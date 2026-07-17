@@ -3,6 +3,15 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import type { LLMMessage, LLMResponse, GenerateOptions } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "./base.js";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] {
   return messages.map((m): ChatCompletionMessageParam => {
     if (m.role === "tool") {
@@ -23,6 +32,8 @@ export class OpenAIProvider implements LLMProvider {
   readonly model: string;
   private client: OpenAI;
   private defaultOptions: GenerateOptions;
+  private readonly maxRetries: number;
+  private readonly baseRetryDelayMs: number;
 
   constructor(options: ProviderOptions) {
     const rawApiKey = options.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
@@ -34,19 +45,90 @@ export class OpenAIProvider implements LLMProvider {
       apiKey: normalizedApiKey,
       baseURL: options.baseUrl,
     });
+    this.maxRetries = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRIES"], 2);
+    this.baseRetryDelayMs = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRY_BASE_MS"], 1200);
+  }
+
+  private getStatusCode(error: unknown): number | undefined {
+    if (!error || typeof error !== "object") return undefined;
+    const maybeError = error as { status?: unknown };
+    return typeof maybeError.status === "number" ? maybeError.status : undefined;
+  }
+
+  private getRetryAfterMs(error: unknown): number | undefined {
+    if (!error || typeof error !== "object") return undefined;
+    const maybeError = error as { headers?: unknown };
+    const headers = maybeError.headers;
+
+    if (!headers) return undefined;
+    if (typeof (headers as { get?: unknown }).get === "function") {
+      const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
+      if (!raw) return undefined;
+      const seconds = Number.parseFloat(raw);
+      if (Number.isFinite(seconds) && seconds > 0) return Math.round(seconds * 1000);
+      return undefined;
+    }
+
+    if (typeof headers === "object" && headers !== null) {
+      const raw = (headers as Record<string, unknown>)["retry-after"];
+      if (typeof raw === "string") {
+        const seconds = Number.parseFloat(raw);
+        if (Number.isFinite(seconds) && seconds > 0) return Math.round(seconds * 1000);
+      }
+    }
+
+    return undefined;
+  }
+
+  private isRateLimitError(error: unknown): boolean {
+    return this.getStatusCode(error) === 429;
+  }
+
+  private createRetryDelayMs(attempt: number, error: unknown): number {
+    const retryAfterMs = this.getRetryAfterMs(error);
+    if (retryAfterMs && retryAfterMs > 0) return retryAfterMs;
+    const expDelay = this.baseRetryDelayMs * Math.pow(2, attempt - 1);
+    const jitter = Math.floor(Math.random() * 250);
+    return expDelay + jitter;
+  }
+
+  private async withRateLimitRetry<T>(fn: () => Promise<T>): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+
+    while (attempt <= this.maxRetries) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        if (!this.isRateLimitError(error) || attempt >= this.maxRetries) {
+          break;
+        }
+        const delayMs = this.createRetryDelayMs(attempt + 1, error);
+        await sleep(delayMs);
+        attempt++;
+      }
+    }
+
+    if (this.isRateLimitError(lastError)) {
+      throw new Error("429 Provider returned error after retries (rate limited)");
+    }
+    throw lastError;
   }
 
   async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
     const merged = { ...this.defaultOptions, ...options };
 
-    const completion = await this.client.chat.completions.create({
-      model: this.model,
-      messages: toOpenAIMessages(messages),
-      temperature: merged.temperature,
-      top_p: merged.topP,
-      max_tokens: merged.maxTokens,
-      stream: false,
-    });
+    const completion = await this.withRateLimitRetry(() =>
+      this.client.chat.completions.create({
+        model: this.model,
+        messages: toOpenAIMessages(messages),
+        temperature: merged.temperature,
+        top_p: merged.topP,
+        max_tokens: merged.maxTokens,
+        stream: false,
+      })
+    );
 
     const choice = completion.choices[0];
     if (!choice) throw new Error("No completion choice returned");
@@ -70,14 +152,16 @@ export class OpenAIProvider implements LLMProvider {
   ): Promise<LLMResponse> {
     const merged = { ...this.defaultOptions, ...options };
 
-    const stream = await this.client.chat.completions.create({
-      model: this.model,
-      messages: toOpenAIMessages(messages),
-      temperature: merged.temperature,
-      top_p: merged.topP,
-      max_tokens: merged.maxTokens,
-      stream: true,
-    });
+    const stream = await this.withRateLimitRetry(() =>
+      this.client.chat.completions.create({
+        model: this.model,
+        messages: toOpenAIMessages(messages),
+        temperature: merged.temperature,
+        top_p: merged.topP,
+        max_tokens: merged.maxTokens,
+        stream: true,
+      })
+    );
 
     let fullContent = "";
     let promptTokens = 0;

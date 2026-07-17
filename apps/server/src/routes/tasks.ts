@@ -109,6 +109,10 @@ tasksRouter.post("/:id/run", async (req, res, next) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await db.updateTask(taskId, { status: "failed", result: message });
+    if (/\b429\b|rate\s*limit/i.test(message)) {
+      res.status(429).json(createApiError("Provider rate limit reached. Please retry in a moment."));
+      return;
+    }
     next(error);
   } finally {
     if (runId) agentRegistry.unregister(runId);
