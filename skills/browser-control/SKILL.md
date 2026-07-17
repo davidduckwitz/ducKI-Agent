@@ -54,6 +54,168 @@ Use the `browser` tool whenever you need to inspect a browser page, verify UI be
 - Keep `timeout` realistic for heavy pages and large downloads.
 - For `download`, verify the target directory when post-click validation is required.
 
+## Prompt Templates
+
+Use these templates to generate valid browser tool calls quickly.
+
+### Login Flow
+
+1. Check environment and launch a session.
+2. Navigate to login page if needed.
+3. Fill credentials and submit.
+
+```json
+{
+	"action": "launch",
+	"url": "https://example.com/login",
+	"headless": false
+}
+```
+
+```json
+{
+	"action": "login",
+	"sessionId": "<sessionId>",
+	"usernameSelector": "input[name='email']",
+	"passwordSelector": "input[name='password']",
+	"submitSelector": "button[type='submit']",
+	"username": "<username>",
+	"password": "<password>",
+	"waitForNavigation": true,
+	"timeoutMs": 20000
+}
+```
+
+### Download Flow
+
+1. Navigate to the page with the download trigger.
+2. Click the download element and store files in a deterministic folder.
+
+```json
+{
+	"action": "download",
+	"sessionId": "<sessionId>",
+	"selector": "a.download-report",
+	"saveDir": "./storage/downloads",
+	"timeoutMs": 25000
+}
+```
+
+### PDF Export Flow
+
+1. Open the target page.
+2. Export to PDF with explicit output path.
+
+```json
+{
+	"action": "pdf",
+	"sessionId": "<sessionId>",
+	"filePath": "./storage/reports/report.pdf",
+	"format": "A4",
+	"printBackground": true,
+	"landscape": false
+}
+```
+
+### Multi-field Form Fill
+
+Use `form_fill` when multiple fields must be set before submit.
+
+```json
+{
+	"action": "form_fill",
+	"sessionId": "<sessionId>",
+	"clearFirst": true,
+	"fields": {
+		"input[name='firstName']": "Max",
+		"input[name='lastName']": "Mustermann",
+		"input[name='city']": "Fulda"
+	}
+}
+```
+
+## Failure Recovery Templates
+
+Use these patterns when a browser action fails. Prefer one recovery step at a time, then re-check state.
+
+### Timeout During Navigation or Wait
+
+1. Increase timeout and retry once.
+2. Fall back from strict waits to `domcontentloaded`.
+3. Confirm current URL and page title before next action.
+
+```json
+{
+	"action": "goto",
+	"sessionId": "<sessionId>",
+	"url": "<targetUrl>",
+	"waitUntil": "domcontentloaded",
+	"timeout": 30000
+}
+```
+
+### Selector Not Found
+
+1. Capture current DOM hints with `evaluate`.
+2. Retry using alternative selectors.
+3. Only then ask user for updated selector.
+
+```json
+{
+	"action": "evaluate",
+	"sessionId": "<sessionId>",
+	"script": "() => ({ url: location.href, title: document.title, inputs: Array.from(document.querySelectorAll('input,button,a')).slice(0,25).map(el => ({tag: el.tagName, id: el.id, name: el.getAttribute('name'), cls: el.className})) })"
+}
+```
+
+### Login Failed or No Redirect
+
+1. Verify fields were filled (`form_fill`/`login` selectors).
+2. Retry login once with higher timeout.
+3. Capture screenshot and ask for MFA/captcha guidance if still blocked.
+
+```json
+{
+	"action": "login",
+	"sessionId": "<sessionId>",
+	"usernameSelector": "<usernameSelector>",
+	"passwordSelector": "<passwordSelector>",
+	"submitSelector": "<submitSelector>",
+	"username": "<username>",
+	"password": "<password>",
+	"waitForNavigation": true,
+	"timeoutMs": 30000
+}
+```
+
+### Download Triggered But File Missing
+
+1. Ensure `saveDir` is set.
+2. Retry click once with longer timeout.
+3. Ask user to confirm browser download policy if still missing.
+
+```json
+{
+	"action": "download",
+	"sessionId": "<sessionId>",
+	"selector": "<downloadSelector>",
+	"saveDir": "./storage/downloads",
+	"timeoutMs": 30000
+}
+```
+
+### Worker Crash or Session Lost
+
+1. Run `detect` to verify local browser readiness.
+2. Start a new session with `launch`.
+3. Re-run only the minimal remaining steps.
+
+```json
+{
+	"action": "detect"
+}
+```
+
 ## Safety
 
 - Do not use the browser tool to access private data without explicit user intent.
