@@ -64,6 +64,9 @@ interface AgentRuntimeControls {
   maxIterations: number;
   timeoutMs: number;
   enableAutoMemory: boolean;
+  enableReflection: boolean;
+  reflectionMaxRetries: number;
+  reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;
   maxRepeatedToolCall: number;
   enableAutoSkillSelection: boolean;
@@ -120,7 +123,7 @@ export class Agent {
     this.systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     this.maxIterations = options.maxIterations ?? parseInt(process.env["AGENT_MAX_ITERATIONS"] ?? "50");
     this.timeoutMs = options.timeoutMs ?? parseInt(process.env["AGENT_TIMEOUT_MS"] ?? "300000");
-    this.enableReflection = options.enableReflection ?? false;
+    this.enableReflection = options.enableReflection ?? (process.env["AGENT_ENABLE_REFLECTION"] ?? "true").toLowerCase() !== "false";
     this.enablePlanning = options.enablePlanning ?? true;
     this.enableAutoMemory = options.enableAutoMemory ?? (process.env["AGENT_AUTO_MEMORY"] ?? "true").toLowerCase() !== "false";
 
@@ -1001,6 +1004,9 @@ export class Agent {
       maxIterations: this.maxIterations,
       timeoutMs: this.timeoutMs,
       enableAutoMemory: this.enableAutoMemory,
+      enableReflection: this.enableReflection,
+      reflectionMaxRetries: this.enableReflection ? 1 : 0,
+      reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
       enableAutoSkillSelection: this.enableAutoSkillSelection,
@@ -1022,6 +1028,9 @@ export class Agent {
         maxIterations: this.parseNumberSetting(get("AGENT_MAX_ITERATIONS"), defaults.maxIterations, 1, 200),
         timeoutMs: this.parseNumberSetting(get("AGENT_TIMEOUT_MS"), defaults.timeoutMs, 5000, 3_600_000),
         enableAutoMemory: this.parseBooleanSetting(get("AGENT_AUTO_MEMORY"), defaults.enableAutoMemory),
+        enableReflection: this.parseBooleanSetting(get("AGENT_ENABLE_REFLECTION"), defaults.enableReflection),
+        reflectionMaxRetries: this.parseNumberSetting(get("AGENT_REFLECTION_MAX_RETRIES"), defaults.reflectionMaxRetries, 0, 3),
+        reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
         enableAutoSkillSelection: this.parseBooleanSetting(get("AGENT_AUTO_SKILL_SELECTION"), defaults.enableAutoSkillSelection),
@@ -1279,7 +1288,50 @@ export class Agent {
       await this.conversation.addMessage(assistantMessage);
       this.history.add(assistantMessage);
 
-      const parsedToolCall = this.extractToolCall(response);
+      let parsedToolCall = this.extractToolCall(response);
+      if (!parsedToolCall) {
+        const reasoning = await this.reasoner.reason(
+          [...messages, assistantMessage],
+          availableTools.map((tool) => tool.name),
+          `User request: ${effectiveInput}`
+        );
+        emit("reasoning", "Reasoner decision", {
+          action: reasoning.action,
+          confidence: reasoning.confidence,
+          toolName: reasoning.toolName,
+          thinking: reasoning.thinking.slice(0, 240),
+        });
+
+        if (
+          reasoning.action === "use_tool" &&
+          reasoning.toolName &&
+          reasoning.toolInput &&
+          reasoning.confidence >= controls.reasonerUseToolMinConfidence
+        ) {
+          parsedToolCall = this.resolveToolNameAndInput(reasoning.toolName, reasoning.toolInput);
+          emit("decision", "Reasoner proposed tool execution", {
+            toolName: parsedToolCall.toolName,
+            confidence: reasoning.confidence,
+            threshold: controls.reasonerUseToolMinConfidence,
+          });
+        } else if (
+          (reasoning.action === "respond" || reasoning.action === "ask_clarification") &&
+          reasoning.response?.trim() &&
+          reasoning.confidence >= controls.reasonerUseToolMinConfidence
+        ) {
+          finalResponse = reasoning.response;
+          if (options.stream && options.onChunk && finalResponse.length > 0) {
+            options.onChunk(finalResponse);
+          }
+          emit("reasoning", "Reasoner provided direct response", {
+            action: reasoning.action,
+            confidence: reasoning.confidence,
+            threshold: controls.reasonerUseToolMinConfidence,
+          });
+          break;
+        }
+      }
+
       if (!parsedToolCall) {
         emit("reasoning", "Antwort generiert", {
           preview: response.slice(0, 280),
@@ -1400,6 +1452,36 @@ export class Agent {
       if (this.stopRequested) {
         emit("reasoning", "Tool-Ausführung abgeschlossen, Stop-Anfrage berücksichtigt.");
         break;
+      }
+    }
+
+    if (controls.enableReflection && controls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
+      for (let reflectionAttempt = 1; reflectionAttempt <= controls.reflectionMaxRetries; reflectionAttempt++) {
+        const reflectionResult = await this.reflection.evaluate(
+          effectiveInput,
+          this.sanitizeFinalResponse(finalResponse),
+          `toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
+        );
+
+        emit("decision", "Reflection evaluation complete", {
+          attempt: reflectionAttempt,
+          quality: reflectionResult.quality,
+          shouldRetry: reflectionResult.shouldRetry,
+          issues: reflectionResult.issues.slice(0, 3),
+        });
+
+        if (!reflectionResult.shouldRetry) break;
+
+        const improved = reflectionResult.improvedResponse?.trim();
+        if (!improved || improved === finalResponse.trim()) {
+          emit("guardrail", "Reflection retry skipped", {
+            reason: !improved ? "no_improved_response" : "same_response",
+            attempt: reflectionAttempt,
+          });
+          break;
+        }
+
+        finalResponse = improved;
       }
     }
 
