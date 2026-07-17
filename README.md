@@ -42,7 +42,7 @@ After startup:
 | Workflow orchestration | Create/update/run/resume graph workflows from UI and tools |
 | Persistent memory | Agent/user memory with profile entries, approvals, and curation actions | Self Updating Memory
 | Skills system | Slash-skill loading, auto-skill selection, pin/enable management, markdown skill editor |
-| Tooling | Filesystem, HTTP, shell, git, skills management, workflow and memory tools |
+| Tooling | Filesystem, HTTP, shell, git, browser automation, skills management, workflow and memory tools |
 | Live operations | Agent live metrics and active run monitoring page |
 | CronJobs | Run at a specific Time for Tasks / skills and Prompts |
 
@@ -232,6 +232,45 @@ Server -> client:
 - Enable/disable skills in `/skills`.
 - Agent can auto-select relevant skills when enabled.
 - Memory supports add/replace/remove/batch/approval flows.
+
+## Browser Tool
+
+The `browser` tool (in `packages/tools/src/browser.ts`) supports browser automation via Puppeteer Core and runs in an isolated worker process.
+
+Implemented actions:
+
+- `detect`
+- `launch`
+- `list_pages`
+- `goto`
+- `click`
+- `type`
+- `press`
+- `wait`
+- `evaluate`
+- `screenshot`
+- `cookies_get`
+- `cookies_set`
+- `cookies_clear`
+- `form_fill`
+- `login`
+- `pdf`
+- `download`
+- `close`
+
+Operational notes:
+
+- Browser execution is isolated in a child process (IPC). Puppeteer runtime failures return tool errors and should not terminate the agent process.
+- On Windows, browser detection checks env vars and common install paths for Edge/Chrome/Chromium.
+- For `download`, use `saveDir` for deterministic storage and verify resulting files in that directory.
+
+Minimal flow example:
+
+1. `detect`
+2. `launch` (optional `url`)
+3. Interact with `goto`/`click`/`type`/`form_fill`/`login`
+4. Capture artifacts with `screenshot` or `pdf`
+5. `close`
 
 ## Development Notes
 
