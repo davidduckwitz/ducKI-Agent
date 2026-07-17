@@ -8,7 +8,7 @@
 - Fully Developed in the Heart of Germany, Fulda near Rhön!
 - This Agent is for Me and All :-) Contribute via Pull Requests or Tell me Issues / Give me Feedback. 
 
-<img width="1633" height="611" alt="image" src="https://github.com/user-attachments/assets/5a92eeb8-8a88-4082-bfc7-dc2ca2c85cfc" />
+<img width="1427" height="946" alt="image" src="https://github.com/user-attachments/assets/44420dc1-d681-4ba6-8aaf-cc769a3e48b7" />
 
 ## Quick Start
 
