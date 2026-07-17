@@ -1,5 +1,6 @@
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
+import { browserTool } from "@ducki/tools";
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 type TaskPriority = "low" | "medium" | "high" | "critical";
@@ -114,6 +115,7 @@ function parseTaskId(value: unknown): number | undefined {
 }
 
 export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
+  void db;
   const memoryTool: ToolExecutor = {
     name: "memory",
     description: "Recall and curate persistent memories (query, add, replace, remove, list)",
@@ -684,5 +686,5 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
     },
   };
 
-  return [memoryTool, projectTool, taskTool, historyTool];
+  return [browserTool, memoryTool, projectTool, taskTool, historyTool];
 }

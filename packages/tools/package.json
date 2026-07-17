@@ -19,6 +19,7 @@
   "dependencies": {
     "@ducki/logger": "workspace:*",
     "@ducki/shared": "workspace:*",
+    "puppeteer-core": "^25.3.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
@@ -26,5 +27,3 @@
     "typescript": "^5.5.0"
   }
 }
-
-
