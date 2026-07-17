@@ -2,6 +2,9 @@
 
 Self-hosted coding and Task / Personal agent platform with web UI, REST API, WebSocket streaming, persistent memory, workflow graphs, discord gateway with speech to text, and multi-agent execution.
 
+<img width="1633" height="611" alt="image" src="https://github.com/user-attachments/assets/5a92eeb8-8a88-4082-bfc7-dc2ca2c85cfc" />
+
+
 ## Quick Start
 
 ### Linux/macOS/WSL
