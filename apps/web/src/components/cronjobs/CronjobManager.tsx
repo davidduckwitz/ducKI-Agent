@@ -92,9 +92,9 @@ export function CronjobManager() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const examples = [
-    "*/5 * * * *",
-    "0 9 * * 1-5",
-    "30 18 * * *",
+    { value: "*/5 * * * *", label: t("cronjobs.everyFiveMinutes") },
+    { value: "0 9 * * 1-5", label: t("cronjobs.weekdaysAtNine") },
+    { value: "30 18 * * *", label: t("cronjobs.dailyAt1830") },
   ];
 
   const jobsQuery = useQuery({
@@ -259,10 +259,22 @@ export function CronjobManager() {
             value={form.schedule}
             onChange={(e) => setForm((f) => ({ ...f, schedule: e.target.value }))}
           />
-          <div className="text-xs text-gray-500 space-y-1">
-            {examples.map((line) => (
-              <div key={line}>{line}</div>
-            ))}
+          <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 text-xs text-gray-300 space-y-2">
+            <div className="font-medium text-gray-200">{t("cronjobs.cronHelpTitle")}</div>
+            <p className="leading-relaxed text-gray-400">{t("cronjobs.cronHelpText")}</p>
+            <div className="text-[11px] text-gray-500">{t("cronjobs.cronPresets")}</div>
+            <div className="flex flex-wrap gap-2">
+              {examples.map((example) => (
+                <button
+                  key={example.value}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, schedule: example.value }))}
+                  className="rounded-full border border-gray-700 bg-gray-900 px-3 py-1 text-[11px] text-gray-300 hover:border-cyan-500/60 hover:text-cyan-300"
+                >
+                  {example.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <select

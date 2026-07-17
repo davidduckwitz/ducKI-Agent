@@ -1441,10 +1441,12 @@ export class Agent {
             break;
           }
         }
-      } catch {
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         emit("tool_result", `Tool fehlgeschlagen: ${parsedToolCall.toolName}`, {
           toolName: parsedToolCall.toolName,
           success: false,
+          error: message,
         });
         break;
       }

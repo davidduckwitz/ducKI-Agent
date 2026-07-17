@@ -56,7 +56,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   connected: false,
 
   initSocket: () => {
-    const socket = io("/", { transports: ["websocket"] });
+    const socketUrl = import.meta.env.DEV
+      ? (import.meta.env.VITE_SOCKET_URL ?? "http://127.0.0.1:3001")
+      : undefined;
+    const socket = io(socketUrl, {
+      path: "/socket.io",
+      transports: ["websocket"],
+    });
 
     socket.on("connect", () => {
       set({ connected: true });
