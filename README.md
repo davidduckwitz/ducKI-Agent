@@ -1,9 +1,14 @@
 # DucKI Node
 
-Self-hosted coding and Task / Personal agent platform with web UI, REST API, WebSocket streaming, persistent memory, workflow graphs, discord gateway with speech to text, and multi-agent execution.
+-Self-hosted coding and Task / Personal agent platform with web UI, REST API, WebSocket streaming, persistent memory, workflow graphs, discord gateway with speech to text, and multi-agent execution.
+
+-Fully Developed in NodeJS! 
+-Tested Local with LM Studio & OpenRouter
+-Agent / Memory / Skill System / Task Management / KanBan Board / Log System / Discord Gateway -> ALL Full working!
+-Lightweight Code for easy Extending!
+-This Agent is for Me and All :-) Contribute via Pull Requests or Tell me Issues / Give me Feedback. 
 
 <img width="1633" height="611" alt="image" src="https://github.com/user-attachments/assets/5a92eeb8-8a88-4082-bfc7-dc2ca2c85cfc" />
-
 
 ## Quick Start
 
@@ -39,6 +44,12 @@ After startup:
 | Skills system | Slash-skill loading, auto-skill selection, pin/enable management, markdown skill editor |
 | Tooling | Filesystem, HTTP, shell, git, skills management, workflow and memory tools |
 | Live operations | Agent live metrics and active run monitoring page |
+
+# Donation & Help
+
+Donations are Welcome and help to make this Agent get an Powerfull Assistant for your Life & Work - Thanks a lot.
+PayPal Me: https://www.paypal.me/davidduckwitz
+Bitcoin: 1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G
 
 ## Getting Started
 
