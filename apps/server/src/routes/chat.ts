@@ -37,6 +37,40 @@ chatRouter.get("/conversations", async (req, res, next) => {
   }
 });
 
+chatRouter.get("/conversations/page", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const projectIdRaw = req.query["projectId"] as string | undefined;
+    const beforeIdRaw = req.query["beforeId"] as string | undefined;
+    const limitRaw = req.query["limit"] as string | undefined;
+
+    const projectId = projectIdRaw ? parseInt(projectIdRaw, 10) : undefined;
+    const beforeId = beforeIdRaw ? parseInt(beforeIdRaw, 10) : undefined;
+    const limit = limitRaw ? parseInt(limitRaw, 10) : 30;
+
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, limit)) : 30;
+    const items = await db.listConversationsPage({
+      projectId: Number.isFinite(projectId) ? projectId : undefined,
+      beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
+      limit: boundedLimit + 1,
+    });
+
+    const hasMore = items.length > boundedLimit;
+    const pageItems = hasMore ? items.slice(0, boundedLimit) : items;
+    const last = pageItems[pageItems.length - 1];
+
+    res.json(
+      createApiResponse({
+        items: pageItems,
+        hasMore,
+        nextBeforeId: hasMore ? last?.id : undefined,
+      })
+    );
+  } catch (error) {
+    next(error);
+  }
+});
+
 chatRouter.get("/conversations/:id/messages", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
@@ -54,6 +88,50 @@ chatRouter.get("/conversations/:id/messages", async (req, res, next) => {
 
     const messages = await db.getMessages(conversationId);
     res.json(createApiResponse(messages));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.get("/conversations/:id/messages/page", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const conversationId = parseInt(req.params["id"] ?? "0", 10);
+    const beforeIdRaw = req.query["beforeId"] as string | undefined;
+    const limitRaw = req.query["limit"] as string | undefined;
+
+    if (!Number.isFinite(conversationId) || conversationId <= 0) {
+      res.status(400).json(createApiError("Invalid conversation id"));
+      return;
+    }
+
+    const conversation = await db.getConversation(conversationId);
+    if (!conversation) {
+      res.status(404).json(createApiError("Conversation not found"));
+      return;
+    }
+
+    const beforeId = beforeIdRaw ? parseInt(beforeIdRaw, 10) : undefined;
+    const limit = limitRaw ? parseInt(limitRaw, 10) : 50;
+    const boundedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(200, limit)) : 50;
+
+    const items = await db.getMessagesPage({
+      conversationId,
+      beforeId: Number.isFinite(beforeId) ? beforeId : undefined,
+      limit: boundedLimit + 1,
+    });
+
+    const hasMore = items.length > boundedLimit;
+    const pageItems = hasMore ? items.slice(1) : items;
+    const first = pageItems[0];
+
+    res.json(
+      createApiResponse({
+        items: pageItems,
+        hasMore,
+        nextBeforeId: hasMore ? first?.id : undefined,
+      })
+    );
   } catch (error) {
     next(error);
   }

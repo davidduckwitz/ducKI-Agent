@@ -181,6 +181,8 @@ export const translations: Record<Language, TranslationTree> = {
       eventDecision: "Decision",
       eventGuardrail: "Guardrail",
       eventReasoning: "Reasoning",
+      loadingMoreConversations: "Weitere Chats werden geladen...",
+      loadingOlderMessages: "Aeltere Nachrichten werden geladen...",
     },
     toolsPage: {
       noTools: "Keine Tools geladen",
@@ -509,6 +511,8 @@ export const translations: Record<Language, TranslationTree> = {
       eventDecision: "Decision",
       eventGuardrail: "Guardrail",
       eventReasoning: "Reasoning",
+      loadingMoreConversations: "Loading more chats...",
+      loadingOlderMessages: "Loading older messages...",
     },
     toolsPage: {
       noTools: "No tools loaded",

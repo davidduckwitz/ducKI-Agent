@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Send, Trash2, Bot, User, Wrench, BrainCircuit, GitBranch, Activity, Paperclip, Square, Image as ImageIcon, X, PanelLeft } from "lucide-react";
 import { useAppStore } from "../../lib/store";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
@@ -78,21 +78,39 @@ export function ChatContainer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesViewportRef = useRef<HTMLDivElement>(null);
+  const conversationsViewportRef = useRef<HTMLElement>(null);
+  const pendingPrependHeightRef = useRef<number | null>(null);
+  const stickToBottomRef = useRef(true);
 
   const defaultExpandedForType = (
     eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail"
-  ) => eventType === "tool_call" || eventType === "tool_result" || eventType === "guardrail";
+  ) => false;
 
-  const conversationsQuery = useQuery({
-    queryKey: ["chat", "conversations"],
-    queryFn: () => api.chat.listConversations() as Promise<ConversationItem[]>,
+  const conversationsQuery = useInfiniteQuery({
+    queryKey: ["chat", "conversations", "page"],
+    queryFn: ({ pageParam }) =>
+      api.chat.listConversationsPage({
+        beforeId: pageParam as number | undefined,
+        limit: 30,
+      }) as Promise<{ items: ConversationItem[]; hasMore: boolean; nextBeforeId?: number }>,
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextBeforeId : undefined),
   });
 
-  const selectedConversationMessages = useQuery({
+  const selectedConversationMessages = useInfiniteQuery({
     queryKey: ["chat", "messages", conversationId],
-    queryFn: () => api.chat.getMessages(conversationId ?? 0) as Promise<PersistedMessage[]>,
+    queryFn: ({ pageParam }) =>
+      api.chat.getMessagesPage(conversationId ?? 0, {
+        beforeId: pageParam as number | undefined,
+        limit: 50,
+      }) as Promise<{ items: PersistedMessage[]; hasMore: boolean; nextBeforeId?: number }>,
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextBeforeId : undefined),
     enabled: Boolean(conversationId),
   });
+
+  const conversations = conversationsQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
   useEffect(() => {
     const fromQuery = Number(searchParams.get("conversationId") ?? "");
@@ -106,7 +124,7 @@ export function ChatContainer() {
 
   useEffect(() => {
     if (!conversationId) return;
-    const persisted = selectedConversationMessages.data;
+    const persisted = selectedConversationMessages.data?.pages.flatMap((page) => page.items);
     if (!persisted) return;
 
     const mapPersistedMessage = (msg: PersistedMessage) => {
@@ -198,11 +216,51 @@ export function ChatContainer() {
     setMessages(
       persisted.map(mapPersistedMessage)
     );
-  }, [conversationId, selectedConversationMessages.data, setMessages]);
+  }, [conversationId, selectedConversationMessages.data, setMessages, t]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    setExpandedEvents({});
+  }, [conversationId]);
+
+  useEffect(() => {
+    const viewport = messagesViewportRef.current;
+    if (!viewport) return;
+
+    if (pendingPrependHeightRef.current !== null) {
+      const previous = pendingPrependHeightRef.current;
+      pendingPrependHeightRef.current = null;
+      const delta = viewport.scrollHeight - previous;
+      viewport.scrollTop = Math.max(0, viewport.scrollTop + delta);
+      return;
+    }
+
+    if (stickToBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, streamingContent]);
+
+  const handleMessagesScroll = () => {
+    const viewport = messagesViewportRef.current;
+    if (!viewport) return;
+
+    const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    stickToBottomRef.current = distanceToBottom < 120;
+
+    if (viewport.scrollTop > 120) return;
+    if (!selectedConversationMessages.hasNextPage || selectedConversationMessages.isFetchingNextPage) return;
+
+    pendingPrependHeightRef.current = viewport.scrollHeight;
+    void selectedConversationMessages.fetchNextPage();
+  };
+
+  const handleConversationsScroll = () => {
+    const viewport = conversationsViewportRef.current;
+    if (!viewport) return;
+    const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    if (distanceToBottom > 120) return;
+    if (!conversationsQuery.hasNextPage || conversationsQuery.isFetchingNextPage) return;
+    void conversationsQuery.fetchNextPage();
+  };
 
   const toBase64 = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -265,7 +323,11 @@ export function ChatContainer() {
 
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
-      <aside className={`${showConversationList ? "block" : "hidden"} lg:block ${compactMode ? "lg:w-72" : "lg:w-80"} w-full border-b lg:border-b-0 lg:border-r border-gray-800 p-3 overflow-y-auto space-y-2 max-h-[42vh] lg:max-h-none shrink-0`}>
+      <aside
+        ref={conversationsViewportRef}
+        onScroll={handleConversationsScroll}
+        className={`${showConversationList ? "block" : "hidden"} lg:block ${compactMode ? "lg:w-72" : "lg:w-80"} w-full border-b lg:border-b-0 lg:border-r border-gray-800 p-3 overflow-y-auto space-y-2 max-h-[42vh] lg:max-h-none shrink-0`}
+      >
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-semibold">{t("chat.chats")}</h2>
           <button
@@ -278,7 +340,7 @@ export function ChatContainer() {
           </button>
         </div>
 
-        {(conversationsQuery.data ?? []).map((conv) => (
+        {conversations.map((conv) => (
           <button
             key={conv.id}
             onClick={() => {
@@ -297,8 +359,11 @@ export function ChatContainer() {
           </button>
         ))}
 
-        {(conversationsQuery.data ?? []).length === 0 && (
+        {conversations.length === 0 && (
           <div className="text-xs text-gray-500 py-4">{t("chat.noSaved")}</div>
+        )}
+        {conversationsQuery.isFetchingNextPage && (
+          <div className="text-xs text-gray-500 py-2">{t("chat.loadingMoreConversations")}</div>
         )}
       </aside>
 
@@ -336,8 +401,15 @@ export function ChatContainer() {
       </div>
 
       {/* Messages */}
-      <div className={`flex-1 min-h-0 overflow-y-auto ${compactMode ? "px-2 py-2 sm:px-3" : "px-3 py-4 sm:px-4"}`}>
+      <div
+        ref={messagesViewportRef}
+        onScroll={handleMessagesScroll}
+        className={`flex-1 min-h-0 overflow-y-auto ${compactMode ? "px-2 py-2 sm:px-3" : "px-3 py-4 sm:px-4"}`}
+      >
         <div className={`mx-auto w-full ${compactMode ? "max-w-3xl space-y-2" : "max-w-4xl space-y-4"}`}>
+        {selectedConversationMessages.isFetchingNextPage && (
+          <div className="text-center text-xs text-gray-500">{t("chat.loadingOlderMessages")}</div>
+        )}
         {messages.length === 0 && (
           <div className="text-center text-gray-500 mt-20">
             <Bot className="w-12 h-12 mx-auto mb-4 text-gray-700" />

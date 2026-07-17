@@ -1,6 +1,6 @@
 import { createClient, type Client } from "@libsql/client";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, lt } from "drizzle-orm";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
@@ -97,6 +97,36 @@ export class DatabaseService {
     return this.db.select().from(schema.conversations).orderBy(desc(schema.conversations.createdAt)).all();
   }
 
+  async listConversationsPage(args?: {
+    projectId?: number;
+    limit?: number;
+    beforeId?: number;
+  }): Promise<ConversationSelect[]> {
+    const limit = Math.max(1, Math.min(100, Number(args?.limit ?? 30)));
+    const projectId = args?.projectId;
+    const beforeId = args?.beforeId;
+    const conditions = [];
+    if (projectId !== undefined) conditions.push(eq(schema.conversations.projectId, projectId));
+    if (beforeId !== undefined) conditions.push(lt(schema.conversations.id, beforeId));
+
+    if (conditions.length === 0) {
+      return this.db
+        .select()
+        .from(schema.conversations)
+        .orderBy(desc(schema.conversations.id))
+        .limit(limit)
+        .all();
+    }
+
+    return this.db
+      .select()
+      .from(schema.conversations)
+      .where(and(...conditions))
+      .orderBy(desc(schema.conversations.id))
+      .limit(limit)
+      .all();
+  }
+
   async deleteConversation(id: number): Promise<void> {
     await this.db.delete(schema.conversations).where(eq(schema.conversations.id, id)).run();
   }
@@ -112,6 +142,28 @@ export class DatabaseService {
 
   async getMessages(conversationId: number): Promise<MessageSelect[]> {
     return this.db.select().from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).orderBy(schema.messages.id).all();
+  }
+
+  async getMessagesPage(args: {
+    conversationId: number;
+    limit?: number;
+    beforeId?: number;
+  }): Promise<MessageSelect[]> {
+    const limit = Math.max(1, Math.min(200, Number(args.limit ?? 50)));
+    const conditions = [eq(schema.messages.conversationId, args.conversationId)];
+    if (args.beforeId !== undefined) {
+      conditions.push(lt(schema.messages.id, args.beforeId));
+    }
+
+    const page = await this.db
+      .select()
+      .from(schema.messages)
+      .where(and(...conditions))
+      .orderBy(desc(schema.messages.id))
+      .limit(limit)
+      .all();
+
+    return [...page].sort((a, b) => a.id - b.id);
   }
 
   // ============================================================

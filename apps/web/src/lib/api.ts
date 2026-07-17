@@ -19,7 +19,22 @@ export const api = {
   chat: {
     listConversations: (projectId?: number) =>
       request<unknown[]>(`/chat/conversations${projectId ? `?projectId=${projectId}` : ""}`),
+    listConversationsPage: (args?: { projectId?: number; limit?: number; beforeId?: number }) => {
+      const params = new URLSearchParams();
+      if (args?.projectId !== undefined) params.set("projectId", String(args.projectId));
+      if (args?.limit !== undefined) params.set("limit", String(args.limit));
+      if (args?.beforeId !== undefined) params.set("beforeId", String(args.beforeId));
+      const query = params.toString();
+      return request<{ items: unknown[]; hasMore: boolean; nextBeforeId?: number }>(`/chat/conversations/page${query ? `?${query}` : ""}`);
+    },
     getMessages: (conversationId: number) => request<unknown[]>(`/chat/conversations/${conversationId}/messages`),
+    getMessagesPage: (conversationId: number, args?: { limit?: number; beforeId?: number }) => {
+      const params = new URLSearchParams();
+      if (args?.limit !== undefined) params.set("limit", String(args.limit));
+      if (args?.beforeId !== undefined) params.set("beforeId", String(args.beforeId));
+      const query = params.toString();
+      return request<{ items: unknown[]; hasMore: boolean; nextBeforeId?: number }>(`/chat/conversations/${conversationId}/messages/page${query ? `?${query}` : ""}`);
+    },
     search: (query: string, limit = 20) =>
       request<
         Array<{
