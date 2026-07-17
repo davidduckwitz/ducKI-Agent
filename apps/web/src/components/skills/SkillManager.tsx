@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, Check, Eye, EyeOff, Plus, Save, Search, Star, Trash2, UploadCloud, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { CodePreview } from "../common/CodePreview";
+import { useI18n } from "../../lib/i18n";
 
 interface SkillItem {
   slug: string;
@@ -149,6 +150,7 @@ const importedSkillTemplates: Array<{ name: string; description: string; content
 ];
 
 export function SkillManager() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState("");
@@ -329,7 +331,7 @@ export function SkillManager() {
 
   const selectSkill = (slug: string): void => {
     if (hasUnsavedChanges && selectedSlug && selectedSlug !== slug) {
-      const proceed = window.confirm("Ungespeicherte Änderungen verwerfen?");
+      const proceed = window.confirm(t("skillsPage.confirmDiscard"));
       if (!proceed) return;
     }
     setSelectedSlug(slug);
@@ -354,7 +356,7 @@ export function SkillManager() {
         <div>
           <h1 className="text-2xl font-bold">Skills</h1>
           <p className="text-sm text-gray-400">
-            Aktiviere nur Skills, die du gerade brauchst. Deaktivierte Skills verbrauchen keinen Chat-Kontext.
+            {t("skillsPage.titleHint")}
           </p>
         </div>
 
@@ -364,35 +366,35 @@ export function SkillManager() {
             className="btn-secondary text-sm"
             disabled={createSkill.isPending}
           >
-            Hermes-Style Beispiele laden
+            {t("skillsPage.loadExamples")}
           </button>
           <button
             onClick={() => setShowManageModal(true)}
             className="btn-primary text-sm"
           >
-            Skill erstellen / importieren
+            {t("skillsPage.manage")}
           </button>
           <div className="text-sm text-gray-300 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
-            Aktiv: <span className="font-semibold text-white">{enabledSet.size}</span> / {skills.length}
+            {t("skillsPage.activeCount")}: <span className="font-semibold text-white">{enabledSet.size}</span> / {skills.length}
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="card">
-          <p className="text-xs text-gray-400">Gesamt</p>
+          <p className="text-xs text-gray-400">{t("skillsPage.total")}</p>
           <p className="text-2xl font-semibold">{skills.length}</p>
         </div>
         <div className="card border-amber-500/30 bg-amber-500/5">
-          <p className="text-xs text-amber-200">Gepinnt</p>
+          <p className="text-xs text-amber-200">{t("skillsPage.pinned")}</p>
           <p className="text-2xl font-semibold text-amber-100">{pinnedSet.size}</p>
         </div>
         <div className="card border-emerald-500/30 bg-emerald-500/5">
-          <p className="text-xs text-emerald-200">Aktiv (im Kontext)</p>
+          <p className="text-xs text-emerald-200">{t("skillsPage.activeInContext")}</p>
           <p className="text-2xl font-semibold text-emerald-100">{enabledSet.size}</p>
         </div>
         <div className="card border-gray-700 bg-gray-900/40">
-          <p className="text-xs text-gray-400">Deaktiviert</p>
+          <p className="text-xs text-gray-400">{t("skillsPage.deactivated")}</p>
           <p className="text-2xl font-semibold text-gray-200">{skills.length - enabledSet.size}</p>
         </div>
       </div>
@@ -404,7 +406,7 @@ export function SkillManager() {
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
               <input
                 className="input pl-9"
-                placeholder="Skills durchsuchen"
+                placeholder={t("skillsPage.search")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -414,22 +416,22 @@ export function SkillManager() {
                 onClick={() => setVisibilityFilter("all")}
                 className={`px-2 py-1 rounded border ${visibilityFilter === "all" ? "border-blue-500 bg-blue-500/20" : "border-gray-700 bg-gray-800"}`}
               >
-                Alle
+                {t("skillsPage.all")}
               </button>
               <button
                 onClick={() => setVisibilityFilter("enabled")}
                 className={`px-2 py-1 rounded border ${visibilityFilter === "enabled" ? "border-emerald-500 bg-emerald-500/20" : "border-gray-700 bg-gray-800"}`}
               >
-                Aktiv
+                {t("common.active")}
               </button>
               <button
                 onClick={() => setVisibilityFilter("disabled")}
                 className={`px-2 py-1 rounded border ${visibilityFilter === "disabled" ? "border-gray-500 bg-gray-700/40" : "border-gray-700 bg-gray-800"}`}
               >
-                Aus
+                {t("skillsPage.off")}
               </button>
             </div>
-            <p className="text-xs text-gray-500">Treffer: {visibleSkills.length}</p>
+            <p className="text-xs text-gray-500">{t("skillsPage.hits")}: {visibleSkills.length}</p>
           </div>
 
           <div className="space-y-2">
@@ -451,7 +453,7 @@ export function SkillManager() {
                       <p className="text-sm font-semibold text-white truncate">{skill.name}</p>
                       <p className="text-xs text-gray-500 truncate">/{skill.slug}</p>
                       <p className="text-xs text-gray-400 mt-1 line-clamp-2">
-                        {skill.description ?? "Keine Beschreibung"}
+                        {skill.description ?? t("skillsPage.noDescription")}
                       </p>
                     </button>
 
@@ -479,7 +481,7 @@ export function SkillManager() {
                         }`}
                       >
                         {enabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                        {enabled ? "An" : "Aus"}
+                        {enabled ? t("skillsPage.on") : t("skillsPage.off")}
                       </button>
                     </div>
                   </div>
@@ -490,7 +492,7 @@ export function SkillManager() {
             {visibleSkills.length === 0 && (
               <div className="text-center text-gray-500 py-10">
                 <BookOpen className="w-10 h-10 mx-auto mb-3 text-gray-700" />
-                <p>Keine passenden Skills gefunden.</p>
+                <p>{t("skillsPage.noMatches")}</p>
               </div>
             )}
           </div>
@@ -501,7 +503,7 @@ export function SkillManager() {
             <div className="h-full flex items-center justify-center text-gray-500">
               <div className="text-center">
                 <BookOpen className="w-10 h-10 mx-auto mb-3 text-gray-700" />
-                <p>Wähle einen Skill zum Bearbeiten.</p>
+                <p>{t("skillsPage.selectSkill")}</p>
               </div>
             </div>
           )}
@@ -513,14 +515,14 @@ export function SkillManager() {
                   <h2 className="text-lg font-semibold">{selectedDetail.data.name}</h2>
                   <p className="text-xs text-gray-500">/{selectedDetail.data.slug}</p>
                   {hasUnsavedChanges && (
-                    <p className="text-xs text-amber-300 mt-1">Ungespeicherte Änderungen</p>
+                    <p className="text-xs text-amber-300 mt-1">{t("skillsPage.unsavedChanges")}</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
                   {enabledSet.has(selectedDetail.data.slug) && (
                     <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs border border-emerald-500/50 bg-emerald-500/15 text-emerald-200">
                       <Check className="w-3.5 h-3.5" />
-                      Aktiv
+                      {t("common.active")}
                     </span>
                   )}
                   <button
@@ -529,7 +531,7 @@ export function SkillManager() {
                     disabled={updateSkill.isPending || !hasUnsavedChanges}
                   >
                     <Save className="w-4 h-4" />
-                    Speichern
+                    {t("common.save")}
                   </button>
                   <button
                     onClick={() => deleteSkill.mutate(selectedDetail.data.slug)}
@@ -537,7 +539,7 @@ export function SkillManager() {
                     disabled={deleteSkill.isPending}
                   >
                     <Trash2 className="w-4 h-4" />
-                    Löschen
+                    {t("skillsPage.delete")}
                   </button>
                 </div>
               </div>
@@ -553,7 +555,7 @@ export function SkillManager() {
               />
               <div className="rounded-lg border border-gray-800 overflow-hidden">
                 <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-800 bg-gray-900/60">
-                  Vorschau mit Syntax-Highlighting
+                  {t("skillsPage.preview")}
                 </div>
                 <CodePreview code={editorContent} language="markdown" maxHeight={280} fontSize={13} />
               </div>
@@ -566,7 +568,7 @@ export function SkillManager() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-              <h3 className="text-base font-semibold">Skills verwalten</h3>
+              <h3 className="text-base font-semibold">{t("skillsPage.manageTitle")}</h3>
               <button
                 onClick={() => setShowManageModal(false)}
                 className="p-1 rounded hover:bg-gray-800 text-gray-300"
@@ -578,7 +580,7 @@ export function SkillManager() {
 
             <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 space-y-2">
-                <p className="text-sm font-semibold">Neuen Skill erstellen</p>
+                <p className="text-sm font-semibold">{t("skillsPage.createNew")}</p>
                 <input
                   className="input"
                   placeholder="Skill Name / Slug (z. B. api-planning)"
@@ -597,12 +599,12 @@ export function SkillManager() {
                   disabled={createSkill.isPending || draftSkill.name.trim().length === 0}
                 >
                   <Plus className="w-4 h-4" />
-                  Erstellen
+                  {t("skillsPage.create")}
                 </button>
               </div>
 
               <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 space-y-2">
-                <p className="text-sm font-semibold">Skill von URL importieren</p>
+                <p className="text-sm font-semibold">{t("skillsPage.importUrl")}</p>
                 <input
                   className="input"
                   placeholder="https://.../SKILL.md"
@@ -621,10 +623,10 @@ export function SkillManager() {
                   disabled={importSkill.isPending || importForm.url.trim().length === 0}
                 >
                   <UploadCloud className="w-4 h-4" />
-                  Importieren
+                  {t("skillsPage.import")}
                 </button>
                 {importSkill.isError && (
-                  <p className="text-xs text-red-300">Import fehlgeschlagen.</p>
+                  <p className="text-xs text-red-300">{t("skillsPage.importFailed")}</p>
                 )}
               </div>
             </div>
@@ -634,7 +636,7 @@ export function SkillManager() {
                 onClick={() => setShowManageModal(false)}
                 className="btn-secondary"
               >
-                Schließen
+                {t("skillsPage.close")}
               </button>
             </div>
           </div>

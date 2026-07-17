@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Play, Trash2, Plus, Save, RefreshCw } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 type CronTargetType = "task" | "prompt" | "tool" | "skill";
 
@@ -46,12 +47,6 @@ interface FormState {
   toolInputJson: string;
 }
 
-const EXAMPLES = [
-  "*/5 * * * *  (alle 5 Minuten)",
-  "0 9 * * 1-5  (werktags 09:00)",
-  "30 18 * * *  (taeglich 18:30)",
-];
-
 function safeParsePayload(raw: string | null | undefined): Record<string, unknown> {
   if (!raw) return {};
   try {
@@ -83,6 +78,7 @@ function buildFormFromJob(job: CronJob): FormState {
 }
 
 export function CronjobManager() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const [form, setForm] = useState<FormState>({
     name: "",
@@ -94,6 +90,12 @@ export function CronjobManager() {
     toolInputJson: "{}",
   });
   const [formError, setFormError] = useState<string | null>(null);
+
+  const examples = [
+    "*/5 * * * *",
+    "0 9 * * 1-5",
+    "30 18 * * *",
+  ];
 
   const jobsQuery = useQuery({
     queryKey: ["cronjobs"],
@@ -162,24 +164,24 @@ export function CronjobManager() {
 
   const payloadForSubmit = (): { targetRef?: string; payload?: Record<string, unknown> } => {
     if (form.targetType === "prompt") {
-      if (!form.promptText.trim()) throw new Error("Prompt text is required for prompt cronjobs");
+      if (!form.promptText.trim()) throw new Error(t("cronjobs.createErrorPrompt"));
       return { payload: { prompt: form.promptText.trim() } };
     }
 
     if (form.targetType === "task") {
-      if (!form.targetRef.trim()) throw new Error("Select a task for task cronjobs");
+      if (!form.targetRef.trim()) throw new Error(t("cronjobs.createErrorTask"));
       return { targetRef: form.targetRef.trim() };
     }
 
     if (form.targetType === "skill") {
-      if (!form.targetRef.trim()) throw new Error("Select a skill for skill cronjobs");
+      if (!form.targetRef.trim()) throw new Error(t("cronjobs.createErrorSkill"));
       return {
         targetRef: form.targetRef.trim(),
         payload: form.promptText.trim() ? { prompt: form.promptText.trim() } : undefined,
       };
     }
 
-    if (!form.targetRef.trim()) throw new Error("Select a tool for tool cronjobs");
+    if (!form.targetRef.trim()) throw new Error(t("cronjobs.createErrorTool"));
     let input: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(form.toolInputJson || "{}");
@@ -187,7 +189,7 @@ export function CronjobManager() {
         input = parsed as Record<string, unknown>;
       }
     } catch {
-      throw new Error("Tool input must be valid JSON");
+      throw new Error(t("cronjobs.createErrorToolJson"));
     }
 
     return { targetRef: form.targetRef.trim(), payload: { input } };
@@ -196,8 +198,8 @@ export function CronjobManager() {
   const submit = () => {
     setFormError(null);
     try {
-      if (!form.name.trim()) throw new Error("Name is required");
-      if (!form.schedule.trim()) throw new Error("Schedule is required");
+      if (!form.name.trim()) throw new Error(t("cronjobs.createErrorName"));
+      if (!form.schedule.trim()) throw new Error(t("cronjobs.createErrorSchedule"));
 
       const extra = payloadForSubmit();
       const basePayload = {
@@ -225,40 +227,40 @@ export function CronjobManager() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <CalendarClock className="w-6 h-6 text-cyan-400" />
-            Cronjobs
+            {t("cronjobs.title")}
           </h1>
-          <p className="text-sm text-gray-400">Schedule Tasks, Prompts, Tools, and Skills with cron syntax.</p>
+          <p className="text-sm text-gray-400">{t("cronjobs.subtitle")}</p>
         </div>
         <button onClick={() => jobsQuery.refetch()} className="btn-secondary inline-flex items-center gap-2">
           <RefreshCw className="w-4 h-4" />
-          Refresh
+          {t("common.refresh")}
         </button>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <section className="card xl:col-span-1 space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold">{form.id ? `Cronjob #${form.id} bearbeiten` : "Neuer Cronjob"}</h2>
+            <h2 className="font-semibold">{form.id ? `#${form.id} ${t("cronjobs.editCronjob")}` : t("cronjobs.newCronjob")}</h2>
             {form.id && (
-              <button onClick={resetForm} className="text-xs text-gray-400 hover:text-gray-200">Neu statt Bearbeiten</button>
+              <button onClick={resetForm} className="text-xs text-gray-400 hover:text-gray-200">{t("cronjobs.switchToNew")}</button>
             )}
           </div>
 
           <input
             className="input w-full"
-            placeholder="Name"
+            placeholder={t("cronjobs.name")}
             value={form.name}
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
           />
 
           <input
             className="input w-full"
-            placeholder="Cron expression"
+            placeholder={t("cronjobs.cronExpression")}
             value={form.schedule}
             onChange={(e) => setForm((f) => ({ ...f, schedule: e.target.value }))}
           />
           <div className="text-xs text-gray-500 space-y-1">
-            {EXAMPLES.map((line) => (
+            {examples.map((line) => (
               <div key={line}>{line}</div>
             ))}
           </div>
@@ -280,7 +282,7 @@ export function CronjobManager() {
               value={form.targetRef}
               onChange={(e) => setForm((f) => ({ ...f, targetRef: e.target.value }))}
             >
-              <option value="">Task auswaehlen</option>
+              <option value="">{t("cronjobs.chooseTask")}</option>
               {(tasksQuery.data ?? []).map((task) => (
                 <option key={task.id} value={String(task.id)}>{`#${task.id} ${task.title}`}</option>
               ))}
@@ -294,7 +296,7 @@ export function CronjobManager() {
                 value={form.targetRef}
                 onChange={(e) => setForm((f) => ({ ...f, targetRef: e.target.value }))}
               >
-                <option value="">Tool auswaehlen</option>
+                <option value="">{t("cronjobs.chooseTool")}</option>
                 {(toolsQuery.data ?? []).map((tool) => (
                   <option key={tool.name} value={tool.name}>{tool.name}</option>
                 ))}
@@ -315,14 +317,14 @@ export function CronjobManager() {
                 value={form.targetRef}
                 onChange={(e) => setForm((f) => ({ ...f, targetRef: e.target.value }))}
               >
-                <option value="">Skill auswaehlen</option>
+                <option value="">{t("cronjobs.chooseSkill")}</option>
                 {(skillsQuery.data ?? []).map((skill) => (
                   <option key={skill.slug} value={skill.slug}>{skill.slug}</option>
                 ))}
               </select>
               <textarea
                 className="input w-full min-h-[96px]"
-                placeholder="Optionaler Prompt fuer Skill-Run"
+                placeholder={t("cronjobs.optionalSkillPrompt")}
                 value={form.promptText}
                 onChange={(e) => setForm((f) => ({ ...f, promptText: e.target.value }))}
               />
@@ -332,7 +334,7 @@ export function CronjobManager() {
           {form.targetType === "prompt" && (
             <textarea
               className="input w-full min-h-[120px]"
-              placeholder="Prompt text"
+              placeholder={t("cronjobs.promptText")}
               value={form.promptText}
               onChange={(e) => setForm((f) => ({ ...f, promptText: e.target.value }))}
             />
@@ -344,7 +346,7 @@ export function CronjobManager() {
               checked={form.enabled}
               onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
             />
-            Aktiv
+            {t("common.active")}
           </label>
 
           {formError && <p className="text-sm text-red-300">{formError}</p>}
@@ -356,16 +358,16 @@ export function CronjobManager() {
               className="btn-primary inline-flex items-center gap-2"
             >
               {form.id ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-              {form.id ? "Speichern" : "Erstellen"}
+              {form.id ? t("common.save") : t("common.create")}
             </button>
-            <button onClick={resetForm} className="btn-secondary">Reset</button>
+            <button onClick={resetForm} className="btn-secondary">{t("common.reset")}</button>
           </div>
         </section>
 
         <section className="xl:col-span-2 card">
-          <h2 className="font-semibold mb-3">Geplante Jobs</h2>
+          <h2 className="font-semibold mb-3">{t("cronjobs.scheduledJobs")}</h2>
           <div className="space-y-2">
-            {sortedJobs.length === 0 && <p className="text-sm text-gray-400">Keine Cronjobs angelegt.</p>}
+            {sortedJobs.length === 0 && <p className="text-sm text-gray-400">{t("cronjobs.noJobs")}</p>}
             {sortedJobs.map((job) => (
               <article key={job.id} className="rounded-lg border border-gray-800 bg-gray-950/70 p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
@@ -374,26 +376,26 @@ export function CronjobManager() {
                     <p className="text-xs text-gray-400">#{job.id} | {job.schedule}</p>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded border ${job.enabled ? "border-green-500/50 text-green-300" : "border-gray-600 text-gray-400"}`}>
-                    {job.enabled ? "aktiv" : "deaktiviert"}
+                    {job.enabled ? t("common.enabled") : t("common.disabled")}
                   </span>
                 </div>
 
                 <div className="text-xs text-gray-300 grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <div>Target: {job.targetType}{job.targetRef ? ` (${job.targetRef})` : ""}</div>
-                  <div>Next: {toLocalDateTime(job.nextRunAt)}</div>
-                  <div>Last: {toLocalDateTime(job.lastRunAt)}</div>
-                  <div>Status: {job.lastStatus ?? "-"}</div>
+                  <div>{t("cronjobs.target")}: {job.targetType}{job.targetRef ? ` (${job.targetRef})` : ""}</div>
+                  <div>{t("cronjobs.next")}: {toLocalDateTime(job.nextRunAt)}</div>
+                  <div>{t("cronjobs.last")}: {toLocalDateTime(job.lastRunAt)}</div>
+                  <div>{t("common.status")}: {job.lastStatus ?? t("common.none")}</div>
                 </div>
 
-                {job.lastError && <p className="text-xs text-red-300">Error: {job.lastError}</p>}
-                {job.lastResult && <p className="text-xs text-gray-400 line-clamp-2">Result: {job.lastResult}</p>}
+                {job.lastError && <p className="text-xs text-red-300">{t("cronjobs.error")}: {job.lastError}</p>}
+                {job.lastResult && <p className="text-xs text-gray-400 line-clamp-2">{t("cronjobs.result")}: {job.lastResult}</p>}
 
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     onClick={() => setForm(buildFormFromJob(job))}
                     className="btn-secondary text-xs"
                   >
-                    Edit
+                    {t("common.edit")}
                   </button>
                   <button
                     onClick={() => runJob.mutate(job.id)}
@@ -401,7 +403,7 @@ export function CronjobManager() {
                     disabled={runJob.isPending}
                   >
                     <Play className="w-3.5 h-3.5" />
-                    Run now
+                    {t("common.runNow")}
                   </button>
                   <button
                     onClick={() =>
@@ -412,14 +414,14 @@ export function CronjobManager() {
                     }
                     className="btn-secondary text-xs"
                   >
-                    {job.enabled ? "Disable" : "Enable"}
+                    {job.enabled ? t("common.disable") : t("common.enable")}
                   </button>
                   <button
                     onClick={() => deleteJob.mutate(job.id)}
                     className="inline-flex items-center gap-1 px-2 py-1 rounded bg-red-600/20 text-red-300 hover:bg-red-600/30 text-xs"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    Delete
+                    {t("common.delete")}
                   </button>
                 </div>
               </article>

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { FileText, FolderOpen, Upload, Trash2, Plus, RefreshCw, Save, ArrowRightLeft, Download } from "lucide-react";
 import { CodePreview } from "../common/CodePreview";
+import { useI18n } from "../../lib/i18n";
 
 interface SharedItem {
   path: string;
@@ -25,6 +26,7 @@ interface SharedReadResponse {
 }
 
 export function SharedWorkspace() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -177,7 +179,7 @@ export function SharedWorkspace() {
 
   const selectPath = (path: string) => {
     if (hasTextChanges) {
-      const proceed = window.confirm("Ungespeicherte Änderungen verwerfen?");
+      const proceed = window.confirm(t("shared.discardConfirm"));
       if (!proceed) return;
     }
     setSelectedPath(path);
@@ -188,7 +190,7 @@ export function SharedWorkspace() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Shared Workspace</h1>
-          <p className="text-sm text-gray-400">Gemeinsames Verzeichnis fuer Uploads und Agent-Artefakte</p>
+          <p className="text-sm text-gray-400">{t("shared.subtitle")}</p>
           <p className="text-xs text-gray-500 mt-1">Root: {data?.root ?? "-"}</p>
         </div>
         <div className="flex items-center gap-2">
@@ -198,11 +200,11 @@ export function SharedWorkspace() {
             disabled={upload.isPending}
           >
             <Upload className="w-4 h-4" />
-            Datei hochladen
+            {t("shared.uploadFile")}
           </button>
           <button onClick={refresh} className="btn-secondary flex items-center gap-2" disabled={isFetching}>
             <RefreshCw className="w-4 h-4" />
-            Aktualisieren
+            {t("common.refresh")}
           </button>
           <input
             ref={fileInputRef}
@@ -223,7 +225,7 @@ export function SharedWorkspace() {
       <div className="grid grid-cols-1 xl:grid-cols-[420px,1fr] gap-4 h-[calc(100%-95px)] min-h-[520px]">
         <section className="card overflow-y-auto space-y-3">
           <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3 space-y-2">
-            <p className="text-sm font-semibold">Neue Datei erstellen</p>
+            <p className="text-sm font-semibold">{t("shared.createFile")}</p>
             <input
               className="input"
               placeholder="z. B. prompts/review.md"
@@ -242,7 +244,7 @@ export function SharedWorkspace() {
               className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
             >
               <Plus className="w-4 h-4" />
-              Datei anlegen
+              {t("shared.createFileButton")}
             </button>
           </div>
 
@@ -268,13 +270,13 @@ export function SharedWorkspace() {
             ))}
 
             {files.length === 0 && (
-              <div className="text-sm text-gray-500 py-4 text-center">Noch keine Dateien vorhanden.</div>
+              <div className="text-sm text-gray-500 py-4 text-center">{t("shared.noFiles")}</div>
             )}
           </div>
         </section>
 
         <section className="card overflow-y-auto">
-          {!selectedPath && <p className="text-gray-500">Datei oder Ordner links auswählen.</p>}
+          {!selectedPath && <p className="text-gray-500">{t("shared.selectLeft")}</p>}
 
           {selectedPath && selectedItem && (
             <div className="space-y-3">
@@ -299,7 +301,7 @@ export function SharedWorkspace() {
                     disabled={deletePath.isPending}
                   >
                     <Trash2 className="w-4 h-4" />
-                    Löschen
+                    {t("shared.delete")}
                   </button>
                 </div>
               </div>
@@ -322,7 +324,7 @@ export function SharedWorkspace() {
                     className="btn-secondary flex items-center gap-2 disabled:opacity-50"
                   >
                     <ArrowRightLeft className="w-4 h-4" />
-                    Verschieben
+                    {t("shared.move")}
                   </button>
                 </div>
               </div>
@@ -336,7 +338,7 @@ export function SharedWorkspace() {
                   />
                   <div className="rounded-lg border border-gray-800 overflow-hidden">
                     <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-800 bg-gray-900/60">
-                      Vorschau mit Syntax-Highlighting
+                      {t("shared.preview")}
                     </div>
                     <CodePreview code={editorContent} language={selectedLanguage} maxHeight={320} fontSize={12} />
                   </div>
@@ -347,7 +349,7 @@ export function SharedWorkspace() {
                       className="btn-primary flex items-center gap-2 disabled:opacity-50"
                     >
                       <Save className="w-4 h-4" />
-                      Speichern
+                      {t("shared.save")}
                     </button>
                   </div>
                 </div>
@@ -358,13 +360,13 @@ export function SharedWorkspace() {
                   {imageDataUrl ? (
                     <img src={imageDataUrl} alt={selectedItem.path} className="max-h-[420px] rounded border border-gray-800" />
                   ) : (
-                    <div>Binärdatei ({readSelected.data.size} Bytes). Vorschau nicht verfügbar.</div>
+                    <div>{t("shared.binaryNoPreview")} ({readSelected.data.size} Bytes).</div>
                   )}
                 </div>
               )}
 
               {selectedItem.type === "directory" && (
-                <div className="text-sm text-gray-400">Ordner ausgewählt. Enthaltene Dateien siehst du in der Liste links.</div>
+                <div className="text-sm text-gray-400">{t("shared.directorySelected")}</div>
               )}
             </div>
           )}

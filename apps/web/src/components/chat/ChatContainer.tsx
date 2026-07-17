@@ -4,6 +4,7 @@ import { useAppStore } from "../../lib/store";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 interface ConversationItem {
   id: number;
@@ -41,17 +42,21 @@ const eventIcon = (eventType?: "plan" | "iteration" | "tool_call" | "tool_result
   return <BrainCircuit className="w-4 h-4 text-purple-300" />;
 };
 
-const eventLabel = (eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail") => {
-  if (eventType === "plan") return "Plan";
-  if (eventType === "tool_call") return "Tool Call";
-  if (eventType === "tool_result") return "Tool Result";
-  if (eventType === "iteration") return "Iteration";
-  if (eventType === "decision") return "Decision";
-  if (eventType === "guardrail") return "Guardrail";
-  return "Reasoning";
+const eventLabel = (
+  t: (key: string) => string,
+  eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail"
+) => {
+  if (eventType === "plan") return t("chat.eventPlan");
+  if (eventType === "tool_call") return t("chat.eventToolCall");
+  if (eventType === "tool_result") return t("chat.eventToolResult");
+  if (eventType === "iteration") return t("chat.eventIteration");
+  if (eventType === "decision") return t("chat.eventDecision");
+  if (eventType === "guardrail") return t("chat.eventGuardrail");
+  return t("chat.eventReasoning");
 };
 
 export function ChatContainer() {
+  const { t } = useI18n();
   const {
     messages,
     sendMessage,
@@ -173,7 +178,7 @@ export function ChatContainer() {
         return {
           id: `db-${msg.id}`,
           role: "event" as const,
-          content: success ? "Tool-Ausführung erfolgreich" : `Tool-Ausführung fehlgeschlagen${error ? `: ${error}` : ""}`,
+          content: success ? t("chat.toolSuccess") : `${t("chat.toolFailed")}${error ? `: ${error}` : ""}`,
           timestamp: msg.createdAt,
           eventType: "tool_result" as const,
           eventData: typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : { raw: parsed },
@@ -207,7 +212,7 @@ export function ChatContainer() {
         const base64 = value.includes(",") ? (value.split(",")[1] ?? "") : value;
         resolve(base64);
       };
-      reader.onerror = () => reject(new Error("Datei konnte nicht gelesen werden"));
+      reader.onerror = () => reject(new Error(t("chat.attachFile")));
       reader.readAsDataURL(file);
     });
 
@@ -231,9 +236,9 @@ export function ChatContainer() {
 
         const imagePaths = uploadedPaths.filter((p) => /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(p));
         const list = uploadedPaths.map((p) => `- shared-workspace/${p}`).join("\n");
-        uploadSummary = `\n\nAngehängte Dateien (im Shared Workspace):\n${list}`;
+        uploadSummary = `\n\n${t("chat.attachedFilesHeader")}\n${list}`;
         if (analyzeImages && imagePaths.length > 0) {
-          uploadSummary += `\n\nBitte analysiere die Bilddateien inhaltlich und beschreibe relevante Details: \n${imagePaths
+          uploadSummary += `\n\n${t("chat.pleaseAnalyzeImages")}\n${imagePaths
             .map((p) => `- shared-workspace/${p}`)
             .join("\n")}`;
         }
@@ -262,14 +267,14 @@ export function ChatContainer() {
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <aside className={`${showConversationList ? "block" : "hidden"} lg:block ${compactMode ? "lg:w-72" : "lg:w-80"} w-full border-b lg:border-b-0 lg:border-r border-gray-800 p-3 overflow-y-auto space-y-2 max-h-[42vh] lg:max-h-none shrink-0`}>
         <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-semibold">Chats</h2>
+          <h2 className="text-sm font-semibold">{t("chat.chats")}</h2>
           <button
             onClick={() => {
               clearChat();
             }}
             className="text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700"
           >
-            Neu
+            {t("chat.new")}
           </button>
         </div>
 
@@ -293,7 +298,7 @@ export function ChatContainer() {
         ))}
 
         {(conversationsQuery.data ?? []).length === 0 && (
-          <div className="text-xs text-gray-500 py-4">Noch keine gespeicherten Chats.</div>
+          <div className="text-xs text-gray-500 py-4">{t("chat.noSaved")}</div>
         )}
       </aside>
 
@@ -306,7 +311,7 @@ export function ChatContainer() {
             className="btn-secondary lg:hidden flex items-center gap-2"
           >
             <PanelLeft className="w-4 h-4" />
-            Chats
+            {t("chat.chats")}
           </button>
           <h1 className="font-semibold truncate">Chat</h1>
         </div>
@@ -315,7 +320,7 @@ export function ChatContainer() {
             onClick={() => setCompactMode((prev) => !prev)}
             className="btn-secondary text-sm"
           >
-            {compactMode ? "Komfort" : "Kompakt"}
+            {compactMode ? t("chat.comfort") : t("chat.compact")}
           </button>
           {isLoading && (
             <button onClick={stopMessage} className="btn-secondary flex items-center gap-2 text-sm">
@@ -325,7 +330,7 @@ export function ChatContainer() {
           )}
           <button onClick={clearChat} className="btn-secondary flex items-center gap-2 text-sm">
             <Trash2 className="w-4 h-4" />
-            Leeren
+            {t("chat.clear")}
           </button>
         </div>
       </div>
@@ -336,7 +341,7 @@ export function ChatContainer() {
         {messages.length === 0 && (
           <div className="text-center text-gray-500 mt-20">
             <Bot className="w-12 h-12 mx-auto mb-4 text-gray-700" />
-            <p>Starte eine Unterhaltung mit DucKI</p>
+            <p>{t("chat.startConversation")}</p>
           </div>
         )}
 
@@ -354,7 +359,7 @@ export function ChatContainer() {
               <summary className="list-none cursor-pointer select-none flex items-center justify-between gap-3">
                 <span className="flex items-center gap-2 min-w-0">
                   {eventIcon(msg.eventType)}
-                  <span className="font-medium whitespace-nowrap">{eventLabel(msg.eventType)}</span>
+                  <span className="font-medium whitespace-nowrap">{eventLabel(t, msg.eventType)}</span>
                   <span className="text-indigo-200/80 truncate">{msg.content}</span>
                 </span>
                 <span className="text-[10px] text-indigo-200/70 whitespace-nowrap">
@@ -438,9 +443,9 @@ export function ChatContainer() {
                   <div className="mt-2 space-y-1 text-[11px] opacity-90">
                     {metadata.attachments.map((attachment, index) => (
                       <div key={index} className="rounded border border-white/10 bg-black/20 px-2 py-1">
-                        <div className="font-medium">{String(attachment.name ?? `Datei ${index + 1}`)}</div>
+                        <div className="font-medium">{String(attachment.name ?? `${t("chat.fileLabel")} ${index + 1}`)}</div>
                         <div className="opacity-80 break-all">
-                          {String(attachment.path ?? attachment.url ?? attachment.mimeType ?? "Attachment")}
+                          {String(attachment.path ?? attachment.url ?? attachment.mimeType ?? t("chat.noAttachmentLabel"))}
                         </div>
                       </div>
                     ))}
@@ -458,7 +463,7 @@ export function ChatContainer() {
 
                   return (
                   <div className="mt-2 rounded border border-white/10 bg-black/20 px-2 py-1 text-[11px] opacity-90">
-                    <div className="font-medium">Spracheingabe</div>
+                    <div className="font-medium">{t("chat.voiceInput")}</div>
                     <div className="opacity-80">{String(metadata.voice.transcript ?? "")}</div>
                   </div>
                   );
@@ -511,7 +516,7 @@ export function ChatContainer() {
               className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border ${analyzeImages ? "bg-blue-500/20 border-blue-500/40 text-blue-200" : "bg-gray-800 border-gray-700 text-gray-300"}`}
             >
               <ImageIcon className="w-3 h-3" />
-              Bildanalyse {analyzeImages ? "AN" : "AUS"}
+              {analyzeImages ? t("chat.imageAnalysisOn") : t("chat.imageAnalysisOff")}
             </button>
           </div>
         )}
@@ -531,7 +536,7 @@ export function ChatContainer() {
           <button
             onClick={() => fileInputRef.current?.click()}
             className="btn-secondary flex items-center gap-2"
-            title="Datei anhängen"
+            title={t("chat.attachFile")}
           >
             <Paperclip className="w-4 h-4" />
           </button>
@@ -540,7 +545,7 @@ export function ChatContainer() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Nachricht eingeben... (Enter zum Senden)"
+            placeholder={t("chat.inputPlaceholder")}
             rows={1}
             className={`input flex-1 resize-none min-h-[40px] ${compactMode ? "max-h-24 sm:max-h-32" : "max-h-28 sm:max-h-40"}`}
             style={{ height: "auto" }}

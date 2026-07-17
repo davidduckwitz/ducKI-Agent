@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Wrench } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 export function ToolRegistry() {
+  const { t } = useI18n();
   const { data: tools = [] } = useQuery({
     queryKey: ["tools"],
     queryFn: () => api.tools.list(),
@@ -28,7 +30,7 @@ export function ToolRegistry() {
         {tools.length === 0 && (
           <div className="col-span-2 text-center text-gray-500 py-12">
             <Wrench className="w-10 h-10 mx-auto mb-3 text-gray-700" />
-            <p>Keine Tools geladen</p>
+            <p>{t("toolsPage.noTools")}</p>
           </div>
         )}
       </div>

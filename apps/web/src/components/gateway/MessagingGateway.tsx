@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Send, Search, MessageSquare, Settings2, Mic, Image as ImageIcon, Smile, Copy, Upload } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 type GatewayConfig = {
   id: string;
@@ -64,6 +65,7 @@ function webhookSecretLabel(portal: string): string {
 }
 
 export function MessagingGateway() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
@@ -177,7 +179,7 @@ export function MessagingGateway() {
           <p className="text-xs uppercase tracking-[0.3em] text-cyan-300">Messaging Gateway</p>
           <h1 className="text-3xl font-semibold mt-2">Discord, Telegram und andere Portale an den Agenten anbinden</h1>
           <p className="text-sm text-gray-400 mt-2 max-w-3xl">
-            Externe Portal-Nachrichten laufen hier in echte Conversations ein und erscheinen danach im normalen Chat-Verlauf.
+            {t("gatewayPage.subtitle")}
           </p>
         </div>
         <button
@@ -186,7 +188,7 @@ export function MessagingGateway() {
           className="inline-flex items-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-4 py-2 text-sm text-gray-200 hover:border-gray-500"
         >
           <RefreshCw className="w-4 h-4" />
-          Neu laden
+          {t("gatewayPage.reload")}
         </button>
       </div>
 
@@ -194,8 +196,8 @@ export function MessagingGateway() {
         <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5 shadow-xl shadow-black/20">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
-              <h2 className="text-lg font-semibold flex items-center gap-2"><Settings2 className="w-4 h-4 text-cyan-300" /> Gateway-Konfiguration</h2>
-              <p className="text-sm text-gray-400">Aktivierte Portale und Zuordnungen speichern.</p>
+              <h2 className="text-lg font-semibold flex items-center gap-2"><Settings2 className="w-4 h-4 text-cyan-300" /> {t("gatewayPage.config")}</h2>
+              <p className="text-sm text-gray-400">{t("gatewayPage.configHint")}</p>
             </div>
             <button
               type="button"
@@ -222,7 +224,7 @@ export function MessagingGateway() {
               className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400"
             >
               <Plus className="w-4 h-4" />
-              Gateway hinzufügen
+              {t("gatewayPage.addGateway")}
             </button>
           </div>
 
@@ -275,7 +277,7 @@ export function MessagingGateway() {
           <div className="space-y-3">
             {mergedConfigs.length === 0 ? (
               <div className="rounded-xl border border-dashed border-gray-700 bg-gray-950/60 p-4 text-sm text-gray-400">
-                Noch keine Gateways konfiguriert. Füge Discord oder Telegram hinzu, um Inbound-Nachrichten zu importieren.
+                {t("gatewayPage.noGateways")}
               </div>
             ) : (
               mergedConfigs.map((config, index) => (
@@ -290,7 +292,7 @@ export function MessagingGateway() {
                       onClick={() => updateConfig(index, { enabled: !config.enabled })}
                       className={`rounded-full px-3 py-1 text-xs font-medium ${config.enabled ? "bg-emerald-500/20 text-emerald-300" : "bg-gray-800 text-gray-400"}`}
                     >
-                      {config.enabled ? "Aktiv" : "Inaktiv"}
+                      {config.enabled ? t("gatewayPage.active") : t("gatewayPage.inactive")}
                     </button>
                   </div>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -336,7 +338,7 @@ export function MessagingGateway() {
                     </label>
                   </div>
                   <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-xs text-cyan-100 break-all">
-                    <div className="font-semibold mb-1">Inbound Webhook</div>
+                    <div className="font-semibold mb-1">{t("gatewayPage.inboundWebhook")}</div>
                     <div className="text-cyan-200/80">{endpointFor(config.id)?.webhookUrl ?? "Wird beim Neuladen erzeugt"}</div>
                     <div className="mt-1 text-cyan-200/60">
                       Telegram sendet Updates an diesen Endpoint. Discord kann ueber einen kleinen Bridge-Service denselben Payload schicken.
@@ -350,14 +352,14 @@ export function MessagingGateway() {
 
         <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5 shadow-xl shadow-black/20 space-y-5">
           <div>
-            <h2 className="text-lg font-semibold flex items-center gap-2"><MessageSquare className="w-4 h-4 text-cyan-300" /> Gateway-Chats</h2>
-            <p className="text-sm text-gray-400">Portal-Konversationen tauchen hier als normale Chats auf.</p>
+            <h2 className="text-lg font-semibold flex items-center gap-2"><MessageSquare className="w-4 h-4 text-cyan-300" /> {t("gatewayPage.chats")}</h2>
+            <p className="text-sm text-gray-400">{t("gatewayPage.chatsHint")}</p>
           </div>
 
           <div className="space-y-3 max-h-[22rem] overflow-y-auto pr-1">
             {conversations.length === 0 ? (
               <div className="rounded-xl border border-dashed border-gray-700 bg-gray-950/60 p-4 text-sm text-gray-400">
-                Noch keine importierten Gateway-Conversations.
+                {t("gatewayPage.noConversations")}
               </div>
             ) : (
               conversations.map((conversation: GatewayConversation) => (
@@ -380,7 +382,7 @@ export function MessagingGateway() {
           </div>
 
           <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
-            <h3 className="text-sm font-semibold flex items-center gap-2"><Search className="w-4 h-4 text-cyan-300" /> Chat-Historie durchsuchen</h3>
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Search className="w-4 h-4 text-cyan-300" /> {t("gatewayPage.searchHistory")}</h3>
             <div className="flex gap-2">
               <input
                 value={query}
@@ -396,7 +398,7 @@ export function MessagingGateway() {
                 onClick={() => setSearchText(query)}
                 className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400"
               >
-                Suchen
+                {t("gatewayPage.search")}
               </button>
             </div>
 
@@ -417,23 +419,23 @@ export function MessagingGateway() {
               ))}
               {searchText.trim().length > 0 && hits.length === 0 ? (
                 <div className="rounded-lg border border-dashed border-gray-700 bg-gray-900/70 p-3 text-sm text-gray-400">
-                  Keine Treffer gefunden.
+                  {t("gatewayPage.noHits")}
                 </div>
               ) : null}
             </div>
           </div>
 
           <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-4 space-y-3">
-            <h3 className="text-sm font-semibold flex items-center gap-2"><Upload className="w-4 h-4 text-cyan-300" /> Gateway-Inbound simulieren</h3>
+            <h3 className="text-sm font-semibold flex items-center gap-2"><Upload className="w-4 h-4 text-cyan-300" /> {t("gatewayPage.simulateInbound")}</h3>
             <div className="grid gap-3 md:grid-cols-2">
               <label className="space-y-1 text-xs text-gray-400 md:col-span-2">
-                <span>Ziel-Gateway</span>
+                <span>{t("gatewayPage.chooseGateway")}</span>
                 <select
                   value={demoConfig?.id ?? ""}
                   onChange={(event) => setDemoConfigId(event.target.value)}
                   className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm outline-none"
                 >
-                  <option value="">Gateway auswählen</option>
+                  <option value="">{t("gatewayPage.chooseGateway")}</option>
                   {mergedConfigs.map((config) => (
                     <option key={config.id} value={config.id}>
                       {config.portal} · {config.name}{config.channelHint ? ` · ${config.channelHint}` : ""}
@@ -442,7 +444,7 @@ export function MessagingGateway() {
                 </select>
               </label>
               <label className="space-y-1 text-xs text-gray-400">
-                <span>Nachrichtenmodus</span>
+                <span>{t("gatewayPage.messageMode")}</span>
                 <select value={inboundMode} onChange={(event) => setInboundMode(event.target.value as "text" | "voice" | "file")} className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm outline-none">
                   <option value="text">Text</option>
                   <option value="voice">Sprache</option>

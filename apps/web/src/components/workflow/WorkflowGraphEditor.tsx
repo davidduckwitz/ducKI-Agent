@@ -2,6 +2,7 @@ import { useMemo, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Play, RotateCcw, Save, Trash2, Link2, Zap } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 type Role = "manager" | "research" | "coding" | "review" | "browser";
 type NodeStatus = "pending" | "running" | "completed" | "failed";
@@ -67,6 +68,7 @@ function formatRole(role: Role): string {
 
 export function WorkflowGraphEditor() {
   const qc = useQueryClient();
+  const { t } = useI18n();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [edgeFrom, setEdgeFrom] = useState<string>("");
@@ -209,13 +211,13 @@ export function WorkflowGraphEditor() {
     <div className="p-6 h-full flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Workflow Graph Editor</h1>
-          <p className="text-sm text-gray-400">Multi-Agent Rollen, persistente Pläne und Resume über Sessions</p>
+          <h1 className="text-2xl font-bold">{t("workflowPage.title")}</h1>
+          <p className="text-sm text-gray-400">{t("workflowPage.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => createWorkflow.mutate()} className="btn-secondary flex items-center gap-2">
             <Plus className="w-4 h-4" />
-            Neuer Workflow
+            {t("workflowPage.newWorkflow")}
           </button>
           {selectedWorkflow && (
             <>
@@ -277,7 +279,7 @@ export function WorkflowGraphEditor() {
         >
           {!selectedWorkflow && (
             <div className="h-full grid place-items-center text-gray-500">
-              Wähle einen Workflow oder erstelle einen neuen.
+              {t("workflowPage.chooseOrCreate")}
             </div>
           )}
 
@@ -345,7 +347,7 @@ export function WorkflowGraphEditor() {
           {selectedWorkflow ? (
             <>
               <div className="space-y-2">
-                <h2 className="font-semibold">Workflow</h2>
+                <h2 className="font-semibold">{t("workflowPage.workflow")}</h2>
                 <input
                   className="input w-full"
                   value={selectedWorkflow.name}
@@ -392,7 +394,7 @@ export function WorkflowGraphEditor() {
                 </select>
                 <button onClick={addEdge} className="btn-secondary w-full flex items-center justify-center gap-2">
                   <Zap className="w-4 h-4" />
-                  Kante hinzufügen
+                  {t("workflowPage.addEdge")}
                 </button>
                 <div className="space-y-1 max-h-24 overflow-y-auto">
                   {selectedWorkflow.edges.map((edge) => (
@@ -432,7 +434,7 @@ export function WorkflowGraphEditor() {
                     className="btn-danger w-full flex items-center justify-center gap-2"
                   >
                     <Trash2 className="w-4 h-4" />
-                    Node entfernen
+                    {t("workflowPage.removeNode")}
                   </button>
                   {selectedNode.result && (
                     <pre className="text-xs whitespace-pre-wrap bg-black/40 border border-gray-800 rounded-lg p-2 max-h-52 overflow-y-auto">
@@ -452,11 +454,11 @@ export function WorkflowGraphEditor() {
                 className="btn-primary w-full flex items-center justify-center gap-2"
               >
                 <Save className="w-4 h-4" />
-                Jetzt speichern
+                {t("workflowPage.saveNow")}
               </button>
             </>
           ) : (
-            <div className="text-gray-500">Kein Workflow gewählt.</div>
+            <div className="text-gray-500">{t("workflowPage.noneSelected")}</div>
           )}
         </aside>
       </div>

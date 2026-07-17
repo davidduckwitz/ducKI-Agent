@@ -5,6 +5,7 @@ import { Dashboard } from "./components/dashboard/Dashboard";
 import { ChatContainer } from "./components/chat/ChatContainer";
 import { ProjectManager } from "./components/projects/ProjectManager";
 import { TaskManager } from "./components/tasks/TaskManager";
+import { useI18n } from "./lib/i18n";
 
 const ToolRegistry = lazy(async () => {
   const module = await import("./components/tools/ToolRegistry");
@@ -56,10 +57,13 @@ const CronjobManager = lazy(async () => {
 });
 
 function LazyRoute({ children }: { children: ReactNode }) {
-  return <Suspense fallback={<div className="p-6 text-sm text-gray-400">Seite wird geladen...</div>}>{children}</Suspense>;
+  const { t } = useI18n();
+  return <Suspense fallback={<div className="p-6 text-sm text-gray-400">{t("app.loadingPage")}</div>}>{children}</Suspense>;
 }
 
 export default function App() {
+  const { t } = useI18n();
+
   return (
     <BrowserRouter>
       <Routes>
@@ -76,7 +80,7 @@ export default function App() {
           <Route
             path="memory"
             element={
-              <Suspense fallback={<div className="p-6 text-sm text-gray-400">Memory wird geladen...</div>}>
+              <Suspense fallback={<div className="p-6 text-sm text-gray-400">{t("app.loadingMemory")}</div>}>
                 <MemoryBrowser />
               </Suspense>
             }

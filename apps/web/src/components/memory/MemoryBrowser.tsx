@@ -25,6 +25,7 @@ import {
   YAxis,
 } from "recharts";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 interface MemoryEntry {
   id: number;
@@ -59,6 +60,7 @@ function MemoryTypeIcon({ type }: { type: string }) {
 }
 
 export function MemoryBrowser() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [agentBehavior, setAgentBehavior] = useState("");
@@ -185,14 +187,14 @@ export function MemoryBrowser() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Memory</h1>
-          <p className="text-sm text-gray-400">Übersicht, Profile, Approval-Queue und Visualisierung</p>
+          <p className="text-sm text-gray-400">{t("memoryPage.subtitle")}</p>
         </div>
         <button
           onClick={() => setShowProfileModal(true)}
           className="btn-primary flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
-          Profile-Eintrag
+          {t("memoryPage.profileEntry")}
         </button>
       </div>
 
@@ -209,14 +211,14 @@ export function MemoryBrowser() {
           onClick={() => setActiveTab("profile")}
         >
           <UserRound className="w-4 h-4" />
-          Profile
+          {t("memoryPage.profile")}
         </button>
         <button
           className={`btn-secondary flex items-center gap-2 ${activeTab === "approvals" ? "ring-2 ring-amber-500" : ""}`}
           onClick={() => setActiveTab("approvals")}
         >
           <ShieldCheck className="w-4 h-4" />
-          Approvals
+          {t("memoryPage.approvals")}
         </button>
       </div>
 
@@ -225,28 +227,28 @@ export function MemoryBrowser() {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
         <div className="card flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-400">Gesamt-Einträge</p>
+            <p className="text-xs text-gray-400">{t("memoryPage.totalEntries")}</p>
             <p className="text-2xl font-semibold">{sortedMemories.length}</p>
           </div>
           <Database className="w-6 h-6 text-blue-300" />
         </div>
         <div className="card flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-400">Ø Wichtigkeit</p>
+            <p className="text-xs text-gray-400">{t("memoryPage.avgImportance")}</p>
             <p className="text-2xl font-semibold">{avgImportance.toFixed(1)}</p>
           </div>
           <Gauge className="w-6 h-6 text-emerald-300" />
         </div>
         <div className="card flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-400">Memory-Typen</p>
+            <p className="text-xs text-gray-400">{t("memoryPage.memoryTypes")}</p>
             <p className="text-2xl font-semibold">{memoryTypeStats.length}</p>
           </div>
           <BarChart3 className="w-6 h-6 text-amber-300" />
         </div>
         <div className="card flex items-center justify-between">
           <div>
-            <p className="text-xs text-gray-400">Pending Approvals</p>
+            <p className="text-xs text-gray-400">{t("memoryPage.pendingApprovals")}</p>
             <p className="text-2xl font-semibold">{pendingWrites.length}</p>
           </div>
           <Clock3 className="w-6 h-6 text-violet-300" />
@@ -259,7 +261,7 @@ export function MemoryBrowser() {
             <BarChart3 className="w-4 h-4" />
             Verteilung nach Memory-Typ
           </div>
-          {memoryTypeStats.length === 0 && <p className="text-sm text-gray-500">Noch keine Daten</p>}
+          {memoryTypeStats.length === 0 && <p className="text-sm text-gray-500">{t("memoryPage.noData")}</p>}
           {memoryTypeStats.length > 0 && (
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
@@ -282,7 +284,7 @@ export function MemoryBrowser() {
         <div className="card space-y-3">
           <div className="flex items-center gap-2 text-sm text-gray-300">
             <Clock3 className="w-4 h-4" />
-            Aktivität über Zeit
+            {t("memoryPage.activityOverTime")}
           </div>
           {timelineBuckets.length > 0 && (
             <div className="h-56">
@@ -308,7 +310,7 @@ export function MemoryBrowser() {
         <div className="flex flex-wrap items-center gap-2">
           <input
             className="input min-w-[220px]"
-            placeholder="Memory durchsuchen..."
+            placeholder={t("memoryPage.searchPlaceholder")}
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
@@ -323,7 +325,7 @@ export function MemoryBrowser() {
               setPage(1);
             }}
           >
-            <option value="all">Alle Typen</option>
+            <option value="all">{t("memoryPage.allTypes")}</option>
             <option value="long-term">long-term</option>
             <option value="semantic">semantic</option>
             <option value="episodic">episodic</option>
@@ -344,7 +346,7 @@ export function MemoryBrowser() {
                   {mem.type}
                 </span>
                 <span className="text-xs text-gray-500">
-                  Wichtigkeit: {mem.importance}
+                  {t("memoryPage.importance")}: {mem.importance}
                 </span>
               </div>
             </div>
@@ -356,18 +358,18 @@ export function MemoryBrowser() {
         {filteredMemories.length === 0 && (
           <div className="text-center text-gray-500 py-12">
             <Brain className="w-10 h-10 mx-auto mb-3 text-gray-700" />
-            <p>Keine Memory-Einträge</p>
+            <p>{t("memoryPage.noEntries")}</p>
           </div>
         )}
         </div>
 
         <div className="flex items-center justify-between pt-1">
           <p className="text-xs text-gray-500">
-            Seite {page} von {totalPages} • {filteredMemories.length} Treffer
+            {t("memoryPage.pageOf")} {page} {t("memoryPage.of")} {totalPages} • {filteredMemories.length} {t("memoryPage.hits")}
           </p>
           <div className="flex gap-2 items-center">
             <button className="btn-secondary" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
-              Zurück
+              {t("memoryPage.back")}
             </button>
             <div className="flex gap-1">
               {paginationButtons.map((p) => (
@@ -389,7 +391,7 @@ export function MemoryBrowser() {
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
             >
-              Weiter
+              {t("memoryPage.next")}
             </button>
           </div>
         </div>
@@ -403,7 +405,7 @@ export function MemoryBrowser() {
           <AlertTriangle className="w-4 h-4" />
           Pending Memory Approvals
         </div>
-        {pendingWrites.length === 0 && <p className="text-sm text-gray-500">Keine ausstehenden Freigaben</p>}
+        {pendingWrites.length === 0 && <p className="text-sm text-gray-500">{t("memoryPage.noPending")}</p>}
         {pendingWrites.map((entry) => {
           const payloadText = JSON.stringify(entry.payload, null, 2);
           return (
@@ -420,7 +422,7 @@ export function MemoryBrowser() {
                     disabled={rejectWrite.isPending || approveWrite.isPending}
                   >
                     <X className="w-3.5 h-3.5" />
-                    Ablehnen
+                    {t("memoryPage.reject")}
                   </button>
                   <button
                     className="btn-primary flex items-center gap-1"
@@ -428,7 +430,7 @@ export function MemoryBrowser() {
                     disabled={rejectWrite.isPending || approveWrite.isPending}
                   >
                     <Check className="w-3.5 h-3.5" />
-                    Freigeben
+                    {t("memoryPage.approve")}
                   </button>
                 </div>
               </div>
@@ -447,7 +449,7 @@ export function MemoryBrowser() {
             Agentenverhalten
           </div>
           <p className="text-sm text-gray-200 whitespace-pre-wrap min-h-[120px]">
-            {agentBehavior.trim().length > 0 ? agentBehavior : "Noch kein Eintrag vorhanden."}
+            {agentBehavior.trim().length > 0 ? agentBehavior : t("memoryPage.noEntryYet")}
           </p>
         </div>
         <div className="card space-y-3">
@@ -456,7 +458,7 @@ export function MemoryBrowser() {
             Infos zum Mensch
           </div>
           <p className="text-sm text-gray-200 whitespace-pre-wrap min-h-[120px]">
-            {humanInfo.trim().length > 0 ? humanInfo : "Noch kein Eintrag vorhanden."}
+            {humanInfo.trim().length > 0 ? humanInfo : t("memoryPage.noEntryYet")}
           </p>
         </div>
       </div>
@@ -466,7 +468,7 @@ export function MemoryBrowser() {
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-3xl rounded-xl border border-gray-800 bg-gray-950 shadow-2xl">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-              <h2 className="text-lg font-semibold">Memory-Profil hinterlegen</h2>
+              <h2 className="text-lg font-semibold">{t("memoryPage.storeProfile")}</h2>
               <button className="text-gray-400 hover:text-white" onClick={() => setShowProfileModal(false)}>
                 <X className="w-4 h-4" />
               </button>
@@ -476,7 +478,7 @@ export function MemoryBrowser() {
               <div className="space-y-2">
                 <label className="text-sm text-gray-300 flex items-center gap-2">
                   <Brain className="w-4 h-4 text-blue-300" />
-                  Eintragung für Agentenverhalten
+                  {t("memoryPage.behaviorEntry")}
                 </label>
                 <textarea
                   className="input w-full min-h-[140px]"
@@ -489,7 +491,7 @@ export function MemoryBrowser() {
               <div className="space-y-2">
                 <label className="text-sm text-gray-300 flex items-center gap-2">
                   <UserRound className="w-4 h-4 text-emerald-300" />
-                  Eintragung für Infos zum Mensch
+                  {t("memoryPage.humanEntry")}
                 </label>
                 <textarea
                   className="input w-full min-h-[140px]"
@@ -501,7 +503,7 @@ export function MemoryBrowser() {
 
               <div className="flex justify-end gap-2 pt-2">
                 <button className="btn-secondary" onClick={() => setShowProfileModal(false)}>
-                  Abbrechen
+                  {t("common.cancel")}
                 </button>
                 <button
                   className="btn-primary flex items-center gap-2"
@@ -509,7 +511,7 @@ export function MemoryBrowser() {
                   disabled={saveProfile.isPending}
                 >
                   <Save className="w-4 h-4" />
-                  {saveProfile.isPending ? "Speichert..." : "Speichern"}
+                  {saveProfile.isPending ? t("memoryPage.saveInProgress") : t("common.save")}
                 </button>
               </div>
             </div>

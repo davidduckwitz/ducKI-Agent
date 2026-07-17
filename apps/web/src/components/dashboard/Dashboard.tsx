@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, CheckSquare, Wrench, Brain, Bot, Activity } from "lucide-react";
+import { FolderOpen, CheckSquare, Wrench, Bot, Activity } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
+import { useI18n } from "../../lib/i18n";
 
 export function Dashboard() {
+  const { t } = useI18n();
   const { agentStatus, connected } = useAppStore();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => api.projects.list() });
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: () => api.tasks.list() });
@@ -11,28 +13,28 @@ export function Dashboard() {
 
   const stats = [
     {
-      label: "Projekte",
+      label: t("dashboard.projects"),
       value: (projects.data as unknown[])?.length ?? 0,
       icon: FolderOpen,
       color: "text-blue-400",
       bg: "bg-blue-400/10",
     },
     {
-      label: "Aufgaben",
+      label: t("dashboard.tasks"),
       value: (tasks.data as unknown[])?.length ?? 0,
       icon: CheckSquare,
       color: "text-green-400",
       bg: "bg-green-400/10",
     },
     {
-      label: "Tools",
+      label: t("dashboard.tools"),
       value: (tools.data as unknown[])?.length ?? 0,
       icon: Wrench,
       color: "text-purple-400",
       bg: "bg-purple-400/10",
     },
     {
-      label: "Agent Status",
+      label: t("dashboard.agentStatus"),
       value: agentStatus,
       icon: Bot,
       color: "text-yellow-400",
@@ -45,7 +47,7 @@ export function Dashboard() {
       <div>
         <h1 className="text-2xl font-bold">Dashboard</h1>
         <p className="text-gray-400 text-sm mt-1">
-          DucKI AI Coding Agent — Übersicht
+          {t("dashboard.subtitle")}
         </p>
       </div>
 
@@ -70,17 +72,17 @@ export function Dashboard() {
       <div className="card">
         <div className="flex items-center gap-2 mb-3">
           <Activity className="w-4 h-4 text-blue-400" />
-          <h2 className="font-semibold">System Status</h2>
+          <h2 className="font-semibold">{t("dashboard.systemStatus")}</h2>
         </div>
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
-            <span className="text-gray-400">WebSocket</span>
+            <span className="text-gray-400">{t("dashboard.websocket")}</span>
             <span className={connected ? "text-green-400" : "text-red-400"}>
-              {connected ? "Verbunden" : "Getrennt"}
+              {connected ? t("layout.connected") : t("layout.disconnected")}
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-gray-400">Agent</span>
+            <span className="text-gray-400">{t("dashboard.agent")}</span>
             <span className="capitalize text-white">{agentStatus}</span>
           </div>
         </div>

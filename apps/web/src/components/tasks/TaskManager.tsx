@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2, CheckSquare, Circle, Clock, Play, FolderOpen, X, Save } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 interface Task {
   id: number;
@@ -22,20 +23,13 @@ interface Project {
 
 type TaskColumnStatus = "pending" | "running" | "completed" | "failed";
 
-const COLUMNS: Array<{ key: TaskColumnStatus; label: string; accent: string }> = [
-  { key: "pending", label: "Backlog", accent: "border-slate-600" },
-  { key: "running", label: "In Arbeit", accent: "border-blue-500" },
-  { key: "completed", label: "Fertig", accent: "border-emerald-500" },
-  { key: "failed", label: "Blockiert", accent: "border-rose-500" },
-];
-
 const statusIcon = (status: string) => {
   if (status === "completed") return <CheckSquare className="w-4 h-4 text-green-400" />;
   if (status === "running") return <Clock className="w-4 h-4 text-blue-400 animate-spin" />;
   return <Circle className="w-4 h-4 text-gray-400" />;
 };
 
-const priorityBadge = (priority: string) => {
+const priorityBadge = (priority: string, label: string) => {
   const classes: Record<string, string> = {
     critical: "bg-red-500/20 text-red-400",
     high: "bg-orange-500/20 text-orange-400",
@@ -44,12 +38,13 @@ const priorityBadge = (priority: string) => {
   };
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full ${classes[priority] ?? classes.medium}`}>
-      {priority}
+      {label}
     </span>
   );
 };
 
 export function TaskManager() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<number | "all">("all");
@@ -140,9 +135,23 @@ export function TaskManager() {
   };
 
   const projectName = (projectId?: number) => {
-    if (!projectId) return "Ohne Projekt";
+    if (!projectId) return t("common.withoutProject");
     const project = (projects as Project[]).find((item) => item.id === projectId);
-    return project?.name ?? `Projekt #${projectId}`;
+    return project?.name ?? `#${projectId}`;
+  };
+
+  const columns: Array<{ key: TaskColumnStatus; label: string; accent: string }> = [
+    { key: "pending", label: t("tasks.backlog"), accent: "border-slate-600" },
+    { key: "running", label: t("tasks.running"), accent: "border-blue-500" },
+    { key: "completed", label: t("tasks.done"), accent: "border-emerald-500" },
+    { key: "failed", label: t("tasks.blocked"), accent: "border-rose-500" },
+  ];
+
+  const priorityLabel = (priority: string): string => {
+    if (priority === "critical") return t("tasks.critical");
+    if (priority === "high") return t("tasks.high");
+    if (priority === "medium") return t("tasks.medium");
+    return t("tasks.low");
   };
 
   const saveTaskDetails = () => {
@@ -171,8 +180,8 @@ export function TaskManager() {
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Task Board</h1>
-          <p className="text-sm text-gray-400">Drag and Drop, Status-Tracking und Agent-Execution</p>
+          <h1 className="text-2xl font-bold">{t("tasks.title")}</h1>
+          <p className="text-sm text-gray-400">{t("tasks.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -183,14 +192,14 @@ export function TaskManager() {
               setSelectedProjectId(value === "all" ? "all" : Number(value));
             }}
           >
-            <option value="all">Alle Projekte</option>
+            <option value="all">{t("common.allProjects")}</option>
             {(projects as Project[]).map((project) => (
               <option key={project.id} value={project.id}>{project.name}</option>
             ))}
           </select>
           <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2">
             <Plus className="w-4 h-4" />
-            Neu
+            {t("tasks.newTask")}
           </button>
         </div>
       </div>
@@ -199,13 +208,13 @@ export function TaskManager() {
         <div className="card space-y-3">
           <input
             className="input w-full"
-            placeholder="Titel *"
+            placeholder={t("tasks.createTitlePlaceholder")}
             value={form.title}
             onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
           />
           <textarea
             className="input w-full"
-            placeholder="Beschreibung"
+            placeholder={t("tasks.createDescriptionPlaceholder")}
             rows={3}
             value={form.description}
             onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
@@ -215,17 +224,17 @@ export function TaskManager() {
             value={form.priority}
             onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
           >
-            <option value="low">Niedrig</option>
-            <option value="medium">Mittel</option>
-            <option value="high">Hoch</option>
-            <option value="critical">Kritisch</option>
+            <option value="low">{t("tasks.low")}</option>
+            <option value="medium">{t("tasks.medium")}</option>
+            <option value="high">{t("tasks.high")}</option>
+            <option value="critical">{t("tasks.critical")}</option>
           </select>
           <select
             className="input w-full"
             value={form.projectId}
             onChange={(e) => setForm((f) => ({ ...f, projectId: e.target.value }))}
           >
-            <option value="">Kein Projekt</option>
+            <option value="">{t("common.noProject")}</option>
             {(projects as Project[]).map((project) => (
               <option key={project.id} value={project.id}>{project.name}</option>
             ))}
@@ -236,15 +245,15 @@ export function TaskManager() {
               disabled={!form.title || create.isPending}
               className="btn-primary disabled:opacity-50"
             >
-              Erstellen
+              {t("tasks.createTask")}
             </button>
-            <button onClick={() => setShowCreate(false)} className="btn-secondary">Abbrechen</button>
+            <button onClick={() => setShowCreate(false)} className="btn-secondary">{t("common.cancel")}</button>
           </div>
         </div>
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-4 gap-4 items-start">
-        {COLUMNS.map((column) => (
+        {columns.map((column) => (
           <section
             key={column.key}
             className={`card min-h-[320px] border-t-2 ${column.accent}`}
@@ -284,7 +293,7 @@ export function TaskManager() {
                   </div>
 
                   <div className="flex items-center justify-between gap-2">
-                    {priorityBadge(task.priority)}
+                    {priorityBadge(task.priority, priorityLabel(task.priority))}
                     <span className="text-xs text-gray-400 flex items-center gap-1">
                       <FolderOpen className="w-3.5 h-3.5" />
                       {projectName(task.projectId)}
@@ -296,21 +305,21 @@ export function TaskManager() {
                       onClick={() => setSelectedTask(task)}
                       className="text-xs text-gray-400 hover:text-gray-200"
                     >
-                      Details
+                      {t("common.details")}
                     </button>
                     <div className="flex items-center gap-1">
                       <button
                         onClick={() => runTask.mutate(task.id)}
                         disabled={runTask.isPending || task.status === "running"}
                         className="p-1.5 text-gray-400 hover:text-blue-400 transition-colors disabled:opacity-50"
-                        title="Task mit Agent ausführen"
+                        title={t("tasks.runWithAgent")}
                       >
                         <Play className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => remove.mutate(task.id)}
                         className="p-1.5 text-gray-400 hover:text-red-400 transition-colors"
-                        title="Task löschen"
+                        title={t("tasks.deleteTask")}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -321,7 +330,7 @@ export function TaskManager() {
 
               {tasksByStatus[column.key].length === 0 && (
                 <div className="text-sm text-gray-500 border border-dashed border-gray-800 rounded-lg p-3 text-center">
-                  Keine Tasks
+                  {t("tasks.noTasks")}
                 </div>
               )}
             </div>
@@ -332,19 +341,19 @@ export function TaskManager() {
       {(tasks as Task[]).length === 0 && (
         <div className="text-center text-gray-500 py-6">
           <CheckSquare className="w-10 h-10 mx-auto mb-3 text-gray-700" />
-          <p>Keine Aufgaben vorhanden</p>
+          <p>{t("tasks.noTasksAvailable")}</p>
         </div>
       )}
 
       <div className="text-xs text-gray-500">
-        Tipp: Karten zwischen Spalten ziehen, um den Status zu ändern. Mit dem Play-Button wird ein Task direkt vom Agenten bearbeitet.
+        {t("common.tip")}: {t("tasks.moveTip")}
       </div>
 
       {selectedTask && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
           <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
             <div className="flex items-center justify-between p-4 border-b border-gray-800">
-              <h2 className="text-lg font-semibold">Task Details #{selectedTask.id}</h2>
+              <h2 className="text-lg font-semibold">{t("tasks.taskDetails")} #{selectedTask.id}</h2>
               <button
                 onClick={() => setSelectedTask(null)}
                 className="p-1 rounded hover:bg-gray-800 text-gray-400"
@@ -355,7 +364,7 @@ export function TaskManager() {
 
             <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="md:col-span-2">
-                <label className="text-xs text-gray-400">Titel</label>
+                <label className="text-xs text-gray-400">{t("tasks.titleField")}</label>
                 <input
                   className="input w-full"
                   value={taskEditForm.title}
@@ -364,7 +373,7 @@ export function TaskManager() {
               </div>
 
               <div className="md:col-span-2">
-                <label className="text-xs text-gray-400">Beschreibung</label>
+                <label className="text-xs text-gray-400">{t("tasks.descriptionField")}</label>
                 <textarea
                   className="input w-full"
                   rows={4}
@@ -374,42 +383,42 @@ export function TaskManager() {
               </div>
 
               <div>
-                <label className="text-xs text-gray-400">Priorität</label>
+                <label className="text-xs text-gray-400">{t("tasks.priorityField")}</label>
                 <select
                   className="input w-full"
                   value={taskEditForm.priority}
                   onChange={(e) => setTaskEditForm((f) => ({ ...f, priority: e.target.value }))}
                 >
-                  <option value="low">Niedrig</option>
-                  <option value="medium">Mittel</option>
-                  <option value="high">Hoch</option>
-                  <option value="critical">Kritisch</option>
+                  <option value="low">{t("tasks.low")}</option>
+                  <option value="medium">{t("tasks.medium")}</option>
+                  <option value="high">{t("tasks.high")}</option>
+                  <option value="critical">{t("tasks.critical")}</option>
                 </select>
               </div>
 
               <div>
-                <label className="text-xs text-gray-400">Status</label>
+                <label className="text-xs text-gray-400">{t("tasks.statusField")}</label>
                 <select
                   className="input w-full"
                   value={taskEditForm.status}
                   onChange={(e) => setTaskEditForm((f) => ({ ...f, status: e.target.value }))}
                 >
-                  <option value="pending">Backlog</option>
-                  <option value="running">In Arbeit</option>
-                  <option value="completed">Fertig</option>
-                  <option value="failed">Blockiert</option>
-                  <option value="cancelled">Abgebrochen</option>
+                  <option value="pending">{t("tasks.backlog")}</option>
+                  <option value="running">{t("tasks.running")}</option>
+                  <option value="completed">{t("tasks.done")}</option>
+                  <option value="failed">{t("tasks.blocked")}</option>
+                  <option value="cancelled">{t("tasks.cancelled")}</option>
                 </select>
               </div>
 
               <div className="md:col-span-2">
-                <label className="text-xs text-gray-400">Projekt</label>
+                <label className="text-xs text-gray-400">{t("tasks.projectField")}</label>
                 <select
                   className="input w-full"
                   value={taskEditForm.projectId}
                   onChange={(e) => setTaskEditForm((f) => ({ ...f, projectId: e.target.value }))}
                 >
-                  <option value="">Kein Projekt</option>
+                  <option value="">{t("common.noProject")}</option>
                   {(projects as Project[]).map((project) => (
                     <option key={project.id} value={project.id}>{project.name}</option>
                   ))}
@@ -418,7 +427,7 @@ export function TaskManager() {
 
               {selectedTask.result && (
                 <div className="md:col-span-2">
-                  <label className="text-xs text-gray-400">Ergebnis</label>
+                  <label className="text-xs text-gray-400">{t("common.result")}</label>
                   <pre className="rounded border border-gray-800 bg-black/30 p-2 text-xs text-gray-300 whitespace-pre-wrap overflow-x-auto">
                     {selectedTask.result}
                   </pre>
@@ -426,8 +435,8 @@ export function TaskManager() {
               )}
 
               <div className="md:col-span-2 text-xs text-gray-500">
-                Erstellt: {new Date(selectedTask.createdAt).toLocaleString()}
-                {selectedTask.updatedAt ? ` | Aktualisiert: ${new Date(selectedTask.updatedAt).toLocaleString()}` : ""}
+                {t("common.createdAt")}: {new Date(selectedTask.createdAt).toLocaleString()}
+                {selectedTask.updatedAt ? ` | ${t("common.updatedAt")}: ${new Date(selectedTask.updatedAt).toLocaleString()}` : ""}
               </div>
             </div>
 
@@ -441,18 +450,18 @@ export function TaskManager() {
                 className="btn-secondary flex items-center gap-2 text-red-300 hover:text-red-200"
               >
                 <Trash2 className="w-4 h-4" />
-                Löschen
+                {t("common.delete")}
               </button>
 
               <div className="flex items-center gap-2">
-                <button onClick={() => setSelectedTask(null)} className="btn-secondary">Schließen</button>
+                <button onClick={() => setSelectedTask(null)} className="btn-secondary">{t("common.close")}</button>
                 <button
                   onClick={saveTaskDetails}
                   disabled={!taskEditForm.title.trim() || update.isPending}
                   className="btn-primary flex items-center gap-2 disabled:opacity-50"
                 >
                   <Save className="w-4 h-4" />
-                  Speichern
+                  {t("common.save")}
                 </button>
               </div>
             </div>

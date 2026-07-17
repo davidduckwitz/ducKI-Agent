@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Eye, EyeOff, ScrollText } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 interface LogEntry {
   id: number;
@@ -51,6 +52,7 @@ function parseLogContext(context?: string): ParsedLogContext | undefined {
 }
 
 export function LogViewer() {
+  const { t } = useI18n();
   const [level, setLevel] = useState("");
   const [limit, setLimit] = useState(100);
   const [showViewerRequests, setShowViewerRequests] = useState(false);
@@ -121,13 +123,13 @@ export function LogViewer() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center gap-4 flex-wrap">
-        <h1 className="text-2xl font-bold">Logs</h1>
+        <h1 className="text-2xl font-bold">{t("logsPage.title")}</h1>
         <select
           className="input"
           value={level}
           onChange={(e) => setLevel(e.target.value)}
         >
-          <option value="">Alle Level</option>
+          <option value="">{t("logsPage.allLevels")}</option>
           <option value="error">Error</option>
           <option value="warn">Warn</option>
           <option value="info">Info</option>
@@ -143,11 +145,11 @@ export function LogViewer() {
           <option value={500}>500</option>
         </select>
         <button onClick={() => refetch()} className="btn-secondary">
-          Aktualisieren
+          {t("logsPage.refresh")}
         </button>
         <button onClick={() => setShowViewerRequests((s) => !s)} className="btn-secondary flex items-center gap-2">
           {showViewerRequests ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-          /api/logs Requests ({viewerRequestLogs.length})
+          /api/logs {t("logsPage.viewerRequests")} ({viewerRequestLogs.length})
         </button>
       </div>
 
@@ -163,7 +165,7 @@ export function LogViewer() {
               {renderGatewayTags(parsedContext)}
               <span className="break-words">{log.message}</span>
               {parsedContext?.error && (
-                <span className="text-red-300 break-words">Fehler: {parsedContext.error}</span>
+                <span className="text-red-300 break-words">{t("logsPage.errorLabel")}: {parsedContext.error}</span>
               )}
               {log.context && !parsedContext?.error && (
                 <span className="text-gray-500 truncate max-w-full">{log.context}</span>
@@ -174,7 +176,7 @@ export function LogViewer() {
         {mainLogs.length === 0 && (
           <div className="text-center text-gray-500 py-12">
             <ScrollText className="w-10 h-10 mx-auto mb-3 text-gray-700" />
-            <p>Keine Logs gefunden</p>
+            <p>{t("logsPage.noLogs")}</p>
           </div>
         )}
       </div>
@@ -183,7 +185,7 @@ export function LogViewer() {
         <div className="card space-y-2">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-gray-200">LogViewer-Eigenanfragen (/api/logs)</h2>
-            <span className="text-xs text-gray-500">{viewerRequestLogs.length} Einträge</span>
+            <span className="text-xs text-gray-500">{viewerRequestLogs.length} {t("logsPage.entries")}</span>
           </div>
           <div className="space-y-1 font-mono text-xs">
             {viewerRequestLogs.map((log) => (

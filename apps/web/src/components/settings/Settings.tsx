@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Settings as SettingsIcon, Save } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 interface Setting {
   key: string;
@@ -477,6 +478,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory"];
 
 export function Settings() {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const { data: settings = [] } = useQuery({
     queryKey: ["settings"],
@@ -511,10 +513,10 @@ export function Settings() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">Einstellungen</h1>
+        <h1 className="text-2xl font-bold">{t("settingsPage.title")}</h1>
         <button onClick={saveAll} className="btn-primary flex items-center gap-2" disabled={save.isPending}>
           <Save className="w-4 h-4" />
-          Alle speichern
+          {t("settingsPage.saveAll")}
         </button>
       </div>
 
@@ -588,7 +590,7 @@ export function Settings() {
 
       {customSettings.length > 0 && (
         <div className="card space-y-3">
-          <h2 className="text-lg font-semibold">Weitere Einstellungen</h2>
+          <h2 className="text-lg font-semibold">{t("settingsPage.otherSettings")}</h2>
           {customSettings.map((setting) => (
             <div key={setting.key} className="space-y-1 border-b border-gray-800 pb-3 last:border-b-0 last:pb-0">
               <p className="text-xs text-gray-500 font-mono">{setting.key}</p>
@@ -614,7 +616,7 @@ export function Settings() {
       {(settings as Setting[]).length === 0 && (
         <div className="text-center text-gray-500 py-8">
           <SettingsIcon className="w-10 h-10 mx-auto mb-3 text-gray-700" />
-          <p>Standardfelder sind vorgeladen und koennen direkt gespeichert werden.</p>
+          <p>{t("settingsPage.defaultsHint")}</p>
         </div>
       )}
     </div>
