@@ -48,8 +48,11 @@ After startup:
 # Donation & Help
 
 Donations are Welcome and help to make this Agent get an Powerfull Assistant for your Life & Work - Thanks a lot.
-PayPal Me: https://www.paypal.me/davidduckwitz
-Bitcoin: 1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G
+
+-PayPal Me: https://www.paypal.me/davidduckwitz
+
+-Bitcoin: 1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G
+
 
 ## Getting Started
 
