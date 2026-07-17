@@ -158,6 +158,59 @@ export const api = {
     },
   },
 
+  updates: {
+    status: () =>
+      request<{
+        enabled: boolean;
+        configured: boolean;
+        repoUrl?: string;
+        branch?: string;
+        workdir?: string;
+        intervalMinutes?: number;
+        requireCleanWorktree?: boolean;
+        checking: boolean;
+        updating: boolean;
+        updateAvailable: boolean;
+        currentCommit?: string;
+        remoteCommit?: string;
+        lastCheckedAt?: string;
+        lastCheckError?: string;
+        lastUpdatedAt?: string;
+        lastUpdateError?: string;
+        lastUpdateOutput: string[];
+      }>("/updates/status"),
+    check: () =>
+      request<{
+        enabled: boolean;
+        configured: boolean;
+        checking: boolean;
+        updating: boolean;
+        updateAvailable: boolean;
+        currentCommit?: string;
+        remoteCommit?: string;
+        lastCheckedAt?: string;
+        lastCheckError?: string;
+        lastUpdatedAt?: string;
+        lastUpdateError?: string;
+        lastUpdateOutput: string[];
+      }>("/updates/check", { method: "POST" }),
+    start: () =>
+      request<{
+        enabled: boolean;
+        configured: boolean;
+        checking: boolean;
+        updating: boolean;
+        updateAvailable: boolean;
+        currentCommit?: string;
+        remoteCommit?: string;
+        lastCheckedAt?: string;
+        lastCheckError?: string;
+        lastUpdatedAt?: string;
+        lastUpdateError?: string;
+        lastUpdateOutput: string[];
+      }>("/updates/start", { method: "POST" }),
+  },
+
   agents: {
     live: () =>
       request<{

@@ -13,6 +13,7 @@ import { allTools } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
 import { DiscordGatewayClient } from "./lib/discord-gateway-ws.js";
 import { agentRegistry } from "./lib/agent-registry.js";
+import { UpdateManager } from "./lib/update-manager.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { gatewayRouter } from "./routes/gateway.js";
@@ -24,6 +25,7 @@ import { sharedRouter } from "./routes/shared.js";
 import { skillsRouter } from "./routes/skills.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { toolsRouter } from "./routes/tools.js";
+import { updatesRouter } from "./routes/updates.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { setupWebSocket } from "./websocket/index.js";
 
@@ -261,6 +263,7 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/agents", agentsRouter);
 	app.use("/api/skills", skillsRouter);
 	app.use("/api/shared", sharedRouter);
+	app.use("/api/updates", updatesRouter);
 	app.use("/api/workflows", workflowsRouter);
 	app.use("/api/gateway", gatewayRouter);
 }
@@ -397,6 +400,8 @@ async function bootstrap(): Promise<void> {
 	const workflowEngine = new WorkflowEngine(provider, db);
 	const createAgent = buildAgentFactory(provider, db, workflowEngine);
 	const defaultAgent = createAgent();
+	const updateManager = new UpdateManager(db, logger.child("UpdateManager"));
+	updateManager.start();
 
 	app.locals["db"] = db;
 	app.locals["provider"] = provider;
@@ -405,6 +410,7 @@ async function bootstrap(): Promise<void> {
 	app.locals["createAgent"] = createAgent;
 	app.locals["agentRegistry"] = agentRegistry;
 	app.locals["discordGatewayStatus"] = discordGatewayStatus;
+	app.locals["updateManager"] = updateManager;
 
 	const io = new SocketIOServer(httpServer, {
 		cors: { origin: process.env["CORS_ORIGIN"] ?? "*" },
@@ -441,6 +447,7 @@ async function bootstrap(): Promise<void> {
 		discordGatewayStatus.active = false;
 		discordGatewayStatus.updatedAt = new Date().toISOString();
 		discordGateway?.stop();
+		updateManager.stop();
 		io.close();
 		httpServer.close(() => {
 			process.exit(0);
