@@ -56,6 +56,11 @@ const CronjobManager = lazy(async () => {
   return { default: module.CronjobManager };
 });
 
+const McpManager = lazy(async () => {
+  const module = await import("./components/mcp/McpManager");
+  return { default: module.McpManager };
+});
+
 function LazyRoute({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   return <Suspense fallback={<div className="p-6 text-sm text-gray-400">{t("app.loadingPage")}</div>}>{children}</Suspense>;
@@ -74,6 +79,7 @@ export default function App() {
           <Route path="projects" element={<ProjectManager />} />
           <Route path="tasks" element={<TaskManager />} />
           <Route path="cronjobs" element={<LazyRoute><CronjobManager /></LazyRoute>} />
+          <Route path="mcp" element={<LazyRoute><McpManager /></LazyRoute>} />
           <Route path="tools" element={<LazyRoute><ToolRegistry /></LazyRoute>} />
           <Route path="skills" element={<LazyRoute><SkillManager /></LazyRoute>} />
           <Route path="shared" element={<LazyRoute><SharedWorkspace /></LazyRoute>} />

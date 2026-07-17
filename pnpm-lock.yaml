@@ -75,6 +75,9 @@ importers:
       '@ducki/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@ducki/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@ducki/providers':
         specifier: workspace:*
         version: link:../../packages/providers

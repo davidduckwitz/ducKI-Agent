@@ -84,6 +84,28 @@ export const api = {
     delete: (id: number) => request<unknown>(`/cronjobs/${id}`, { method: "DELETE" }),
   },
 
+  mcp: {
+    servers: () =>
+      request<{
+        configured: Array<{ id: string; name: string; url: string; enabled: boolean }>;
+        runtime: Array<{ id: string; name: string; url: string; enabled: boolean; connected: boolean; reconnectAttempts: number; tools: number }>;
+      }>("/mcp/servers"),
+    saveServers: (servers: Array<{ id: string; name: string; url: string; enabled: boolean }>) =>
+      request<{
+        saved: boolean;
+        servers: Array<{ id: string; name: string; url: string; enabled: boolean; connected: boolean; reconnectAttempts: number; tools: number }>;
+      }>("/mcp/servers", { method: "PUT", body: JSON.stringify({ servers }) }),
+    reloadServers: () =>
+      request<{
+        reloaded: boolean;
+        servers: Array<{ id: string; name: string; url: string; enabled: boolean; connected: boolean; reconnectAttempts: number; tools: number }>;
+      }>("/mcp/servers/reload", { method: "POST" }),
+    tools: () =>
+      request<Array<{ name: string; description: string; inputSchema: Record<string, unknown>; serverId: string }>>("/mcp/tools"),
+    callTool: (payload: { toolName: string; input?: Record<string, unknown>; serverId?: string }) =>
+      request<unknown>("/mcp/tools/call", { method: "POST", body: JSON.stringify(payload) }),
+  },
+
   tools: {
     list: () => request<{ name: string; description: string }[]>("/tools"),
   },

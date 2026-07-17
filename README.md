@@ -272,6 +272,38 @@ Minimal flow example:
 4. Capture artifacts with `screenshot` or `pdf`
 5. `close`
 
+## MCP Integration
+
+The project includes MCP runtime integration with server registry, reconnect handling, streaming, and a dedicated UI page (`/mcp`).
+
+Core capabilities:
+
+- Configure MCP servers (`id`, `name`, `url`, `enabled`) and persist settings.
+- Automatic runtime sync/reload of configured servers.
+- Reconnect tracking (`connected`, `reconnectAttempts`) and discovered tool counts.
+- List discovered remote tools across connected MCP servers.
+- Execute remote MCP tools via one-shot calls.
+- Execute remote MCP tools via SSE stream with live output.
+- Stop active streams from UI.
+- Inspect streamed chunks with per-chunk timestamps in UI.
+
+Server API endpoints:
+
+- `GET /api/mcp/servers`
+- `PUT /api/mcp/servers`
+- `POST /api/mcp/servers/reload`
+- `GET /api/mcp/tools`
+- `POST /api/mcp/tools/call`
+- `POST /api/mcp/tools/stream`
+
+UI flow (`/mcp`):
+
+1. Add or update MCP servers.
+2. Click reload to sync runtime.
+3. Verify connected status and tool discovery.
+4. Call tools directly or start stream mode.
+5. Stop stream if needed and review chunk timeline.
+
 ## Development Notes
 
 - Workspace uses `pnpm` with TypeScript project references.

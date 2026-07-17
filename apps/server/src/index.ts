@@ -8,18 +8,22 @@ import { Server as SocketIOServer } from "socket.io";
 import { Agent, WorkflowEngine, createWorkflowManagementTool, createCronjobManagementTool } from "@ducki/agent";
 import { getDatabase } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
+import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
+import type { ToolExecutor } from "@ducki/shared";
 import { createProvider, type ProviderName } from "@ducki/providers";
 import { allTools } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
 import { DiscordGatewayClient } from "./lib/discord-gateway-ws.js";
 import { agentRegistry } from "./lib/agent-registry.js";
 import { CronjobManager } from "./lib/cronjob-manager.js";
+import { createMcpTool } from "./lib/mcp-tool.js";
 import { UpdateManager } from "./lib/update-manager.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
 import { gatewayRouter } from "./routes/gateway.js";
 import { logsRouter } from "./routes/logs.js";
+import { mcpRouter } from "./routes/mcp.js";
 import { memoryRouter } from "./routes/memory.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
@@ -243,10 +247,39 @@ async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabas
 	return { provider, providerName };
 }
 
-function buildAgentFactory(provider: ReturnType<typeof createProvider>, db: Awaited<ReturnType<typeof getDatabase>>, workflowEngine: WorkflowEngine) {
+const MCP_SERVERS_SETTING = "MCP_SERVERS";
+
+function parseMcpServerConfigs(raw: string | undefined): MCPServerConfig[] {
+	if (!raw) return [];
+	try {
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return [];
+		return parsed
+			.filter((item) => item && typeof item === "object")
+			.map((item, index) => {
+				const entry = item as Record<string, unknown>;
+				return {
+					id: String(entry["id"] ?? `mcp_${index + 1}`).trim(),
+					name: String(entry["name"] ?? `MCP ${index + 1}`).trim(),
+					url: String(entry["url"] ?? "").trim(),
+					enabled: entry["enabled"] !== false,
+				};
+			})
+			.filter((entry) => entry.id.length > 0 && entry.name.length > 0 && entry.url.length > 0);
+	} catch {
+		return [];
+	}
+}
+
+function buildAgentFactory(
+	provider: ReturnType<typeof createProvider>,
+	db: Awaited<ReturnType<typeof getDatabase>>,
+	workflowEngine: WorkflowEngine,
+	runtimeTools: ToolExecutor[]
+) {
 	return () => {
 		const agent = new Agent(provider, db);
-		for (const tool of allTools) {
+		for (const tool of runtimeTools) {
 			agent.executor.registerTool(tool);
 		}
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngine));
@@ -270,6 +303,7 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/cronjobs", cronjobsRouter);
 	app.use("/api/workflows", workflowsRouter);
 	app.use("/api/gateway", gatewayRouter);
+	app.use("/api/mcp", mcpRouter);
 }
 
 async function bootstrapDiscordGatewayBridge(
@@ -401,8 +435,12 @@ async function bootstrap(): Promise<void> {
 	const loadedProvider = await loadProviderFromSettings(db);
 	const provider = loadedProvider.provider;
 	logger.info("Provider loaded", { provider: loadedProvider.providerName });
+	const mcpRegistry = new MCPRegistry();
+	const mcpServers = parseMcpServerConfigs(await db.getSetting(MCP_SERVERS_SETTING));
+	await mcpRegistry.syncServers(mcpServers);
+	const runtimeTools: ToolExecutor[] = [...allTools, createMcpTool(mcpRegistry)];
 	const workflowEngine = new WorkflowEngine(provider, db);
-	const createAgent = buildAgentFactory(provider, db, workflowEngine);
+	const createAgent = buildAgentFactory(provider, db, workflowEngine, runtimeTools);
 	const defaultAgent = createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
 	cronjobManager.start();
@@ -418,6 +456,7 @@ async function bootstrap(): Promise<void> {
 	app.locals["discordGatewayStatus"] = discordGatewayStatus;
 	app.locals["cronjobManager"] = cronjobManager;
 	app.locals["updateManager"] = updateManager;
+	app.locals["mcpRegistry"] = mcpRegistry;
 
 	const io = new SocketIOServer(httpServer, {
 		cors: { origin: process.env["CORS_ORIGIN"] ?? "*" },
@@ -456,6 +495,7 @@ async function bootstrap(): Promise<void> {
 		discordGateway?.stop();
 		cronjobManager.stop();
 		updateManager.stop();
+		void mcpRegistry.shutdown();
 		io.close();
 		httpServer.close(() => {
 			process.exit(0);

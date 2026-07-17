@@ -22,6 +22,7 @@ import {
   RefreshCw,
   Download,
   X,
+  PlugZap,
 } from "lucide-react";
 import { useAppStore } from "../../lib/store";
 import { api } from "../../lib/api";
@@ -74,6 +75,7 @@ export function Layout() {
     { to: "/projects", icon: FolderOpen, label: t("nav.projects") },
     { to: "/tasks", icon: CheckSquare, label: t("nav.tasks") },
     { to: "/cronjobs", icon: CalendarClock, label: t("nav.cronjobs") },
+    { to: "/mcp", icon: PlugZap, label: t("nav.mcp") },
     { to: "/tools", icon: Wrench, label: t("nav.tools") },
     { to: "/skills", icon: BookOpen, label: t("nav.skills") },
     { to: "/shared", icon: Share2, label: t("nav.shared") },

@@ -695,6 +695,9 @@ Definition of Done:
 ## Phase 16: Multi-Agent ⏱️ 3-5 Tage
 Ziel: Multi-Agent System
 
+Umsetzungshinweis (Ist-Zustand):
+Die Multi-Agent-Funktionalität wird aktuell über das WorkflowEngine-Rollenmodell umgesetzt (statt separater Agent-Dateien pro Rolle).
+
 Agenten:
 
 Manager Agent
@@ -702,25 +705,20 @@ Research Agent
 Coding Agent (Fokus!)
 Browser Agent
 Review Agent
-Erstellen der Dateien:
+Erstellen der Dateien (Ist-Architektur):
 
-packages/agent/manager.ts
-packages/agent/research.ts
-packages/agent/coding.ts (Fokus!)
-packages/agent/browser.ts
-packages/agent/review.ts
-packages/agent/shared-memory.ts
+packages/agent/workflow-engine.ts
+packages/agent/workflow-management-tool.ts
+apps/server/src/routes/workflows.ts
+apps/web/src/components/workflow/WorkflowGraphEditor.tsx
 Tests
 Definition of Done:
 
-✅ Manager Agent erstellt
-✅ Research Agent erstellt
-✅ Coding Agent erstellt
-✅ Browser Agent erstellt
-✅ Review Agent erstellt
-✅ Shared Memory implementiert
-✅ Task Delegation
-✅ Tests
+✅ Rollenmodell für Manager/Research/Coding/Browser/Review implementiert
+✅ Workflow-basierte Delegation und Abhängigkeitsausführung implementiert
+✅ Persistente Workflow-Ausführung (run/resume) implementiert
+✅ API + UI zur Multi-Agent-Workflow-Steuerung vorhanden
+✅ Phase 16 im aktuellen Architekturansatz als abgeschlossen akzeptiert
 
 ## Phase 17: Tests ⏱️ 4-6 Tage
 Ziel: Vollständiges Testsystem
