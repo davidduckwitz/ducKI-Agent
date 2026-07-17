@@ -1,0 +1,252 @@
+const BASE_URL = "/api";
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+
+  if (!res.ok) {
+    const error = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
+    throw new Error(error.error ?? `HTTP ${res.status}`);
+  }
+
+  const data = (await res.json()) as { data: T };
+  return data.data;
+}
+
+export const api = {
+  chat: {
+    listConversations: (projectId?: number) =>
+      request<unknown[]>(`/chat/conversations${projectId ? `?projectId=${projectId}` : ""}`),
+    getMessages: (conversationId: number) => request<unknown[]>(`/chat/conversations/${conversationId}/messages`),
+    search: (query: string, limit = 20) =>
+      request<
+        Array<{
+          conversationId: number;
+          conversationName: string;
+          messageId: number;
+          role: string;
+          content: string;
+          createdAt: string;
+        }>
+      >(`/chat/search?query=${encodeURIComponent(query)}&limit=${limit}`),
+    createConversation: (data: { name?: string; projectId?: number }) =>
+      request<{ conversationId: number }>("/chat/conversation", { method: "POST", body: JSON.stringify(data) }),
+  },
+
+  workflows: {
+    list: () => request<unknown[]>("/workflows"),
+    get: (id: string) => request<unknown>(`/workflows/${id}`),
+    create: (data: Record<string, unknown>) => request<unknown>("/workflows", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: string, data: Record<string, unknown>) =>
+      request<unknown>(`/workflows/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+    run: (id: string) => request<unknown>(`/workflows/${id}/run`, { method: "POST" }),
+    resume: (id: string) => request<unknown>(`/workflows/${id}/resume`, { method: "POST" }),
+    delete: (id: string) => request<unknown>(`/workflows/${id}`, { method: "DELETE" }),
+  },
+
+  projects: {
+    list: () => request<unknown[]>("/projects"),
+    get: (id: number) => request<unknown>(`/projects/${id}`),
+    create: (data: { name: string; description?: string; folder?: string }) =>
+      request<unknown>("/projects", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: number, data: Record<string, unknown>) =>
+      request<unknown>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    delete: (id: number) => request<unknown>(`/projects/${id}`, { method: "DELETE" }),
+  },
+
+  tasks: {
+    list: (projectId?: number) => request<unknown[]>(`/tasks${projectId ? `?projectId=${projectId}` : ""}`),
+    get: (id: number) => request<unknown>(`/tasks/${id}`),
+    create: (data: { title: string; description?: string; priority?: string; projectId?: number }) =>
+      request<unknown>("/tasks", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: number, data: Record<string, unknown>) =>
+      request<unknown>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    run: (id: number) => request<unknown>(`/tasks/${id}/run`, { method: "POST" }),
+    delete: (id: number) => request<unknown>(`/tasks/${id}`, { method: "DELETE" }),
+  },
+
+  tools: {
+    list: () => request<{ name: string; description: string }[]>("/tools"),
+  },
+
+  memory: {
+    list: (conversationId?: number, type?: string) => {
+      const params = new URLSearchParams();
+      if (conversationId) params.set("conversationId", String(conversationId));
+      if (type) params.set("type", type);
+      const query = params.toString();
+      return request<unknown[]>(`/memory${query ? `?${query}` : ""}`);
+    },
+    action: (payload: {
+      action: "add" | "replace" | "remove" | "batch" | "pending_list" | "approve";
+      type?: string;
+      target?: "memory" | "user";
+      conversationId?: number;
+      content?: string;
+      oldText?: string;
+      operations?: Array<{ action: "add" | "replace" | "remove"; content?: string; oldText?: string }>;
+      pendingId?: string;
+      approved?: boolean;
+    }) => request<unknown>("/memory/actions", { method: "POST", body: JSON.stringify(payload) }),
+    getProfile: () => request<{ agentBehavior: string; humanInfo: string }>("/memory/profile"),
+    saveProfile: (payload: { agentBehavior: string; humanInfo: string }) =>
+      request<{ saved: boolean; agentBehavior: string; humanInfo: string }>("/memory/profile", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+  },
+
+  settings: {
+    list: () => request<{ key: string; value: string }[]>("/settings"),
+    set: (key: string, value: string) => request<unknown>(`/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) }),
+  },
+
+  skills: {
+    list: () => request<{ slug: string; name: string; description?: string }[]>("/skills"),
+    get: (slug: string) => request<{ slug: string; name: string; description?: string; content: string }>(`/skills/${slug}`),
+    create: (data: { name?: string; slug?: string; description?: string; content?: string }) =>
+      request<{ slug: string; created: boolean }>("/skills", { method: "POST", body: JSON.stringify(data) }),
+    import: (data: { url: string; name?: string; slug?: string }) =>
+      request<{ slug: string; imported: boolean; sourceUrl: string }>("/skills/import", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (slug: string, content: string) =>
+      request<{ slug: string; updated: boolean }>(`/skills/${slug}`, { method: "PUT", body: JSON.stringify({ content }) }),
+    patch: (slug: string, oldString: string, newString: string) =>
+      request<{ slug: string; patched: boolean }>(`/skills/${slug}`, {
+        method: "PATCH",
+        body: JSON.stringify({ oldString, newString }),
+      }),
+    delete: (slug: string) => request<{ slug: string; deleted: boolean }>(`/skills/${slug}`, { method: "DELETE" }),
+  },
+
+  shared: {
+    listFiles: () =>
+      request<{ root: string; files: Array<{ path: string; type: "file" | "directory"; size?: number; updatedAt?: string }> }>("/shared/files"),
+    readFile: (path: string) =>
+      request<{ path: string; size: number; isText: boolean; content?: string; contentBase64?: string }>(`/shared/read?path=${encodeURIComponent(path)}`),
+    downloadUrl: (path: string) => `${BASE_URL}/shared/download?path=${encodeURIComponent(path)}`,
+    writeFile: (path: string, content: string) =>
+      request<{ written: boolean; path: string }>("/shared/write", {
+        method: "POST",
+        body: JSON.stringify({ path, content }),
+      }),
+    uploadFile: (data: { fileName: string; contentBase64: string; folder?: string }) =>
+      request<{ uploaded: boolean; path: string; size: number }>("/shared/upload", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    moveFile: (fromPath: string, toPath: string) =>
+      request<{ moved: boolean; fromPath: string; toPath: string }>("/shared/move", {
+        method: "POST",
+        body: JSON.stringify({ fromPath, toPath }),
+      }),
+    deleteFile: (path: string) =>
+      request<{ deleted: boolean; path: string }>(`/shared/file?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
+  },
+
+  logs: {
+    list: (level?: string, limit?: number) => {
+      const params = new URLSearchParams();
+      if (level) params.set("level", level);
+      if (limit) params.set("limit", String(limit));
+      const query = params.toString();
+      return request<unknown[]>(`/logs${query ? `?${query}` : ""}`);
+    },
+  },
+
+  agents: {
+    live: () =>
+      request<{
+        runningCount: number;
+        agents: Array<{
+          id: string;
+          source: "chat_http" | "chat_ws" | "task_run" | "gateway_inbound";
+          startedAt: string;
+          conversationId?: number;
+          taskId?: number;
+          socketId?: string;
+          label?: string;
+        }>;
+        gateway?: {
+          discord?: {
+            enabled: boolean;
+            configured: boolean;
+            active: boolean;
+            connectedAt?: string;
+            lastError?: string;
+            updatedAt: string;
+          };
+        };
+      }>("/agents/live"),
+  },
+
+  gateway: {
+    list: () =>
+      request<{
+        configs: Array<{
+          id: string;
+          portal: string;
+          name: string;
+          enabled: boolean;
+          channelHint?: string;
+          inboundLabel?: string;
+          guildId?: string;
+          userId?: string;
+          appId?: string;
+          publicKey?: string;
+          metadata?: string;
+          authToken?: string;
+          webhookSecret?: string;
+        }>;
+        endpoints: Array<{
+          id: string;
+          portal: string;
+          webhookUrl: string;
+        }>;
+        conversations: Array<{
+          id: number;
+          name: string;
+          projectId?: number;
+          createdAt: string;
+          updatedAt: string;
+        }>;
+      }>("/gateway"),
+    save: (configs: Array<Record<string, unknown>>) =>
+      request<{ saved: boolean; configs: Array<Record<string, unknown>> }>("/gateway", {
+        method: "PUT",
+        body: JSON.stringify({ configs }),
+      }),
+    inbound: (payload: {
+      portal: string;
+      externalConversationId: string;
+      sourceMessageId?: string;
+      message: string;
+      text?: string;
+      channelName?: string;
+      userName?: string;
+      projectId?: number;
+      configId?: string;
+      mode?: "text" | "voice" | "file";
+      voiceTranscript?: string;
+      voiceLanguage?: string;
+      voiceDurationMs?: number;
+      attachments?: Array<{
+        name: string;
+        mimeType?: string;
+        contentBase64?: string;
+        url?: string;
+        text?: string;
+      }>;
+      reactions?: Array<{ emoji: string; userName?: string }>;
+      agentEmoji?: string;
+    }) =>
+      request<{ conversationId: number; replyText: string; result: unknown; portal: string; configId: string; reaction: string }>("/gateway/inbound", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+  },
+};

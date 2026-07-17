@@ -1,0 +1,15 @@
+// Ollama uses OpenAI-compatible API endpoint
+import { OpenAIProvider } from "./openai-provider.js";
+export class OllamaProvider extends OpenAIProvider {
+    name = "ollama";
+    constructor(options) {
+        const baseUrl = options.baseUrl ?? process.env["OLLAMA_BASE_URL"] ?? "http://localhost:11434";
+        super({
+            baseUrl: `${baseUrl}/v1`,
+            apiKey: options.apiKey ?? "ollama",
+            model: options.model ?? process.env["OLLAMA_MODEL"] ?? "llama3",
+            defaultOptions: options.defaultOptions,
+        });
+    }
+}
+//# sourceMappingURL=ollama-provider.js.map

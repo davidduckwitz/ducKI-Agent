@@ -1,0 +1,254 @@
+import { createClient, type Client } from "@libsql/client";
+import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
+import { eq, desc, and } from "drizzle-orm";
+import { mkdirSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
+import type { Logger } from "@ducki/logger";
+import { getRootLogger } from "@ducki/logger";
+import * as schema from "./schema.js";
+import type {
+  ConversationInsert,
+  ConversationSelect,
+  MessageInsert,
+  MessageSelect,
+  ProjectInsert,
+  ProjectSelect,
+  TaskInsert,
+  TaskSelect,
+  MemoryInsert,
+  MemorySelect,
+  SettingInsert,
+  SettingSelect,
+  LogInsert,
+  EmbeddingInsert,
+  EmbeddingSelect,
+} from "./schema.js";
+
+export type { LibSQLDatabase };
+export * from "./schema.js";
+
+export class DatabaseService {
+  private db!: LibSQLDatabase<typeof schema>;
+  private client!: Client;
+  private logger: Logger;
+
+  constructor(private readonly dbPath: string = "./storage/ducki.db") {
+    this.logger = getRootLogger().child("Database");
+  }
+
+  async initialize(): Promise<void> {
+    const dir = dirname(this.dbPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+
+    this.client = createClient({ url: `file:${this.dbPath}` });
+    this.db = drizzle(this.client, { schema });
+    await this.runMigrations();
+
+    this.logger.info("Database initialized", { path: this.dbPath });
+  }
+
+  private async runMigrations(): Promise<void> {
+    const tables = [
+      `CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT, folder TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, project_id INTEGER REFERENCES projects(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, tool_call_id TEXT, tool_result TEXT, created_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER REFERENCES projects(id), title TEXT NOT NULL, description TEXT, status TEXT NOT NULL DEFAULT 'pending', priority TEXT NOT NULL DEFAULT 'medium', subtasks TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS tools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_schema TEXT, last_used TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), type TEXT NOT NULL DEFAULT 'short-term', content TEXT NOT NULL, importance INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, embedding TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT NOT NULL, message TEXT NOT NULL, context TEXT, timestamp TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS tool_executions (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, input TEXT, output TEXT, success INTEGER NOT NULL, execution_time REAL, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL)`,
+    ];
+    for (const sql of tables) {
+      await this.client.execute(sql);
+    }
+
+    await this.client.execute(`ALTER TABLE messages ADD COLUMN metadata TEXT`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+  }
+
+  // ============================================================
+  // Conversations
+  // ============================================================
+  async createConversation(data: Omit<ConversationInsert, "createdAt" | "updatedAt">): Promise<ConversationSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db.insert(schema.conversations).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+    if (!result) throw new Error("Failed to create conversation");
+    return result;
+  }
+
+  async getConversation(id: number): Promise<ConversationSelect | undefined> {
+    return this.db.select().from(schema.conversations).where(eq(schema.conversations.id, id)).get();
+  }
+
+  async listConversations(projectId?: number): Promise<ConversationSelect[]> {
+    if (projectId !== undefined) {
+      return this.db.select().from(schema.conversations).where(eq(schema.conversations.projectId, projectId)).orderBy(desc(schema.conversations.createdAt)).all();
+    }
+    return this.db.select().from(schema.conversations).orderBy(desc(schema.conversations.createdAt)).all();
+  }
+
+  async deleteConversation(id: number): Promise<void> {
+    await this.db.delete(schema.conversations).where(eq(schema.conversations.id, id)).run();
+  }
+
+  // ============================================================
+  // Messages
+  // ============================================================
+  async addMessage(data: Omit<MessageInsert, "createdAt">): Promise<MessageSelect> {
+    const result = await this.db.insert(schema.messages).values({ ...data, createdAt: new Date().toISOString() }).returning().get();
+    if (!result) throw new Error("Failed to add message");
+    return result;
+  }
+
+  async getMessages(conversationId: number): Promise<MessageSelect[]> {
+    return this.db.select().from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).orderBy(schema.messages.id).all();
+  }
+
+  // ============================================================
+  // Projects
+  // ============================================================
+  async createProject(data: Omit<ProjectInsert, "createdAt" | "updatedAt">): Promise<ProjectSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db.insert(schema.projects).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+    if (!result) throw new Error("Failed to create project");
+    return result;
+  }
+
+  async getProject(id: number): Promise<ProjectSelect | undefined> {
+    return this.db.select().from(schema.projects).where(eq(schema.projects.id, id)).get();
+  }
+
+  async listProjects(): Promise<ProjectSelect[]> {
+    return this.db.select().from(schema.projects).orderBy(desc(schema.projects.createdAt)).all();
+  }
+
+  async updateProject(id: number, data: Partial<Omit<ProjectInsert, "id" | "createdAt">>): Promise<ProjectSelect | undefined> {
+    return this.db.update(schema.projects).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(schema.projects.id, id)).returning().get();
+  }
+
+  async deleteProject(id: number): Promise<void> {
+    await this.db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
+  }
+
+  // ============================================================
+  // Tasks
+  // ============================================================
+  async createTask(data: Omit<TaskInsert, "createdAt" | "updatedAt">): Promise<schema.TaskSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db.insert(schema.tasks).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+    if (!result) throw new Error("Failed to create task");
+    return result;
+  }
+
+  async getTask(id: number): Promise<schema.TaskSelect | undefined> {
+    return this.db.select().from(schema.tasks).where(eq(schema.tasks.id, id)).get();
+  }
+
+  async listTasks(projectId?: number): Promise<schema.TaskSelect[]> {
+    if (projectId !== undefined) {
+      return this.db.select().from(schema.tasks).where(eq(schema.tasks.projectId, projectId)).orderBy(desc(schema.tasks.createdAt)).all();
+    }
+    return this.db.select().from(schema.tasks).orderBy(desc(schema.tasks.createdAt)).all();
+  }
+
+  async updateTask(id: number, data: Partial<Omit<TaskInsert, "id" | "createdAt">>): Promise<schema.TaskSelect | undefined> {
+    return this.db.update(schema.tasks).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(schema.tasks.id, id)).returning().get();
+  }
+
+  async deleteTask(id: number): Promise<void> {
+    await this.db.delete(schema.tasks).where(eq(schema.tasks.id, id)).run();
+  }
+
+  // ============================================================
+  // Memories
+  // ============================================================
+  async addMemory(data: Omit<MemoryInsert, "createdAt">): Promise<MemorySelect> {
+    const result = await this.db.insert(schema.memories).values({ ...data, createdAt: new Date().toISOString() }).returning().get();
+    if (!result) throw new Error("Failed to add memory");
+    return result;
+  }
+
+  async getMemories(conversationId?: number, type?: string): Promise<MemorySelect[]> {
+    const conditions = [];
+    if (conversationId !== undefined) conditions.push(eq(schema.memories.conversationId, conversationId));
+    if (type !== undefined) conditions.push(eq(schema.memories.type, type));
+    if (conditions.length === 0) return this.db.select().from(schema.memories).orderBy(desc(schema.memories.importance)).all();
+    return this.db.select().from(schema.memories).where(and(...conditions)).orderBy(desc(schema.memories.importance)).all();
+  }
+
+  async deleteMemory(id: number): Promise<void> {
+    await this.db.delete(schema.memories).where(eq(schema.memories.id, id)).run();
+  }
+
+  // ============================================================
+  // Embeddings
+  // ============================================================
+  async addEmbedding(data: Omit<EmbeddingInsert, "createdAt">): Promise<EmbeddingSelect> {
+    const result = await this.db.insert(schema.embeddings).values({ ...data, createdAt: new Date().toISOString() }).returning().get();
+    if (!result) throw new Error("Failed to add embedding");
+    return result;
+  }
+
+  async getEmbeddings(): Promise<EmbeddingSelect[]> {
+    return this.db.select().from(schema.embeddings).all();
+  }
+
+  // ============================================================
+  // Settings
+  // ============================================================
+  async getSetting(key: string): Promise<string | undefined> {
+    const row = await this.db.select().from(schema.settings).where(eq(schema.settings.key, key)).get();
+    return row?.value;
+  }
+
+  async setSetting(key: string, value: string): Promise<void> {
+    const now = new Date().toISOString();
+    const existing = await this.db.select().from(schema.settings).where(eq(schema.settings.key, key)).get();
+    if (existing) {
+      await this.db.update(schema.settings).set({ value, updatedAt: now }).where(eq(schema.settings.key, key)).run();
+    } else {
+      await this.db.insert(schema.settings).values({ key, value, createdAt: now, updatedAt: now }).run();
+    }
+  }
+
+  async getAllSettings(): Promise<SettingSelect[]> {
+    return this.db.select().from(schema.settings).all();
+  }
+
+  async deleteSetting(key: string): Promise<void> {
+    await this.db.delete(schema.settings).where(eq(schema.settings.key, key)).run();
+  }
+
+  // ============================================================
+  // Logs
+  // ============================================================
+  async addLog(data: Omit<LogInsert, "timestamp">): Promise<void> {
+    await this.db.insert(schema.logs).values({ ...data, timestamp: new Date().toISOString() }).run();
+  }
+
+  async getLogs(level?: string, limit = 100): Promise<schema.LogSelect[]> {
+    if (level) {
+      return this.db.select().from(schema.logs).where(eq(schema.logs.level, level)).orderBy(desc(schema.logs.timestamp)).limit(limit).all();
+    }
+    return this.db.select().from(schema.logs).orderBy(desc(schema.logs.timestamp)).limit(limit).all();
+  }
+
+  get raw(): LibSQLDatabase<typeof schema> {
+    return this.db;
+  }
+}
+
+let instance: DatabaseService | undefined;
+
+export async function getDatabase(dbPath?: string): Promise<DatabaseService> {
+  if (!instance) {
+    instance = new DatabaseService(dbPath ?? process.env["DATABASE_PATH"] ?? "./storage/ducki.db");
+    await instance.initialize();
+  }
+  return instance;
+}

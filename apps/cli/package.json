@@ -1,0 +1,28 @@
+{
+  "name": "@ducki/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "ducki": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "tsc --noEmit --watch",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@ducki/agent": "workspace:*",
+    "@ducki/database": "workspace:*",
+    "@ducki/logger": "workspace:*",
+    "@ducki/providers": "workspace:*",
+    "@ducki/tools": "workspace:*",
+    "dotenv": "^16.4.0",
+    "readline": "^1.3.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.15.0",
+    "typescript": "^5.5.0"
+  }
+}

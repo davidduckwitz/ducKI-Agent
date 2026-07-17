@@ -1,0 +1,1 @@
+{"version":3,"file":"openrouter-provider.d.ts","sourceRoot":"","sources":["openrouter-provider.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,cAAc,EAAE,MAAM,sBAAsB,CAAC;AACtD,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,WAAW,CAAC;AAEjD,qBAAa,kBAAmB,SAAQ,cAAc;IACpD,SAAkB,IAAI,gBAAgB;gBAE1B,OAAO,EAAE,OAAO,CAAC,eAAe,CAAC,GAAG;QAAE,KAAK,EAAE,MAAM,CAAA;KAAE;CAQlE"}

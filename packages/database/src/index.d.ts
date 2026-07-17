@@ -1,0 +1,43 @@
+import { type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import * as schema from "./schema.js";
+import type { ConversationInsert, ConversationSelect, MessageInsert, MessageSelect, ProjectInsert, ProjectSelect, TaskInsert, MemoryInsert, MemorySelect, SettingSelect, LogInsert, EmbeddingInsert, EmbeddingSelect } from "./schema.js";
+export type { BetterSQLite3Database };
+export * from "./schema.js";
+export declare class DatabaseService {
+    private readonly dbPath;
+    private db;
+    private sqlite;
+    private logger;
+    constructor(dbPath?: string);
+    initialize(): void;
+    private runMigrations;
+    createConversation(data: Omit<ConversationInsert, "createdAt" | "updatedAt">): ConversationSelect;
+    getConversation(id: number): ConversationSelect | undefined;
+    listConversations(projectId?: number): ConversationSelect[];
+    deleteConversation(id: number): void;
+    addMessage(data: Omit<MessageInsert, "createdAt">): MessageSelect;
+    getMessages(conversationId: number): MessageSelect[];
+    createProject(data: Omit<ProjectInsert, "createdAt" | "updatedAt">): ProjectSelect;
+    getProject(id: number): ProjectSelect | undefined;
+    listProjects(): ProjectSelect[];
+    updateProject(id: number, data: Partial<Omit<ProjectInsert, "id" | "createdAt">>): ProjectSelect | undefined;
+    deleteProject(id: number): void;
+    createTask(data: Omit<TaskInsert, "createdAt" | "updatedAt">): schema.TaskSelect;
+    getTask(id: number): schema.TaskSelect | undefined;
+    listTasks(projectId?: number): schema.TaskSelect[];
+    updateTask(id: number, data: Partial<Omit<TaskInsert, "id" | "createdAt">>): schema.TaskSelect | undefined;
+    deleteTask(id: number): void;
+    addMemory(data: Omit<MemoryInsert, "createdAt">): MemorySelect;
+    getMemories(conversationId?: number, type?: string): MemorySelect[];
+    addEmbedding(data: Omit<EmbeddingInsert, "createdAt">): EmbeddingSelect;
+    getEmbeddings(): EmbeddingSelect[];
+    getSetting(key: string): string | undefined;
+    setSetting(key: string, value: string): void;
+    getAllSettings(): SettingSelect[];
+    addLog(data: Omit<LogInsert, "timestamp">): void;
+    getLogs(level?: string, limit?: number): schema.LogSelect[];
+    get raw(): BetterSQLite3Database<typeof schema>;
+    close(): void;
+}
+export declare function getDatabase(dbPath?: string): DatabaseService;
+//# sourceMappingURL=index.d.ts.map

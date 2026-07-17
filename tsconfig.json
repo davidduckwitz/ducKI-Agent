@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["packages/*/src", "apps/*/src"],
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/logger" },
+    { "path": "./packages/database" },
+    { "path": "./packages/providers" },
+    { "path": "./packages/tools" },
+    { "path": "./packages/memory" },
+    { "path": "./packages/agent" },
+    { "path": "./packages/planer" },
+    { "path": "./packages/scheduler" },
+    { "path": "./packages/mcp" },
+    { "path": "./apps/server" },
+    { "path": "./apps/cli" }
+  ]
+}
