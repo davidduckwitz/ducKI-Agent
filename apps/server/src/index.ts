@@ -5,7 +5,7 @@ import helmet from "helmet";
 import { createServer } from "node:http";
 import { Buffer } from "node:buffer";
 import { Server as SocketIOServer } from "socket.io";
-import { Agent, WorkflowEngine, createWorkflowManagementTool } from "@ducki/agent";
+import { Agent, WorkflowEngine, createWorkflowManagementTool, createCronjobManagementTool } from "@ducki/agent";
 import { getDatabase } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { createProvider, type ProviderName } from "@ducki/providers";
@@ -13,9 +13,11 @@ import { allTools } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
 import { DiscordGatewayClient } from "./lib/discord-gateway-ws.js";
 import { agentRegistry } from "./lib/agent-registry.js";
+import { CronjobManager } from "./lib/cronjob-manager.js";
 import { UpdateManager } from "./lib/update-manager.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
+import { cronjobsRouter } from "./routes/cronjobs.js";
 import { gatewayRouter } from "./routes/gateway.js";
 import { logsRouter } from "./routes/logs.js";
 import { memoryRouter } from "./routes/memory.js";
@@ -248,6 +250,7 @@ function buildAgentFactory(provider: ReturnType<typeof createProvider>, db: Awai
 			agent.executor.registerTool(tool);
 		}
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngine));
+		agent.executor.registerTool(createCronjobManagementTool(db));
 		return agent;
 	};
 }
@@ -264,6 +267,7 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/skills", skillsRouter);
 	app.use("/api/shared", sharedRouter);
 	app.use("/api/updates", updatesRouter);
+	app.use("/api/cronjobs", cronjobsRouter);
 	app.use("/api/workflows", workflowsRouter);
 	app.use("/api/gateway", gatewayRouter);
 }
@@ -400,6 +404,8 @@ async function bootstrap(): Promise<void> {
 	const workflowEngine = new WorkflowEngine(provider, db);
 	const createAgent = buildAgentFactory(provider, db, workflowEngine);
 	const defaultAgent = createAgent();
+	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
+	cronjobManager.start();
 	const updateManager = new UpdateManager(db, logger.child("UpdateManager"));
 	updateManager.start();
 
@@ -410,6 +416,7 @@ async function bootstrap(): Promise<void> {
 	app.locals["createAgent"] = createAgent;
 	app.locals["agentRegistry"] = agentRegistry;
 	app.locals["discordGatewayStatus"] = discordGatewayStatus;
+	app.locals["cronjobManager"] = cronjobManager;
 	app.locals["updateManager"] = updateManager;
 
 	const io = new SocketIOServer(httpServer, {
@@ -447,6 +454,7 @@ async function bootstrap(): Promise<void> {
 		discordGatewayStatus.active = false;
 		discordGatewayStatus.updatedAt = new Date().toISOString();
 		discordGateway?.stop();
+		cronjobManager.stop();
 		updateManager.stop();
 		io.close();
 		httpServer.close(() => {

@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import * as schema from "./schema.js";
+import { computeNextRun } from "./cron.js";
 import type {
   ConversationInsert,
   ConversationSelect,
@@ -22,10 +23,13 @@ import type {
   LogInsert,
   EmbeddingInsert,
   EmbeddingSelect,
+  CronJobInsert,
+  CronJobSelect,
 } from "./schema.js";
 
 export type { LibSQLDatabase };
 export * from "./schema.js";
+export * from "./cron.js";
 
 export class DatabaseService {
   private db!: LibSQLDatabase<typeof schema>;
@@ -61,6 +65,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT NOT NULL, message TEXT NOT NULL, context TEXT, timestamp TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS tool_executions (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, input TEXT, output TEXT, success INTEGER NOT NULL, execution_time REAL, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS cron_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, schedule TEXT NOT NULL, target_type TEXT NOT NULL, target_ref TEXT, payload TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run_at TEXT, next_run_at TEXT, last_status TEXT, last_error TEXT, last_result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -236,6 +241,102 @@ export class DatabaseService {
       return this.db.select().from(schema.logs).where(eq(schema.logs.level, level)).orderBy(desc(schema.logs.timestamp)).limit(limit).all();
     }
     return this.db.select().from(schema.logs).orderBy(desc(schema.logs.timestamp)).limit(limit).all();
+  }
+
+  // ============================================================
+  // Cron Jobs
+  // ============================================================
+  async createCronJob(
+    data: Omit<CronJobInsert, "id" | "createdAt" | "updatedAt" | "nextRunAt" | "lastRunAt" | "lastStatus" | "lastError" | "lastResult">
+  ): Promise<CronJobSelect> {
+    const now = new Date().toISOString();
+    const nextRunAt = computeNextRun(data.schedule, new Date()).toISOString();
+    const result = await this.db
+      .insert(schema.cronJobs)
+      .values({
+        ...data,
+        enabled: data.enabled ?? 1,
+        createdAt: now,
+        updatedAt: now,
+        nextRunAt,
+        lastRunAt: null,
+        lastStatus: null,
+        lastError: null,
+        lastResult: null,
+      })
+      .returning()
+      .get();
+    if (!result) throw new Error("Failed to create cron job");
+    return result;
+  }
+
+  async getCronJob(id: number): Promise<CronJobSelect | undefined> {
+    return this.db.select().from(schema.cronJobs).where(eq(schema.cronJobs.id, id)).get();
+  }
+
+  async listCronJobs(enabledOnly = false): Promise<CronJobSelect[]> {
+    if (enabledOnly) {
+      return this.db
+        .select()
+        .from(schema.cronJobs)
+        .where(eq(schema.cronJobs.enabled, 1))
+        .orderBy(desc(schema.cronJobs.createdAt))
+        .all();
+    }
+    return this.db.select().from(schema.cronJobs).orderBy(desc(schema.cronJobs.createdAt)).all();
+  }
+
+  async updateCronJob(
+    id: number,
+    data: Partial<Omit<CronJobInsert, "id" | "createdAt">>
+  ): Promise<CronJobSelect | undefined> {
+    const patch: Partial<Omit<CronJobInsert, "id" | "createdAt">> = {
+      ...data,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (data.schedule) {
+      patch.nextRunAt = computeNextRun(data.schedule, new Date()).toISOString();
+    }
+
+    if (data.enabled === 0) {
+      patch.nextRunAt = null;
+    }
+
+    if (data.enabled === 1 && !patch.nextRunAt) {
+      const existing = await this.getCronJob(id);
+      if (existing) {
+        patch.nextRunAt = computeNextRun(data.schedule ?? existing.schedule, new Date()).toISOString();
+      }
+    }
+
+    return this.db.update(schema.cronJobs).set(patch).where(eq(schema.cronJobs.id, id)).returning().get();
+  }
+
+  async setCronJobRunResult(
+    id: number,
+    data: { status: "success" | "failed"; error?: string; result?: string; nextRunAt?: string }
+  ): Promise<void> {
+    const existing = await this.getCronJob(id);
+    if (!existing) return;
+
+    const nextRunAt = data.nextRunAt ?? (existing.enabled ? computeNextRun(existing.schedule, new Date()).toISOString() : null);
+    await this.db
+      .update(schema.cronJobs)
+      .set({
+        lastRunAt: new Date().toISOString(),
+        lastStatus: data.status,
+        lastError: data.error ?? null,
+        lastResult: data.result ?? null,
+        nextRunAt,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(schema.cronJobs.id, id))
+      .run();
+  }
+
+  async deleteCronJob(id: number): Promise<void> {
+    await this.db.delete(schema.cronJobs).where(eq(schema.cronJobs.id, id)).run();
   }
 
   get raw(): LibSQLDatabase<typeof schema> {

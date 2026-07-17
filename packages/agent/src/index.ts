@@ -11,6 +11,7 @@ export { Reflection } from "./reflection.js";
 export { History } from "./history.js";
 export { createWorkflowTools } from "./workflow-tools.js";
 export { createWorkflowManagementTool } from "./workflow-management-tool.js";
+export { createCronjobManagementTool } from "./cronjob-management-tool.js";
 export { WorkflowEngine } from "./workflow-engine.js";
 export type {
 	MultiAgentRole,

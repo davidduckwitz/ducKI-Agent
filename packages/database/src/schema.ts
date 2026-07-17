@@ -126,6 +126,26 @@ export const toolExecutions = sqliteTable("tool_executions", {
   createdAt: text("created_at").notNull(),
 });
 
+// ============================================================
+// Cron Jobs
+// ============================================================
+export const cronJobs = sqliteTable("cron_jobs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  schedule: text("schedule").notNull(),
+  targetType: text("target_type").notNull(), // task, prompt, tool, skill
+  targetRef: text("target_ref"),
+  payload: text("payload"), // JSON
+  enabled: integer("enabled").notNull().default(1),
+  lastRunAt: text("last_run_at"),
+  nextRunAt: text("next_run_at"),
+  lastStatus: text("last_status"), // success, failed
+  lastError: text("last_error"),
+  lastResult: text("last_result"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export type ConversationInsert = typeof conversations.$inferInsert;
 export type ConversationSelect = typeof conversations.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
@@ -144,3 +164,5 @@ export type SettingInsert = typeof settings.$inferInsert;
 export type SettingSelect = typeof settings.$inferSelect;
 export type LogInsert = typeof logs.$inferInsert;
 export type LogSelect = typeof logs.$inferSelect;
+export type CronJobInsert = typeof cronJobs.$inferInsert;
+export type CronJobSelect = typeof cronJobs.$inferSelect;

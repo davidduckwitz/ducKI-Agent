@@ -67,6 +67,23 @@ export const api = {
     delete: (id: number) => request<unknown>(`/tasks/${id}`, { method: "DELETE" }),
   },
 
+  cronjobs: {
+    list: () => request<unknown[]>("/cronjobs"),
+    get: (id: number) => request<unknown>(`/cronjobs/${id}`),
+    create: (data: {
+      name: string;
+      schedule: string;
+      targetType: "task" | "prompt" | "tool" | "skill";
+      targetRef?: string;
+      payload?: Record<string, unknown>;
+      enabled?: boolean;
+    }) => request<unknown>("/cronjobs", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: number, data: Record<string, unknown>) =>
+      request<unknown>(`/cronjobs/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    run: (id: number) => request<unknown>(`/cronjobs/${id}/run`, { method: "POST" }),
+    delete: (id: number) => request<unknown>(`/cronjobs/${id}`, { method: "DELETE" }),
+  },
+
   tools: {
     list: () => request<{ name: string; description: string }[]>("/tools"),
   },

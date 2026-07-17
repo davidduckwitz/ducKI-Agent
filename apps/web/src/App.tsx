@@ -50,6 +50,11 @@ const MessagingGateway = lazy(async () => {
   return { default: module.MessagingGateway };
 });
 
+const CronjobManager = lazy(async () => {
+  const module = await import("./components/cronjobs/CronjobManager");
+  return { default: module.CronjobManager };
+});
+
 function LazyRoute({ children }: { children: ReactNode }) {
   return <Suspense fallback={<div className="p-6 text-sm text-gray-400">Seite wird geladen...</div>}>{children}</Suspense>;
 }
@@ -64,6 +69,7 @@ export default function App() {
           <Route path="chat" element={<ChatContainer />} />
           <Route path="projects" element={<ProjectManager />} />
           <Route path="tasks" element={<TaskManager />} />
+          <Route path="cronjobs" element={<LazyRoute><CronjobManager /></LazyRoute>} />
           <Route path="tools" element={<LazyRoute><ToolRegistry /></LazyRoute>} />
           <Route path="skills" element={<LazyRoute><SkillManager /></LazyRoute>} />
           <Route path="shared" element={<LazyRoute><SharedWorkspace /></LazyRoute>} />
