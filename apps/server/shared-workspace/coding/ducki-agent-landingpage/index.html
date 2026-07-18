@@ -1,81 +1,354 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="de">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DucKI – Dein intelligenter KI-Agent</title>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <header class="hero">
-    <nav class="nav">
-      <span class="logo">🦆 DucKI</span>
-      <a href="#features">Fähigkeiten</a>
-      <a href="#usecases">Anwendungen</a>
-      <a href="#contact">Kontakt</a>
-    </nav>
-    <div class="hero-content">
-      <h1>Ich bin DucKI</h1>
-      <p class="subtitle">Dein präziser, hilfsbereiter KI-Agent mit echten Werkzeugen – nicht nur Text.</p>
-      <a class="cta" href="#features">Meine Fähigkeiten entdecken</a>
-    </div>
-  </header>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DucKI Agent Landingpage</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <style>
+      :root {
+        --ducki-bg: #0b1220;
+        --ducki-panel: #111a2e;
+        --ducki-accent: #f59e0b;
+        --ducki-accent-2: #22d3ee;
+      }
 
-  <main>
-    <section id="features" class="section">
-      <h2>Was ich kann</h2>
-      <div class="grid">
-        <article class="card">
-          <h3>🌐 Browser steuern</h3>
-          <p>Webseiten inspizieren, Flows testen, Screenshots, PDFs & Downloads – sicher per Puppeteer.</p>
-        </article>
-        <article class="card">
-          <h3>📁 Shared Workspace</h3>
-          <p>Dateien lesen, schreiben, verschieben & löschen – API-first mit Filesystem-Fallback.</p>
-        </article>
-        <article class="card">
-          <h3>🧠 Memory & History</h3>
-          <p>Lerne aus Aufgaben, merke mir Profile und durchsuche alte Konversationen.</p>
-        </article>
-        <article class="card">
-          <h3>⚙️ Workflows</h3>
-          <p>Grahen erstellen, ausführen und fortsetzen – planbar & wiederholbar.</p>
-        </article>
-        <article class="card">
-          <h3>💬 Gateway / Discord</h3>
-          <p>Zuverlässig Nachrichten über konfigurierte Portale senden.</p>
-        </article>
-        <article class="card">
-          <h3>🕒 Cronjobs</h3>
-          <p>Geplante Aufgaben, Prompts, Tools & Skills zeitgesteuert automatisieren.</p>
-        </article>
-        <article class="card">
-          <h3>🔧 Git & Shell</h3>
-          <p>Repos versionieren, Befehle ausführen, Server lokal starten.</p>
-        </article>
-        <article class="card">
-          <h3>🧩 Skills & MCP</h3>
-          <p>Modulare Skills nutzen und externe MCP-Server sicher einbinden.</p>
-        </article>
+      body {
+        background: radial-gradient(circle at 10% 10%, #17243f, var(--ducki-bg) 45%),
+          linear-gradient(180deg, #0b1220 0%, #070d18 100%);
+        color: #e5e7eb;
+      }
+
+      .hero {
+        padding: 6rem 0 4rem;
+      }
+
+      .glass {
+        background: rgba(17, 26, 46, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        backdrop-filter: blur(6px);
+      }
+
+      .badge-ducki {
+        background: linear-gradient(90deg, var(--ducki-accent), var(--ducki-accent-2));
+        color: #0f172a;
+        font-weight: 700;
+      }
+
+      .cap-card {
+        transition: transform 0.2s ease, border-color 0.2s ease;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+      }
+
+      .cap-card:hover {
+        transform: translateY(-4px);
+        border-color: rgba(34, 211, 238, 0.8);
+      }
+
+      .benefit-icon {
+        font-size: 1.8rem;
+      }
+
+      footer {
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg navbar-dark py-3">
+      <div class="container">
+        <a class="navbar-brand fw-bold" href="#">DucKI Agent</a>
+        <div class="d-flex align-items-center gap-2">
+          <a class="btn btn-sm btn-outline-info" href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a class="btn btn-sm btn-outline-light" href="documentation.html">Dokumentation</a>
+          <span class="badge rounded-pill badge-ducki px-3 py-2">AI Agent</span>
+        </div>
       </div>
-    </section>
+    </nav>
 
-    <section id="usecases" class="section alt">
-      <h2>Typische Anwendungen</h2>
-      <ul class="usecases">
-        <li>Automatisierte tägliche Nachrichten (Wetter + News)</li>
-        <li>Landingpages & Prototypen aus einer Anfrage bauen</li>
-        <li>Code-Review & TDD-gestützte Feature-Entwicklung</li>
-        <li>Browser-Tests und Screenshots für UI-Freigaben</li>
-        <li>Wissenspflege im LLM-Wiki & Historie-Recherche</li>
-      </ul>
-    </section>
-  </main>
+    <main>
+      <section class="hero">
+        <div class="container">
+          <div class="row align-items-center g-4">
+            <div class="col-lg-7">
+              <h1 class="display-4 fw-bold mb-3">Ich plane, codiere und liefere Features end-to-end.</h1>
+              <p class="lead text-secondary mb-4">
+                DucKI ist ein self-hosted AI Agent fuer produktive Arbeit: mit Planung, Recherche, Workflows,
+                persistentem Memory und sicherer Automatisierung im Projektkontext.
+              </p>
+              <div class="d-flex flex-wrap gap-2">
+                <a class="btn btn-warning btn-lg" href="#faehigkeiten">Faehigkeiten</a>
+                <a class="btn btn-outline-info btn-lg" href="#benefits">Benefits</a>
+                <a class="btn btn-outline-light btn-lg" href="#quickstart">Quickstart</a>
+              </div>
+            </div>
+            <div class="col-lg-5">
+              <div class="glass rounded-4 p-4 shadow-lg">
+                <h2 class="h5 mb-3">Was ich uebernehme</h2>
+                <ul class="mb-0">
+                  <li>Planung von Aufgaben in klaren, umsetzbaren Schritten</li>
+                  <li>Recherche, Analyse und strukturierte Ergebnisaufbereitung</li>
+                  <li>Workflow-Orchestrierung fuer mehrstufige Automationen</li>
+                  <li>Memory-gestuetzte Kontextarbeit ueber Sessions hinweg</li>
+                  <li>Sichere Tool-Ausfuehrung mit nachvollziehbaren Ergebnissen</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-  <footer id="contact" class="footer">
-    <p>🦆 DucKI – Assistent von David · Gebaut mit Coding-System Skill</p>
-  </footer>
+      <section id="faehigkeiten" class="py-5">
+        <div class="container">
+          <div class="d-flex justify-content-between align-items-end mb-4">
+            <h2 class="fw-bold mb-0">Meine Kernfaehigkeiten</h2>
+            <span class="text-secondary">Produktiver AI Agent fuer echte Projekte</span>
+          </div>
+          <div class="row g-4">
+            <div class="col-md-6 col-xl-3">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Planung</h3>
+                <p class="text-secondary mb-0">Ziele in konkrete Schritte und priorisierte Tasks zerlegen, inklusive sauberer Umsetzungsreihenfolge.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Recherche</h3>
+                <p class="text-secondary mb-0">Kontext aus Dateien, Historie und Wissensquellen auswerten und als klare Handlungsempfehlungen liefern.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Memory</h3>
+                <p class="text-secondary mb-0">Wichtige Informationen persistent halten, wiederfinden und in Folgeaufgaben intelligent nutzen.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Automatisierung</h3>
+                <p class="text-secondary mb-0">Wiederkehrende Aufgaben ueber Workflows, CronJobs und Tools zuverlaessig automatisieren.</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
 
-  <script src="script.js"></script>
-</body>
+      <section id="benefits" class="py-5">
+        <div class="container">
+          <div class="text-center mb-5">
+            <h2 class="fw-bold mb-2">Warum DucKI?</h2>
+            <p class="text-secondary mb-0">Echte Benefits aus der DucKI-Plattform (LLM-Wiki)</p>
+          </div>
+          <div class="row g-4">
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">⚡</div>
+                <h3 class="h5">Multi-Agent Runs</h3>
+                <p class="text-secondary mb-0">Parallele Agent-Ausfuehrungen (Chat + Tasks + WebSocket) ohne globalen Lock-Contention.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">🕸️</div>
+                <h3 class="h5">Workflow Orchestration</h3>
+                <p class="text-secondary mb-0">Graph-Workflows erstellen, ausfuehren und fortsetzen – direkt aus UI und Tools.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">🧠</div>
+                <h3 class="h5">Persistent Memory</h3>
+                <p class="text-secondary mb-0">Self-updating Memory mit Profil-Eintraegen, Approval und kuratierter Historie.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">🧩</div>
+                <h3 class="h5">Skills System</h3>
+                <p class="text-secondary mb-0">Slash-Skills, Auto-Auswahl, Pin/Enable-Management und Markdown-Skill-Editor.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">📚</div>
+                <h3 class="h5">LLM-Wiki</h3>
+                <p class="text-secondary mb-0">Wissens-Pipeline aus dem Workspace: Chunking, Moderation, Suche und Auto-Memory.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">🛠️</div>
+                <h3 class="h5">Umfangreiches Tooling</h3>
+                <p class="text-secondary mb-0">Filesystem, HTTP, Shell, Git, Browser-Automation, Skills, Workflow & Memory Tools.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">📡</div>
+                <h3 class="h5">Live Operations</h3>
+                <p class="text-secondary mb-0">Live-Metriken und Monitoring aktiver Runs ueber eine dedizierte Seite.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">🕒</div>
+                <h3 class="h5">CronJobs</h3>
+                <p class="text-secondary mb-0">Geplante Ausfuehrung von Tasks, Prompts, Tools und Skills zu festen Zeiten.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">💬</div>
+                <h3 class="h5">Discord Gateway</h3>
+                <p class="text-secondary mb-0">Outbound-Nachrichten inkl. Speech-to-Text ueber konfigurierte Discord-Portale.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-4">
+              <article class="cap-card glass rounded-4 h-100 p-4">
+                <div class="benefit-icon mb-2">🆓</div>
+                <h3 class="h5">Kostenfrei & Open Source</h3>
+                <p class="text-secondary mb-0">DucKI ist kostenlos nutzbar, frei erweiterbar und offen fuer Forks, Pull Requests und gemeinsames Bauen.</p>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="plattform" class="py-5">
+        <div class="container">
+          <div class="glass rounded-4 p-4 p-lg-5">
+            <div class="row g-4 align-items-center">
+              <div class="col-lg-7">
+                <h2 class="fw-bold mb-3">Self-hosted & leichtgewichtig</h2>
+                <p class="text-secondary mb-4">
+                  Komplett in NodeJS gebaut, mit Web UI, REST API, WebSocket-Streaming und persistenter
+                  Memory. Du behaeltst die Kontrolle ueber Daten und Infrastruktur.
+                </p>
+                <div class="d-flex flex-wrap gap-2">
+                  <span class="badge rounded-pill text-bg-dark border">Web UI</span>
+                  <span class="badge rounded-pill text-bg-dark border">REST API</span>
+                  <span class="badge rounded-pill text-bg-dark border">WebSocket</span>
+                  <span class="badge rounded-pill text-bg-dark border">NodeJS</span>
+                  <span class="badge rounded-pill text-bg-dark border">Self-hosted</span>
+                </div>
+              </div>
+              <div class="col-lg-5">
+                <div class="glass rounded-4 p-4">
+                  <h3 class="h5 mb-3">Architektur im Ueberblick</h3>
+                  <ul class="mb-0 text-secondary">
+                    <li>Chat + Tasks + Agents</li>
+                    <li>KanBan Board & Log System</li>
+                    <li>Provider: LM Studio & OpenRouter</li>
+                    <li>Memory / Skill / Tool Registry</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="quickstart" class="py-5">
+        <div class="container">
+          <div class="glass rounded-4 p-4 p-lg-5">
+            <div class="row g-4">
+              <div class="col-lg-7">
+                <h2 class="fw-bold mb-3">Quickstart in 3 Minuten</h2>
+                <p class="text-secondary mb-3">
+                  Setup ist leichtgewichtig: installieren, .env anlegen, starten.
+                </p>
+                <div class="rounded-3 border border-secondary-subtle bg-dark p-3 mb-3">
+                  <pre class="mb-0 text-light"><code>pnpm install
+Copy-Item .env.example .env
+pnpm dev</code></pre>
+                </div>
+                <ul class="text-secondary mb-0">
+                  <li>Web UI: http://localhost:3000</li>
+                  <li>API: http://localhost:3001</li>
+                  <li>Health: http://localhost:3001/health</li>
+                </ul>
+              </div>
+              <div class="col-lg-5">
+                <div class="glass rounded-4 p-4 h-100">
+                  <h3 class="h5 mb-3">Setup Hinweise</h3>
+                  <ul class="text-secondary mb-0">
+                    <li>In /settings zuerst Provider und Modell setzen.</li>
+                    <li>In /skills nur benoetigte Skills aktivieren.</li>
+                    <li>Mit /chat iterativ arbeiten, /workflow fuer Graph-Runs.</li>
+                    <li>Aktive Agent-Laeufe ueber /agents beobachten.</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="community" class="py-5">
+        <div class="container">
+          <div class="glass rounded-4 p-4 p-lg-5">
+            <div class="row g-4 align-items-start">
+              <div class="col-lg-7">
+                <h2 class="fw-bold mb-3">Kostenfrei nutzen, gemeinsam verbessern</h2>
+                <p class="text-secondary mb-3">
+                  DucKI ist kostenlos. Wenn dir das Projekt hilft, freuen wir uns ueber Feedback, Issues, Forks und Pull Requests.
+                </p>
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                  <a class="btn btn-outline-info" href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer">GitHub Projekt</a>
+                  <a class="btn btn-outline-light" href="https://github.com/davidduckwitz/ducKI-Agent/fork" target="_blank" rel="noopener noreferrer">Fork erstellen</a>
+                  <a class="btn btn-warning text-dark fw-semibold" href="https://github.com/davidduckwitz/ducKI-Agent/pulls" target="_blank" rel="noopener noreferrer">Pull Request einreichen</a>
+                  <a class="btn btn-outline-light" href="documentation.html">Dokumentation lesen</a>
+                </div>
+                <p class="text-secondary mb-0">Download, Nutzung und Beteiligung laufen direkt ueber GitHub.</p>
+              </div>
+              <div class="col-lg-5">
+                <div class="glass rounded-4 p-4">
+                  <h3 class="h5 mb-3">Support & Spenden</h3>
+                  <p class="text-secondary mb-2">Projekt ist kostenfrei. Freiwillige Unterstuetzung hilft bei Weiterentwicklung.</p>
+                  <p class="mb-2"><strong>PayPal Me:</strong><br /><a class="link-info" href="https://www.paypal.me/davidduckwitz" target="_blank" rel="noopener noreferrer">https://www.paypal.me/davidduckwitz</a></p>
+                  <p class="mb-0"><strong>Bitcoin:</strong><br /><span class="text-break">1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G</span></p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="kontakt" class="py-5">
+        <div class="container">
+          <div class="glass rounded-4 p-4 p-lg-5">
+            <div class="row g-4 align-items-center">
+              <div class="col-lg-8">
+                <h2 class="fw-bold">Bereit fuer den naechsten Schritt?</h2>
+                <p class="text-secondary mb-0">
+                  Gib uns Feedback, teste DucKI lokal und bringe deine Ideen als Issue oder Pull Request ein.
+                </p>
+              </div>
+              <div class="col-lg-4 text-lg-end">
+                <a class="btn btn-info btn-lg text-dark fw-semibold" href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer">Jetzt mit DucKI starten</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="py-4">
+      <div class="container d-flex flex-column flex-md-row justify-content-between gap-2">
+        <small class="text-secondary">DucKI Agent Landingpage</small>
+        <small class="text-secondary">Built with Bootstrap 5 · Kostenlos · Open Source · Community driven</small>
+      </div>
+    </footer>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+      crossorigin="anonymous"
+    ></script>
+  </body>
 </html>

@@ -11,6 +11,11 @@
 
 <img width="1427" height="946" alt="image" src="https://github.com/user-attachments/assets/44420dc1-d681-4ba6-8aaf-cc769a3e48b7" />
 
+- Website: https://www.davidduckwitz.de/ducki-agent
+- Author Website: https://www.davidduckwitz.de/
+- Help & Contribute: Donation Links on the end of the ReadMe or contribute via Pull Request with new Features & Fixes
+
+
 ## Quick Start
 
 ### Linux/macOS/WSL

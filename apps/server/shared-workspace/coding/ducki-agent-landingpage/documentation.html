@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DucKI Agent Dokumentation</title>
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+    <style>
+      :root {
+        --ducki-bg: #0b1220;
+        --ducki-panel: #111a2e;
+        --ducki-accent: #f59e0b;
+        --ducki-accent-2: #22d3ee;
+      }
+
+      body {
+        background: radial-gradient(circle at 10% 10%, #17243f, var(--ducki-bg) 45%),
+          linear-gradient(180deg, #0b1220 0%, #070d18 100%);
+        color: #e5e7eb;
+      }
+
+      .glass {
+        background: rgba(17, 26, 46, 0.8);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        backdrop-filter: blur(6px);
+      }
+
+      .badge-ducki {
+        background: linear-gradient(90deg, var(--ducki-accent), var(--ducki-accent-2));
+        color: #0f172a;
+        font-weight: 700;
+      }
+
+      .doc-card {
+        border: 1px solid rgba(148, 163, 184, 0.25);
+      }
+
+      pre {
+        margin: 0;
+      }
+
+      footer {
+        border-top: 1px solid rgba(148, 163, 184, 0.2);
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="navbar navbar-expand-lg navbar-dark py-3">
+      <div class="container">
+        <a class="navbar-brand fw-bold" href="index.html">DucKI Agent</a>
+        <div class="d-flex align-items-center gap-2">
+          <a class="btn btn-sm btn-outline-info" href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a class="btn btn-sm btn-outline-light" href="index.html">Landingpage</a>
+          <span class="badge rounded-pill badge-ducki px-3 py-2">Dokumentation</span>
+        </div>
+      </div>
+    </nav>
+
+    <main class="py-4 py-lg-5">
+      <div class="container d-grid gap-4">
+        <section class="glass rounded-4 p-3 p-lg-4">
+          <div class="d-flex flex-wrap gap-2">
+            <a class="btn btn-sm btn-outline-info" href="#quickstart">Quickstart</a>
+            <a class="btn btn-sm btn-outline-light" href="#konfiguration">Konfiguration</a>
+            <a class="btn btn-sm btn-outline-light" href="#alltag">Alltag</a>
+            <a class="btn btn-sm btn-outline-light" href="#automation">Automation</a>
+            <a class="btn btn-sm btn-outline-light" href="#troubleshooting">Troubleshooting</a>
+            <a class="btn btn-sm btn-outline-warning" href="#support">Unterstuetzen</a>
+          </div>
+        </section>
+
+        <section class="glass rounded-4 p-4 p-lg-5">
+          <h1 class="display-6 fw-bold mb-3">DucKI Agent bedienen</h1>
+          <p class="text-secondary mb-0">
+            Diese Seite zeigt dir den schnellsten Weg vom ersten Start bis zur produktiven Nutzung im Alltag.
+            DucKI ist kostenlos nutzbar, self-hosted und offen fuer Pull Requests.
+          </p>
+        </section>
+
+        <section id="quickstart" class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">1. Quickstart Setup</h2>
+          <div class="row g-4">
+            <div class="col-lg-6">
+              <h3 class="h5">Windows (PowerShell)</h3>
+              <div class="rounded-3 border border-secondary-subtle bg-dark p-3">
+                <pre class="text-light"><code>pnpm install
+Copy-Item .env.example .env
+pnpm dev</code></pre>
+              </div>
+            </div>
+            <div class="col-lg-6">
+              <h3 class="h5">Linux/macOS/WSL</h3>
+              <div class="rounded-3 border border-secondary-subtle bg-dark p-3">
+                <pre class="text-light"><code>pnpm install
+cp .env.example .env
+pnpm dev</code></pre>
+              </div>
+            </div>
+          </div>
+          <ul class="mt-3 text-secondary mb-0">
+            <li>Web UI: http://localhost:3000</li>
+            <li>API: http://localhost:3001</li>
+            <li>Healthcheck: http://localhost:3001/health</li>
+          </ul>
+        </section>
+
+        <section id="konfiguration" class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">2. Erste Konfiguration</h2>
+          <div class="row g-4">
+            <div class="col-md-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Settings</h3>
+                <p class="text-secondary mb-0">In /settings den Provider und das Modell setzen (z. B. LM Studio, OpenRouter, OpenAI, Ollama).</p>
+              </article>
+            </div>
+            <div class="col-md-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Skills</h3>
+                <p class="text-secondary mb-0">In /skills nur die Skills aktivieren, die du wirklich brauchst. Das spart Kontext und macht den Agenten praeziser.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="alltag" class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">3. Bedienung im Alltag</h2>
+          <div class="row g-4">
+            <div class="col-md-6 col-xl-3">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h6 text-uppercase text-info">Chat</h3>
+                <p class="text-secondary mb-0">/chat fuer iterative Arbeit, Recherche, Planung und Tool-gestuetzte Umsetzung.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h6 text-uppercase text-info">Workflow</h3>
+                <p class="text-secondary mb-0">/workflow fuer graph-basierte, mehrstufige Ausfuehrungen mit Resume-Faehigkeit.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h6 text-uppercase text-info">Memory</h3>
+                <p class="text-secondary mb-0">/memory fuer Profile, Eintraege, Freigaben und kontrollierte Langzeit-Kontextpflege.</p>
+              </article>
+            </div>
+            <div class="col-md-6 col-xl-3">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h6 text-uppercase text-info">Agents Live</h3>
+                <p class="text-secondary mb-0">/agents zur Beobachtung laufender Agent-Runs und Runtime-Aktivitaet.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="automation" class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">4. Coding, Tasks und Automatisierung</h2>
+          <ul class="text-secondary mb-0">
+            <li>/coding fuer projektgebundenes Arbeiten mit Dateiexplorer, Editor, Preview und Chat-Kontext.</li>
+            <li>/tasks fuer planbare Arbeitsitems inkl. Agent-Ausfuehrung pro Task.</li>
+            <li>/cronjobs fuer zeitgesteuerte Prompts, Tasks, Skills und Tool-Runs.</li>
+            <li>/shared fuer gemeinsame Artefakte und Uploads.</li>
+          </ul>
+        </section>
+
+        <section id="troubleshooting" class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">5. Troubleshooting Kurzguide</h2>
+          <div class="row g-4">
+            <div class="col-md-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Provider antwortet nicht</h3>
+                <p class="text-secondary mb-0">Pruefe in /settings Provider-URL, Modellname und API-Key. Danach Chat erneut starten.</p>
+              </article>
+            </div>
+            <div class="col-md-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Feature fehlt im Menue</h3>
+                <p class="text-secondary mb-0">Flags wie CODING_ENABLED oder WIKI_ENABLED in /settings aktivieren und UI neu laden.</p>
+              </article>
+            </div>
+            <div class="col-md-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Dateioperationen schlagen fehl</h3>
+                <p class="text-secondary mb-0">Nur relative Pfade im Projekt nutzen und auf den freigegebenen Workspace-Bereich achten.</p>
+              </article>
+            </div>
+            <div class="col-md-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5">Monitoring</h3>
+                <p class="text-secondary mb-0">/logs und /agents helfen bei Analyse von Fehlern und laufenden Prozessen.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">Open Source & Community</h2>
+          <p class="text-secondary mb-3">
+            DucKI ist kostenlos. Wenn du mithelfen willst: Feedback geben, Issues melden, Fork erstellen und Pull Requests einreichen.
+          </p>
+          <div class="d-flex flex-wrap gap-2 mb-3">
+            <a class="btn btn-outline-info" href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer">Repository</a>
+            <a class="btn btn-outline-light" href="https://github.com/davidduckwitz/ducKI-Agent/fork" target="_blank" rel="noopener noreferrer">Fork</a>
+            <a class="btn btn-warning text-dark fw-semibold" href="https://github.com/davidduckwitz/ducKI-Agent/pulls" target="_blank" rel="noopener noreferrer">Pull Requests</a>
+          </div>
+          <p class="mb-2"><strong>PayPal Me:</strong> <a class="link-info" href="https://www.paypal.me/davidduckwitz" target="_blank" rel="noopener noreferrer">https://www.paypal.me/davidduckwitz</a></p>
+          <p class="mb-0"><strong>Bitcoin:</strong> <span class="text-break">1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G</span></p>
+        </section>
+
+        <section id="support" class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">Spenden / Unterstuetzen</h2>
+          <p class="text-secondary mb-3">
+            DucKI bleibt kostenlos. Wenn dir das Projekt hilft, freuen wir uns sehr ueber freiwillige Unterstuetzung.
+          </p>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <div class="doc-card glass rounded-4 p-4 h-100">
+                <h3 class="h5">PayPal</h3>
+                <p class="mb-0"><a class="link-info text-break" href="https://www.paypal.me/davidduckwitz" target="_blank" rel="noopener noreferrer">https://www.paypal.me/davidduckwitz</a></p>
+              </div>
+            </div>
+            <div class="col-md-6">
+              <div class="doc-card glass rounded-4 p-4 h-100">
+                <h3 class="h5">Bitcoin</h3>
+                <p class="mb-0 text-break">1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer class="py-4">
+      <div class="container d-flex flex-column flex-md-row justify-content-between gap-2">
+        <small class="text-secondary">DucKI Agent Dokumentation</small>
+        <small class="text-secondary">Kostenfrei · Open Source · Community driven</small>
+      </div>
+    </footer>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+      crossorigin="anonymous"
+    ></script>
+  </body>
+</html>
