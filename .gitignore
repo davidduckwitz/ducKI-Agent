@@ -6,3 +6,5 @@ storage/
 *.log
 .DS_Store
 coverage/
+apps/server/shared-workspace/llm-wiki/
+apps/server/shared-workspace/chat-uploads/
