@@ -1,6 +1,9 @@
----
+﻿---
 name: browser-control
-description: Use the browser tool to inspect, control, and verify browser-based flows safely
+description: Use the browser tool to inspect, control, and verify browser-based flows safely
+related_skills: [shared-workspace-ops, shared-workspace-api-first, workflow-orchestrator, plan, fast-answer]
+primary_skills: [shared-workspace-ops]
+fallback_skills: [shared-workspace-api-first, workflow-orchestrator]
 ---
 
 # Browser Control Skill
@@ -222,3 +225,12 @@ Use these patterns when a browser action fails. Prefer one recovery step at a ti
 - Do not enter secrets, passwords, or tokens unless the user clearly instructs it.
 - Prefer read-only inspection first when the task is about recognition rather than automation.
 - Avoid excessive parallel browser sessions; keep the workflow predictable.
+
+## Skill Interop
+
+- Nutze `shared-workspace-ops` (oder `shared-workspace-api-first`) fuer persistente Artefakte aus Browser-Faellen:
+- Screenshots, PDFs, Downloads, Exportdateien.
+- Wenn ein Browser-Lauf in mehrere Schritte zerfaellt, erstelle zuerst mit `plan` eine Schrittfolge oder nutze `workflow-orchestrator` fuer Wiederholbarkeit.
+- Wenn nur eine direkte Kurzantwort noetig ist, pruefe vor Browser-Aktionen mit `fast-answer`, ob Browser-Control ueberhaupt erforderlich ist.
+
+

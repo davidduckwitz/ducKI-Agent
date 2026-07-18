@@ -63,6 +63,9 @@ interface SkillManifest {
   name: string;
   description?: string;
   path: string;
+  primarySkills: string[];
+  relatedSkills: string[];
+  fallbackSkills: string[];
 }
 
 interface SkillSummary extends SkillManifest {
@@ -240,12 +243,34 @@ export class Agent {
     return `${value.slice(0, keep)}${suffix}`;
   }
 
-  private parseFrontmatter(content: string): { name?: string; description?: string } {
+  private parseFrontmatter(content: string): {
+    name?: string;
+    description?: string;
+    primarySkills?: string[];
+    relatedSkills?: string[];
+    fallbackSkills?: string[];
+  } {
     if (!content.startsWith("---")) return {};
     const end = content.indexOf("\n---", 3);
     if (end < 0) return {};
     const block = content.slice(3, end).trim();
-    const result: { name?: string; description?: string } = {};
+    const parseSkillList = (raw: string): string[] => {
+      const parsed = raw
+        .replace(/^\[/, "")
+        .replace(/\]$/, "")
+        .split(",")
+        .map((token) => token.trim().replace(/^['"]|['"]$/g, "").toLowerCase())
+        .filter((token) => token.length > 0 && /^[a-z0-9_-]+$/.test(token));
+      return Array.from(new Set(parsed));
+    };
+
+    const result: {
+      name?: string;
+      description?: string;
+      primarySkills?: string[];
+      relatedSkills?: string[];
+      fallbackSkills?: string[];
+    } = {};
     for (const line of block.split(/\r?\n/)) {
       const idx = line.indexOf(":");
       if (idx < 0) continue;
@@ -253,8 +278,63 @@ export class Agent {
       const value = line.slice(idx + 1).trim().replace(/^['"]|['"]$/g, "");
       if (key === "name") result.name = value;
       if (key === "description") result.description = value;
+      if (key === "primary_skills") {
+        result.primarySkills = parseSkillList(value);
+      }
+      if (key === "related_skills") {
+        result.relatedSkills = parseSkillList(value);
+      }
+      if (key === "fallback_skills") {
+        result.fallbackSkills = parseSkillList(value);
+      }
     }
     return result;
+  }
+
+  private expandRelatedSkills(
+    selected: SkillManifest[],
+    installed: SkillManifest[],
+    allowlist: Set<string>
+  ): SkillManifest[] {
+    const bySlug = new Map(installed.map((skill) => [skill.slug, skill]));
+    const visited = new Set(selected.map((skill) => skill.slug));
+    const queue = [...selected];
+    const extras: SkillManifest[] = [];
+    const maxExtras = 10;
+
+    const enqueueByPriority = (slugs: string[]): number => {
+      let added = 0;
+      for (const candidateSlug of slugs) {
+        if (visited.has(candidateSlug)) continue;
+        const candidate = bySlug.get(candidateSlug);
+        if (!candidate) continue;
+        if (allowlist.size > 0 && !allowlist.has(candidate.slug)) continue;
+
+        visited.add(candidate.slug);
+        extras.push(candidate);
+        queue.push(candidate);
+        added++;
+        if (extras.length >= maxExtras) break;
+      }
+      return added;
+    };
+
+    while (queue.length > 0 && extras.length < maxExtras) {
+      const current = queue.shift();
+      if (!current) continue;
+      const addedPrimary = enqueueByPriority(current.primarySkills);
+      if (extras.length >= maxExtras) break;
+
+      const addedRelated = enqueueByPriority(current.relatedSkills);
+      if (extras.length >= maxExtras) break;
+
+      // Fallback skills are only considered when stronger relations are not available.
+      if (addedPrimary === 0 && addedRelated === 0) {
+        enqueueByPriority(current.fallbackSkills);
+      }
+    }
+
+    return extras;
   }
 
   private loadSkillManifests(): SkillManifest[] {
@@ -273,6 +353,9 @@ export class Agent {
         name: fm.name ?? slug,
         description: fm.description,
         path: skillPath,
+        primarySkills: fm.primarySkills ?? [],
+        relatedSkills: fm.relatedSkills ?? [],
+        fallbackSkills: fm.fallbackSkills ?? [],
       });
     }
 
@@ -1253,6 +1336,16 @@ export class Agent {
       }
     }
 
+    const relatedSkillManifests = this.expandRelatedSkills(
+      activeSkillManifests,
+      installedSkillManifests,
+      enabledAllowlist
+    ).filter((skill) => !activeSkillManifests.some((current) => current.slug === skill.slug));
+
+    if (relatedSkillManifests.length > 0) {
+      activeSkillManifests = [...activeSkillManifests, ...relatedSkillManifests];
+    }
+
     const activeSkills = activeSkillManifests.map((skill) => this.loadSkillContent(skill));
     const activeSkillSlugs = activeSkills.map((skill) => skill.slug);
     const workflowOrchestratorActive = activeSkillSlugs.includes("workflow-orchestrator");
@@ -1269,6 +1362,15 @@ export class Agent {
         `Skills geladen: ${activeSkills.map((s) => s.slug).join(", ")}`,
         { skills: activeSkills.map((s) => ({ slug: s.slug, name: s.name })) }
       );
+    }
+
+    if (relatedSkillManifests.length > 0) {
+      emit("decision", "Related skills auto-loaded", {
+        requestedOrSelected: activeSkillManifests
+          .map((skill) => skill.slug)
+          .filter((slug, index, all) => all.indexOf(slug) === index),
+        autoRelated: relatedSkillManifests.map((skill) => skill.slug),
+      });
     }
 
     if (controls.skillBehavior === "automatic") {

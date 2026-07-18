@@ -49,3 +49,9 @@ Runtime status fields:
 - If tool is missing, refresh/reload and re-check discovered tools.
 - If stream fails mid-output, retry as non-stream call to capture final error payload.
 - If configs are malformed, reset to an empty server list and re-add entries one by one.
+
+## Skill Interop
+
+- Fuer Dokumentation von MCP-Outputs oder Konfig-Snapshots `shared-workspace-ops` nutzen.
+- Fuer geordnete, mehrstufige MCP-Tasks `workflow-orchestrator` einsetzen.
+- Wenn MCP-Ergebnisse Codeaenderungen ausloesen, mit `test-driven-development` umsetzen und mit `code-review` absichern.

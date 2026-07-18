@@ -1,6 +1,9 @@
----
+﻿---
 name: shared-workspace-api-first
 description: "Strict API-first shared workspace operations using /api/shared with filesystem fallback only on API failure."
+related_skills: [shared-workspace-ops, browser-control, workflow-orchestrator]
+primary_skills: [shared-workspace-ops]
+fallback_skills: [workflow-orchestrator]
 version: 1.0.0
 ---
 
@@ -64,3 +67,11 @@ Return these fields in final summary:
 - [TOOL:http({"action":"post","baseUrl":"http://localhost:3001","path":"/api/shared/write","body":{"path":"notes/today.md","content":"Daily note"},"allowedHosts":["localhost","127.0.0.1"]})]
 - [TOOL:http({"action":"delete","baseUrl":"http://localhost:3001","path":"/api/shared/file","query":{"path":"notes/old.md"},"allowedHosts":["localhost","127.0.0.1"]})]
 - [TOOL:filesystem({"action":"write","path":"notes/fallback.md","basePath":"./shared-workspace","safeMode":true,"createDirs":true,"content":"fallback write"})]
+
+## Skill Interop
+
+- Verwende diesen Skill als striktes Gegenstueck zu `shared-workspace-ops`, wenn API-Paritaet Prioritaet hat.
+- Wenn `browser-control` Dateien erzeugt (Download/PDF/Screenshot), hiermit den finalen API-basierten Persistenzpfad absichern.
+- Bei groesseren Datei-Workflows mit mehreren Schritten kann `workflow-orchestrator` die Sequenz steuern.
+
+

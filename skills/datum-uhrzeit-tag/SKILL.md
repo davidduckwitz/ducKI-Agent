@@ -1,6 +1,9 @@
----
+﻿---
 name: datum-uhrzeit-tag
 description: "Gibt Datum, Uhrzeit und/oder Wochentag aus. Steuerbar ueber skillInput." 
+related_skills: [fast-answer, cronjobs, shared-workspace-ops]
+primary_skills: [fast-answer]
+fallback_skills: [cronjobs, shared-workspace-ops]
 version: 1.0.0
 script: script.js
 ---
@@ -50,3 +53,11 @@ Wenn keiner der drei Schalter gesetzt ist, werden standardmaessig alle drei Info
 
 ## Ausgabe
 Das Script schreibt die Ausgabe in `console.log` und liefert ein Ergebnisobjekt zurueck.
+
+## Skill Interop
+
+- Dieser Skill wird bevorzugt aus `fast-answer` heraus delegiert, sobald Zeit/Datum/Tag gefragt ist.
+- Fuer geplante Zeitmeldungen `cronjobs` mit `targetType=skill` auf `datum-uhrzeit-tag` nutzen.
+- Wenn Ausgaben als Datei gespeichert werden sollen, Ergebnis ueber `shared-workspace-ops` persistieren.
+
+

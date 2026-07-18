@@ -1,6 +1,9 @@
----
+﻿---
 name: workflow-orchestrator
 description: "Create and control workflow graphs via the workflow tool with a strict plan-build-run-resume loop."
+related_skills: [fast-answer, plan, history-search, llm-wiki, browser-control, shared-workspace-ops, code-review, test-driven-development]
+primary_skills: [plan, history-search]
+fallback_skills: [code-review, test-driven-development]
 version: 1.0.0
 ---
 
@@ -70,3 +73,13 @@ When reporting to user, include:
 2. What was executed (`run` or `resume`)
 3. Current status and blockers
 4. Proposed next step
+
+## Skill Interop
+
+- Vor dem Graph-Start mit `fast-answer` pruefen, ob Workflow-Orchestrierung wirklich noetig ist.
+- Plan-/Manager-Knoten mit Regeln aus `plan` ausrichten.
+- Recherche-Knoten bevorzugt mit `history-search` und (bei Wissensfragen) `llm-wiki` bauen.
+- Browser-Knoten nutzen `browser-control`; Dateien daraus immer ueber `shared-workspace-ops` oder `shared-workspace-api-first` persistieren.
+- Review-/Qualitaetsknoten mit `code-review` und `test-driven-development` absichern.
+
+

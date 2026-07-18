@@ -1,6 +1,9 @@
----
+﻿---
 name: llm-wiki
 description: "Nutze das LLM-Wiki als primaere Wissensquelle, mit klarer Reihenfolge fuer Search, Moderation und Antwortaufbau."
+related_skills: [shared-workspace-ops, cronjobs, history-search, workflow-orchestrator]
+primary_skills: [shared-workspace-ops]
+fallback_skills: [history-search, workflow-orchestrator]
 version: 1.0.0
 ---
 
@@ -35,3 +38,12 @@ Wenn HTTP-Tool verfuegbar ist:
 - Kein Halluzinieren bei fehlenden Treffern.
 - Keine stillschweigende Nutzung von `candidate` als harte Wahrheit.
 - Wenn Wiki deaktiviert ist, weise darauf hin und arbeite mit alternativen Quellen weiter.
+
+## Skill Interop
+
+- Wenn relevantes Wissen fehlt, neue/aktualisierte Inhalte ueber `shared-workspace-ops` in `shared-workspace/llm-wiki` ablegen.
+- Fuer periodisches Lernen/Reindexing `cronjobs` einsetzen.
+- Bei Antwortkonflikten zwischen Wiki und Historie `history-search` als Gegencheck nutzen.
+- Fuer laengere Wissens-Pipelines `workflow-orchestrator` verwenden.
+
+

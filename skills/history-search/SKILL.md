@@ -1,6 +1,9 @@
----
+﻿---
 name: history-search
 description: "Search older chats and reuse prior solutions with the history tool before re-solving from scratch."
+related_skills: [llm-wiki, plan, code-review]
+primary_skills: [llm-wiki]
+fallback_skills: [plan, code-review]
 version: 1.0.0
 ---
 
@@ -36,3 +39,11 @@ When using this skill, report:
 2. What was reused
 3. What changed for current context
 4. Remaining uncertainty or risks
+
+## Skill Interop
+
+- Kombiniere mit `llm-wiki`, wenn neben Chat-Historie auch kuratierte Wissenseintraege gebraucht werden.
+- Ergebnisse in `plan` uebernehmen, damit Umsetzungsplaene auf realen Vorerfahrungen basieren.
+- Bei wiederkehrenden Fehlermustern `code-review` hinzuziehen.
+
+

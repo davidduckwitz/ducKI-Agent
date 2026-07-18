@@ -1,6 +1,9 @@
----
+﻿---
 name: discord
 description: "Reliable Discord send flow using gateway configs, diagnostics, and recovery steps"
+related_skills: [shared-workspace-ops, cronjobs, workflow-orchestrator]
+primary_skills: [shared-workspace-ops]
+fallback_skills: [cronjobs, workflow-orchestrator]
 version: 1.1.0
 ---
 
@@ -126,3 +129,11 @@ Wenn `gateway` fehlschlaegt, nutze `error` plus `data.diagnostic.code`:
 - Bei Sendefehlern zuerst `list_configs` erneut ausfuehren und Outbound-Bereitschaft pruefen.
 - Fehler immer mit Ursache und Diagnose-Code zurueckgeben.
 - Keine Endlosschleifen: maximal ein Retry mit anderer passender Config.
+
+## Skill Interop
+
+- Wenn Discord-Nachrichten als Datei/Artefakt abgelegt werden sollen, `shared-workspace-ops` nutzen.
+- Bei geplanten, wiederkehrenden Sendungen `cronjobs` nutzen.
+- Fuer umfangreiche, mehrstufige Gateway-Prozesse `workflow-orchestrator` einsetzen.
+
+

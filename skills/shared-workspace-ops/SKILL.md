@@ -1,6 +1,9 @@
----
+﻿---
 name: shared-workspace-ops
 description: "Use shared-workspace directly or via /api/shared endpoints for read/write/create/move/delete operations."
+related_skills: [browser-control, shared-workspace-api-first, workflow-orchestrator, llm-wiki, discord]
+primary_skills: [shared-workspace-api-first]
+fallback_skills: [workflow-orchestrator]
 version: 1.0.0
 ---
 
@@ -78,3 +81,11 @@ When done, return:
 - [TOOL:http({"action":"get","baseUrl":"http://localhost:3001","path":"/api/shared/files","allowedHosts":["localhost","127.0.0.1"]})]
 - [TOOL:http({"action":"get","baseUrl":"http://localhost:3001","path":"/api/shared/read","query":{"path":"docs/readme.md"},"allowedHosts":["localhost","127.0.0.1"]})]
 - [TOOL:http({"action":"post","baseUrl":"http://localhost:3001","path":"/api/shared/write","body":{"path":"docs/readme.md","content":"Hello"},"allowedHosts":["localhost","127.0.0.1"]})]
+
+## Skill Interop
+
+- PrimÃ¤rer Persistenz-Skill fuer andere Skills: `browser-control`, `workflow-orchestrator`, `llm-wiki`, `discord`, `mcp-integration`.
+- Wenn API-Verhalten exakt eingehalten werden muss, eskaliere zu `shared-workspace-api-first`.
+- Wenn zuerst ein Umsetzungsplan noetig ist, kombiniere mit `plan`.
+
+

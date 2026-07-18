@@ -1,6 +1,9 @@
----
+﻿---
 name: cronjobs
 description: "Manage scheduled cronjobs for tasks, prompts, tools, and skills using the cronjob tool."
+related_skills: [workflow-orchestrator, llm-wiki, datum-uhrzeit-tag]
+primary_skills: [workflow-orchestrator]
+fallback_skills: [llm-wiki, datum-uhrzeit-tag]
 version: 1.0.0
 ---
 
@@ -45,3 +48,11 @@ Use this skill when the user asks to schedule, list, edit, enable, disable, or d
 - Never store secrets inside prompt payloads.
 - Keep tool payloads minimal and deterministic.
 - If the user asks for destructive automation, confirm intent before creating or updating the cronjob.
+
+## Skill Interop
+
+- Fuer komplexe zeitgesteuerte Multi-Step-Faelle `workflow-orchestrator` als `targetType=skill` bevorzugen.
+- Fuer zeitbasierte Wissenspflege kann `llm-wiki` (z. B. Reindex-Flow) geplant werden.
+- Fuer Zeit-/Datumsantworten in festen Intervallen `datum-uhrzeit-tag` als Skill-Target nutzen.
+
+
