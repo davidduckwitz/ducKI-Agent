@@ -184,6 +184,11 @@ export const translations: Record<Language, TranslationTree> = {
       eventReasoning: "Reasoning",
       loadingMoreConversations: "Weitere Chats werden geladen...",
       loadingOlderMessages: "Aeltere Nachrichten werden geladen...",
+      timeoutNoProgress: "Der Agent wurde beendet, weil fuer laengere Zeit kein Fortschritt mehr erkannt wurde",
+      errorPrefix: "Fehler:",
+      socketErrorPrefix: "Socket-Fehler:",
+      socketDisconnectedDuringRun: "Verbindung getrennt. Laufende Antwort wurde beendet.",
+      executionStopped: "Ausfuehrung gestoppt",
     },
     toolsPage: {
       noTools: "Keine Tools geladen",
@@ -598,6 +603,11 @@ export const translations: Record<Language, TranslationTree> = {
       eventReasoning: "Reasoning",
       loadingMoreConversations: "Loading more chats...",
       loadingOlderMessages: "Loading older messages...",
+      timeoutNoProgress: "The agent was stopped because no progress was detected for a longer period",
+      errorPrefix: "Error:",
+      socketErrorPrefix: "Socket error:",
+      socketDisconnectedDuringRun: "Connection lost. The running response was stopped.",
+      executionStopped: "Execution stopped",
     },
     toolsPage: {
       noTools: "No tools loaded",

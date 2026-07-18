@@ -81,6 +81,10 @@ interface SkillScore {
 interface AgentRuntimeControls {
   maxIterations: number;
   timeoutMs: number;
+  shellToolTimeoutMs: number;
+  httpToolTimeoutMs: number;
+  browserToolTimeoutMs: number;
+  gitToolTimeoutMs: number;
   enableAutoMemory: boolean;
   enableReflection: boolean;
   reflectionMaxRetries: number;
@@ -143,7 +147,7 @@ export class Agent {
     this.name = options.name ?? "DucKI";
     this.systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     this.maxIterations = options.maxIterations ?? parseInt(process.env["AGENT_MAX_ITERATIONS"] ?? "50");
-    this.timeoutMs = options.timeoutMs ?? parseInt(process.env["AGENT_TIMEOUT_MS"] ?? "300000");
+    this.timeoutMs = options.timeoutMs ?? parseInt(process.env["AGENT_TIMEOUT_MS"] ?? "600000");
     this.enableReflection = options.enableReflection ?? (process.env["AGENT_ENABLE_REFLECTION"] ?? "true").toLowerCase() !== "false";
     this.enablePlanning = options.enablePlanning ?? true;
     this.enableAutoMemory = options.enableAutoMemory ?? (process.env["AGENT_AUTO_MEMORY"] ?? "true").toLowerCase() !== "false";
@@ -192,22 +196,68 @@ export class Agent {
     let iterations = 0;
     const controls = await this.loadRuntimeControls();
 
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Agent timeout")), controls.timeoutMs)
-    );
+    let timedOut = false;
+    let settled = false;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    let rejectTimeout: ((error: Error) => void) | undefined;
+
+    const wrappedOptions: AgentRunOptions = {
+      ...options,
+      onChunk: (chunk) => {
+        armTimeout();
+        options.onChunk?.(chunk);
+      },
+      onEvent: (event) => {
+        armTimeout();
+        options.onEvent?.(event);
+      },
+    };
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectTimeout = reject;
+    });
+
+    const armTimeout = () => {
+      if (settled) return;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      timeoutHandle = setTimeout(() => {
+        if (settled || timedOut) return;
+        timedOut = true;
+        this.stopRequested = true;
+        wrappedOptions.onEvent?.({
+          type: "guardrail",
+          message: `Agent progress timeout after ${controls.timeoutMs}ms`,
+          data: { timeoutMs: controls.timeoutMs },
+          timestamp: new Date().toISOString(),
+        });
+        rejectTimeout?.(new Error(`Agent timeout after ${controls.timeoutMs}ms without progress`));
+      }, controls.timeoutMs);
+    };
+
+    armTimeout();
+    const runLoopPromise = this.runLoop(userInput, toolsUsed, iterations, controls, wrappedOptions);
+    void runLoopPromise.catch((error) => {
+      if (timedOut) {
+        this.logger.warn("Agent run settled after timeout", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
 
     try {
-      const result = await Promise.race([
-        this.runLoop(userInput, toolsUsed, iterations, controls, options),
-        timeoutPromise,
-      ]);
+      const result = await Promise.race([runLoopPromise, timeoutPromise]);
+      settled = true;
       this.status = this.stopRequested ? "stopped" : "idle";
       return result;
     } catch (error) {
-      this.status = "error";
+      settled = true;
+      this.status = timedOut || this.stopRequested ? "stopped" : "error";
       throw error;
     } finally {
-      this.stopRequested = false;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (!timedOut) {
+        this.stopRequested = false;
+      }
     }
   }
 
@@ -694,10 +744,29 @@ export class Agent {
 
   private preflightToolInput(
     toolName: string,
-    input: Record<string, unknown>
+    input: Record<string, unknown>,
+    controls: AgentRuntimeControls
   ): { ok: true; input: Record<string, unknown> } | { ok: false; error: string } {
     const normalizedName = toolName.trim().toLowerCase();
     const normalizedInput: Record<string, unknown> = { ...input };
+
+    if (normalizedName === "shell" && normalizedInput["timeout"] === undefined) {
+      normalizedInput["timeout"] = controls.shellToolTimeoutMs;
+    }
+    if (normalizedName === "http" && normalizedInput["timeout"] === undefined) {
+      normalizedInput["timeout"] = controls.httpToolTimeoutMs;
+    }
+    if (normalizedName === "git" && normalizedInput["timeout"] === undefined) {
+      normalizedInput["timeout"] = controls.gitToolTimeoutMs;
+    }
+    if (normalizedName === "browser") {
+      if (normalizedInput["timeout"] === undefined) {
+        normalizedInput["timeout"] = controls.browserToolTimeoutMs;
+      }
+      if (normalizedInput["timeoutMs"] === undefined) {
+        normalizedInput["timeoutMs"] = controls.browserToolTimeoutMs;
+      }
+    }
 
     if (!this.executor.hasTool(normalizedName)) {
       return { ok: false, error: `Unknown tool '${normalizedName}'` };
@@ -1173,6 +1242,10 @@ export class Agent {
     const defaults: AgentRuntimeControls = {
       maxIterations: this.maxIterations,
       timeoutMs: this.timeoutMs,
+      shellToolTimeoutMs: 120_000,
+      httpToolTimeoutMs: 60_000,
+      browserToolTimeoutMs: 120_000,
+      gitToolTimeoutMs: 120_000,
       enableAutoMemory: this.enableAutoMemory,
       enableReflection: this.enableReflection,
       reflectionMaxRetries: this.enableReflection ? 1 : 0,
@@ -1200,6 +1273,10 @@ export class Agent {
       return {
         maxIterations: this.parseNumberSetting(get("AGENT_MAX_ITERATIONS"), defaults.maxIterations, 1, 200),
         timeoutMs: this.parseNumberSetting(get("AGENT_TIMEOUT_MS"), defaults.timeoutMs, 5000, 3_600_000),
+        shellToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_SHELL_MS"), defaults.shellToolTimeoutMs, 1000, 3_600_000),
+        httpToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_HTTP_MS"), defaults.httpToolTimeoutMs, 1000, 3_600_000),
+        browserToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_BROWSER_MS"), defaults.browserToolTimeoutMs, 1000, 3_600_000),
+        gitToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_GIT_MS"), defaults.gitToolTimeoutMs, 1000, 3_600_000),
         enableAutoMemory: this.parseBooleanSetting(get("AGENT_AUTO_MEMORY"), defaults.enableAutoMemory),
         enableReflection: this.parseBooleanSetting(get("AGENT_ENABLE_REFLECTION"), defaults.enableReflection),
         reflectionMaxRetries: this.parseNumberSetting(get("AGENT_REFLECTION_MAX_RETRIES"), defaults.reflectionMaxRetries, 0, 3),
@@ -1799,7 +1876,7 @@ export class Agent {
       });
 
       try {
-        const preflight = this.preflightToolInput(parsedToolCall.toolName, parsedToolCall.input);
+        const preflight = this.preflightToolInput(parsedToolCall.toolName, parsedToolCall.input, controls);
         const toolResult = preflight.ok
           ? await this.executor.execute(parsedToolCall.toolName, preflight.input)
           : { success: false, data: null, error: preflight.error };

@@ -1,5 +1,46 @@
 import { create } from "zustand";
 import { io, type Socket } from "socket.io-client";
+import { translations, type Language, type TranslationTree } from "./translations";
+
+const LANGUAGE_STORAGE_KEY = "ducki.language";
+
+function getNestedValue(tree: TranslationTree, key: string): string | undefined {
+  const segments = key.split(".");
+  let current: unknown = tree;
+
+  for (const segment of segments) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[segment];
+  }
+
+  return typeof current === "string" ? current : undefined;
+}
+
+function getCurrentLanguage(): Language {
+  const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  if (saved === "de" || saved === "en") return saved;
+
+  const browser = navigator.language.toLowerCase();
+  return browser.startsWith("de") ? "de" : "en";
+}
+
+function t(key: string): string {
+  const language = getCurrentLanguage();
+  return getNestedValue(translations[language], key) ?? getNestedValue(translations.de, key) ?? key;
+}
+
+function formatChatErrorMessage(rawError: string): string {
+  const normalized = rawError.toLowerCase();
+
+  if (normalized.includes("without progress") || normalized.includes("progress timeout")) {
+    const match = rawError.match(/(\d+)ms/);
+    const timeoutMs = match?.[1];
+    const base = t("chat.timeoutNoProgress");
+    return timeoutMs ? `${base} (${timeoutMs} ms).` : base;
+  }
+
+  return `${t("chat.errorPrefix")} ${rawError}`;
+}
 
 interface ChatMessage {
   id: string;
@@ -78,7 +119,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const disconnectMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "event",
-        content: "Verbindung getrennt. Laufende Antwort wurde beendet.",
+        content: t("chat.socketDisconnectedDuringRun"),
         timestamp: new Date().toISOString(),
         eventType: "guardrail",
       };
@@ -94,7 +135,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const errorMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: `Socket error: ${error.message}`,
+        content: `${t("chat.socketErrorPrefix")} ${error.message}`,
         timestamp: new Date().toISOString(),
       };
       set((s) => ({
@@ -149,7 +190,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const msg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "event",
-        content: "Ausführung gestoppt",
+        content: t("chat.executionStopped"),
         timestamp: new Date().toISOString(),
         eventType: "reasoning",
       };
@@ -164,7 +205,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const msg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: `Error: ${data.error}`,
+        content: formatChatErrorMessage(data.error),
         timestamp: new Date().toISOString(),
       };
       set((s) => ({

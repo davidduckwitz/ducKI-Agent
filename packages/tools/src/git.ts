@@ -20,6 +20,7 @@ export const gitTool: ToolExecutor = {
         remote: { type: "string", description: "Remote URL for clone/push/pull" },
         branch: { type: "string", description: "Branch name" },
         files: { type: "array", items: { type: "string" }, description: "Files to add" },
+        timeout: { type: "number", description: "Timeout in ms", default: 30000 },
       },
       required: ["action"],
     },
@@ -31,13 +32,14 @@ export const gitTool: ToolExecutor = {
     const remote = input["remote"] as string | undefined;
     const branch = input["branch"] as string | undefined;
     const files = (input["files"] as string[] | undefined) ?? ["."];
+    const timeout = Number(input["timeout"] ?? 30000);
 
     const runGit = (args: string): string => {
       try {
         return execSync(`git ${args}`, {
           cwd: repoPath,
           encoding: "utf8",
-          timeout: 30000,
+          timeout,
         }).trim();
       } catch (error: unknown) {
         if (error instanceof Error && "stderr" in error) {
@@ -78,7 +80,7 @@ export const gitTool: ToolExecutor = {
           if (!remote) return { success: false, data: null, error: "Remote URL required for clone" };
           const output = execSync(`git clone "${remote}" "${repoPath}"`, {
             encoding: "utf8",
-            timeout: 60000,
+            timeout,
           });
           return { success: true, data: { output: output.trim(), path: repoPath } };
         }
