@@ -25,6 +25,8 @@ import type {
   EmbeddingSelect,
   CronJobInsert,
   CronJobSelect,
+  LlmWikiEntryInsert,
+  LlmWikiEntrySelect,
 } from "./schema.js";
 
 export type { LibSQLDatabase };
@@ -66,6 +68,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT NOT NULL, message TEXT NOT NULL, context TEXT, timestamp TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS tool_executions (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, input TEXT, output TEXT, success INTEGER NOT NULL, execution_time REAL, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS cron_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, schedule TEXT NOT NULL, target_type TEXT NOT NULL, target_ref TEXT, payload TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run_at TEXT, next_run_at TEXT, last_status TEXT, last_error TEXT, last_result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS llm_wiki_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, source_path TEXT NOT NULL UNIQUE, title TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', metadata TEXT, learned_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -253,6 +256,107 @@ export class DatabaseService {
 
   async getEmbeddings(): Promise<EmbeddingSelect[]> {
     return this.db.select().from(schema.embeddings).all();
+  }
+
+  // ============================================================
+  // LLM Wiki Entries
+  // ============================================================
+  async listLlmWikiEntries(limit = 200): Promise<LlmWikiEntrySelect[]> {
+    const capped = Math.max(1, Math.min(1000, Number(limit)));
+    return this.db
+      .select()
+      .from(schema.llmWikiEntries)
+      .orderBy(desc(schema.llmWikiEntries.updatedAt))
+      .limit(capped)
+      .all();
+  }
+
+  async getLlmWikiEntry(id: number): Promise<LlmWikiEntrySelect | undefined> {
+    return this.db
+      .select()
+      .from(schema.llmWikiEntries)
+      .where(eq(schema.llmWikiEntries.id, id))
+      .get();
+  }
+
+  async upsertLlmWikiEntry(data: {
+    sourcePath: string;
+    title: string;
+    content: string;
+    contentHash: string;
+    status?: string;
+    metadata?: string | null;
+  }): Promise<LlmWikiEntrySelect> {
+    const now = new Date().toISOString();
+    const existing = await this.db
+      .select()
+      .from(schema.llmWikiEntries)
+      .where(eq(schema.llmWikiEntries.sourcePath, data.sourcePath))
+      .get();
+
+    if (existing) {
+      const updated = await this.db
+        .update(schema.llmWikiEntries)
+        .set({
+          title: data.title,
+          content: data.content,
+          contentHash: data.contentHash,
+          status: data.status ?? existing.status,
+          metadata: data.metadata ?? existing.metadata,
+          updatedAt: now,
+        })
+        .where(eq(schema.llmWikiEntries.id, existing.id))
+        .returning()
+        .get();
+      if (!updated) throw new Error("Failed to update llm wiki entry");
+      return updated;
+    }
+
+    const created = await this.db
+      .insert(schema.llmWikiEntries)
+      .values({
+        sourcePath: data.sourcePath,
+        title: data.title,
+        content: data.content,
+        contentHash: data.contentHash,
+        status: data.status ?? "candidate",
+        metadata: data.metadata ?? null,
+        learnedAt: now,
+        updatedAt: now,
+      })
+      .returning()
+      .get();
+
+    if (!created) throw new Error("Failed to create llm wiki entry");
+    return created;
+  }
+
+  async deleteLlmWikiEntryBySourcePath(sourcePath: string): Promise<void> {
+    await this.db
+      .delete(schema.llmWikiEntries)
+      .where(eq(schema.llmWikiEntries.sourcePath, sourcePath))
+      .run();
+  }
+
+  async deleteLlmWikiEntriesBySourcePrefix(prefix: string): Promise<number> {
+    const all = await this.listLlmWikiEntries(5000);
+    const matches = all.filter((entry) => entry.sourcePath.startsWith(prefix));
+    for (const entry of matches) {
+      await this.db
+        .delete(schema.llmWikiEntries)
+        .where(eq(schema.llmWikiEntries.id, entry.id))
+        .run();
+    }
+    return matches.length;
+  }
+
+  async updateLlmWikiEntryStatus(id: number, status: "candidate" | "approved" | "rejected" | "error"): Promise<LlmWikiEntrySelect | undefined> {
+    return this.db
+      .update(schema.llmWikiEntries)
+      .set({ status, updatedAt: new Date().toISOString() })
+      .where(eq(schema.llmWikiEntries.id, id))
+      .returning()
+      .get();
   }
 
   // ============================================================

@@ -14,6 +14,8 @@ import {
   ShieldCheck,
   UserRound,
   X,
+  BookOpen,
+  RefreshCcw,
 } from "lucide-react";
 import {
   Bar,
@@ -43,6 +45,7 @@ interface PendingMemoryWrite {
 
 const PAGE_SIZE = 10;
 type ActiveTab = "memory" | "profile" | "approvals";
+type ExtendedActiveTab = ActiveTab | "wiki";
 
 function memoryTypeColor(type: string): string {
   if (type === "long-term") return "bg-blue-500/20 text-blue-300";
@@ -68,7 +71,12 @@ export function MemoryBrowser() {
   const [page, setPage] = useState(1);
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState<ActiveTab>("memory");
+  const [activeTab, setActiveTab] = useState<ExtendedActiveTab>("memory");
+  const [wikiEnabledEdit, setWikiEnabledEdit] = useState("false");
+  const [wikiAutoMemoryEdit, setWikiAutoMemoryEdit] = useState("true");
+  const [wikiAutoApproveEdit, setWikiAutoApproveEdit] = useState("false");
+  const [wikiStatusFilter, setWikiStatusFilter] = useState("all");
+  const [wikiSearch, setWikiSearch] = useState("");
 
   const { data: memories = [] } = useQuery({
     queryKey: ["memory"],
@@ -87,11 +95,69 @@ export function MemoryBrowser() {
     queryFn: () => api.memory.getProfile(),
   });
 
+  const wikiStatusQuery = useQuery({
+    queryKey: ["wiki", "status"],
+    queryFn: () => api.wiki.status(),
+    refetchInterval: 5000,
+  });
+
+  const wikiEntriesQuery = useQuery({
+    queryKey: ["wiki", "entries"],
+    queryFn: () => api.wiki.entries(400),
+    refetchInterval: 8000,
+  });
+
+  const wikiSearchQuery = useQuery({
+    queryKey: ["wiki", "search", wikiSearch],
+    queryFn: () => api.wiki.search(wikiSearch, 40, true),
+    enabled: activeTab === "wiki" && wikiSearch.trim().length > 1,
+    refetchInterval: false,
+  });
+
+  const saveWikiConfig = useMutation({
+    mutationFn: (payload: { enabled?: boolean; autoMemory?: boolean; autoApprove?: boolean }) => api.wiki.saveConfig(payload),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["wiki", "status"] });
+    },
+  });
+
+  const wikiReindex = useMutation({
+    mutationFn: () => api.wiki.reindex(),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["wiki", "status"] });
+      await qc.invalidateQueries({ queryKey: ["wiki", "entries"] });
+      await qc.invalidateQueries({ queryKey: ["memory"] });
+    },
+  });
+
+  const approveWikiEntry = useMutation({
+    mutationFn: (id: number) => api.wiki.approveEntry(id),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["wiki", "entries"] });
+      await qc.invalidateQueries({ queryKey: ["memory"] });
+    },
+  });
+
+  const rejectWikiEntry = useMutation({
+    mutationFn: (id: number) => api.wiki.rejectEntry(id),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["wiki", "entries"] });
+      await qc.invalidateQueries({ queryKey: ["memory"] });
+    },
+  });
+
   useEffect(() => {
     if (!profileQuery.data) return;
     setAgentBehavior(profileQuery.data.agentBehavior ?? "");
     setHumanInfo(profileQuery.data.humanInfo ?? "");
   }, [profileQuery.data]);
+
+  useEffect(() => {
+    if (!wikiStatusQuery.data) return;
+    setWikiEnabledEdit(wikiStatusQuery.data.enabled ? "true" : "false");
+    setWikiAutoMemoryEdit(wikiStatusQuery.data.config.autoMemory ? "true" : "false");
+    setWikiAutoApproveEdit(wikiStatusQuery.data.config.autoApprove ? "true" : "false");
+  }, [wikiStatusQuery.data]);
 
   const saveProfile = useMutation({
     mutationFn: (payload: { agentBehavior: string; humanInfo: string }) => api.memory.saveProfile(payload),
@@ -174,6 +240,27 @@ export function MemoryBrowser() {
   }, [sortedMemories]);
 
   const pendingWrites = (pendingQuery.data ?? []) as PendingMemoryWrite[];
+  const wikiEntries = (wikiEntriesQuery.data ?? []) as Array<{ id: number; sourcePath: string; title: string; status: string; updatedAt: string }>;
+  const wikiStatusData = wikiStatusQuery.data?.stats;
+  const wikiVisibleEntries = useMemo(() => {
+    const base = wikiSearch.trim().length > 1
+      ? ((wikiSearchQuery.data ?? []) as Array<{ id: number; sourcePath: string; title: string; status: string; score: number; contentPreview: string; updatedAt: string }>)
+      : wikiEntries;
+    return base.filter((entry) => wikiStatusFilter === "all" || entry.status === wikiStatusFilter);
+  }, [wikiEntries, wikiSearch, wikiSearchQuery.data, wikiStatusFilter]);
+
+  const wikiChart = useMemo(() => {
+    const candidate = wikiEntries.filter((entry) => entry.status === "candidate").length;
+    const approved = wikiEntries.filter((entry) => entry.status === "approved").length;
+    const rejected = wikiEntries.filter((entry) => entry.status === "rejected").length;
+    const error = wikiEntries.filter((entry) => entry.status === "error").length;
+    return [
+      { name: "candidate", value: candidate },
+      { name: "approved", value: approved },
+      { name: "rejected", value: rejected },
+      { name: "error", value: error },
+    ];
+  }, [wikiEntries]);
 
   const paginationButtons = useMemo(() => {
     const pages = new Set<number>([1, totalPages, page - 1, page, page + 1]);
@@ -205,6 +292,13 @@ export function MemoryBrowser() {
         >
           <LayoutGrid className="w-4 h-4" />
           Memory
+        </button>
+        <button
+          className={`btn-secondary flex items-center gap-2 ${activeTab === "wiki" ? "ring-2 ring-blue-500" : ""}`}
+          onClick={() => setActiveTab("wiki")}
+        >
+          <BookOpen className="w-4 h-4" />
+          LLM Wiki
         </button>
         <button
           className={`btn-secondary flex items-center gap-2 ${activeTab === "profile" ? "ring-2 ring-emerald-500" : ""}`}
@@ -439,6 +533,142 @@ export function MemoryBrowser() {
           );
         })}
       </div>
+      )}
+
+      {activeTab === "wiki" && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="card">
+              <p className="text-xs text-gray-400">Wiki Enabled</p>
+              <p className="text-2xl font-semibold">{wikiStatusQuery.data?.enabled ? "ON" : "OFF"}</p>
+            </div>
+            <div className="card">
+              <p className="text-xs text-gray-400">Entries</p>
+              <p className="text-2xl font-semibold">{wikiEntries.length}</p>
+            </div>
+            <div className="card">
+              <p className="text-xs text-gray-400">Processed (last run)</p>
+              <p className="text-2xl font-semibold">{wikiStatusData?.processedFiles ?? 0}</p>
+            </div>
+            <div className="card">
+              <p className="text-xs text-gray-400">Memories Created</p>
+              <p className="text-2xl font-semibold">{wikiStatusData?.memoriesCreated ?? 0}</p>
+            </div>
+          </div>
+
+          <div className="card space-y-3">
+            <h2 className="text-lg font-semibold">Steuerung</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <p className="text-xs text-gray-400 mb-1">WIKI_ENABLED</p>
+                <select className="input" value={wikiEnabledEdit} onChange={(e) => setWikiEnabledEdit(e.target.value)}>
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </div>
+              <div>
+                <p className="text-xs text-gray-400 mb-1">WIKI_SHARED_SOURCE_AUTO_MEMORY</p>
+                <select className="input" value={wikiAutoMemoryEdit} onChange={(e) => setWikiAutoMemoryEdit(e.target.value)}>
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </div>
+              <div>
+                <p className="text-xs text-gray-400 mb-1">WIKI_AUTO_APPROVE</p>
+                <select className="input" value={wikiAutoApproveEdit} onChange={(e) => setWikiAutoApproveEdit(e.target.value)}>
+                  <option value="true">true</option>
+                  <option value="false">false</option>
+                </select>
+              </div>
+              <div className="flex items-end gap-2">
+                <button
+                  className="btn-primary"
+                  disabled={saveWikiConfig.isPending}
+                  onClick={() =>
+                    saveWikiConfig.mutate({
+                      enabled: wikiEnabledEdit === "true",
+                      autoMemory: wikiAutoMemoryEdit === "true",
+                      autoApprove: wikiAutoApproveEdit === "true",
+                    })
+                  }
+                >
+                  <Save className="w-4 h-4 inline mr-1" /> Speichern
+                </button>
+                <button
+                  className="btn-secondary"
+                  disabled={wikiReindex.isPending || wikiEnabledEdit !== "true"}
+                  onClick={() => wikiReindex.mutate()}
+                >
+                  <RefreshCcw className="w-4 h-4 inline mr-1" /> Reindex
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="card space-y-2">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Status-Verteilung</h2>
+            </div>
+            <div className="h-52">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={wikiChart} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#273244" />
+                  <XAxis dataKey="name" stroke="#9aa6b2" />
+                  <YAxis stroke="#9aa6b2" allowDecimals={false} />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#60a5fa" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="card space-y-2">
+            <h2 className="text-lg font-semibold">Dateien</h2>
+            <div className="flex flex-wrap gap-2">
+              <input
+                className="input min-w-[240px]"
+                placeholder="Wiki durchsuchen..."
+                value={wikiSearch}
+                onChange={(e) => setWikiSearch(e.target.value)}
+              />
+              <select className="input" value={wikiStatusFilter} onChange={(e) => setWikiStatusFilter(e.target.value)}>
+                <option value="all">all</option>
+                <option value="candidate">candidate</option>
+                <option value="approved">approved</option>
+                <option value="rejected">rejected</option>
+                <option value="error">error</option>
+              </select>
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {wikiVisibleEntries.map((entry) => (
+                <div key={entry.id} className="border border-gray-800 rounded-lg px-3 py-2">
+                  <p className="text-sm font-medium text-white">{entry.title}</p>
+                  <p className="text-xs text-gray-400">{entry.sourcePath}</p>
+                  <p className="text-xs text-gray-500">status={entry.status} · updated={entry.updatedAt}</p>
+                  {entry.status === "candidate" && (
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        className="btn-primary"
+                        disabled={approveWikiEntry.isPending || rejectWikiEntry.isPending}
+                        onClick={() => approveWikiEntry.mutate(entry.id)}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        className="btn-secondary"
+                        disabled={approveWikiEntry.isPending || rejectWikiEntry.isPending}
+                        onClick={() => rejectWikiEntry.mutate(entry.id)}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {wikiVisibleEntries.length === 0 && <p className="text-sm text-gray-500">Keine Wiki-Dateien erfasst.</p>}
+            </div>
+          </div>
+        </>
       )}
 
       {activeTab === "profile" && (

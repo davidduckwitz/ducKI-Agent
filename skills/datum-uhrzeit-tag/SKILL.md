@@ -16,6 +16,7 @@ Nutze diesen Skill automatisch bei Fragen wie:
 - "Welchen Tag haben wir heute?"
 - "Wie spaet ist es?"
 - "Welches Datum ist heute?"
+- "Welche Uhrzeit haben wir heute"
 - "What day is it today?"
 - "Current date and time"
 

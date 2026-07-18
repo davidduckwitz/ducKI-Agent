@@ -18,6 +18,7 @@ import { agentRegistry } from "./lib/agent-registry.js";
 import { CronjobManager } from "./lib/cronjob-manager.js";
 import { createMcpTool } from "./lib/mcp-tool.js";
 import { UpdateManager } from "./lib/update-manager.js";
+import { LlmWikiService } from "./lib/llm-wiki-service.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
@@ -33,6 +34,7 @@ import { tasksRouter } from "./routes/tasks.js";
 import { toolsRouter } from "./routes/tools.js";
 import { updatesRouter } from "./routes/updates.js";
 import { workflowsRouter } from "./routes/workflows.js";
+import { wikiRouter } from "./routes/wiki.js";
 import { setupWebSocket } from "./websocket/index.js";
 
 const logger = getRootLogger().child("Server");
@@ -304,6 +306,7 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/workflows", workflowsRouter);
 	app.use("/api/gateway", gatewayRouter);
 	app.use("/api/mcp", mcpRouter);
+	app.use("/api/wiki", wikiRouter);
 }
 
 async function bootstrapDiscordGatewayBridge(
@@ -446,6 +449,8 @@ async function bootstrap(): Promise<void> {
 	cronjobManager.start();
 	const updateManager = new UpdateManager(db, logger.child("UpdateManager"));
 	updateManager.start();
+	const wikiService = new LlmWikiService(db, logger.child("LlmWikiService"));
+	await wikiService.start();
 
 	app.locals["db"] = db;
 	app.locals["provider"] = provider;
@@ -456,6 +461,7 @@ async function bootstrap(): Promise<void> {
 	app.locals["discordGatewayStatus"] = discordGatewayStatus;
 	app.locals["cronjobManager"] = cronjobManager;
 	app.locals["updateManager"] = updateManager;
+	app.locals["wikiService"] = wikiService;
 	app.locals["mcpRegistry"] = mcpRegistry;
 
 	const io = new SocketIOServer(httpServer, {
@@ -495,6 +501,7 @@ async function bootstrap(): Promise<void> {
 		discordGateway?.stop();
 		cronjobManager.stop();
 		updateManager.stop();
+		wikiService.stop();
 		void mcpRegistry.shutdown();
 		io.close();
 		httpServer.close(() => {

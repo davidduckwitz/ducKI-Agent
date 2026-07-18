@@ -146,6 +146,21 @@ export const cronJobs = sqliteTable("cron_jobs", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// ============================================================
+// LLM Wiki Entries
+// ============================================================
+export const llmWikiEntries = sqliteTable("llm_wiki_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sourcePath: text("source_path").notNull().unique(),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  contentHash: text("content_hash").notNull(),
+  status: text("status").notNull().default("candidate"), // candidate, approved, rejected, error
+  metadata: text("metadata"), // JSON
+  learnedAt: text("learned_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export type ConversationInsert = typeof conversations.$inferInsert;
 export type ConversationSelect = typeof conversations.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
@@ -166,3 +181,5 @@ export type LogInsert = typeof logs.$inferInsert;
 export type LogSelect = typeof logs.$inferSelect;
 export type CronJobInsert = typeof cronJobs.$inferInsert;
 export type CronJobSelect = typeof cronJobs.$inferSelect;
+export type LlmWikiEntryInsert = typeof llmWikiEntries.$inferInsert;
+export type LlmWikiEntrySelect = typeof llmWikiEntries.$inferSelect;

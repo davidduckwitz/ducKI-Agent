@@ -217,6 +217,33 @@ export const api = {
     },
   },
 
+  wiki: {
+    status: () =>
+      request<{ enabled: boolean; config: { autoMemory: boolean; autoApprove: boolean; maxFileSizeKb: number; intervalMs: number; chunkSizeChars: number; chunkOverlapChars: number }; stats: { scannedFiles: number; processedFiles: number; skippedFiles: number; memoriesCreated: number; updatedAt: string; lastError?: string } | null }>("/wiki/status"),
+    entries: (limit?: number, status?: string) => {
+      const params = new URLSearchParams();
+      if (limit) params.set("limit", String(limit));
+      if (status) params.set("status", status);
+      const query = params.toString();
+      return request<Array<{ id: number; sourcePath: string; title: string; status: string; learnedAt: string; updatedAt: string }>>(`/wiki/entries${query ? `?${query}` : ""}`);
+    },
+    search: (query: string, limit?: number, includeCandidates?: boolean) => {
+      const params = new URLSearchParams();
+      params.set("query", query);
+      if (limit) params.set("limit", String(limit));
+      if (includeCandidates !== undefined) params.set("includeCandidates", String(includeCandidates));
+      return request<Array<{ id: number; sourcePath: string; title: string; status: string; score: number; contentPreview: string; updatedAt: string }>>(`/wiki/search?${params.toString()}`);
+    },
+    reindex: () => request<{ reindexed: boolean; stats: unknown }>("/wiki/reindex", { method: "POST" }),
+    approveEntry: (id: number) => request<{ approved: boolean; id: number; status: string }>(`/wiki/entries/${id}/approve`, { method: "POST" }),
+    rejectEntry: (id: number) => request<{ rejected: boolean; id: number; status: string }>(`/wiki/entries/${id}/reject`, { method: "POST" }),
+    saveConfig: (payload: { enabled?: boolean; autoMemory?: boolean; autoApprove?: boolean; maxFileSizeKb?: number; intervalMs?: number; chunkSizeChars?: number; chunkOverlapChars?: number }) =>
+      request<{ saved: boolean }>("/wiki/config", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+  },
+
   updates: {
     status: () =>
       request<{

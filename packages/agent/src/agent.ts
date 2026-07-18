@@ -329,6 +329,13 @@ export class Agent {
     }
 
     if (
+      /(wiki|wissen|knowledge|dokumentation|docs|nachschlagen|recherche|quelle|sources|llm-wiki)/.test(normalizedInput) &&
+      /(llm-wiki|knowledge-base|wiki)/.test(skill.slug)
+    ) {
+      score += 0.5;
+    }
+
+    if (
       /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput) &&
       /(datum-uhrzeit-tag|datum-uhrzeit|date-time)/.test(skill.slug)
     ) {
