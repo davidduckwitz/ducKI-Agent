@@ -1,11 +1,13 @@
 import { Suspense, lazy, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Layout } from "./components/layout/Layout";
 import { Dashboard } from "./components/dashboard/Dashboard";
 import { ChatContainer } from "./components/chat/ChatContainer";
 import { ProjectManager } from "./components/projects/ProjectManager";
 import { TaskManager } from "./components/tasks/TaskManager";
 import { useI18n } from "./lib/i18n";
+import { api } from "./lib/api";
 
 const ToolRegistry = lazy(async () => {
   const module = await import("./components/tools/ToolRegistry");
@@ -61,9 +63,36 @@ const McpManager = lazy(async () => {
   return { default: module.McpManager };
 });
 
+const CodingWorkspace = lazy(async () => {
+  const module = await import("./components/coding/CodingWorkspace");
+  return { default: module.CodingWorkspace };
+});
+
 function LazyRoute({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   return <Suspense fallback={<div className="p-6 text-sm text-gray-400">{t("app.loadingPage")}</div>}>{children}</Suspense>;
+}
+
+function CodingGate() {
+  const { t } = useI18n();
+  const settingsQuery = useQuery({
+    queryKey: ["settings", "coding-gate"],
+    queryFn: () => api.settings.list() as Promise<Array<{ key: string; value: string }>>,
+    refetchInterval: 5000,
+  });
+
+  if (settingsQuery.isLoading || !settingsQuery.data) {
+    return <div className="p-6 text-sm text-gray-400">{t("app.loadingPage")}</div>;
+  }
+
+  const rawValue = settingsQuery.data.find((s) => s.key === "CODING_ENABLED")?.value;
+  const codingEnabled = String(rawValue ?? "false").trim().toLowerCase() === "true";
+
+  if (!codingEnabled) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <LazyRoute><CodingWorkspace /></LazyRoute>;
 }
 
 export default function App() {
@@ -76,6 +105,7 @@ export default function App() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="chat" element={<ChatContainer />} />
+          <Route path="coding" element={<CodingGate />} />
           <Route path="projects" element={<ProjectManager />} />
           <Route path="tasks" element={<TaskManager />} />
           <Route path="cronjobs" element={<LazyRoute><CronjobManager /></LazyRoute>} />

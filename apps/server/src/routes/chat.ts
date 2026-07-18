@@ -220,3 +220,25 @@ chatRouter.post("/conversation", async (req, res, next) => {
   }
 });
 
+chatRouter.delete("/conversations/:id", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const conversationId = parseInt(req.params["id"] ?? "0", 10);
+    if (!Number.isFinite(conversationId) || conversationId <= 0) {
+      res.status(400).json(createApiError("Invalid conversation id"));
+      return;
+    }
+
+    const existing = await db.getConversation(conversationId);
+    if (!existing) {
+      res.status(404).json(createApiError("Conversation not found"));
+      return;
+    }
+
+    await db.deleteConversation(conversationId);
+    res.json(createApiResponse({ deleted: true, id: conversationId }));
+  } catch (error) {
+    next(error);
+  }
+});
+

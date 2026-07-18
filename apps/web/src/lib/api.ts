@@ -48,6 +48,8 @@ export const api = {
       >(`/chat/search?query=${encodeURIComponent(query)}&limit=${limit}`),
     createConversation: (data: { name?: string; projectId?: number }) =>
       request<{ conversationId: number }>("/chat/conversation", { method: "POST", body: JSON.stringify(data) }),
+    deleteConversation: (conversationId: number) =>
+      request<{ deleted: boolean; id: number }>(`/chat/conversations/${conversationId}`, { method: "DELETE" }),
   },
 
   workflows: {
@@ -155,7 +157,46 @@ export const api = {
 
   settings: {
     list: () => request<{ key: string; value: string }[]>("/settings"),
+    get: (key: string) => request<{ key: string; value: string | null }>(`/settings/${key}`),
     set: (key: string, value: string) => request<unknown>(`/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) }),
+  },
+
+  coding: {
+    status: () => request<{ enabled: boolean; root: string }>("/coding/status"),
+    listProjects: () => request<Array<{ slug: string; name: string }>>("/coding/projects"),
+    createProject: (name: string) =>
+      request<{ created: boolean; slug: string; path: string }>("/coding/projects", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    listFiles: (project: string) =>
+      request<{ project: string; files: Array<{ path: string; type: "file" | "directory"; size?: number; updatedAt?: string }> }>(
+        `/coding/projects/${encodeURIComponent(project)}/files`
+      ),
+    readFile: (project: string, path: string) =>
+      request<{ project: string; path: string; size: number; isText: boolean; content?: string; contentBase64?: string }>(
+        `/coding/projects/${encodeURIComponent(project)}/read?path=${encodeURIComponent(path)}`
+      ),
+    writeFile: (project: string, path: string, content: string) =>
+      request<{ written: boolean; project: string; path: string }>(`/coding/projects/${encodeURIComponent(project)}/write`, {
+        method: "POST",
+        body: JSON.stringify({ path, content }),
+      }),
+    moveFile: (project: string, fromPath: string, toPath: string) =>
+      request<{ moved: boolean; project: string; fromPath: string; toPath: string }>(`/coding/projects/${encodeURIComponent(project)}/move`, {
+        method: "POST",
+        body: JSON.stringify({ fromPath, toPath }),
+      }),
+    deleteFile: (project: string, path: string) =>
+      request<{ deleted: boolean; project: string; path: string }>(
+        `/coding/projects/${encodeURIComponent(project)}/file?path=${encodeURIComponent(path)}`,
+        { method: "DELETE" }
+      ),
+    uploadFile: (project: string, data: { fileName: string; contentBase64: string; folder?: string }) =>
+      request<{ uploaded: boolean; project: string; path: string; size: number }>(`/coding/projects/${encodeURIComponent(project)}/upload`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
   },
 
   skills: {

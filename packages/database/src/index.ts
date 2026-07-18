@@ -131,6 +131,9 @@ export class DatabaseService {
   }
 
   async deleteConversation(id: number): Promise<void> {
+    await this.db.delete(schema.messages).where(eq(schema.messages.conversationId, id)).run();
+    await this.db.delete(schema.memories).where(eq(schema.memories.conversationId, id)).run();
+    await this.db.delete(schema.toolExecutions).where(eq(schema.toolExecutions.conversationId, id)).run();
     await this.db.delete(schema.conversations).where(eq(schema.conversations.id, id)).run();
   }
 

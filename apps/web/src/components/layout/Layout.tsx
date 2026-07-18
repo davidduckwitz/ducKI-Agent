@@ -23,6 +23,7 @@ import {
   Download,
   X,
   PlugZap,
+  Code2,
 } from "lucide-react";
 import { useAppStore } from "../../lib/store";
 import { api } from "../../lib/api";
@@ -69,9 +70,17 @@ export function Layout() {
   const remoteCommitShort = updateStatus.data?.remoteCommit?.slice(0, 8) ?? "-";
   const updateError = updateStatus.data?.lastUpdateError ?? updateStatus.data?.lastCheckError;
 
+  const settingsQuery = useQuery({
+    queryKey: ["settings", "layout-nav"],
+    queryFn: () => api.settings.list() as Promise<Array<{ key: string; value: string }>>,
+    refetchInterval: 5000,
+  });
+  const codingEnabled = String(settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value ?? "false").trim().toLowerCase() === "true";
+
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard") },
     { to: "/chat", icon: MessageSquare, label: t("nav.chat") },
+    ...(codingEnabled ? [{ to: "/coding", icon: Code2, label: t("nav.coding") }] : []),
     { to: "/projects", icon: FolderOpen, label: t("nav.projects") },
     { to: "/tasks", icon: CheckSquare, label: t("nav.tasks") },
     { to: "/cronjobs", icon: CalendarClock, label: t("nav.cronjobs") },

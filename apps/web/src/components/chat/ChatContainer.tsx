@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Send, Trash2, Bot, User, Wrench, BrainCircuit, GitBranch, Activity, Paperclip, Square, Image as ImageIcon, X, PanelLeft } from "lucide-react";
 import { useAppStore } from "../../lib/store";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
@@ -57,6 +57,7 @@ const eventLabel = (
 
 export function ChatContainer() {
   const { t } = useI18n();
+  const qc = useQueryClient();
   const {
     messages,
     sendMessage,
@@ -321,6 +322,17 @@ export function ChatContainer() {
     }
   };
 
+  const deleteConversation = useMutation({
+    mutationFn: (conversationIdToDelete: number) => api.chat.deleteConversation(conversationIdToDelete),
+    onSuccess: async (_data, deletedId) => {
+      if (conversationId === deletedId) {
+        clearChat();
+      }
+      await qc.invalidateQueries({ queryKey: ["chat", "conversations", "page"] });
+      await qc.invalidateQueries({ queryKey: ["chat", "messages", deletedId] });
+    },
+  });
+
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <aside
@@ -341,22 +353,40 @@ export function ChatContainer() {
         </div>
 
         {conversations.map((conv) => (
-          <button
+          <div
             key={conv.id}
-            onClick={() => {
-              setConversationId(conv.id);
-            }}
-            className={`w-full text-left rounded-lg border px-3 py-2 transition ${
+            className={`w-full rounded-lg border px-3 py-2 transition ${
               conversationId === conv.id
                 ? "border-blue-500 bg-blue-500/10"
                 : "border-gray-800 bg-gray-900 hover:border-gray-700"
             }`}
           >
-            <div className="text-sm font-medium truncate">{conv.name}</div>
-            <div className="text-xs text-gray-400 mt-1">
-              {new Date(conv.updatedAt).toLocaleString()}
+            <div className="flex items-start justify-between gap-2">
+              <button
+                onClick={() => {
+                  setConversationId(conv.id);
+                }}
+                className="min-w-0 text-left flex-1"
+              >
+                <div className="text-sm font-medium truncate">{conv.name}</div>
+                <div className="text-xs text-gray-400 mt-1">
+                  {new Date(conv.updatedAt).toLocaleString()}
+                </div>
+              </button>
+              <button
+                className="text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-red-300"
+                onClick={() => {
+                  const confirmed = window.confirm(`Chat '${conv.name}' loeschen?`);
+                  if (!confirmed) return;
+                  deleteConversation.mutate(conv.id);
+                }}
+                disabled={deleteConversation.isPending}
+                title={t("common.delete")}
+              >
+                {t("common.delete")}
+              </button>
             </div>
-          </button>
+          </div>
         ))}
 
         {conversations.length === 0 && (

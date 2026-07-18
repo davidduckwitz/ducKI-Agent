@@ -474,6 +474,18 @@ const PREDEFINED_FIELDS: SettingField[] = [
     defaultValue: "2",
   },
   {
+    key: "CODING_ENABLED",
+    label: "Coding Area Enabled",
+    description: "Aktiviert den Coding-Bereich (Menuepunkt + Coding-Workspace mit Chat und Editor).",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_SYSTEM_PROMPT",
     label: "System Prompt",
     description: "Globaler Prompt fuer das Agent-Verhalten",

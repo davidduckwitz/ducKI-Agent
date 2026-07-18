@@ -22,6 +22,7 @@ import { LlmWikiService } from "./lib/llm-wiki-service.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
+import { codingRouter } from "./routes/coding.js";
 import { gatewayRouter } from "./routes/gateway.js";
 import { logsRouter } from "./routes/logs.js";
 import { mcpRouter } from "./routes/mcp.js";
@@ -303,6 +304,7 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/shared", sharedRouter);
 	app.use("/api/updates", updatesRouter);
 	app.use("/api/cronjobs", cronjobsRouter);
+	app.use("/api/coding", codingRouter);
 	app.use("/api/workflows", workflowsRouter);
 	app.use("/api/gateway", gatewayRouter);
 	app.use("/api/mcp", mcpRouter);
