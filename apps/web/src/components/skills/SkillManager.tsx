@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Eye, EyeOff, Plus, Save, Search, Star, Trash2, UploadCloud, X } from "lucide-react";
+import { BookOpen, Check, Eye, EyeOff, Play, Plus, Save, Search, Star, Trash2, UploadCloud, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { CodePreview } from "../common/CodePreview";
 import { useI18n } from "../../lib/i18n";
@@ -26,6 +26,14 @@ interface SettingEntry {
 interface DraftSkill {
   name: string;
   description: string;
+}
+
+interface SkillExecutionResult {
+  slug: string;
+  executed: boolean;
+  source: string;
+  logs: string[];
+  result: unknown;
 }
 
 type VisibilityFilter = "all" | "enabled" | "disabled";
@@ -147,6 +155,31 @@ const importedSkillTemplates: Array<{ name: string; description: string; content
       "",
     ].join("\n"),
   },
+  {
+    name: "datum-uhrzeit",
+    description: "Zeigt aktuelles Datum und Uhrzeit per eingebettetem JavaScript-Script an.",
+    content: [
+      "---",
+      "name: datum-uhrzeit",
+      "description: \"Zeigt aktuelles Datum und Uhrzeit per Script.\"",
+      "version: 1.0.0",
+      "---",
+      "",
+      "# Datum Uhrzeit Skill",
+      "",
+      "Dieser Skill kann direkt JavaScript ausfuehren.",
+      "",
+      "<script>",
+      "const now = new Date();",
+      "const formattedDateTime = new Intl.DateTimeFormat('en-GB', {",
+      "  dateStyle: 'full',",
+      "  timeStyle: 'long'",
+      "}).format(now);",
+      "console.log('Current Date & Time:', formattedDateTime);",
+      "</script>",
+      "",
+    ].join("\n"),
+  },
 ];
 
 export function SkillManager() {
@@ -159,6 +192,11 @@ export function SkillManager() {
   const [search, setSearch] = useState("");
   const [visibilityFilter, setVisibilityFilter] = useState<VisibilityFilter>("all");
   const [showManageModal, setShowManageModal] = useState(false);
+  const [executionResult, setExecutionResult] = useState<SkillExecutionResult | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
+  const [scriptFileOverride, setScriptFileOverride] = useState("");
+  const [executionInputJson, setExecutionInputJson] = useState("{}");
+  const [executionContextJson, setExecutionContextJson] = useState("{}");
 
   const { data: skills = [] } = useQuery({
     queryKey: ["skills"],
@@ -250,6 +288,19 @@ export function SkillManager() {
     },
   });
 
+  const executeSkill = useMutation({
+    mutationFn: ({ slug, payload }: { slug: string; payload?: { scriptFile?: string; input?: unknown; context?: unknown } }) =>
+      api.skills.execute(slug, payload),
+    onSuccess: (result) => {
+      setExecutionError(null);
+      setExecutionResult(result as SkillExecutionResult);
+    },
+    onError: (error) => {
+      setExecutionResult(null);
+      setExecutionError(error instanceof Error ? error.message : String(error));
+    },
+  });
+
   const toggleSkill = (slug: string): void => {
     const next = new Set(enabledSet);
     if (next.has(slug)) {
@@ -335,6 +386,30 @@ export function SkillManager() {
       if (!proceed) return;
     }
     setSelectedSlug(slug);
+    setExecutionResult(null);
+    setExecutionError(null);
+    setScriptFileOverride("");
+    setExecutionInputJson("{}");
+    setExecutionContextJson("{}");
+  };
+
+  const runSelectedSkillScript = (slug: string): void => {
+    try {
+      const parsedInput = executionInputJson.trim().length > 0 ? JSON.parse(executionInputJson) : undefined;
+      const parsedContext = executionContextJson.trim().length > 0 ? JSON.parse(executionContextJson) : undefined;
+      setExecutionError(null);
+      executeSkill.mutate({
+        slug,
+        payload: {
+          scriptFile: scriptFileOverride.trim() || undefined,
+          input: parsedInput,
+          context: parsedContext,
+        },
+      });
+    } catch (error) {
+      setExecutionResult(null);
+      setExecutionError(error instanceof Error ? `Invalid JSON: ${error.message}` : "Invalid JSON payload");
+    }
   };
 
   const importInspirationSkills = async () => {
@@ -526,6 +601,14 @@ export function SkillManager() {
                     </span>
                   )}
                   <button
+                    onClick={() => runSelectedSkillScript(selectedDetail.data.slug)}
+                    className="btn-secondary text-sm flex items-center gap-2"
+                    disabled={executeSkill.isPending}
+                  >
+                    <Play className="w-4 h-4" />
+                    Script ausfuehren
+                  </button>
+                  <button
                     onClick={() => updateSkill.mutate({ slug: selectedDetail.data.slug, content: editorContent })}
                     className="btn-primary text-sm flex items-center gap-2"
                     disabled={updateSkill.isPending || !hasUnsavedChanges}
@@ -559,6 +642,64 @@ export function SkillManager() {
                 </div>
                 <CodePreview code={editorContent} language="markdown" maxHeight={280} fontSize={13} />
               </div>
+
+              <div className="rounded-lg border border-gray-800 overflow-hidden">
+                <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-800 bg-gray-900/60">
+                  Script Runtime Payload
+                </div>
+                <div className="p-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <p className="text-xs text-gray-400">scriptFile (optional)</p>
+                    <input
+                      className="input"
+                      placeholder="script.js"
+                      value={scriptFileOverride}
+                      onChange={(e) => setScriptFileOverride(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-gray-400">skillInput (JSON)</p>
+                    <textarea
+                      className="input min-h-[90px] font-mono text-xs"
+                      value={executionInputJson}
+                      onChange={(e) => setExecutionInputJson(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-gray-400">skillContext (JSON)</p>
+                    <textarea
+                      className="input min-h-[90px] font-mono text-xs"
+                      value={executionContextJson}
+                      onChange={(e) => setExecutionContextJson(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {(executionResult || executionError) && (
+                <div className="rounded-lg border border-gray-800 overflow-hidden">
+                  <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-800 bg-gray-900/60">
+                    Script Ausgabe
+                  </div>
+                  <div className="p-3 text-sm space-y-2">
+                    {executionError && <p className="text-red-300">{executionError}</p>}
+                    {executionResult && (
+                      <>
+                        <p className="text-xs text-gray-400">Quelle: {executionResult.source}</p>
+                        <p className="text-xs text-gray-400">
+                          Return Value: {executionResult.result === null ? "null" : String(executionResult.result)}
+                        </p>
+                        <div>
+                          <p className="text-xs text-gray-400 mb-1">Console Logs</p>
+                          <pre className="text-xs bg-gray-950 border border-gray-800 rounded p-2 overflow-x-auto">
+                            {executionResult.logs.length > 0 ? executionResult.logs.join("\n") : "(keine Logs)"}
+                          </pre>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

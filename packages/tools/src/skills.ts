@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, normalize, resolve } from "node:path";
+import { Script, createContext } from "node:vm";
 
 function resolveSkillsRoot(): string {
   const configured = process.env["SKILLS_PATH"]?.trim();
@@ -76,6 +77,103 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
   return result;
 }
 
+function frontmatterScript(content: string): string | undefined {
+  if (!content.startsWith("---")) return undefined;
+  const end = content.indexOf("\n---", 3);
+  if (end < 0) return undefined;
+  const block = content.slice(3, end).trim();
+  for (const line of block.split(/\r?\n/)) {
+    const idx = line.indexOf(":");
+    if (idx < 0) continue;
+    const key = line.slice(0, idx).trim();
+    const value = line.slice(idx + 1).trim().replace(/^['"]|['"]$/g, "");
+    if (key === "script") return value;
+  }
+  return undefined;
+}
+
+function extractInlineScript(content: string): string | undefined {
+  const closedMatch = content.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i);
+  if (closedMatch?.[1]?.trim()) return closedMatch[1].trim();
+
+  const openMatch = content.match(/<script\b[^>]*>([\s\S]*)$/i);
+  if (openMatch?.[1]?.trim()) return openMatch[1].trim();
+  return undefined;
+}
+
+function sanitizeRuntimeValue(value: unknown, depth = 0): unknown {
+  if (depth > 6) {
+    throw new Error("Runtime payload is too deeply nested");
+  }
+  if (value === null || value === undefined) return value;
+  const valueType = typeof value;
+  if (valueType === "string" || valueType === "number" || valueType === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 500) {
+      throw new Error("Runtime payload array too large");
+    }
+    return value.map((item) => sanitizeRuntimeValue(item, depth + 1));
+  }
+  if (valueType === "object") {
+    const source = value as Record<string, unknown>;
+    const keys = Object.keys(source);
+    if (keys.length > 200) {
+      throw new Error("Runtime payload object too large");
+    }
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = sanitizeRuntimeValue(source[key], depth + 1);
+    }
+    return result;
+  }
+
+  throw new Error("Runtime payload contains unsupported value type");
+}
+
+function runScriptInSandbox(script: string, runtime?: { input?: unknown; context?: unknown }): { logs: string[]; result: unknown } {
+  const logs: string[] = [];
+  const logger = (...args: unknown[]) => {
+    logs.push(
+      args
+        .map((arg) => {
+          if (typeof arg === "string") return arg;
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return String(arg);
+          }
+        })
+        .join(" ")
+    );
+  };
+
+  const context = createContext({
+    console: { log: logger, info: logger, warn: logger, error: logger },
+    Date,
+    Intl,
+    Math,
+    JSON,
+    Number,
+    String,
+    Boolean,
+    Array,
+    Object,
+    RegExp,
+    URL,
+    URLSearchParams,
+    skillInput: sanitizeRuntimeValue(runtime?.input),
+    skillContext: sanitizeRuntimeValue(runtime?.context),
+  });
+  const wrappedScript = `(function () {\n"use strict";\n${script}\n})();`;
+  const vmScript = new Script(wrappedScript);
+  return {
+    logs,
+    result: vmScript.runInContext(context, { timeout: 1500 }),
+  };
+}
+
 function skillNameFromPath(filePath: string): string | undefined {
   const normalized = filePath.replaceAll("\\", "/").trim();
   const match = normalized.match(/(?:^|\/)skills\/([^/]+)\.md$/i);
@@ -125,7 +223,7 @@ export const skillsTool: ToolExecutor = {
       properties: {
         action: {
           type: "string",
-          enum: ["list", "list_skills", "get_skills", "view", "create", "patch", "edit", "edit_skill", "rename", "delete", "write_file", "remove_file"],
+          enum: ["list", "list_skills", "get_skills", "view", "create", "patch", "edit", "edit_skill", "rename", "delete", "write_file", "remove_file", "execute"],
         },
         name: { type: "string", description: "Skill name/slug" },
         skillName: { type: "string", description: "Legacy skill name/slug" },
@@ -138,6 +236,9 @@ export const skillsTool: ToolExecutor = {
         new_string: { type: "string", description: "Replacement text for patch action" },
         file_path: { type: "string", description: "Supporting file path relative to skill directory" },
         file_content: { type: "string", description: "Supporting file content" },
+        script_file: { type: "string", description: "Optional script file path relative to skill directory for execute action" },
+        input: { type: "object", description: "Optional runtime input object available as skillInput in script" },
+        context: { type: "object", description: "Optional runtime context object available as skillContext in script" },
       },
       required: ["action"],
     },
@@ -265,6 +366,62 @@ export const skillsTool: ToolExecutor = {
 
           unlinkSync(absolutePath);
           return ok({ name: slugify(name), removed: relativePath });
+        }
+
+        case "execute": {
+          if (!name) return fail("name is required");
+          const dir = skillDir(name);
+          const file = skillFile(name);
+          if (!existsSync(file)) return fail(`Skill not found: ${name}`);
+
+          const content = readFileSync(file, "utf8");
+          const directScriptFile = input["script_file"] ? String(input["script_file"]).trim() : "";
+          const runtimeInput = input["input"];
+          const runtimeContext = input["context"];
+
+          let source = "";
+          let script = "";
+
+          if (directScriptFile) {
+            const rel = safeRelativePath(directScriptFile);
+            const absolute = resolve(dir, rel);
+            if (!absolute.startsWith(dir)) return fail("script_file escapes the skill directory");
+            if (!existsSync(absolute)) return fail(`Script file not found: ${rel}`);
+            source = rel;
+            script = readFileSync(absolute, "utf8");
+          } else {
+            const configuredScript = frontmatterScript(content)?.trim();
+            if (configuredScript) {
+              const rel = safeRelativePath(configuredScript);
+              const absolute = resolve(dir, rel);
+              if (!absolute.startsWith(dir)) return fail("Configured script escapes the skill directory");
+              if (!existsSync(absolute)) return fail(`Configured script not found: ${rel}`);
+              source = rel;
+              script = readFileSync(absolute, "utf8");
+            } else {
+              const defaultScript = resolve(dir, "script.js");
+              if (existsSync(defaultScript)) {
+                source = "script.js";
+                script = readFileSync(defaultScript, "utf8");
+              } else {
+                const inlineScript = extractInlineScript(content);
+                if (!inlineScript) {
+                  return fail("No executable script found. Add <script>...</script>, set frontmatter script, or create script.js");
+                }
+                source = "inline:<script>";
+                script = inlineScript;
+              }
+            }
+          }
+
+          const executed = runScriptInSandbox(script, { input: runtimeInput, context: runtimeContext });
+          return ok({
+            name: slugify(name),
+            executed: true,
+            source,
+            logs: executed.logs,
+            result: executed.result ?? null,
+          });
         }
 
         default:

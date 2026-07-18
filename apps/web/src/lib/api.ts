@@ -174,6 +174,11 @@ export const api = {
         method: "PATCH",
         body: JSON.stringify({ oldString, newString }),
       }),
+    execute: (slug: string, payload?: { scriptFile?: string; input?: unknown; context?: unknown }) =>
+      request<{ slug: string; executed: boolean; source: string; logs: string[]; result: unknown }>(`/skills/${slug}/execute`, {
+        method: "POST",
+        body: JSON.stringify(payload ?? {}),
+      }),
     delete: (slug: string) => request<{ slug: string; deleted: boolean }>(`/skills/${slug}`, { method: "DELETE" }),
   },
 

@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { Script, createContext } from "node:vm";
 import { createApiError, createApiResponse } from "@ducki/shared";
 
 export const skillsRouter: IRouter = Router();
@@ -9,6 +10,17 @@ interface SkillSummary {
   slug: string;
   name: string;
   description?: string;
+}
+
+interface SkillFrontmatter {
+  name?: string;
+  description?: string;
+  script?: string;
+}
+
+interface SkillRuntimePayload {
+  input?: unknown;
+  context?: unknown;
 }
 
 function resolveSkillsRoot(): string {
@@ -40,6 +52,14 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function safeRelativePath(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("..")) {
+    throw new Error("Invalid relative path");
+  }
+  return normalized;
+}
+
 function buildSkillMarkdown(slug: string, title?: string, description?: string, body?: string): string {
   const safeTitle = title?.trim() || slug;
   const safeDescription = description?.trim() || "Skill instructions";
@@ -67,12 +87,12 @@ function buildSkillMarkdown(slug: string, title?: string, description?: string, 
   ].join("\n");
 }
 
-function parseFrontmatter(content: string): { name?: string; description?: string } {
+function parseFrontmatter(content: string): SkillFrontmatter {
   if (!content.startsWith("---")) return {};
   const end = content.indexOf("\n---", 3);
   if (end < 0) return {};
   const block = content.slice(3, end).trim();
-  const result: { name?: string; description?: string } = {};
+  const result: SkillFrontmatter = {};
 
   for (const line of block.split(/\r?\n/)) {
     const idx = line.indexOf(":");
@@ -81,9 +101,147 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
     const value = line.slice(idx + 1).trim().replace(/^['"]|['"]$/g, "");
     if (key === "name") result.name = value;
     if (key === "description") result.description = value;
+    if (key === "script") result.script = value;
   }
 
   return result;
+}
+
+function extractInlineScript(content: string): string | undefined {
+  const closedMatch = content.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i);
+  if (closedMatch?.[1]?.trim()) return closedMatch[1].trim();
+
+  const openMatch = content.match(/<script\b[^>]*>([\s\S]*)$/i);
+  if (openMatch?.[1]?.trim()) return openMatch[1].trim();
+  return undefined;
+}
+
+function loadSkillScript(skillDir: string, content: string, scriptFile?: string): { source: string; script: string } {
+  if (scriptFile) {
+    const rel = safeRelativePath(scriptFile);
+    const absolute = resolve(skillDir, rel);
+    if (!absolute.startsWith(resolve(skillDir))) {
+      throw new Error("scriptFile escapes skill directory");
+    }
+    if (!existsSync(absolute)) {
+      throw new Error(`scriptFile not found: ${rel}`);
+    }
+    return {
+      source: rel,
+      script: readFileSync(absolute, "utf8"),
+    };
+  }
+
+  const frontmatter = parseFrontmatter(content);
+  if (frontmatter.script?.trim()) {
+    const rel = safeRelativePath(frontmatter.script.trim());
+    const absolute = resolve(skillDir, rel);
+    if (!absolute.startsWith(resolve(skillDir))) {
+      throw new Error("Frontmatter script path escapes skill directory");
+    }
+    if (!existsSync(absolute)) {
+      throw new Error(`Configured script not found: ${rel}`);
+    }
+    return {
+      source: rel,
+      script: readFileSync(absolute, "utf8"),
+    };
+  }
+
+  const defaultFile = resolve(skillDir, "script.js");
+  if (existsSync(defaultFile)) {
+    return {
+      source: "script.js",
+      script: readFileSync(defaultFile, "utf8"),
+    };
+  }
+
+  const inlineScript = extractInlineScript(content);
+  if (inlineScript) {
+    return {
+      source: "inline:<script>",
+      script: inlineScript,
+    };
+  }
+
+  throw new Error("No executable script found. Add <script>...</script>, set frontmatter 'script', or create script.js");
+}
+
+function sanitizeRuntimeValue(value: unknown, depth = 0): unknown {
+  if (depth > 6) {
+    throw new Error("Runtime payload is too deeply nested");
+  }
+  if (value === null || value === undefined) return value;
+  const valueType = typeof value;
+  if (valueType === "string" || valueType === "number" || valueType === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 500) {
+      throw new Error("Runtime payload array too large");
+    }
+    return value.map((item) => sanitizeRuntimeValue(item, depth + 1));
+  }
+  if (valueType === "object") {
+    const source = value as Record<string, unknown>;
+    const keys = Object.keys(source);
+    if (keys.length > 200) {
+      throw new Error("Runtime payload object too large");
+    }
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = sanitizeRuntimeValue(source[key], depth + 1);
+    }
+    return result;
+  }
+
+  throw new Error("Runtime payload contains unsupported value type");
+}
+
+function runSkillScript(script: string, runtime?: SkillRuntimePayload): { logs: string[]; result: unknown } {
+  const logs: string[] = [];
+  const logger = (...args: unknown[]) => {
+    logs.push(
+      args
+        .map((arg) => {
+          if (typeof arg === "string") return arg;
+          try {
+            return JSON.stringify(arg);
+          } catch {
+            return String(arg);
+          }
+        })
+        .join(" ")
+    );
+  };
+
+  const context = createContext({
+    console: {
+      log: logger,
+      info: logger,
+      warn: logger,
+      error: logger,
+    },
+    Date,
+    Intl,
+    Math,
+    JSON,
+    Number,
+    String,
+    Boolean,
+    Array,
+    Object,
+    RegExp,
+    URL,
+    URLSearchParams,
+    skillInput: sanitizeRuntimeValue(runtime?.input),
+    skillContext: sanitizeRuntimeValue(runtime?.context),
+  });
+
+  const wrappedScript = `(function () {\n"use strict";\n${script}\n})();`;
+  const vmScript = new Script(wrappedScript);
+  const result = vmScript.runInContext(context, { timeout: 1500 });
+  return { logs, result };
 }
 
 function listSkills(): SkillSummary[] {
@@ -304,4 +462,39 @@ skillsRouter.delete("/:slug", (req, res) => {
 
   rmSync(skillDir, { recursive: true, force: true });
   res.json(createApiResponse({ slug, deleted: true }));
+});
+
+skillsRouter.post("/:slug/execute", (req, res) => {
+  const slug = slugify(req.params["slug"] ?? "");
+  if (!slug) {
+    res.status(400).json(createApiError("Invalid skill slug"));
+    return;
+  }
+
+  const { scriptFile, input, context } = (req.body ?? {}) as { scriptFile?: string; input?: unknown; context?: unknown };
+  const skillDir = join(skillsRoot, slug);
+  const skillFile = join(skillDir, "SKILL.md");
+  if (!existsSync(skillFile)) {
+    res.status(404).json(createApiError("Skill not found"));
+    return;
+  }
+
+  try {
+    const content = readFileSync(skillFile, "utf8");
+    const loaded = loadSkillScript(skillDir, content, scriptFile);
+    const executed = runSkillScript(loaded.script, { input, context });
+
+    res.json(
+      createApiResponse({
+        slug,
+        executed: true,
+        source: loaded.source,
+        logs: executed.logs,
+        result: executed.result ?? null,
+      })
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(400).json(createApiError(message));
+  }
 });

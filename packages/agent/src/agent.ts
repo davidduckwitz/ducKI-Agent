@@ -328,7 +328,19 @@ export class Agent {
       score += 0.3;
     }
 
+    if (
+      /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput) &&
+      /(datum-uhrzeit-tag|datum-uhrzeit|date-time)/.test(skill.slug)
+    ) {
+      score += 0.55;
+    }
+
     return Math.min(1, score);
+  }
+
+  private isDateTimeIntent(input: string): boolean {
+    const normalizedInput = input.toLowerCase();
+    return /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput);
   }
 
   private tokenOverlapCount(input: string, skill: SkillManifest): number {
@@ -1194,6 +1206,14 @@ export class Agent {
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);
     const enabledAllowlist = new Set(controls.enabledSkillAllowlist);
     const allowlistCandidates = installedSkillManifests.filter((skill) => enabledAllowlist.has(skill.slug));
+    const dateSkillFallback = installedSkillManifests.find((skill) => skill.slug === "datum-uhrzeit-tag");
+    if (dateSkillFallback && this.isDateTimeIntent(effectiveInput) && !allowlistCandidates.some((skill) => skill.slug === dateSkillFallback.slug)) {
+      allowlistCandidates.push(dateSkillFallback);
+      emit("decision", "Utility date/time skill injected for date intent", {
+        skill: dateSkillFallback.slug,
+        reason: "date_time_intent",
+      });
+    }
     const requestedSkills = requestedSkillSlugs
       .map((slug) => installedSkillManifests.find((skill) => skill.slug === slug))
       .filter((skill): skill is SkillManifest => Boolean(skill));
