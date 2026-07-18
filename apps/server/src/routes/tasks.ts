@@ -5,6 +5,12 @@ import { createApiResponse, createApiError } from "@ducki/shared";
 
 export const tasksRouter: IRouter = Router();
 
+function envCap(key: string, fallback: number, minimum = 0): number {
+  const parsed = Number.parseInt(process.env[key] ?? "", 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed >= minimum ? parsed : fallback;
+}
+
 tasksRouter.get("/", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
@@ -99,7 +105,15 @@ tasksRouter.post("/:id/run", async (req, res, next) => {
       label: `Task #${taskId}`,
     });
 
-    const runResult = await agent.run(prompt);
+    const runResult = await agent.run(prompt, {
+      contextCaps: {
+        maxSystemPromptChars: envCap("AGENT_TASK_MAX_SYSTEM_PROMPT_CHARS", 50000, 2000),
+        maxDynamicMemoryChars: envCap("AGENT_TASK_MAX_DYNAMIC_MEMORY_CHARS", 6000, 0),
+        maxContextMessages: envCap("AGENT_TASK_MAX_CONTEXT_MESSAGES", 24, 1),
+        maxContextChars: envCap("AGENT_TASK_MAX_CONTEXT_CHARS", 45000, 2000),
+        maxContextMessageChars: envCap("AGENT_TASK_MAX_CONTEXT_MESSAGE_CHARS", 5000, 200),
+      },
+    });
     const updated = await db.updateTask(taskId, {
       status: "completed",
       result: runResult.response,

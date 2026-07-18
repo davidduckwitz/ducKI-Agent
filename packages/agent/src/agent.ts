@@ -34,6 +34,21 @@ export interface AgentRunResult {
   conversationId?: number;
 }
 
+export interface AgentRunContextCaps {
+  maxSystemPromptChars?: number;
+  maxDynamicMemoryChars?: number;
+  maxContextMessages?: number;
+  maxContextChars?: number;
+  maxContextMessageChars?: number;
+}
+
+export interface AgentRunOptions {
+  stream?: boolean;
+  onChunk?: (chunk: string) => void;
+  onEvent?: (event: AgentRunEvent) => void;
+  contextCaps?: AgentRunContextCaps;
+}
+
 export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
 
 export interface AgentRunEvent {
@@ -162,7 +177,7 @@ export class Agent {
 
   async run(
     userInput: string,
-    options: { stream?: boolean; onChunk?: (chunk: string) => void; onEvent?: (event: AgentRunEvent) => void } = {}
+    options: AgentRunOptions = {}
   ): Promise<AgentRunResult> {
     if (this.status === "running") {
       throw new Error("Agent is already running");
@@ -215,6 +230,14 @@ export class Agent {
       .replace(/<\/?tool_call[^>]*>/gi, "")
       // Remove leading/trailing whitespace that may remain
       .trim();
+  }
+
+  private truncateText(value: string, maxChars: number): string {
+    if (maxChars <= 0) return "";
+    if (value.length <= maxChars) return value;
+    const suffix = "\n...[truncated]";
+    const keep = Math.max(0, maxChars - suffix.length);
+    return `${value.slice(0, keep)}${suffix}`;
   }
 
   private parseFrontmatter(content: string): { name?: string; description?: string } {
@@ -1100,7 +1123,7 @@ export class Agent {
     toolsUsed: string[],
     iterations: number,
     controls: AgentRuntimeControls,
-    options: { stream?: boolean; onChunk?: (chunk: string) => void; onEvent?: (event: AgentRunEvent) => void }
+    options: AgentRunOptions
   ): Promise<AgentRunResult> {
     const emit = (
       type: AgentRunEventType,
@@ -1345,6 +1368,46 @@ export class Agent {
         || normalized.includes("token");
     };
 
+    const isContextOverflowError = (message: string): boolean => {
+      const normalized = message.toLowerCase();
+      return normalized.includes("maximum context length")
+        || normalized.includes("max context")
+        || normalized.includes("requested about")
+        || normalized.includes("too many tokens")
+        || normalized.includes("context length");
+    };
+
+    const sanitizeCap = (value: number, minimum: number, fallback: number): number => {
+      if (!Number.isFinite(value)) return fallback;
+      const rounded = Math.floor(value);
+      return rounded >= minimum ? rounded : fallback;
+    };
+    const envCap = (key: string, fallback: number, minimum: number): number => {
+      const parsed = Number.parseInt(process.env[key] ?? "", 10);
+      return sanitizeCap(parsed, minimum, fallback);
+    };
+    const withOverride = (override: number | undefined, fallback: number, minimum: number): number => {
+      if (override === undefined) return fallback;
+      return sanitizeCap(override, minimum, fallback);
+    };
+
+    const contextCaps = options.contextCaps;
+    const maxSystemPromptChars = withOverride(contextCaps?.maxSystemPromptChars, envCap("AGENT_MAX_SYSTEM_PROMPT_CHARS", 120000, 2000), 2000);
+    const maxDynamicMemoryChars = withOverride(contextCaps?.maxDynamicMemoryChars, envCap("AGENT_MAX_DYNAMIC_MEMORY_CHARS", 24000, 0), 0);
+    const maxContextMessages = withOverride(contextCaps?.maxContextMessages, envCap("AGENT_MAX_CONTEXT_MESSAGES", 60, 1), 1);
+    const maxContextChars = withOverride(contextCaps?.maxContextChars, envCap("AGENT_MAX_CONTEXT_CHARS", 120000, 2000), 2000);
+    const maxContextMessageChars = withOverride(contextCaps?.maxContextMessageChars, envCap("AGENT_MAX_CONTEXT_MESSAGE_CHARS", 12000, 200), 200);
+
+    if (contextCaps) {
+      emit("guardrail", "Run-specific context caps applied", {
+        maxSystemPromptChars,
+        maxDynamicMemoryChars,
+        maxContextMessages,
+        maxContextChars,
+        maxContextMessageChars,
+      });
+    }
+
     let finalResponse = "";
     let consecutiveToolFailures = 0;
     const repeatedToolCalls = new Map<string, number>();
@@ -1371,17 +1434,64 @@ export class Agent {
         });
       }
 
-      const buildMessages = (mode: "full" | "compact" | "minimal"): LLMMessage[] => {
+      const buildConversationWindow = (messageLimit: number, charLimit: number): LLMMessage[] => {
+        const allMessages = this.conversation.getMessages();
+        if (allMessages.length === 0) return [];
+
+        const selected: LLMMessage[] = [];
+        let usedChars = 0;
+
+        for (let index = allMessages.length - 1; index >= 0; index--) {
+          const message = allMessages[index];
+          if (!message) continue;
+          if (selected.length >= Math.max(1, messageLimit)) break;
+
+          const rawContent = typeof message.content === "string" ? message.content : "";
+          const clippedContent = this.truncateText(rawContent, Math.max(200, maxContextMessageChars));
+          const nextChars = usedChars + clippedContent.length;
+          if (selected.length > 0 && nextChars > Math.max(2000, charLimit)) break;
+
+          selected.push({
+            ...message,
+            content: clippedContent,
+          });
+          usedChars = nextChars;
+        }
+
+        return selected.reverse();
+      };
+
+      const buildMessages = (
+        mode: "full" | "compact" | "minimal",
+        contextOptions?: {
+          messageLimit?: number;
+          charLimit?: number;
+          dynamicMemoryLimit?: number;
+          includeDynamicMemory?: boolean;
+        }
+      ): LLMMessage[] => {
         const selectedPrompt = mode === "compact"
           ? compactBaseSystemPrompt
           : mode === "minimal"
             ? minimalBaseSystemPrompt
             : baseSystemPrompt;
+
+        const clippedPrompt = this.truncateText(selectedPrompt, Math.max(2000, maxSystemPromptChars));
+        const includeDynamicMemory = contextOptions?.includeDynamicMemory ?? true;
+        const clippedDynamicMemory = includeDynamicMemory
+          ? this.truncateText(dynamicMemoryContext, Math.max(0, contextOptions?.dynamicMemoryLimit ?? maxDynamicMemoryChars))
+          : "";
         const systemMessage: LLMMessage = {
           role: "system",
-          content: `${selectedPrompt}${dynamicMemoryContext}`,
+          content: `${clippedPrompt}${clippedDynamicMemory}`,
         };
-        return [systemMessage, ...this.conversation.getMessages()];
+
+        const contextMessages = buildConversationWindow(
+          contextOptions?.messageLimit ?? maxContextMessages,
+          contextOptions?.charLimit ?? maxContextChars
+        );
+
+        return [systemMessage, ...contextMessages];
       };
 
       const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
@@ -1426,7 +1536,26 @@ export class Agent {
           });
 
           messages = buildMessages("minimal");
-          response = await generateFromMessages(messages);
+          try {
+            response = await generateFromMessages(messages);
+          } catch (minimalError) {
+            const minimalProviderError = minimalError instanceof Error ? minimalError.message : String(minimalError);
+            if (!isContextOverflowError(minimalProviderError)) {
+              throw minimalError;
+            }
+
+            emit("guardrail", "Minimal retry still exceeded context, retrying with aggressively truncated context", {
+              error: minimalProviderError,
+            });
+
+            messages = buildMessages("minimal", {
+              messageLimit: 12,
+              charLimit: 24000,
+              dynamicMemoryLimit: 0,
+              includeDynamicMemory: false,
+            });
+            response = await generateFromMessages(messages);
+          }
         }
       }
 

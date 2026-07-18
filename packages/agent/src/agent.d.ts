@@ -17,6 +17,26 @@ export interface AgentRunResult {
     toolsUsed: string[];
     conversationId?: number;
 }
+export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
+export interface AgentRunEvent {
+    type: AgentRunEventType;
+    message: string;
+    data?: Record<string, unknown>;
+    timestamp: string;
+}
+export interface AgentRunContextCaps {
+    maxSystemPromptChars?: number;
+    maxDynamicMemoryChars?: number;
+    maxContextMessages?: number;
+    maxContextChars?: number;
+    maxContextMessageChars?: number;
+}
+export interface AgentRunOptions {
+    stream?: boolean;
+    onChunk?: (chunk: string) => void;
+    onEvent?: (event: AgentRunEvent) => void;
+    contextCaps?: AgentRunContextCaps;
+}
 export declare class Agent {
     private readonly provider;
     private readonly db;
@@ -41,10 +61,7 @@ export declare class Agent {
         projectId?: number;
     }): Promise<number>;
     loadConversation(id: number): Promise<void>;
-    run(userInput: string, options?: {
-        stream?: boolean;
-        onChunk?: (chunk: string) => void;
-    }): Promise<AgentRunResult>;
+    run(userInput: string, options?: AgentRunOptions): Promise<AgentRunResult>;
     private runLoop;
     stop(): void;
     getStatus(): AgentStatus;
