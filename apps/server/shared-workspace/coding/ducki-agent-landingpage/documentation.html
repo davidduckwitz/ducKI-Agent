@@ -67,6 +67,7 @@
           <div class="d-flex flex-wrap gap-2">
             <a class="btn btn-sm btn-outline-info" href="#quickstart">Quickstart</a>
             <a class="btn btn-sm btn-outline-light" href="#konfiguration">Konfiguration</a>
+            <a class="btn btn-sm btn-outline-light" href="#provider-setup">Provider Setup</a>
             <a class="btn btn-sm btn-outline-light" href="#alltag">Alltag</a>
             <a class="btn btn-sm btn-outline-light" href="#automation">Automation</a>
             <a class="btn btn-sm btn-outline-light" href="#troubleshooting">Troubleshooting</a>
@@ -88,7 +89,9 @@
             <div class="col-lg-6">
               <h3 class="h5">Windows (PowerShell)</h3>
               <div class="rounded-3 border border-secondary-subtle bg-dark p-3">
-                <pre class="text-light"><code>pnpm install
+                <pre class="mb-0 text-light"><code>git clone https://github.com/davidduckwitz/ducKI-Agent
+cd ducKI-Agent
+pnpm install
 Copy-Item .env.example .env
 pnpm dev</code></pre>
               </div>
@@ -96,7 +99,9 @@ pnpm dev</code></pre>
             <div class="col-lg-6">
               <h3 class="h5">Linux/macOS/WSL</h3>
               <div class="rounded-3 border border-secondary-subtle bg-dark p-3">
-                <pre class="text-light"><code>pnpm install
+                <pre class="text-light"><code>git clone https://github.com/davidduckwitz/ducKI-Agent
+cd ducKI-Agent
+pnpm install
 cp .env.example .env
 pnpm dev</code></pre>
               </div>
@@ -122,6 +127,47 @@ pnpm dev</code></pre>
               <article class="doc-card glass rounded-4 h-100 p-4">
                 <h3 class="h5">Skills</h3>
                 <p class="text-secondary mb-0">In /skills nur die Skills aktivieren, die du wirklich brauchst. Das spart Kontext und macht den Agenten praeziser.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section id="provider-setup" class="glass rounded-4 p-4 p-lg-5">
+          <h2 class="h3 fw-bold mb-3">2.1 LM Studio und / oder OpenRouter verbinden</h2>
+          <small>DucKI Agent läuft super mit den OpenRouter "openrouter/free" Model (KOSTENLOS!!)</small>
+          <div class="row g-4">
+            <div class="col-lg-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5 mb-3">LM Studio installieren und verbinden</h3>
+                <ol class="text-secondary mb-3">
+                  <li>LM Studio lokal installieren und starten.</li>
+                  <li>Ein Modell laden und den Local Server starten.</li>
+                  <li>In DucKI unter /settings setzen:</li>
+                </ol>
+                <div class="rounded-3 border border-secondary-subtle bg-dark p-3">
+                  <pre class="text-light"><code>DEFAULT_PROVIDER=lmstudio
+LM_STUDIO_BASE_URL=http://localhost:1234/v1
+LM_STUDIO_MODEL=dein-modellname</code></pre>
+                </div>
+                <p class="text-secondary mb-0 mt-3">Danach im Chat eine kurze Testnachricht senden, um die Verbindung zu pruefen.</p>
+              </article>
+            </div>
+            <div class="col-lg-6">
+              <article class="doc-card glass rounded-4 h-100 p-4">
+                <h3 class="h5 mb-3">OpenRouter verbinden (inkl. FREE Modelle)</h3>
+                <ol class="text-secondary mb-3">
+                  <li>Account bei OpenRouter erstellen und API-Key erzeugen.</li>
+                  <li>In DucKI unter /settings setzen:</li>
+                </ol>
+                <div class="rounded-3 border border-secondary-subtle bg-dark p-3 mb-3">
+                  <pre class="text-light"><code>DEFAULT_PROVIDER=openrouter
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_API_KEY=dein-openrouter-key
+OPENROUTER_MODEL=openrouter/free</code></pre>
+                </div>
+                <p class="text-secondary mb-0">
+                  Hinweis: Mit <strong>openrouter/free</strong> kannst du kostenlose LLM-Modelle fuer den Agenten nutzen.
+                </p>
               </article>
             </div>
           </div>

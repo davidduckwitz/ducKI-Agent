@@ -1,8 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Settings as SettingsIcon, Save } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { useAppStore } from "../../lib/store";
 
 interface Setting {
   key: string;
@@ -591,6 +592,7 @@ const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "
 
 export function Settings() {
   const { t } = useI18n();
+  const { setSetupModalOpen } = useAppStore();
   const qc = useQueryClient();
   const { data: settings = [] } = useQuery({
     queryKey: ["settings"],
@@ -626,10 +628,16 @@ export function Settings() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">{t("settingsPage.title")}</h1>
-        <button onClick={saveAll} className="btn-primary flex items-center gap-2" disabled={save.isPending}>
-          <Save className="w-4 h-4" />
-          {t("settingsPage.saveAll")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setSetupModalOpen(true)} className="btn-secondary flex items-center gap-2">
+            <Sparkles className="w-4 h-4" />
+            Setup Assistent
+          </button>
+          <button onClick={saveAll} className="btn-primary flex items-center gap-2" disabled={save.isPending}>
+            <Save className="w-4 h-4" />
+            {t("settingsPage.saveAll")}
+          </button>
+        </div>
       </div>
 
       {SECTIONS.map((section) => {

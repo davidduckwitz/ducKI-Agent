@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, CheckSquare, Wrench, Bot, Activity } from "lucide-react";
+import { FolderOpen, CheckSquare, Wrench, Bot, Activity, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import { useI18n } from "../../lib/i18n";
 
 export function Dashboard() {
   const { t } = useI18n();
-  const { agentStatus, connected } = useAppStore();
+  const { agentStatus, connected, setSetupModalOpen } = useAppStore();
   const projects = useQuery({ queryKey: ["projects"], queryFn: () => api.projects.list() });
   const tasks = useQuery({ queryKey: ["tasks"], queryFn: () => api.tasks.list() });
   const tools = useQuery({ queryKey: ["tools"], queryFn: () => api.tools.list() });
@@ -44,11 +44,17 @@ export function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="text-gray-400 text-sm mt-1">
-          {t("dashboard.subtitle")}
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Dashboard</h1>
+          <p className="text-gray-400 text-sm mt-1">
+            {t("dashboard.subtitle")}
+          </p>
+        </div>
+        <button className="btn-primary inline-flex items-center gap-2" onClick={() => setSetupModalOpen(true)}>
+          <Sparkles className="w-4 h-4" />
+          Setup Assistent
+        </button>
       </div>
 
       {/* Status Grid */}

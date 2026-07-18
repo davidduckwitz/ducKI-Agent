@@ -32,6 +32,9 @@ interface AppState {
   // Socket
   socket: Socket | null;
   connected: boolean;
+
+  // UI
+  setupModalOpen: boolean;
   
   // Actions
   initSocket: () => void;
@@ -43,6 +46,7 @@ interface AppState {
   setMessages: (messages: ChatMessage[]) => void;
   setAgentStatus: (status: AppState["agentStatus"]) => void;
   setGlobalRunningAgents: (count: number) => void;
+  setSetupModalOpen: (open: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -54,6 +58,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   globalRunningAgents: 0,
   socket: null,
   connected: false,
+  setupModalOpen: false,
 
   initSocket: () => {
     const socketUrl = import.meta.env.DEV
@@ -211,4 +216,5 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMessages: (messages) => set({ messages }),
   setAgentStatus: (status) => set({ agentStatus: status }),
   setGlobalRunningAgents: (count) => set({ globalRunningAgents: Math.max(0, count) }),
+  setSetupModalOpen: (open) => set({ setupModalOpen: open }),
 }));

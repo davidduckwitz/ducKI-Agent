@@ -1,5 +1,5 @@
 import { Outlet, NavLink } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   LayoutDashboard,
@@ -28,11 +28,13 @@ import {
 import { useAppStore } from "../../lib/store";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { SetupWizardModal } from "../setup/SetupWizardModal";
 
 export function Layout() {
   const { t, language, setLanguage, languages } = useI18n();
   const qc = useQueryClient();
-  const { initSocket, disconnectSocket, connected, agentStatus, globalRunningAgents } = useAppStore();
+  const { initSocket, disconnectSocket, connected, agentStatus, globalRunningAgents, setupModalOpen, setSetupModalOpen } = useAppStore();
+  const firstRunCheckDone = useRef(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const liveAgents = useQuery({
     queryKey: ["agents", "live", "sidebar"],
@@ -76,6 +78,16 @@ export function Layout() {
     refetchInterval: 5000,
   });
   const codingEnabled = String(settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value ?? "false").trim().toLowerCase() === "true";
+
+  useEffect(() => {
+    if (firstRunCheckDone.current) return;
+    if (!settingsQuery.data) return;
+    const setupCompleted = String(settingsQuery.data.find((s) => s.key === "SETUP_COMPLETED")?.value ?? "false").trim().toLowerCase() === "true";
+    if (!setupCompleted) {
+      setSetupModalOpen(true);
+    }
+    firstRunCheckDone.current = true;
+  }, [setSetupModalOpen, settingsQuery.data]);
 
   const navItems = [
     { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard") },
@@ -272,6 +284,12 @@ export function Layout() {
           </div>
         </div>
       )}
+
+      <SetupWizardModal
+        open={setupModalOpen}
+        onClose={() => setSetupModalOpen(false)}
+        settings={(settingsQuery.data ?? []) as Array<{ key: string; value: string }>}
+      />
     </div>
   );
 }
