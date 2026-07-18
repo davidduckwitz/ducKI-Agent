@@ -259,6 +259,10 @@ export const translations: Record<Language, TranslationTree> = {
       behaviorEntry: "Eintragung fuer Agentenverhalten",
       humanEntry: "Eintragung fuer Infos zum Mensch",
       saveInProgress: "Speichert...",
+      deleteEntry: "Loeschen",
+      deleteConfirm: "Diesen Memory-Eintrag wirklich loeschen?",
+      deleteSuccess: "Memory-Eintrag geloescht.",
+      deleteFailed: "Loeschen fehlgeschlagen",
     },
     gatewayPage: {
       subtitle: "Externe Portal-Nachrichten laufen hier in echte Conversations ein und erscheinen danach im normalen Chat-Verlauf.",
@@ -589,6 +593,10 @@ export const translations: Record<Language, TranslationTree> = {
       behaviorEntry: "Entry for agent behavior",
       humanEntry: "Entry for human info",
       saveInProgress: "Saving...",
+      deleteEntry: "Delete",
+      deleteConfirm: "Delete this memory entry?",
+      deleteSuccess: "Memory entry deleted.",
+      deleteFailed: "Delete failed",
     },
     gatewayPage: {
       subtitle: "External portal messages arrive as real conversations and then appear in regular chat history.",

@@ -144,6 +144,7 @@ export const api = {
       pendingId?: string;
       approved?: boolean;
     }) => request<unknown>("/memory/actions", { method: "POST", body: JSON.stringify(payload) }),
+    delete: (id: number) => request<{ deleted: boolean; id: number }>(`/memory/${id}`, { method: "DELETE" }),
     getProfile: () => request<{ agentBehavior: string; humanInfo: string }>("/memory/profile"),
     saveProfile: (payload: { agentBehavior: string; humanInfo: string }) =>
       request<{ saved: boolean; agentBehavior: string; humanInfo: string }>("/memory/profile", {

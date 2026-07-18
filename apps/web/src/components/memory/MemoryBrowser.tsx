@@ -12,6 +12,7 @@ import {
   Plus,
   Save,
   ShieldCheck,
+  Trash2,
   UserRound,
   X,
   BookOpen,
@@ -41,6 +42,11 @@ interface PendingMemoryWrite {
   id: string;
   createdAt: string;
   payload: Record<string, unknown>;
+}
+
+interface InlineToast {
+  type: "success" | "error";
+  message: string;
 }
 
 const PAGE_SIZE = 10;
@@ -77,6 +83,7 @@ export function MemoryBrowser() {
   const [wikiAutoApproveEdit, setWikiAutoApproveEdit] = useState("false");
   const [wikiStatusFilter, setWikiStatusFilter] = useState("all");
   const [wikiSearch, setWikiSearch] = useState("");
+  const [inlineToast, setInlineToast] = useState<InlineToast | null>(null);
 
   const { data: memories = [] } = useQuery({
     queryKey: ["memory"],
@@ -183,6 +190,24 @@ export function MemoryBrowser() {
     },
   });
 
+  const deleteMemoryEntry = useMutation({
+    mutationFn: (id: number) => api.memory.delete(id),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["memory"] });
+      setInlineToast({ type: "success", message: t("memoryPage.deleteSuccess") });
+    },
+    onError: (error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      setInlineToast({ type: "error", message: `${t("memoryPage.deleteFailed")}: ${reason}` });
+    },
+  });
+
+  useEffect(() => {
+    if (!inlineToast) return;
+    const timer = window.setTimeout(() => setInlineToast(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [inlineToast]);
+
   const sortedMemories = useMemo(
     () => [...(memories as MemoryEntry[])].sort((a, b) => b.id - a.id),
     [memories]
@@ -271,6 +296,20 @@ export function MemoryBrowser() {
 
   return (
     <div className="p-6 space-y-4">
+      {inlineToast && (
+        <div className="fixed top-4 right-4 z-50">
+          <div
+            className={`rounded-lg border px-3 py-2 text-sm shadow-lg ${
+              inlineToast.type === "success"
+                ? "border-emerald-700 bg-emerald-950/95 text-emerald-200"
+                : "border-red-700 bg-red-950/95 text-red-200"
+            }`}
+          >
+            {inlineToast.message}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Memory</h1>
@@ -442,6 +481,17 @@ export function MemoryBrowser() {
                 <span className="text-xs text-gray-500">
                   {t("memoryPage.importance")}: {mem.importance}
                 </span>
+                <button
+                  className="btn-secondary text-xs px-2 py-1"
+                  disabled={deleteMemoryEntry.isPending}
+                  onClick={() => {
+                    if (!window.confirm(t("memoryPage.deleteConfirm"))) return;
+                    deleteMemoryEntry.mutate(mem.id);
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5 inline mr-1" />
+                  {t("memoryPage.deleteEntry")}
+                </button>
               </div>
             </div>
             <p className="text-xs text-gray-500 mt-1">

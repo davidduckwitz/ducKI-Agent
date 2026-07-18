@@ -49,6 +49,27 @@ memoryRouter.get("/", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+memoryRouter.delete("/:id", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const id = Number.parseInt(String(req.params["id"] ?? ""), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      res.status(400).json({ success: false, error: "Valid memory id is required", timestamp: new Date().toISOString() });
+      return;
+    }
+
+    const existing = await db.getMemories();
+    const match = existing.find((entry) => entry.id === id);
+    if (!match) {
+      res.status(404).json({ success: false, error: `Memory with id ${id} not found`, timestamp: new Date().toISOString() });
+      return;
+    }
+
+    await db.deleteMemory(id);
+    res.json(createApiResponse({ deleted: true, id }));
+  } catch (e) { next(e); }
+});
+
 memoryRouter.post("/actions", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
