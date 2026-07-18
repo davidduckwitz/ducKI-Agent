@@ -6,26 +6,6 @@ import { agentRegistry } from "../lib/agent-registry.js";
 
 const logger = getRootLogger().child("WebSocket");
 
-function readEnabledSkillSlugs(rawValue: string | null | undefined): string[] {
-  if (!rawValue || rawValue.trim().length === 0) return [];
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim().toLowerCase())
-      .filter((item) => item.length > 0 && /^[a-z0-9_-]+$/.test(item));
-  } catch {
-    return [];
-  }
-}
-
-function withEnabledSkillsPrefix(message: string, enabledSkills: string[]): string {
-  if (enabledSkills.length === 0) return message;
-  const prefix = enabledSkills.map((slug) => `/${slug}`).join(" ");
-  return `${prefix} ${message}`.trim();
-}
-
 export function setupWebSocket(
   io: SocketIOServer,
   createAgent: () => Agent,
@@ -88,10 +68,7 @@ export function setupWebSocket(
 
         socket.emit("chat:start", { timestamp: new Date().toISOString() });
 
-        const enabledSkills = readEnabledSkillSlugs(await db.getSetting("ENABLED_SKILLS"));
-        const finalMessage = withEnabledSkillsPrefix(data.message, enabledSkills);
-
-        const result = await agent.run(finalMessage, {
+        const result = await agent.run(data.message, {
           stream: true,
           onChunk: (chunk) => {
             socket.emit("chat:chunk", { content: chunk });

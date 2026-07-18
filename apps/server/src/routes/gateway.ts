@@ -632,25 +632,6 @@ function parseDiscordInteractionPayload(body: unknown): DiscordInteractionPayloa
   };
 }
 
-function readEnabledSkillSlugs(rawValue: string | null | undefined): string[] {
-  if (!rawValue || rawValue.trim().length === 0) return [];
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim().toLowerCase())
-      .filter((item) => item.length > 0 && /^[a-z0-9_-]+$/.test(item));
-  } catch {
-    return [];
-  }
-}
-
-function withEnabledSkillsPrefix(message: string, enabledSkills: string[]): string {
-  if (enabledSkills.length === 0) return message;
-  const prefix = enabledSkills.map((slug) => `/${slug}`).join(" ");
-  return `${prefix} ${message}`.trim();
-}
 
 async function getOrCreateGatewayConversation(
   db: DatabaseService,
@@ -743,10 +724,10 @@ function encodeDiscordReactionEmoji(emoji: string): string {
 }
 
 function resolveDiscordBotToken(config: MessagingGatewayConfig): string | undefined {
-  const envToken = process.env["DISCORD_BOT_TOKEN"]?.trim();
-  if (envToken) return envToken;
   const gatewayToken = config.authToken?.trim();
-  return gatewayToken || undefined;
+  if (gatewayToken) return gatewayToken;
+  const envToken = process.env["DISCORD_BOT_TOKEN"]?.trim();
+  return envToken || undefined;
 }
 
 async function addDiscordMessageReaction(botToken: string, channelId: string, messageId: string, emoji: string): Promise<void> {
@@ -1049,15 +1030,29 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
     const attachmentHints = attachmentRecords
       .filter((record) => Boolean(record.path))
       .map((record) => `Shared-Workspace-Datei: ${record.path}`);
-    const messageWithAttachmentHints = attachmentHints.length > 0
-      ? `${message}\n${attachmentHints.join("\n")}`
-      : message;
 
     const hasAudioAttachments = (body.attachments ?? []).some(isAudioAttachment);
     const hasVoiceTranscript = Boolean(body.voiceTranscript?.trim());
+    const explicitTextMessage = String(body.message ?? body.text ?? "").trim();
+    const useTranscriptOnlyForAgent = hasAudioAttachments && hasVoiceTranscript && explicitTextMessage.length === 0;
     const attachmentPaths = attachmentRecords
       .map((record) => record.path)
       .filter((value): value is string => Boolean(value));
+
+    const transcriptText = String(body.voiceTranscript ?? "").trim();
+    const agentMessageBase = useTranscriptOnlyForAgent && transcriptText.length > 0
+      ? transcriptText
+      : message;
+
+    const filteredAttachmentHints = attachmentHints.filter((_, index) => {
+      if (!useTranscriptOnlyForAgent) return true;
+      const attachment = body.attachments?.[index];
+      return attachment ? !isAudioAttachment(attachment) : true;
+    });
+
+    const messageWithAttachmentHints = filteredAttachmentHints.length > 0
+      ? `${agentMessageBase}\n${filteredAttachmentHints.join("\n")}`
+      : agentMessageBase;
 
     if (hasAudioAttachments && !hasVoiceTranscript) {
       const responseText = buildVoiceTranscriptionMissingReply(
@@ -1122,11 +1117,9 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
       return;
     }
 
-    const enabledSkills = readEnabledSkillSlugs(await db.getSetting("ENABLED_SKILLS"));
-    const prefixedMessage = withEnabledSkillsPrefix(
-      userName ? `[${config.portal} / ${userName}] ${messageWithAttachmentHints}` : `[${config.portal}] ${messageWithAttachmentHints}`,
-      enabledSkills
-    );
+    const prefixedMessage = userName
+      ? `[${config.portal} / ${userName}] ${messageWithAttachmentHints}`
+      : `[${config.portal}] ${messageWithAttachmentHints}`;
 
     await applyDiscordReactionWithLog(
       db,
@@ -1189,6 +1182,7 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
       type: "inbound",
       portal: config.portal,
       configId: config.id,
+      agentInputMode: useTranscriptOnlyForAgent ? "voice_transcript_only" : "default",
       mode: body.mode ?? (attachmentRecords.length > 0 ? "file" : body.voiceTranscript ? "voice" : "text"),
       channelName,
       externalConversationId,
@@ -1369,12 +1363,10 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
             label,
           });
 
-          const enabledSkills = readEnabledSkillSlugs(await db.getSetting("ENABLED_SKILLS"));
           const interactionUserName = resolveGatewayUserName(config, discordInteraction.userName);
-          const incomingMessage = withEnabledSkillsPrefix(
-            interactionUserName ? `[${config.portal} / ${interactionUserName}] ${discordInteraction.message}` : `[${config.portal}] ${discordInteraction.message}`,
-            enabledSkills
-          );
+          const incomingMessage = interactionUserName
+            ? `[${config.portal} / ${interactionUserName}] ${discordInteraction.message}`
+            : `[${config.portal}] ${discordInteraction.message}`;
           const result = await agent.run(incomingMessage);
           const responseText = typeof result?.response === "string" ? result.response : JSON.stringify(result);
           const reaction = pickAgentReaction(responseText);
@@ -1446,11 +1438,9 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
     });
 
     try {
-      const enabledSkills = readEnabledSkillSlugs(await db.getSetting("ENABLED_SKILLS"));
-      const incomingMessage = withEnabledSkillsPrefix(
-        resolveGatewayUserName(config, normalized.userName) ? `[${config.portal} / ${resolveGatewayUserName(config, normalized.userName)}] ${normalized.message}` : `[${config.portal}] ${normalized.message}`,
-        enabledSkills
-      );
+      const incomingMessage = resolveGatewayUserName(config, normalized.userName)
+        ? `[${config.portal} / ${resolveGatewayUserName(config, normalized.userName)}] ${normalized.message}`
+        : `[${config.portal}] ${normalized.message}`;
       const result = await agent.run(incomingMessage);
       const responseText = typeof result?.response === "string" ? result.response : JSON.stringify(result);
       const reaction = pickAgentReaction(responseText);

@@ -5,26 +5,6 @@ import { createApiResponse, createApiError } from "@ducki/shared";
 
 export const chatRouter: IRouter = Router();
 
-function readEnabledSkillSlugs(rawValue: string | null | undefined): string[] {
-  if (!rawValue || rawValue.trim().length === 0) return [];
-  try {
-    const parsed = JSON.parse(rawValue) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim().toLowerCase())
-      .filter((item) => item.length > 0 && /^[a-z0-9_-]+$/.test(item));
-  } catch {
-    return [];
-  }
-}
-
-function withEnabledSkillsPrefix(message: string, enabledSkills: string[]): string {
-  if (enabledSkills.length === 0) return message;
-  const prefix = enabledSkills.map((slug) => `/${slug}`).join(" ");
-  return `${prefix} ${message}`.trim();
-}
-
 chatRouter.get("/conversations", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
@@ -189,7 +169,6 @@ chatRouter.post("/", async (req, res, next) => {
   try {
     const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
     const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
-    const db = req.app.locals["db"] as DatabaseService;
     const agentRegistry = req.app.locals["agentRegistry"] as {
       register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
       unregister: (id: string) => void;
@@ -219,8 +198,7 @@ chatRouter.post("/", async (req, res, next) => {
       label: "HTTP Chat",
     });
 
-    const enabledSkills = readEnabledSkillSlugs(await db.getSetting("ENABLED_SKILLS"));
-    const result = await agent.run(withEnabledSkillsPrefix(message, enabledSkills));
+    const result = await agent.run(message);
     res.json(createApiResponse(result));
   } catch (error) {
     next(error);

@@ -69,7 +69,36 @@ export const useAppStore = create<AppState>((set, get) => ({
       socket.emit("agent:status");
     });
 
-    socket.on("disconnect", () => set({ connected: false }));
+    socket.on("disconnect", () => {
+      const disconnectMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "event",
+        content: "Verbindung getrennt. Laufende Antwort wurde beendet.",
+        timestamp: new Date().toISOString(),
+        eventType: "guardrail",
+      };
+      set((s) => ({
+        connected: false,
+        isLoading: false,
+        streamingContent: "",
+        messages: s.isLoading ? [...s.messages, disconnectMsg] : s.messages,
+      }));
+    });
+
+    socket.on("connect_error", (error: Error) => {
+      const errorMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `Socket error: ${error.message}`,
+        timestamp: new Date().toISOString(),
+      };
+      set((s) => ({
+        connected: false,
+        isLoading: false,
+        streamingContent: "",
+        messages: [...s.messages, errorMsg],
+      }));
+    });
 
     socket.on("chat:conversation", (data: { conversationId: number }) => {
       set({ conversationId: data.conversationId });

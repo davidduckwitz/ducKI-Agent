@@ -1,0 +1,13 @@
+{
+  "source": "discord",
+  "user": "davidduckwitz",
+  "channel": "discord-1784236799111",
+  "messageId": "1518820996440920144",
+  "audioFile": "1-voice-message.ogg",
+  "audioPath": "M:\\projekte\\ducki-node\\apps\\server\\shared-workspace\\chat-uploads\\gateway\\discord-1784236799111\\1518820996440920144\\1-voice-message.ogg",
+  "transcript": "Könntest du mich hören?",
+  "transcriptTimestamps": "[00:00:00.000 --> 00:00:03.760]",
+  "language": "de",
+  "receivedAt": "2026-07-17T23:36:00.000Z",
+  "storedVia": "shared-workspace-api-first (filesystem fallback)"
+}

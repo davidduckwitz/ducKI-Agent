@@ -418,6 +418,30 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "AGENT_SKILL_BEHAVIOR",
+    label: "Skill Behavior",
+    description: "Automatic: Agent waehlt relevante Skills aus aktivierten Skills. Active Skills: Alle aktivierten Skills werden voll geladen.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "automatic",
+    options: [
+      { label: "Auto Skills = Automatic", value: "automatic" },
+      { label: "Active Skills = All Activated full loaded", value: "active" },
+    ],
+  },
+  {
+    key: "AGENT_AUTO_SKILL_FALLBACK_NONE",
+    label: "Auto Skill Fallback",
+    description: "Wenn im Automatic-Mode kein passender Skill gefunden wird: Keine Skills laden (Aktiv) oder alle aktivierten Skills laden (Aus).",
+    type: "select",
+    section: "Agent",
+    defaultValue: "true",
+    options: [
+      { label: "No auto-selection => no skill loaded", value: "true" },
+      { label: "No auto-selection => load all activated skills", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_AUTO_SKILL_THRESHOLD",
     label: "Auto Skill Threshold",
     description: "Mindest-Score (0.0-1.0), damit ein Skill automatisch geladen wird.",

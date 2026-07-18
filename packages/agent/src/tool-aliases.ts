@@ -66,6 +66,11 @@ export const TOOL_ALIAS_TABLE: ToolAliasEntry[] = [
     notes: "Search and history lookup shortcuts.",
   },
   {
+    canonicalTool: "gateway",
+    aliases: ["gateway", "discord", "discord_gateway", "gateway_send", "send_discord"],
+    notes: "Messaging gateway outbound/list operations.",
+  },
+  {
     canonicalTool: "task",
     aliases: ["task", "list_all", "list_tasks", "get_all", "all"],
     notes: "Task listing aliases are action-normalized separately.",
@@ -115,6 +120,10 @@ export const TOOL_ACTION_ALIAS_MAP: Record<string, Record<string, string>> = {
     list_tasks: "list",
     get_all: "list",
     all: "list",
+  },
+  gateway: {
+    gateway_send: "send",
+    send_discord: "send",
   },
 };
 

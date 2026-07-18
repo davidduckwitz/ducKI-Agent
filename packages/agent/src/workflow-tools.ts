@@ -20,6 +20,16 @@ interface PendingMemoryWrite {
   payload: Record<string, unknown>;
 }
 
+interface GatewayConfig {
+  id: string;
+  portal: "discord" | "telegram" | "slack" | "signal" | "custom";
+  name: string;
+  enabled: boolean;
+  channelHint?: string;
+  authToken?: string;
+  webhookSecret?: string;
+}
+
 const MEMORY_PENDING_WRITES_SETTING = "MEMORY_PENDING_WRITES";
 
 function targetToType(target: MemoryTarget): "long-term" | "semantic" {
@@ -112,6 +122,48 @@ function parseTaskId(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+function normalizeGatewayPortal(value: unknown): GatewayConfig["portal"] {
+  const normalized = String(value ?? "custom").trim().toLowerCase();
+  if (normalized === "discord" || normalized === "telegram" || normalized === "slack" || normalized === "signal") {
+    return normalized;
+  }
+  return "custom";
+}
+
+function parseGatewayConfigs(rawValue: string | undefined): GatewayConfig[] {
+  if (!rawValue) return [];
+  try {
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item && typeof item === "object")
+      .map((item) => item as Record<string, unknown>)
+      .map((item, index) => ({
+        id: String(item["id"] ?? `gateway_${index + 1}`),
+        portal: normalizeGatewayPortal(item["portal"]),
+        name: String(item["name"] ?? "Messaging Gateway").trim() || "Messaging Gateway",
+        enabled: item["enabled"] !== false,
+        channelHint: item["channelHint"] ? String(item["channelHint"]).trim() : undefined,
+        authToken: item["authToken"] ? String(item["authToken"]).trim() : undefined,
+        webhookSecret: item["webhookSecret"] ? String(item["webhookSecret"]).trim() : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function resolveDiscordBotToken(config: GatewayConfig): string | undefined {
+  const cfgToken = config.authToken?.trim();
+  if (cfgToken) return cfgToken;
+  const envToken = process.env["DISCORD_BOT_TOKEN"]?.trim();
+  return envToken || undefined;
+}
+
+function isHttpUrl(value: string | undefined): boolean {
+  const raw = String(value ?? "").trim();
+  return /^https?:\/\//i.test(raw);
 }
 
 export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
@@ -686,5 +738,234 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
     },
   };
 
-  return [browserTool, memoryTool, projectTool, taskTool, historyTool];
+  const gatewayTool: ToolExecutor = {
+    name: "gateway",
+    description: "List gateway configs and send outbound messages via configured portals (Discord/Telegram/Webhook)",
+    definition: {
+      name: "gateway",
+      description: "Gateway operations for outbound messaging",
+      parameters: {
+        type: "object",
+        properties: {
+          action: {
+            type: "string",
+            enum: ["list_configs", "send"],
+          },
+          portal: {
+            type: "string",
+            enum: ["discord", "telegram", "slack", "signal", "custom"],
+            description: "Optional portal filter",
+          },
+          configId: { type: "string", description: "Optional explicit gateway config id" },
+          externalConversationId: { type: "string", description: "Target id (Discord channel id, Telegram chat id, etc.)" },
+          channelId: { type: "string", description: "Alias for externalConversationId" },
+          message: { type: "string", description: "Message content to send" },
+        },
+        required: ["action"],
+      },
+    },
+    async execute(input: Record<string, unknown>): Promise<ToolResult> {
+      const action = String(input["action"] ?? "").toLowerCase();
+      const failWithDiagnostic = (
+        error: string,
+        diagnostic: Record<string, unknown>
+      ): ToolResult => ({
+        success: false,
+        data: {
+          diagnostic,
+        },
+        error,
+      });
+
+      try {
+        const configs = parseGatewayConfigs(await db.getSetting("MESSAGING_GATEWAYS"));
+        const enabled = configs.filter((cfg) => cfg.enabled);
+
+        if (action === "list_configs") {
+          return ok(
+            enabled.map((cfg) => ({
+              id: cfg.id,
+              portal: cfg.portal,
+              name: cfg.name,
+              enabled: cfg.enabled,
+              defaultTarget: cfg.channelHint,
+              outboundReady:
+                cfg.portal === "discord"
+                  ? Boolean(resolveDiscordBotToken(cfg) || isHttpUrl(cfg.webhookSecret))
+                  : cfg.portal === "telegram"
+                    ? Boolean(cfg.authToken)
+                    : Boolean(isHttpUrl(cfg.webhookSecret) || isHttpUrl(cfg.authToken)),
+            }))
+          );
+        }
+
+        if (action !== "send") {
+          return fail(`Unknown gateway action: ${action}`);
+        }
+
+        const message = String(input["message"] ?? "").trim();
+        if (!message) {
+          return failWithDiagnostic("gateway:send requires field 'message'", {
+            code: "missing_message",
+            hint: "Provide input.message",
+          });
+        }
+
+        const portalFilter = normalizeGatewayPortal(input["portal"]);
+        const configId = String(input["configId"] ?? "").trim();
+        const config = configId
+          ? enabled.find((cfg) => cfg.id === configId)
+          : enabled.find((cfg) => (input["portal"] ? cfg.portal === portalFilter : true));
+
+        if (!config) {
+          return failWithDiagnostic("No matching enabled gateway config found. Use gateway action=list_configs first.", {
+            code: "config_not_found",
+            requestedPortal: input["portal"] ? portalFilter : undefined,
+            requestedConfigId: configId || undefined,
+            enabledConfigs: enabled.map((cfg) => ({ id: cfg.id, portal: cfg.portal, name: cfg.name })),
+          });
+        }
+
+        const explicitTarget = String(input["externalConversationId"] ?? input["channelId"] ?? "").trim();
+        const target = explicitTarget || String(config.channelHint ?? "").trim();
+        if (!target) {
+          return failWithDiagnostic("No target id provided. Set externalConversationId/channelId or configure channelHint in gateway config.", {
+            code: "missing_target",
+            configId: config.id,
+            portal: config.portal,
+            defaultTarget: config.channelHint,
+          });
+        }
+
+        if (config.portal === "discord") {
+          const configToken = String(config.authToken ?? "").trim();
+          const envToken = String(process.env["DISCORD_BOT_TOKEN"] ?? "").trim();
+          const tokenSource = configToken ? "config.authToken" : envToken ? "env.DISCORD_BOT_TOKEN" : "none";
+          const botToken = resolveDiscordBotToken(config);
+          if (botToken) {
+            const response = await fetch(`https://discord.com/api/v10/channels/${encodeURIComponent(target)}/messages`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bot ${botToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ content: message }),
+            });
+            if (!response.ok) {
+              return failWithDiagnostic(`Discord send failed: HTTP ${response.status}`, {
+                code: "discord_http_error",
+                configId: config.id,
+                portal: config.portal,
+                target,
+                transport: "bot_api",
+                tokenSource,
+                status: response.status,
+              });
+            }
+            return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "bot_api", tokenSource });
+          }
+
+          if (isHttpUrl(config.webhookSecret)) {
+            const response = await fetch(String(config.webhookSecret), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: message }),
+            });
+            if (!response.ok) {
+              return failWithDiagnostic(`Discord webhook send failed: HTTP ${response.status}`, {
+                code: "discord_webhook_http_error",
+                configId: config.id,
+                portal: config.portal,
+                target,
+                transport: "webhook",
+                status: response.status,
+              });
+            }
+            return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook" });
+          }
+
+          return failWithDiagnostic("Discord gateway requires DISCORD_BOT_TOKEN/authToken or webhookSecret webhook URL.", {
+            code: "discord_transport_not_configured",
+            configId: config.id,
+            portal: config.portal,
+            hasEnvBotToken: Boolean(process.env["DISCORD_BOT_TOKEN"]?.trim()),
+            hasConfigBotToken: Boolean(config.authToken),
+            hasWebhookUrl: Boolean(isHttpUrl(config.webhookSecret)),
+            tokenSource,
+          });
+        }
+
+        if (config.portal === "telegram") {
+          const botToken = String(config.authToken ?? "").trim();
+          if (!botToken) {
+            return failWithDiagnostic("Telegram gateway requires authToken (bot token).", {
+              code: "telegram_token_missing",
+              configId: config.id,
+              portal: config.portal,
+            });
+          }
+          const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: target, text: message }),
+          });
+          if (!response.ok) {
+            return failWithDiagnostic(`Telegram send failed: HTTP ${response.status}`, {
+              code: "telegram_http_error",
+              configId: config.id,
+              portal: config.portal,
+              target,
+              status: response.status,
+            });
+          }
+          return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "bot_api" });
+        }
+
+        const webhook = isHttpUrl(config.webhookSecret)
+          ? String(config.webhookSecret)
+          : isHttpUrl(config.authToken)
+            ? String(config.authToken)
+            : "";
+
+        if (!webhook) {
+          return failWithDiagnostic(`Gateway portal '${config.portal}' has no outbound webhook configured.`, {
+            code: "webhook_not_configured",
+            configId: config.id,
+            portal: config.portal,
+            hasWebhookSecretUrl: Boolean(isHttpUrl(config.webhookSecret)),
+            hasAuthTokenUrl: Boolean(isHttpUrl(config.authToken)),
+          });
+        }
+
+        const response = await fetch(webhook, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            portal: config.portal,
+            configId: config.id,
+            externalConversationId: target,
+            replyText: message,
+          }),
+        });
+        if (!response.ok) {
+          return failWithDiagnostic(`Webhook send failed: HTTP ${response.status}`, {
+            code: "webhook_http_error",
+            configId: config.id,
+            portal: config.portal,
+            target,
+            status: response.status,
+          });
+        }
+        return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook" });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return failWithDiagnostic(message, {
+          code: "gateway_send_exception",
+          action,
+        });
+      }
+    },
+  };
+
+  return [browserTool, memoryTool, projectTool, taskTool, historyTool, gatewayTool];
 }

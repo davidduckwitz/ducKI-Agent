@@ -74,6 +74,9 @@ interface AgentRuntimeControls {
   autoSkillMarginThreshold: number;
   autoSkillMinInputLength: number;
   autoSkillMinOverlap: number;
+  skillBehavior: "automatic" | "active";
+  autoSkillFallbackNone: boolean;
+  enabledSkillAllowlist: string[];
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
@@ -553,6 +556,14 @@ export class Agent {
       }
     }
 
+    if (normalized === "gateway" && normalizedInput["action"] === undefined) {
+      if (normalizedInput["message"] !== undefined) {
+        normalizedInput["action"] = "send";
+      } else {
+        normalizedInput["action"] = "list_configs";
+      }
+    }
+
     return { toolName: normalized, input: normalizedInput };
   }
 
@@ -749,6 +760,18 @@ export class Agent {
       }
       if (action === "search" && String(normalizedInput["query"] ?? "").trim().length === 0) {
         return { ok: false, error: "history:search requires field 'query'" };
+      }
+      return { ok: true, input: normalizedInput };
+    }
+
+    if (normalizedName === "gateway") {
+      const action = String(normalizedInput["action"] ?? "").toLowerCase();
+      if (!action) return { ok: false, error: "gateway: action is required" };
+      if (!["list_configs", "send"].includes(action)) {
+        return { ok: false, error: `gateway: unknown action '${action}'` };
+      }
+      if (action === "send" && String(normalizedInput["message"] ?? "").trim().length === 0) {
+        return { ok: false, error: "gateway:send requires field 'message'" };
       }
       return { ok: true, input: normalizedInput };
     }
@@ -999,6 +1022,28 @@ export class Agent {
     return Math.max(min, max !== undefined ? Math.min(max, parsed) : parsed);
   }
 
+  private parseEnabledSkillSlugs(rawValue: string | undefined): string[] {
+    if (!rawValue || rawValue.trim().length === 0) return [];
+    try {
+      const parsed = JSON.parse(rawValue) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim().toLowerCase())
+        .filter((item) => item.length > 0 && /^[a-z0-9_-]+$/.test(item));
+    } catch {
+      return [];
+    }
+  }
+
+  private parseSkillBehavior(raw: string | undefined, fallback: "automatic" | "active"): "automatic" | "active" {
+    if (!raw) return fallback;
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "automatic" || normalized === "auto") return "automatic";
+    if (normalized === "active" || normalized === "all_activated") return "active";
+    return fallback;
+  }
+
   private async loadRuntimeControls(): Promise<AgentRuntimeControls> {
     const defaults: AgentRuntimeControls = {
       maxIterations: this.maxIterations,
@@ -1014,6 +1059,9 @@ export class Agent {
       autoSkillMarginThreshold: this.autoSkillMarginThreshold,
       autoSkillMinInputLength: this.autoSkillMinInputLength,
       autoSkillMinOverlap: this.autoSkillMinOverlap,
+      skillBehavior: "automatic",
+      autoSkillFallbackNone: true,
+      enabledSkillAllowlist: [],
     };
 
     try {
@@ -1038,6 +1086,9 @@ export class Agent {
         autoSkillMarginThreshold: this.parseFloatSetting(get("AGENT_AUTO_SKILL_MARGIN"), defaults.autoSkillMarginThreshold, 0, 1),
         autoSkillMinInputLength: this.parseNumberSetting(get("AGENT_AUTO_SKILL_MIN_INPUT_LEN"), defaults.autoSkillMinInputLength, 1, 2000),
         autoSkillMinOverlap: this.parseNumberSetting(get("AGENT_AUTO_SKILL_MIN_OVERLAP"), defaults.autoSkillMinOverlap, 0, 20),
+        skillBehavior: this.parseSkillBehavior(get("AGENT_SKILL_BEHAVIOR"), defaults.skillBehavior),
+        autoSkillFallbackNone: this.parseBooleanSetting(get("AGENT_AUTO_SKILL_FALLBACK_NONE"), defaults.autoSkillFallbackNone),
+        enabledSkillAllowlist: this.parseEnabledSkillSlugs(get("ENABLED_SKILLS")),
       };
     } catch {
       return defaults;
@@ -1118,6 +1169,8 @@ export class Agent {
 
     const installedSkillManifests = this.loadSkillManifests();
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);
+    const enabledAllowlist = new Set(controls.enabledSkillAllowlist);
+    const allowlistCandidates = installedSkillManifests.filter((skill) => enabledAllowlist.has(skill.slug));
     const requestedSkills = requestedSkillSlugs
       .map((slug) => installedSkillManifests.find((skill) => skill.slug === slug))
       .filter((skill): skill is SkillManifest => Boolean(skill));
@@ -1131,16 +1184,34 @@ export class Agent {
       : requestedSkills;
 
     const selectedSlugs = new Set(prioritizedRequestedSkillManifests.map((skill) => skill.slug));
-    const autoSkillSelection = this.selectAutoSkill(effectiveInput, installedSkillManifests, selectedSlugs, controls);
+    const autoSkillSelection = this.selectAutoSkill(effectiveInput, allowlistCandidates, selectedSlugs, controls);
     const autoSkill = autoSkillSelection.selected;
-    this.autoSkillSelectionAttempts++;
-    if (autoSkill) this.autoSkillSelections++;
-    const activeSkillManifests = autoSkill
-      ? [...prioritizedRequestedSkillManifests, autoSkill]
-      : prioritizedRequestedSkillManifests;
+    let activeSkillManifests: SkillManifest[] = [...prioritizedRequestedSkillManifests];
+
+    if (controls.skillBehavior === "active") {
+      const additionalActive = allowlistCandidates.filter((skill) => !selectedSlugs.has(skill.slug));
+      activeSkillManifests = [...activeSkillManifests, ...additionalActive];
+    } else {
+      this.autoSkillSelectionAttempts++;
+      if (autoSkill) this.autoSkillSelections++;
+
+      if (autoSkill) {
+        activeSkillManifests = [...activeSkillManifests, autoSkill];
+      } else if (!controls.autoSkillFallbackNone) {
+        const fallbackSkills = allowlistCandidates.filter((skill) => !selectedSlugs.has(skill.slug));
+        activeSkillManifests = [...activeSkillManifests, ...fallbackSkills];
+      }
+    }
+
     const activeSkills = activeSkillManifests.map((skill) => this.loadSkillContent(skill));
     const activeSkillSlugs = activeSkills.map((skill) => skill.slug);
     const workflowOrchestratorActive = activeSkillSlugs.includes("workflow-orchestrator");
+
+    emit("decision", "Skill behavior controls applied", {
+      behavior: controls.skillBehavior,
+      fallbackNone: controls.autoSkillFallbackNone,
+      allowlistSize: controls.enabledSkillAllowlist.length,
+    });
 
     if (activeSkills.length > 0) {
       emit(
@@ -1150,23 +1221,30 @@ export class Agent {
       );
     }
 
-    if (autoSkill) {
-      emit("decision", "Skill auto-selected after relevance check", {
-        skill: autoSkill.slug,
-        threshold: controls.autoSkillScoreThreshold,
-        marginThreshold: controls.autoSkillMarginThreshold,
-        minOverlap: controls.autoSkillMinOverlap,
-      });
-    } else if (autoSkillSelection.reason !== "disabled") {
-      emit("decision", "No auto skill selected", {
-        reason: autoSkillSelection.reason,
-        threshold: controls.autoSkillScoreThreshold,
-        marginThreshold: controls.autoSkillMarginThreshold,
-        minOverlap: controls.autoSkillMinOverlap,
+    if (controls.skillBehavior === "automatic") {
+      if (autoSkill) {
+        emit("decision", "Skill auto-selected after relevance check", {
+          skill: autoSkill.slug,
+          threshold: controls.autoSkillScoreThreshold,
+          marginThreshold: controls.autoSkillMarginThreshold,
+          minOverlap: controls.autoSkillMinOverlap,
+        });
+      } else if (autoSkillSelection.reason !== "disabled") {
+        emit("decision", "No auto skill selected", {
+          reason: autoSkillSelection.reason,
+          threshold: controls.autoSkillScoreThreshold,
+          marginThreshold: controls.autoSkillMarginThreshold,
+          minOverlap: controls.autoSkillMinOverlap,
+          fallbackNone: controls.autoSkillFallbackNone,
+        });
+      }
+    } else {
+      emit("decision", "Active skill mode loaded all enabled skills", {
+        loaded: activeSkillSlugs,
       });
     }
 
-    if (autoSkillSelection.scored.length > 0) {
+    if (controls.skillBehavior === "automatic" && autoSkillSelection.scored.length > 0) {
       emit("decision", "Skill relevance ranking", {
         top: autoSkillSelection.scored.slice(0, 3).map((item) => ({
           slug: item.skill.slug,
@@ -1222,6 +1300,15 @@ export class Agent {
           .join("\n\n")}`
       : "";
 
+    const compactSkillManifests = workflowOrchestratorActive
+      ? activeSkills.filter((skill) => skill.slug === "workflow-orchestrator")
+      : [];
+    const compactRequestedSkillsContext = compactSkillManifests.length > 0
+      ? `\n\n## Loaded Skills\n${compactSkillManifests
+          .map((skill) => `### ${skill.slug}\n${skill.content}`)
+          .join("\n\n")}`
+      : "";
+
     const baseSystemPrompt =
       this.systemPrompt +
       installedSkillsContext +
@@ -1229,7 +1316,34 @@ export class Agent {
       toolContext +
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
       memoryContext +
-      "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.";
+      "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
+
+    const compactBaseSystemPrompt =
+      this.systemPrompt +
+      installedSkillsContext +
+      compactRequestedSkillsContext +
+      toolContext +
+      (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
+      memoryContext +
+      "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
+
+    const minimalBaseSystemPrompt =
+      this.systemPrompt +
+      toolContext +
+      (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
+      memoryContext +
+      "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
+
+    const isProviderLoadError = (message: string): boolean => {
+      const normalized = message.toLowerCase();
+      return normalized.includes("402")
+        || normalized.includes("provider returned error")
+        || normalized.includes("payment")
+        || normalized.includes("quota")
+        || normalized.includes("context")
+        || normalized.includes("too large")
+        || normalized.includes("token");
+    };
 
     let finalResponse = "";
     let consecutiveToolFailures = 0;
@@ -1257,22 +1371,63 @@ export class Agent {
         });
       }
 
-      const systemMessage: LLMMessage = {
-        role: "system",
-        content: `${baseSystemPrompt}${dynamicMemoryContext}`,
+      const buildMessages = (mode: "full" | "compact" | "minimal"): LLMMessage[] => {
+        const selectedPrompt = mode === "compact"
+          ? compactBaseSystemPrompt
+          : mode === "minimal"
+            ? minimalBaseSystemPrompt
+            : baseSystemPrompt;
+        const systemMessage: LLMMessage = {
+          role: "system",
+          content: `${selectedPrompt}${dynamicMemoryContext}`,
+        };
+        return [systemMessage, ...this.conversation.getMessages()];
       };
 
-      const messages: LLMMessage[] = [systemMessage, ...this.conversation.getMessages()];
+      const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
+        if (options.stream && this.provider.supportsStreaming()) {
+          const result = await this.provider.generateStream(messages, {});
+          return result.content;
+        }
+        const result = await this.provider.generate(messages);
+        return result.content;
+      };
 
       // Generate response
       let response: string;
-      if (options.stream && this.provider.supportsStreaming()) {
-        // Buffer stream internally so tool-call markup is not forwarded to the UI.
-        const result = await this.provider.generateStream(messages, {});
-        response = result.content;
-      } else {
-        const result = await this.provider.generate(messages);
-        response = result.content;
+      let messages = buildMessages("full");
+      try {
+        response = await generateFromMessages(messages);
+      } catch (error) {
+        const providerError = error instanceof Error ? error.message : String(error);
+        const canRetryCompact = compactSkillManifests.length > 0 && activeSkills.length > compactSkillManifests.length;
+        if (!canRetryCompact || !isProviderLoadError(providerError)) {
+          throw error;
+        }
+
+        emit("guardrail", "Provider error detected, retrying with compact skill context", {
+          error: providerError,
+          loadedSkills: activeSkillSlugs,
+          compactSkills: compactSkillManifests.map((skill) => skill.slug),
+        });
+
+        messages = buildMessages("compact");
+        try {
+          response = await generateFromMessages(messages);
+        } catch (compactError) {
+          const compactProviderError = compactError instanceof Error ? compactError.message : String(compactError);
+          if (!isProviderLoadError(compactProviderError)) {
+            throw compactError;
+          }
+
+          emit("guardrail", "Compact retry failed, retrying with minimal prompt context", {
+            error: compactProviderError,
+            droppedSkillContents: activeSkillSlugs,
+          });
+
+          messages = buildMessages("minimal");
+          response = await generateFromMessages(messages);
+        }
       }
 
       finalResponse = response;

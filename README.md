@@ -117,10 +117,18 @@ Important agent controls:
 - `AGENT_MAX_REPEATED_TOOL_CALL`
 - `AGENT_AUTO_MEMORY`
 - `AGENT_AUTO_SKILL_SELECTION`
+- `AGENT_SKILL_BEHAVIOR` (`automatic` or `active`)
+- `AGENT_AUTO_SKILL_FALLBACK_NONE`
 - `AGENT_AUTO_SKILL_THRESHOLD`
 - `AGENT_AUTO_SKILL_MARGIN`
 - `AGENT_AUTO_SKILL_MIN_INPUT_LEN`
 - `AGENT_AUTO_SKILL_MIN_OVERLAP`
+
+Skill behavior notes:
+
+- `AGENT_SKILL_BEHAVIOR=automatic`: Agent evaluates relevance and auto-loads only needed skills from `ENABLED_SKILLS` allowlist.
+- `AGENT_SKILL_BEHAVIOR=active`: Agent loads all skills listed in `ENABLED_SKILLS`.
+- `AGENT_AUTO_SKILL_FALLBACK_NONE=true`: In `automatic` mode, if no skill matches, no skill is loaded.
 
 Provider controls:
 
