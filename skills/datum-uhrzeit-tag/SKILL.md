@@ -1,7 +1,8 @@
 ﻿---
 name: datum-uhrzeit-tag
 description: "Gibt Datum, Uhrzeit und/oder Wochentag aus. Steuerbar ueber skillInput." 
-related_skills: [fast-answer, cronjobs, shared-workspace-ops]
+related_skills: [fast-answer, cronjobs, shared-workspace-ops]
+
 primary_skills: [fast-answer]
 fallback_skills: [cronjobs, shared-workspace-ops]
 version: 1.0.0

@@ -1,7 +1,8 @@
 ﻿---
 name: plan
 description: "Plan mode: write an actionable markdown plan to .hermes/plans/, no execution. Bite-sized tasks, exact paths, complete code."
-related_skills: [fast-answer, history-search, llm-wiki, test-driven-development, code-review]
+related_skills: [fast-answer, history-search, llm-wiki, test-driven-development, code-review]
+
 primary_skills: [history-search, llm-wiki]
 fallback_skills: [test-driven-development, code-review]
 version: 2.0.0

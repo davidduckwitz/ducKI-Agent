@@ -1,7 +1,8 @@
 ﻿---
 name: shared-workspace-ops
 description: "Use shared-workspace directly or via /api/shared endpoints for read/write/create/move/delete operations."
-related_skills: [browser-control, shared-workspace-api-first, workflow-orchestrator, llm-wiki, discord]
+related_skills: [browser-control, shared-workspace-api-first, workflow-orchestrator, llm-wiki, discord]
+
 primary_skills: [shared-workspace-api-first]
 fallback_skills: [workflow-orchestrator]
 version: 1.0.0

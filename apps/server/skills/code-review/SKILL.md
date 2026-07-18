@@ -1,7 +1,8 @@
 ﻿---
 name: code-review
 description: "Structured review mode: findings-first, ordered by severity, with concrete file references."
-related_skills: [plan, test-driven-development, history-search]
+related_skills: [plan, test-driven-development, history-search]
+
 primary_skills: [test-driven-development]
 fallback_skills: [plan, history-search]
 version: 1.0.0

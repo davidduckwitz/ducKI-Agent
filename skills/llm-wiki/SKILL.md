@@ -1,7 +1,8 @@
 ﻿---
 name: llm-wiki
 description: "Nutze das LLM-Wiki als primaere Wissensquelle, mit klarer Reihenfolge fuer Search, Moderation und Antwortaufbau."
-related_skills: [shared-workspace-ops, cronjobs, history-search, workflow-orchestrator]
+related_skills: [shared-workspace-ops, cronjobs, history-search, workflow-orchestrator]
+
 primary_skills: [shared-workspace-ops]
 fallback_skills: [history-search, workflow-orchestrator]
 version: 1.0.0

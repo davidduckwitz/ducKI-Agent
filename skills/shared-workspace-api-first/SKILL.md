@@ -1,7 +1,8 @@
 ﻿---
 name: shared-workspace-api-first
 description: "Strict API-first shared workspace operations using /api/shared with filesystem fallback only on API failure."
-related_skills: [shared-workspace-ops, browser-control, workflow-orchestrator]
+related_skills: [shared-workspace-ops, browser-control, workflow-orchestrator]
+
 primary_skills: [shared-workspace-ops]
 fallback_skills: [workflow-orchestrator]
 version: 1.0.0

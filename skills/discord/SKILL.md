@@ -1,7 +1,8 @@
 ﻿---
 name: discord
 description: "Reliable Discord send flow using gateway configs, diagnostics, and recovery steps"
-related_skills: [shared-workspace-ops, cronjobs, workflow-orchestrator]
+related_skills: [shared-workspace-ops, cronjobs, workflow-orchestrator]
+
 primary_skills: [shared-workspace-ops]
 fallback_skills: [cronjobs, workflow-orchestrator]
 version: 1.1.0

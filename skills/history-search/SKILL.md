@@ -1,7 +1,8 @@
 ﻿---
 name: history-search
 description: "Search older chats and reuse prior solutions with the history tool before re-solving from scratch."
-related_skills: [llm-wiki, plan, code-review]
+related_skills: [llm-wiki, plan, code-review]
+
 primary_skills: [llm-wiki]
 fallback_skills: [plan, code-review]
 version: 1.0.0

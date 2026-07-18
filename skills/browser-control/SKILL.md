@@ -1,6 +1,7 @@
 ﻿---
 name: browser-control
-description: Use the browser tool to inspect, control, and verify browser-based flows safely
+description: Use the browser tool to inspect, control, and verify browser-based flows safely
+
 related_skills: [shared-workspace-ops, shared-workspace-api-first, workflow-orchestrator, plan, fast-answer]
 primary_skills: [shared-workspace-ops]
 fallback_skills: [shared-workspace-api-first, workflow-orchestrator]

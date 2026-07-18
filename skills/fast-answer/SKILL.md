@@ -1,7 +1,8 @@
 ﻿---
 name: fast-answer
 description: "Check if no Skill is needed for fast answers"
-related_skills: [datum-uhrzeit-tag, llm-wiki, history-search, browser-control, plan]
+related_skills: [datum-uhrzeit-tag, llm-wiki, history-search, browser-control, plan]
+
 primary_skills: [datum-uhrzeit-tag, llm-wiki]
 fallback_skills: [history-search, browser-control, plan]
 version: 1.0.0

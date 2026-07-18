@@ -1,7 +1,8 @@
 ﻿---
 name: test-driven-development
 description: "TDD-first implementation: red, green, refactor with explicit verification."
-related_skills: [plan, history-search, code-review]
+related_skills: [plan, history-search, code-review]
+
 primary_skills: [plan]
 fallback_skills: [history-search, code-review]
 version: 1.0.0

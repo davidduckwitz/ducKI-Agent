@@ -1,7 +1,8 @@
 ﻿---
 name: cronjobs
 description: "Manage scheduled cronjobs for tasks, prompts, tools, and skills using the cronjob tool."
-related_skills: [workflow-orchestrator, llm-wiki, datum-uhrzeit-tag]
+related_skills: [workflow-orchestrator, llm-wiki, datum-uhrzeit-tag]
+
 primary_skills: [workflow-orchestrator]
 fallback_skills: [llm-wiki, datum-uhrzeit-tag]
 version: 1.0.0
