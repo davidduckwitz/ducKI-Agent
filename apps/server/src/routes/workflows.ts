@@ -100,22 +100,52 @@ workflowsRouter.put("/:id", async (req, res, next) => {
 });
 
 workflowsRouter.post("/:id/run", async (req, res, next) => {
+  let runId: string | undefined;
   try {
     const workflowEngine = req.app.locals["workflowEngine"] as WorkflowEngine;
-    const summary = await workflowEngine.runWorkflow(req.params["id"] ?? "");
+    const workflowId = req.params["id"] ?? "";
+    const agentRegistry = req.app.locals["agentRegistry"] as {
+      register: (entry: { source: "chat_http" | "chat_ws" | "task_run" | "workflow_run" | "gateway_inbound"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
+      unregister: (id: string) => void;
+    };
+
+    runId = agentRegistry.register({
+      source: "workflow_run",
+      label: `Workflow ${workflowId}`,
+    });
+
+    const summary = await workflowEngine.runWorkflow(workflowId);
     res.json(createApiResponse(summary));
   } catch (error) {
     next(error);
+  } finally {
+    const agentRegistry = req.app.locals["agentRegistry"] as { unregister: (id: string) => void };
+    if (runId) agentRegistry.unregister(runId);
   }
 });
 
 workflowsRouter.post("/:id/resume", async (req, res, next) => {
+  let runId: string | undefined;
   try {
     const workflowEngine = req.app.locals["workflowEngine"] as WorkflowEngine;
-    const summary = await workflowEngine.resumeWorkflow(req.params["id"] ?? "");
+    const workflowId = req.params["id"] ?? "";
+    const agentRegistry = req.app.locals["agentRegistry"] as {
+      register: (entry: { source: "chat_http" | "chat_ws" | "task_run" | "workflow_run" | "gateway_inbound"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
+      unregister: (id: string) => void;
+    };
+
+    runId = agentRegistry.register({
+      source: "workflow_run",
+      label: `Workflow ${workflowId}`,
+    });
+
+    const summary = await workflowEngine.resumeWorkflow(workflowId);
     res.json(createApiResponse(summary));
   } catch (error) {
     next(error);
+  } finally {
+    const agentRegistry = req.app.locals["agentRegistry"] as { unregister: (id: string) => void };
+    if (runId) agentRegistry.unregister(runId);
   }
 });
 

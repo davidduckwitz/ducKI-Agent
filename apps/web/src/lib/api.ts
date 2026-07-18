@@ -269,15 +269,29 @@ export const api = {
     live: () =>
       request<{
         runningCount: number;
+        snapshotAt?: string;
         agents: Array<{
           id: string;
-          source: "chat_http" | "chat_ws" | "task_run" | "gateway_inbound";
+          source: "chat_http" | "chat_ws" | "task_run" | "workflow_run" | "gateway_inbound";
           startedAt: string;
           conversationId?: number;
           taskId?: number;
           socketId?: string;
           label?: string;
         }>;
+        sourceMap?: {
+          chat_http: number;
+          chat_ws: number;
+          task_run: number;
+          workflow_run: number;
+          gateway_inbound: number;
+        };
+        summary?: {
+          chats: number;
+          tasks: number;
+          workflows: number;
+          gateway: number;
+        };
         gateway?: {
           discord?: {
             enabled: boolean;

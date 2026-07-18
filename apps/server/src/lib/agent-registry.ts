@@ -1,4 +1,4 @@
-export type AgentRunSource = "chat_http" | "chat_ws" | "task_run" | "gateway_inbound";
+export type AgentRunSource = "chat_http" | "chat_ws" | "task_run" | "workflow_run" | "gateway_inbound";
 
 export interface ActiveAgentEntry {
   id: string;
@@ -12,6 +12,21 @@ export interface ActiveAgentEntry {
 
 class AgentRegistry {
   private active = new Map<string, ActiveAgentEntry>();
+  private listeners = new Set<(snapshot: { runningCount: number; agents: ActiveAgentEntry[] }) => void>();
+
+  private notify(): void {
+    const snapshot = this.snapshot();
+    for (const listener of this.listeners) {
+      listener(snapshot);
+    }
+  }
+
+  subscribe(listener: (snapshot: { runningCount: number; agents: ActiveAgentEntry[] }) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
 
   register(entry: Omit<ActiveAgentEntry, "id" | "startedAt">): string {
     const id = crypto.randomUUID();
@@ -20,6 +35,7 @@ class AgentRegistry {
       startedAt: new Date().toISOString(),
       ...entry,
     });
+    this.notify();
     return id;
   }
 
@@ -30,10 +46,12 @@ class AgentRegistry {
       ...current,
       ...patch,
     });
+    this.notify();
   }
 
   unregister(id: string): void {
     this.active.delete(id);
+    this.notify();
   }
 
   snapshot(): { runningCount: number; agents: ActiveAgentEntry[] } {

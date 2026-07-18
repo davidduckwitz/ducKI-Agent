@@ -13,14 +13,14 @@ export function setupWebSocket(
 ): void {
   const activeAgentsBySocket = new Map<string, Set<Agent>>();
 
+  agentRegistry.subscribe((snapshot) => {
+    io.emit("agent:metrics", snapshot);
+  });
+
   const registerActiveAgent = (socketId: string, agent: Agent): void => {
     const bucket = activeAgentsBySocket.get(socketId) ?? new Set<Agent>();
     bucket.add(agent);
     activeAgentsBySocket.set(socketId, bucket);
-  };
-
-  const emitLiveMetrics = (): void => {
-    io.emit("agent:metrics", agentRegistry.snapshot());
   };
 
   const unregisterActiveAgent = (socketId: string, agent: Agent): void => {
@@ -64,7 +64,6 @@ export function setupWebSocket(
           conversationId,
           label: "WebSocket Chat",
         });
-        emitLiveMetrics();
 
         socket.emit("chat:start", { timestamp: new Date().toISOString() });
 
@@ -86,7 +85,6 @@ export function setupWebSocket(
       } finally {
         if (registryRunId) {
           agentRegistry.unregister(registryRunId);
-          emitLiveMetrics();
         }
         unregisterActiveAgent(socket.id, agent);
       }
@@ -95,7 +93,6 @@ export function setupWebSocket(
     socket.on("chat:stop", () => {
       stopSocketAgents(socket.id);
       socket.emit("chat:stopped", { timestamp: new Date().toISOString() });
-      emitLiveMetrics();
     });
 
     // Task updates
@@ -115,7 +112,6 @@ export function setupWebSocket(
       stopSocketAgents(socket.id);
       activeAgentsBySocket.delete(socket.id);
       logger.info("Client disconnected", { id: socket.id });
-      emitLiveMetrics();
     });
   });
 }

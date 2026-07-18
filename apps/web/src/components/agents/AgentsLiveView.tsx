@@ -5,7 +5,7 @@ import { api } from "../../lib/api";
 
 interface LiveAgentItem {
   id: string;
-  source: "chat_http" | "chat_ws" | "task_run" | "gateway_inbound";
+  source: "chat_http" | "chat_ws" | "task_run" | "workflow_run" | "gateway_inbound";
   startedAt: string;
   conversationId?: number;
   taskId?: number;
@@ -16,6 +16,7 @@ interface LiveAgentItem {
 function sourceLabel(source: LiveAgentItem["source"]): string {
   if (source === "chat_ws") return "Chat (WebSocket)";
   if (source === "chat_http") return "Chat (HTTP)";
+  if (source === "workflow_run") return "Workflow";
   if (source === "gateway_inbound") return "Messaging Gateway";
   return "Task Run";
 }
@@ -31,6 +32,22 @@ export function AgentsLiveView() {
 
   const runningCount = live.data?.runningCount ?? 0;
   const agents = (live.data?.agents ?? []) as LiveAgentItem[];
+  const summary = live.data?.summary;
+  const snapshotAt = live.data?.snapshotAt;
+  const sourceMap = live.data?.sourceMap ?? {
+    chat_http: agents.filter((entry) => entry.source === "chat_http").length,
+    chat_ws: agents.filter((entry) => entry.source === "chat_ws").length,
+    task_run: agents.filter((entry) => entry.source === "task_run").length,
+    workflow_run: agents.filter((entry) => entry.source === "workflow_run").length,
+    gateway_inbound: agents.filter((entry) => entry.source === "gateway_inbound").length,
+  };
+  const sourceTotal = sourceMap.chat_http + sourceMap.chat_ws + sourceMap.task_run + sourceMap.workflow_run + sourceMap.gateway_inbound;
+  const mismatch = runningCount !== sourceTotal;
+  const mismatchDelta = runningCount - sourceTotal;
+  const chatCount = summary?.chats ?? agents.filter((entry) => entry.source === "chat_http" || entry.source === "chat_ws").length;
+  const taskCount = summary?.tasks ?? agents.filter((entry) => entry.source === "task_run").length;
+  const workflowCount = summary?.workflows ?? agents.filter((entry) => entry.source === "workflow_run").length;
+  const gatewayCount = summary?.gateway ?? agents.filter((entry) => entry.source === "gateway_inbound").length;
 
   return (
     <div className="p-6 space-y-5">
@@ -43,6 +60,36 @@ export function AgentsLiveView() {
           <Activity className="w-4 h-4" />
           Laufend: <span className="font-semibold">{runningCount}</span>
         </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="card">
+          <p className="text-xs text-gray-400">Agents gesamt</p>
+          <p className="text-xl font-semibold text-emerald-200">{runningCount}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-gray-400">Chats aktiv</p>
+          <p className="text-xl font-semibold text-blue-200">{chatCount}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-gray-400">Tasks aktiv</p>
+          <p className="text-xl font-semibold text-cyan-200">{taskCount}</p>
+        </div>
+        <div className="card">
+          <p className="text-xs text-gray-400">Workflows aktiv</p>
+          <p className="text-xl font-semibold text-violet-200">{workflowCount}</p>
+          {gatewayCount > 0 && <p className="text-[11px] text-gray-500 mt-1">Gateway: {gatewayCount}</p>}
+        </div>
+      </div>
+
+      <div className={`rounded-lg border px-3 py-2 text-[11px] ${mismatch ? "border-rose-500/60 bg-rose-950/20 text-rose-200" : "border-gray-800 bg-gray-950/70 text-gray-400"}`}>
+        <p>
+          Debug Snapshot: {snapshotAt ? new Date(snapshotAt).toLocaleTimeString() : "-"} | Sources: chat_http={sourceMap.chat_http}, chat_ws={sourceMap.chat_ws}, task_run={sourceMap.task_run}, workflow_run={sourceMap.workflow_run}, gateway_inbound={sourceMap.gateway_inbound}
+        </p>
+        <p className={mismatch ? "text-rose-200" : "text-gray-500"}>
+          Check: runningCount={runningCount} vs sourceTotal={sourceTotal}
+          {mismatch ? ` (delta=${mismatchDelta >= 0 ? `+${mismatchDelta}` : `${mismatchDelta}`})` : " (ok)"}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
