@@ -14,6 +14,16 @@ const queryClient = new QueryClient({
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element not found");
 
+const hideInitialLoader = () => {
+  const loader = document.getElementById("initial-loader");
+  if (!loader) return;
+
+  loader.classList.add("is-hidden");
+  window.setTimeout(() => {
+    loader.remove();
+  }, 300);
+};
+
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
@@ -23,3 +33,5 @@ ReactDOM.createRoot(root).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+window.requestAnimationFrame(hideInitialLoader);

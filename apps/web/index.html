@@ -5,8 +5,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DucKI Agent</title>
     <link rel="icon" type="image/svg+xml" href="/duck.svg" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #030712;
+        color: #ffffff;
+      }
+
+      #initial-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at 20% 20%, #111827 0%, #030712 55%, #000000 100%);
+        z-index: 9999;
+        transition: opacity 0.25s ease;
+      }
+
+      #initial-loader.is-hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .initial-loader-content {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 14px;
+        letter-spacing: 0.02em;
+        color: #d1d5db;
+      }
+
+      .initial-loader-spinner {
+        width: 38px;
+        height: 38px;
+        border-radius: 9999px;
+        border: 3px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #60a5fa;
+        animation: initial-loader-spin 0.8s linear infinite;
+      }
+
+      @keyframes initial-loader-spin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
   </head>
   <body class="bg-gray-950 text-white">
+    <div id="initial-loader" aria-live="polite" aria-busy="true">
+      <div class="initial-loader-content">
+        <div class="initial-loader-spinner" aria-hidden="true"></div>
+        <div>DucKI wird geladen...</div>
+      </div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
