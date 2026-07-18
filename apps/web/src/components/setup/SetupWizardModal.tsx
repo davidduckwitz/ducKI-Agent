@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronLeft, ChevronRight, Sparkles, X } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 interface SettingEntry {
   key: string;
@@ -23,7 +24,7 @@ function toBool(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
-function parseGateways(raw: string | undefined): Array<{ id: string; portal: string; enabled: boolean; authToken?: string; guildId?: string; userId?: string }> {
+function parseGateways(raw: string | undefined): Array<{ id: string; portal: string; enabled: boolean; authToken?: string; guildId?: string; channelId?: string; userId?: string }> {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -37,6 +38,7 @@ function parseGateways(raw: string | undefined): Array<{ id: string; portal: str
         enabled: item["enabled"] !== false,
         authToken: item["authToken"] ? String(item["authToken"]) : undefined,
         guildId: item["guildId"] ? String(item["guildId"]) : undefined,
+        channelId: item["channelId"] ? String(item["channelId"]) : undefined,
         userId: item["userId"] ? String(item["userId"]) : undefined,
       }));
   } catch {
@@ -45,6 +47,7 @@ function parseGateways(raw: string | undefined): Array<{ id: string; portal: str
 }
 
 export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalProps) {
+  const { t } = useI18n();
   const qc = useQueryClient();
   const settingsMap = useMemo(() => new Map(settings.map((entry) => [entry.key, entry.value])), [settings]);
 
@@ -65,6 +68,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [gatewayEnabled, setGatewayEnabled] = useState(Boolean(discordGateway?.enabled));
   const [discordBotToken, setDiscordBotToken] = useState(discordGateway?.authToken ?? "");
   const [discordGuildId, setDiscordGuildId] = useState(discordGateway?.guildId ?? "");
+  const [discordChannelId, setDiscordChannelId] = useState(discordGateway?.channelId ?? "");
   const [discordAllowedUserId, setDiscordAllowedUserId] = useState(discordGateway?.userId ?? "");
 
   const [codingEnabled, setCodingEnabled] = useState(toBool(settingsMap.get("CODING_ENABLED"), false));
@@ -101,6 +105,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
               enabled: true,
               authToken: discordBotToken,
               guildId: discordGuildId || undefined,
+              channelId: discordChannelId || undefined,
               userId: discordAllowedUserId || undefined,
             },
           ]
@@ -124,17 +129,40 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   if (!open) return null;
 
   const isLastStep = step === 3;
+  const steps = [t("setupWizard.steps.llm"), t("setupWizard.steps.gateway"), t("setupWizard.steps.features"), t("setupWizard.steps.summary")];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="w-full max-w-3xl rounded-xl border border-gray-800 bg-gray-950 shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-          <div>
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-amber-300" />
-              Setup Assistent
-            </h2>
-            <p className="text-xs text-gray-400 mt-1">Schritt {step + 1} von 4</p>
+          <div className="flex items-start gap-4">
+            <div>
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-300" />
+                {t("setupWizard.title")}
+              </h2>
+              <p className="text-xs text-gray-400 mt-1">{t("setupWizard.step")} {step + 1} {t("setupWizard.of")} 4</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              {steps.map((label, index) => {
+                const active = step === index;
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => setStep(index)}
+                    className={`px-2.5 py-1 rounded-md text-xs border transition-colors ${
+                      active
+                        ? "bg-emerald-500/20 text-emerald-200 border-emerald-400/40"
+                        : "bg-gray-900 text-gray-300 border-gray-700 hover:text-white hover:border-gray-500"
+                    }`}
+                  >
+                    {index + 1}. {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <button className="text-gray-400 hover:text-white" onClick={onClose}>
             <X className="w-4 h-4" />
@@ -144,10 +172,10 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
         <div className="p-5 space-y-4">
           {step === 0 && (
             <div className="space-y-3">
-              <h3 className="text-base font-semibold">LLM Einstellungen</h3>
-              <label className="text-sm text-gray-300 block">Provider</label>
+              <h3 className="text-base font-semibold">{t("setupWizard.section.llm")}</h3>
+              <label className="text-sm text-gray-300 block">{t("setupWizard.provider")}</label>
               <select className="input w-full" value={provider} onChange={(e) => setProvider(e.target.value as ProviderName)}>
-                <option value="lmstudio">LM Studio (lokal)</option>
+                <option value="lmstudio">{t("setupWizard.providerOptions.lmstudio")}</option>
                 <option value="openrouter">OpenRouter</option>
                 <option value="openai">OpenAI</option>
                 <option value="ollama">Ollama</option>
@@ -155,29 +183,29 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
               {provider === "lmstudio" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <input className="input" value={lmStudioBaseUrl} onChange={(e) => setLmStudioBaseUrl(e.target.value)} placeholder="LM Studio Base URL" />
-                  <input className="input" value={lmStudioModel} onChange={(e) => setLmStudioModel(e.target.value)} placeholder="LM Studio Model" />
+                  <input className="input" value={lmStudioBaseUrl} onChange={(e) => setLmStudioBaseUrl(e.target.value)} placeholder={t("setupWizard.placeholders.lmStudioBaseUrl")} />
+                  <input className="input" value={lmStudioModel} onChange={(e) => setLmStudioModel(e.target.value)} placeholder={t("setupWizard.placeholders.lmStudioModel")} />
                 </div>
               )}
 
               {provider === "openrouter" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <input className="input" type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder="OpenRouter API Key" />
+                  <input className="input" type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.openRouterApiKey")} />
                   <input className="input" value={openRouterModel} onChange={(e) => setOpenRouterModel(e.target.value)} placeholder="openrouter/free" />
                 </div>
               )}
 
               {provider === "openai" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <input className="input" type="password" value={openAiApiKey} onChange={(e) => setOpenAiApiKey(e.target.value)} placeholder="OpenAI API Key" />
+                  <input className="input" type="password" value={openAiApiKey} onChange={(e) => setOpenAiApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.openAiApiKey")} />
                   <input className="input" value={openAiModel} onChange={(e) => setOpenAiModel(e.target.value)} placeholder="gpt-4o" />
                 </div>
               )}
 
               {provider === "ollama" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <input className="input" value={ollamaBaseUrl} onChange={(e) => setOllamaBaseUrl(e.target.value)} placeholder="Ollama Base URL" />
-                  <input className="input" value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} placeholder="llama3" />
+                  <input className="input" value={ollamaBaseUrl} onChange={(e) => setOllamaBaseUrl(e.target.value)} placeholder={t("setupWizard.placeholders.ollamaBaseUrl")} />
+                  <input className="input" value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} placeholder={t("setupWizard.placeholders.ollamaModel")} />
                 </div>
               )}
             </div>
@@ -185,17 +213,18 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
           {step === 1 && (
             <div className="space-y-3">
-              <h3 className="text-base font-semibold">Gateway Einstellungen</h3>
+              <h3 className="text-base font-semibold">{t("setupWizard.section.gateway")}</h3>
               <label className="flex items-center gap-2 text-sm text-gray-300">
                 <input type="checkbox" checked={gatewayEnabled} onChange={(e) => setGatewayEnabled(e.target.checked)} />
-                Discord Gateway aktivieren
+                {t("setupWizard.gateway.enableDiscord")}
               </label>
               {gatewayEnabled && (
                 <div className="space-y-3">
-                  <input className="input w-full" type="password" value={discordBotToken} onChange={(e) => setDiscordBotToken(e.target.value)} placeholder="Discord Bot Token" />
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <input className="input" value={discordGuildId} onChange={(e) => setDiscordGuildId(e.target.value)} placeholder="Discord Guild ID (optional)" />
-                    <input className="input" value={discordAllowedUserId} onChange={(e) => setDiscordAllowedUserId(e.target.value)} placeholder="Allowed User ID (optional)" />
+                  <input className="input w-full" type="password" value={discordBotToken} onChange={(e) => setDiscordBotToken(e.target.value)} placeholder={t("setupWizard.placeholders.discordBotToken")} />
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <input className="input" value={discordGuildId} onChange={(e) => setDiscordGuildId(e.target.value)} placeholder={t("setupWizard.placeholders.discordGuildId")} />
+                    <input className="input" value={discordChannelId} onChange={(e) => setDiscordChannelId(e.target.value)} placeholder={t("setupWizard.placeholders.discordChannelId")} />
+                    <input className="input" value={discordAllowedUserId} onChange={(e) => setDiscordAllowedUserId(e.target.value)} placeholder={t("setupWizard.placeholders.discordAllowedUserId")} />
                   </div>
                 </div>
               )}
@@ -204,13 +233,13 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
           {step === 2 && (
             <div className="space-y-3">
-              <h3 className="text-base font-semibold">Features aktivieren</h3>
+              <h3 className="text-base font-semibold">{t("setupWizard.section.features")}</h3>
               <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
-                <span>Coding Bereich</span>
+                <span>{t("setupWizard.features.coding")}</span>
                 <input type="checkbox" checked={codingEnabled} onChange={(e) => setCodingEnabled(e.target.checked)} />
               </label>
               <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
-                <span>LLM-Wiki</span>
+                <span>{t("setupWizard.features.wiki")}</span>
                 <input type="checkbox" checked={wikiEnabled} onChange={(e) => setWikiEnabled(e.target.checked)} />
               </label>
             </div>
@@ -218,15 +247,16 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
           {step === 3 && (
             <div className="space-y-3">
-              <h3 className="text-base font-semibold">Uebersicht</h3>
+              <h3 className="text-base font-semibold">{t("setupWizard.section.summary")}</h3>
               <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm space-y-2">
-                <p><strong>Provider:</strong> {provider}</p>
-                {provider === "openrouter" && <p><strong>OpenRouter Modell:</strong> {openRouterModel || "openrouter/free"}</p>}
-                <p><strong>Gateway:</strong> {gatewayEnabled ? "Discord aktiv" : "Aus"}</p>
-                <p><strong>Coding:</strong> {codingEnabled ? "An" : "Aus"}</p>
-                <p><strong>LLM-Wiki:</strong> {wikiEnabled ? "An" : "Aus"}</p>
+                <p><strong>{t("setupWizard.summary.provider")}:</strong> {provider}</p>
+                {provider === "openrouter" && <p><strong>{t("setupWizard.summary.openRouterModel")}:</strong> {openRouterModel || "openrouter/free"}</p>}
+                <p><strong>{t("setupWizard.summary.gateway")}:</strong> {gatewayEnabled ? t("setupWizard.summary.discordActive") : t("setupWizard.summary.off")}</p>
+                {gatewayEnabled && discordChannelId && <p><strong>{t("setupWizard.summary.discordChannel")}:</strong> {discordChannelId}</p>}
+                <p><strong>{t("setupWizard.summary.coding")}:</strong> {codingEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
+                <p><strong>{t("setupWizard.summary.wiki")}:</strong> {wikiEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
               </div>
-              <p className="text-xs text-gray-400 flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-300" />Beim Speichern werden die Einstellungen direkt in die Settings geschrieben.</p>
+              <p className="text-xs text-gray-400 flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-300" />{t("setupWizard.summary.saveHint")}</p>
             </div>
           )}
         </div>
@@ -237,16 +267,16 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
             onClick={() => setStep((s) => Math.max(0, s - 1))}
             disabled={step === 0 || saveSetup.isPending}
           >
-            <ChevronLeft className="w-4 h-4" /> Zurueck
+            <ChevronLeft className="w-4 h-4" /> {t("setupWizard.back")}
           </button>
 
           {isLastStep ? (
             <button className="btn-primary" onClick={() => saveSetup.mutate()} disabled={saveSetup.isPending}>
-              {saveSetup.isPending ? "Speichert..." : "Setup abschliessen"}
+              {saveSetup.isPending ? t("setupWizard.saving") : t("setupWizard.finish")}
             </button>
           ) : (
             <button className="btn-primary inline-flex items-center gap-2" onClick={() => setStep((s) => Math.min(3, s + 1))}>
-              Weiter <ChevronRight className="w-4 h-4" />
+              {t("setupWizard.next")} <ChevronRight className="w-4 h-4" />
             </button>
           )}
         </div>

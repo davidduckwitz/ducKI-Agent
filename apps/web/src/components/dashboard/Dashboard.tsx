@@ -53,7 +53,7 @@ export function Dashboard() {
         </div>
         <button className="btn-primary inline-flex items-center gap-2" onClick={() => setSetupModalOpen(true)}>
           <Sparkles className="w-4 h-4" />
-          Setup Assistent
+          {t("setupWizard.openButton")}
         </button>
       </div>
 

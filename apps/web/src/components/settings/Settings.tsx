@@ -631,7 +631,7 @@ export function Settings() {
         <div className="flex items-center gap-2">
           <button onClick={() => setSetupModalOpen(true)} className="btn-secondary flex items-center gap-2">
             <Sparkles className="w-4 h-4" />
-            Setup Assistent
+            {t("setupWizard.openButton")}
           </button>
           <button onClick={saveAll} className="btn-primary flex items-center gap-2" disabled={save.isPending}>
             <Save className="w-4 h-4" />
