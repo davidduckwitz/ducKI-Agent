@@ -1,6 +1,7 @@
 # DucKI Node
 
 - Self-hosted coding and Task / Personal agent platform with web UI, REST API, WebSocket streaming, persistent memory, workflow graphs, CronJobs to running prompts/ Tasks / Skills, discord gateway with speech to text, and multi-agent execution.
+- Includes LLM-Wiki: optional shared-workspace knowledge ingestion (`shared-workspace/llm-wiki`) with chunking, moderation (`candidate/approved/rejected`), search, and memory integration.
 - Fully Developed in NodeJS! 
 - Tested Local with LM Studio & OpenRouter
 - Agent / Memory / Skill System / Task Management / KanBan Board / Log System / Discord Gateway -> ALL Full working!
@@ -42,6 +43,7 @@ After startup:
 | Workflow orchestration | Create/update/run/resume graph workflows from UI and tools |
 | Persistent memory | Agent/user memory with profile entries, approvals, and curation actions | Self Updating Memory
 | Skills system | Slash-skill loading, auto-skill selection, pin/enable management, markdown skill editor |
+| LLM-Wiki | Optional knowledge pipeline from shared workspace files with chunk ingest, moderation, search, and controllable auto-memory |
 | Tooling | Filesystem, HTTP, shell, git, browser automation, skills management, workflow and memory tools |
 | Live operations | Agent live metrics and active run monitoring page |
 | CronJobs | Run at a specific Time for Tasks / skills and Prompts |
@@ -123,6 +125,17 @@ Important agent controls:
 - `AGENT_AUTO_SKILL_MARGIN`
 - `AGENT_AUTO_SKILL_MIN_INPUT_LEN`
 - `AGENT_AUTO_SKILL_MIN_OVERLAP`
+
+LLM-Wiki controls:
+
+- `WIKI_ENABLED` (hard on/off switch; when `false`, no ingest and no reindex)
+- `WIKI_SHARED_SOURCE_PATH` (default: `llm-wiki` under shared workspace root)
+- `WIKI_SHARED_SOURCE_AUTO_MEMORY` (write approved wiki chunks into semantic memory)
+- `WIKI_AUTO_APPROVE` (if `true`, new chunks become `approved`; otherwise `candidate`)
+- `WIKI_SHARED_SOURCE_MAX_FILE_SIZE_KB`
+- `WIKI_INGEST_INTERVAL_MS`
+- `WIKI_CHUNK_SIZE_CHARS`
+- `WIKI_CHUNK_OVERLAP_CHARS`
 
 Skill behavior notes:
 
@@ -212,6 +225,13 @@ Core endpoints:
 - `GET /api/memory`
 - `POST /api/memory/actions`
 - `GET /api/skills`
+- `GET /api/wiki/status`
+- `GET /api/wiki/entries`
+- `GET /api/wiki/search`
+- `POST /api/wiki/reindex`
+- `PUT /api/wiki/config`
+- `POST /api/wiki/entries/:id/approve`
+- `POST /api/wiki/entries/:id/reject`
 - `GET /api/shared/files`
 - `GET /api/agents/live`
 - `GET /api/logs`
@@ -240,6 +260,45 @@ Server -> client:
 - Enable/disable skills in `/skills`.
 - Agent can auto-select relevant skills when enabled.
 - Memory supports add/replace/remove/batch/approval flows.
+
+## LLM-Wiki
+
+LLM-Wiki turns files in shared workspace into searchable, moderated knowledge for the agent.
+
+Source folder:
+
+- `shared-workspace/llm-wiki`
+
+What happens during ingest:
+
+1. Scanner reads supported text files (`.md`, `.txt`, `.json`) from the wiki folder.
+2. Files are chunked (`WIKI_CHUNK_SIZE_CHARS` + `WIKI_CHUNK_OVERLAP_CHARS`).
+3. Chunks are stored as wiki entries with moderation status (`candidate`, `approved`, `rejected`, `error`).
+4. If auto-memory is enabled, approved chunks are mirrored into semantic memory.
+
+Moderation flow:
+
+1. New chunks are `candidate` by default.
+2. Approve to promote reliable chunks into active knowledge.
+3. Reject to exclude incorrect chunks from retrieval.
+
+Search behavior:
+
+- `/api/wiki/search` ranks by token relevance + recency + moderation weight.
+- `approved` entries are prioritized.
+- `rejected` and `error` entries are excluded.
+- `candidate` entries are only included when explicitly requested.
+
+UI controls:
+
+- Open `/memory` -> `LLM Wiki` tab.
+- Toggle `WIKI_ENABLED` and `WIKI_SHARED_SOURCE_AUTO_MEMORY`.
+- Trigger `Reindex` manually.
+- Filter/search entries and approve/reject candidates.
+
+Disable guarantee:
+
+- With `WIKI_ENABLED=false`, wiki ingest does not run and reindex requests are rejected.
 
 ## Browser Tool
 
