@@ -69,6 +69,24 @@ Recommended control fields:
 - For replace edits, read first and verify expected content before writing.
 - For destructive actions (delete/move), confirm exact target path in output.
 
+## Mandatory Write Discipline
+1. Never use absolute paths.
+2. For filesystem operations always set:
+- `basePath: "./shared-workspace"`
+- `safeMode: true`
+- `createDirs: true` (for write/append)
+3. Before every `write`/`append`/`move`/`copy`, run the same operation with `dryRun: true` first.
+4. After every write-like operation, verify immediately with:
+- `exists` or `stat` on the target path
+- optional `read` for text-content validation
+5. If a scope/path error occurs, stop and correct the path relative to `./shared-workspace` before retry.
+
+## Minimal Write Pattern
+1. Resolve relative target path under shared-workspace.
+2. Dry-run validation.
+3. Execute operation.
+4. Verify result (`exists`/`stat`/`read`).
+
 ## Output Contract
 When done, return:
 1. Chosen mode: filesystem or API

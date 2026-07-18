@@ -23,6 +23,25 @@ Nutze den integrierten Coding-Bereich fuer projektbezogenes Arbeiten mit Chat + 
 3. Speichere Dateien nur unter `shared-workspace/coding/<project>/...`.
 4. Bei grossen Aenderungen zuerst TDD- oder Plan-Schritte ausfuehren.
 
+## Schreibdisziplin (verpflichtend)
+1. Nutze fuer Coding-Dateien nur relative Pfade innerhalb des aktuellen Projekts.
+2. Bei Filesystem-Operationen immer setzen:
+- `basePath: "./shared-workspace/coding/<project>"`
+- `safeMode: true`
+- `createDirs: true` (bei write/append)
+3. Vor jedem `write`/`append`/`move`/`copy` zuerst mit `dryRun: true` validieren.
+4. Nach jeder Schreiboperation sofort verifizieren:
+- `exists` oder `stat` auf Zieldatei
+- optional `read` fuer Inhaltskontrolle bei Textdateien
+5. Keine absoluten Pfade verwenden.
+6. Bei Pfad- oder Scope-Fehlern sofort abbrechen und den Pfad auf das Projekt-Root zurueckfuehren.
+
+## Minimales Dateischreib-Muster
+1. Zielpfad bestimmen: relativ zu `shared-workspace/coding/<project>`.
+2. Dry-Run ausfuehren (`dryRun: true`).
+3. Write ausfuehren (`dryRun: false`).
+4. Ergebnis verifizieren (`exists`/`stat`/`read`).
+
 ## API-Flow
 1. `GET /api/coding/status`
 2. `GET /api/coding/projects`
