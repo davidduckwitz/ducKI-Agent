@@ -12,6 +12,21 @@ function toPositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function normalizeBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/g, "");
+  if (!trimmed) return baseUrl;
+  return trimmed
+    .replace(/\/chat\/completions$/i, "")
+    .replace(/\/responses$/i, "");
+}
+
+function shouldOmitAuthorizationHeader(apiKey: string): boolean {
+  const normalized = apiKey.trim().toLowerCase();
+  if (!normalized) return true;
+  if (["lm-studio", "not-needed", "none", "null", "undefined"].includes(normalized)) return true;
+  return false;
+}
+
 function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] {
   return messages.map((m): ChatCompletionMessageParam => {
     if (m.role === "tool") {
@@ -36,14 +51,28 @@ export class OpenAIProvider implements LLMProvider {
   private readonly baseRetryDelayMs: number;
 
   constructor(options: ProviderOptions) {
-    const rawApiKey = options.apiKey ?? process.env["OPENAI_API_KEY"] ?? "";
+    const rawApiKey = options.apiKey ?? "";
     const normalizedApiKey = rawApiKey.replace(/^Bearer\s+/i, "").trim();
+    const omitAuthorizationHeader = shouldOmitAuthorizationHeader(normalizedApiKey);
+    const baseURL = normalizeBaseUrl(options.baseUrl);
 
     this.model = options.model;
     this.defaultOptions = options.defaultOptions ?? {};
+
+    const customFetch: typeof fetch = async (input, init) => {
+      if (!omitAuthorizationHeader) {
+        return fetch(input, init);
+      }
+
+      const headers = new Headers(init?.headers ?? {});
+      headers.delete("Authorization");
+      return fetch(input, { ...(init ?? {}), headers });
+    };
+
     this.client = new OpenAI({
-      apiKey: normalizedApiKey,
-      baseURL: options.baseUrl,
+      apiKey: omitAuthorizationHeader ? "sk-no-auth-required" : normalizedApiKey,
+      baseURL,
+      fetch: customFetch,
     });
     this.maxRetries = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRIES"], 2);
     this.baseRetryDelayMs = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRY_BASE_MS"], 1200);
