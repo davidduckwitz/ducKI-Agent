@@ -199,14 +199,22 @@ chatRouter.post("/", async (req, res, next) => {
       label: "HTTP Chat",
     });
 
+    const wantsDiscordDelivery = /(?:\b(?:auf|an|zu|to)\s+discord\b|\bdiscord\b.*\b(?:antwort|reply|post|poste|sende|send|schick|schreibe)\b|\b(?:antwort|reply|post|poste|sende|send|schick|schreibe)\b.*\bdiscord\b)/i.test(message);
+    const routedMessage = wantsDiscordDelivery
+      ? [
+          "[Routing hint: The user explicitly wants the answer to be delivered on Discord. Treat this as an outbound gateway operation, not a normal chat reply. If the Discord target is unclear, ask for the target channel instead of guessing. Use gateway action=list_configs before gateway action=send in the same run.]",
+          message,
+        ].join("\n\n")
+      : message;
+
     const result = await runAgentWithRepairRetry(
       createAgent ?? (() => agent),
-      message,
+      routedMessage,
       (errorMessage) => [
         "The previous chat run failed with a runtime error.",
         `Error: ${errorMessage}`,
         "Start over from scratch with a fresh solution path.",
-        message,
+        routedMessage,
       ].join("\n"),
       async (runAgent) => {
         if (activeConversationId) {
