@@ -632,7 +632,11 @@ function parseDiscordInteractionPayload(body: unknown): DiscordInteractionPayloa
   const applicationId = String(payload["application_id"] ?? "").trim();
   const interactionToken = String(payload["token"] ?? "").trim();
   const channelId = String(payload["channel_id"] ?? "").trim();
-  if (!applicationId || !interactionToken || !channelId) return undefined;
+  const guildId = String(payload["guild_id"] ?? "").trim();
+  const member = payload["member"] as Record<string, unknown> | undefined;
+  const user = (member?.["user"] as Record<string, unknown> | undefined) ?? (payload["user"] as Record<string, unknown> | undefined);
+  const userId = String(user?.["id"] ?? "").trim();
+  if (!applicationId || !interactionToken) return undefined;
 
   const data = payload["data"] as Record<string, unknown> | undefined;
   const commandName = String(data?.["name"] ?? "discord").trim() || "discord";
@@ -649,13 +653,12 @@ function parseDiscordInteractionPayload(body: unknown): DiscordInteractionPayloa
   const message = String(primaryOption?.["value"] ?? [commandName, ...optionParts].join(" | ")).trim();
   if (!message) return undefined;
 
-  const member = payload["member"] as Record<string, unknown> | undefined;
-  const user = (member?.["user"] as Record<string, unknown> | undefined) ?? (payload["user"] as Record<string, unknown> | undefined);
-  const channelName = String(payload["channel_name"] ?? channelId).trim() || channelId;
+  const externalConversationId = channelId || guildId || userId || `interaction-${applicationId}`;
+  const channelName = String(payload["channel_name"] ?? channelId ?? guildId ?? userId).trim() || externalConversationId;
   const userName = String(user?.["username"] ?? member?.["nick"] ?? "").trim() || undefined;
 
   return {
-    externalConversationId: channelId,
+    externalConversationId,
     message,
     channelName,
     userName,
@@ -761,6 +764,39 @@ function encodeDiscordReactionEmoji(emoji: string): string {
   return encodeURIComponent(trimmed);
 }
 
+const DISCORD_MESSAGE_MAX_CHARS = 3900;
+
+function splitForDiscord(content: string, maxChars = DISCORD_MESSAGE_MAX_CHARS): string[] {
+  const text = content.trim();
+  if (!text) return [];
+  if (text.length <= maxChars) return [text];
+
+  const chunks: string[] = [];
+  let rest = text;
+
+  while (rest.length > maxChars) {
+    let cut = rest.lastIndexOf("\n", maxChars);
+    if (cut < Math.floor(maxChars * 0.6)) {
+      cut = rest.lastIndexOf(" ", maxChars);
+    }
+    if (cut < Math.floor(maxChars * 0.4)) {
+      cut = maxChars;
+    }
+
+    const part = rest.slice(0, cut).trim();
+    if (part.length > 0) {
+      chunks.push(part);
+    }
+    rest = rest.slice(cut).trimStart();
+  }
+
+  if (rest.length > 0) {
+    chunks.push(rest);
+  }
+
+  return chunks;
+}
+
 function resolveDiscordBotToken(config: MessagingGatewayConfig): string | undefined {
   const gatewayToken = config.authToken?.trim();
   if (gatewayToken) return gatewayToken;
@@ -857,18 +893,21 @@ async function applyDiscordReactionWithLog(
 }
 
 async function sendDiscordReply(botToken: string, channelId: string, text: string): Promise<void> {
-  const response = await fetch(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bot ${botToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ content: text }),
-  });
+  const chunks = splitForDiscord(text);
+  for (const chunk of chunks) {
+    const response = await fetch(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${botToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content: chunk }),
+    });
 
-  if (!response.ok) {
-    const body = await readResponseBody(response);
-    throw new Error(`Discord send message failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`);
+    if (!response.ok) {
+      const body = await readResponseBody(response);
+      throw new Error(`Discord send message failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`);
+    }
   }
 }
 
@@ -1447,6 +1486,31 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
     }
 
     const discordInteraction = portal === "discord" ? parseDiscordInteractionPayload(req.body) : undefined;
+    if (portal === "discord" && [2, 3].includes(interactionType) && !discordInteraction) {
+      await db.addLog({
+        level: "warn",
+        message: "[Gateway discord] Interaction payload could not be parsed",
+        context: JSON.stringify({
+          portal,
+          configId,
+          interactionType,
+          hasApplicationId: Boolean((req.body as Record<string, unknown> | undefined)?.["application_id"]),
+          hasToken: Boolean((req.body as Record<string, unknown> | undefined)?.["token"]),
+          hasChannelId: Boolean((req.body as Record<string, unknown> | undefined)?.["channel_id"]),
+        }),
+      }).catch(() => {
+        // Ignore logging failures while responding to interaction.
+      });
+
+      res.json({
+        type: 4,
+        data: {
+          content: "Interaction empfangen, aber das Payload-Format wurde nicht erkannt.",
+        },
+      });
+      return;
+    }
+
     if (discordInteraction) {
       res.json({ type: 5 });
 

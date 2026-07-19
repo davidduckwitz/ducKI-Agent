@@ -24,6 +24,16 @@ interface PersistedMessage {
   createdAt: string;
 }
 
+interface RenderedChatMessage {
+  id: string;
+  role: "user" | "assistant" | "system" | "event" | "tool";
+  content: string;
+  timestamp: string;
+  eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
+  eventData?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
 function parseMessageMetadata(raw?: string | null): Record<string, unknown> | undefined {
   if (!raw) return undefined;
   try {
@@ -32,6 +42,20 @@ function parseMessageMetadata(raw?: string | null): Record<string, unknown> | un
   } catch {
     return undefined;
   }
+}
+
+function compareMessages(a: RenderedChatMessage, b: RenderedChatMessage): number {
+  const aTime = Date.parse(a.timestamp);
+  const bTime = Date.parse(b.timestamp);
+  if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) {
+    return aTime - bTime;
+  }
+
+  if (a.id !== b.id) {
+    return a.id.localeCompare(b.id);
+  }
+
+  return 0;
 }
 
 const eventIcon = (eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail") => {
@@ -125,7 +149,11 @@ export function ChatContainer() {
 
   useEffect(() => {
     if (!conversationId) return;
-    const persisted = selectedConversationMessages.data?.pages.flatMap((page) => page.items);
+    const persisted = selectedConversationMessages.data?.pages
+      .slice()
+      .reverse()
+      .flatMap((page) => page.items)
+      .map((item) => item);
     if (!persisted) return;
 
     const mapPersistedMessage = (msg: PersistedMessage) => {
@@ -215,7 +243,9 @@ export function ChatContainer() {
     };
 
     setMessages(
-      persisted.map(mapPersistedMessage)
+      persisted
+        .map(mapPersistedMessage)
+        .sort(compareMessages)
     );
   }, [conversationId, selectedConversationMessages.data, setMessages, t]);
 
