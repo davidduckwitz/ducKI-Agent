@@ -1109,6 +1109,17 @@ export class Agent {
     const end = endCandidates.length > 0 ? Math.min(...endCandidates) : afterStart.length;
     const callBody = afterStart.slice(0, end).trim();
 
+    // Hermes can emit either tool{...} or tool({...}). Support both forms.
+    const parenMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
+    if (parenMatch?.[1]) {
+      const toolName = parenMatch[1].trim();
+      const rawArgs = (parenMatch[2] ?? "").trim();
+      const args = rawArgs.startsWith("{") && rawArgs.endsWith("}")
+        ? rawArgs.slice(1, -1)
+        : rawArgs;
+      return { toolName, args };
+    }
+
     const firstBrace = callBody.indexOf("{");
     const lastBrace = callBody.lastIndexOf("}");
     if (firstBrace < 0 || lastBrace <= firstBrace) return undefined;
@@ -1139,13 +1150,56 @@ export class Agent {
   }
 
   private extractToolCall(response: string): { toolName: string; input: Record<string, unknown> } | undefined {
-    const bracketMatch = response.match(/\[TOOL:([A-Za-z_][A-Za-z0-9_\-]*)\(([^]*?)\)\]/);
-    if (bracketMatch) {
-      const toolName = bracketMatch[1];
-      const args = this.parseLooseObject(bracketMatch[2] ?? "{}");
-      if (toolName && args) {
-        return this.resolveToolNameAndInput(toolName, args);
+    const bracketBodyMatch = response.match(/\[TOOL:([^\]]+)\]/);
+    if (bracketBodyMatch?.[1]) {
+      const body = bracketBodyMatch[1].trim();
+
+      // Variant A: [TOOL:name({...})]
+      const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
+      if (callMatch?.[1]) {
+        const toolName = callMatch[1];
+        const args = this.parseLooseObject(callMatch[2] ?? "{}");
+        if (args) {
+          return this.resolveToolNameAndInput(toolName, args);
+        }
       }
+
+      // Variant B: [TOOL:name={...}] or [TOOL:name = {...}]
+      const equalsMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(\{[^]*\})\s*$/);
+      if (equalsMatch?.[1]) {
+        const toolName = equalsMatch[1];
+        const args = this.parseLooseObject(equalsMatch[2] ?? "{}");
+        if (args) {
+          return this.resolveToolNameAndInput(toolName, args);
+        }
+      }
+
+      // Variant C: [TOOL:name({...})] but model emitted the JSON object without parens
+      // e.g. [TOOL:name{...}]
+      const compactObjectMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
+      if (compactObjectMatch?.[1]) {
+        const toolName = compactObjectMatch[1];
+        const args = this.parseLooseObject(compactObjectMatch[2] ?? "{}");
+        if (args) {
+          return this.resolveToolNameAndInput(toolName, args);
+        }
+      }
+
+      // Variant D: fallback for malformed payloads like [TOOL:gateway({"a":1}) extra]
+      const fallbackMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=\(\{](.*)$/);
+      if (fallbackMatch?.[1]) {
+        const toolName = fallbackMatch[1];
+        const tail = fallbackMatch[2] ?? "";
+        const firstBrace = tail.indexOf("{");
+        const lastBrace = tail.lastIndexOf("}");
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+          const args = this.parseLooseObject(tail.slice(firstBrace, lastBrace + 1));
+          if (args) {
+            return this.resolveToolNameAndInput(toolName, args);
+          }
+        }
+      }
+
       return undefined;
     }
 
