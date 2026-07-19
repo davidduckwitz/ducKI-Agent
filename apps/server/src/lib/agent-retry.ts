@@ -6,13 +6,15 @@ export function shouldRetryAgentRun(errorMessage: string): boolean {
   const normalized = errorMessage.toLowerCase();
   return normalized.includes("cannot read properties")
     || normalized.includes("cannot read property")
-    || normalized.includes("undefined")
+    || normalized.includes("cannot set properties")
+    || normalized.includes("is not a function")
+    || normalized.includes("undefined is not")
     || normalized.includes("typeerror")
     || normalized.includes("referenceerror")
     || normalized.includes("syntaxerror")
     || normalized.includes("rangeerror")
-    || normalized.includes("failed")
-    || normalized.includes("error");
+    || normalized.includes("maximum call stack size exceeded")
+    || normalized.includes("out of memory");
 }
 
 export async function runAgentWithRepairRetry(
