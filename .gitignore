@@ -8,3 +8,4 @@ storage/
 coverage/
 apps/server/shared-workspace/llm-wiki/
 apps/server/shared-workspace/chat-uploads/
+apps/server/shared-workspace/btc-puzzle/
