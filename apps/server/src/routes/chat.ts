@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import type { Agent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createApiResponse, createApiError } from "@ducki/shared";
+import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 
 export const chatRouter: IRouter = Router();
 
@@ -198,8 +199,25 @@ chatRouter.post("/", async (req, res, next) => {
       label: "HTTP Chat",
     });
 
-    const result = await agent.run(message);
-    res.json(createApiResponse(result));
+    const result = await runAgentWithRepairRetry(
+      createAgent ?? (() => agent),
+      message,
+      (errorMessage) => [
+        "The previous chat run failed with a runtime error.",
+        `Error: ${errorMessage}`,
+        "Start over from scratch with a fresh solution path.",
+        message,
+      ].join("\n"),
+      async (runAgent) => {
+        if (activeConversationId) {
+          await runAgent.loadConversation(activeConversationId);
+          return;
+        }
+
+        await runAgent.startConversation();
+      }
+    );
+    res.json(createApiResponse(result.result));
   } catch (error) {
     next(error);
   } finally {

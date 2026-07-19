@@ -3,6 +3,7 @@ import type { Agent, AgentRunEvent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "../lib/agent-registry.js";
+import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 
 const logger = getRootLogger().child("WebSocket");
 
@@ -67,17 +68,35 @@ export function setupWebSocket(
 
         socket.emit("chat:start", { timestamp: new Date().toISOString() });
 
-        const result = await agent.run(data.message, {
-          stream: true,
-          onChunk: (chunk) => {
-            socket.emit("chat:chunk", { content: chunk });
-          },
-          onEvent: (event: AgentRunEvent) => {
-            socket.emit("chat:event", event);
-          },
-        });
+        const result = await runAgentWithRepairRetry(
+          createAgent,
+          data.message,
+          (errorMessage) => [
+            "The previous websocket chat run failed with a runtime error.",
+            `Error: ${errorMessage}`,
+            "Restart from scratch with a fresh solution path.",
+            data.message,
+          ].join("\n"),
+          async (runAgent) => {
+            if (data.conversationId) {
+              await runAgent.loadConversation(data.conversationId);
+              return;
+            }
 
-        socket.emit("chat:complete", result);
+            await runAgent.startConversation();
+          },
+          {
+            stream: true,
+            onChunk: (chunk) => {
+              socket.emit("chat:chunk", { content: chunk });
+            },
+            onEvent: (event: AgentRunEvent) => {
+              socket.emit("chat:event", event);
+            },
+          }
+        );
+
+        socket.emit("chat:complete", result.result);
       } catch (error) {
         socket.emit("chat:error", {
           error: error instanceof Error ? error.message : String(error),

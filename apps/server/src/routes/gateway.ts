@@ -3,6 +3,7 @@ import type { Agent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createSpeechToTextProvider } from "@ducki/providers";
 import { createApiError, createApiResponse } from "@ducki/shared";
+import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 import { createPublicKey, verify } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { Buffer } from "node:buffer";
@@ -1274,10 +1275,21 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
     let processingFailed = false;
     let processingErrorMessage: string | undefined;
     try {
-      result = await agent.run(prefixedMessage);
-      responseText = typeof (result as { response?: unknown })?.response === "string"
-        ? String((result as { response?: unknown }).response)
-        : JSON.stringify(result);
+      const runResult = await runAgentWithRepairRetry(
+        createAgent ?? (() => agent),
+        prefixedMessage,
+        (errorMessage) => [
+          "The previous gateway run failed with a runtime error.",
+          `Error: ${errorMessage}`,
+          "Start over from scratch with a fresh solution path.",
+          prefixedMessage,
+        ].join("\n"),
+        async (runAgent) => {
+          await runAgent.loadConversation(conversationId);
+        }
+      );
+      responseText = runResult.result.response;
+      result = runResult.result;
     } catch (processingError) {
       processingFailed = true;
       processingErrorMessage = processingError instanceof Error ? processingError.message : String(processingError);
@@ -1558,8 +1570,20 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
           const incomingMessage = interactionUserName
             ? `[${config.portal} / ${interactionUserName}] ${interactionMessage}`
             : `[${config.portal}] ${interactionMessage}`;
-          const result = await agent.run(incomingMessage);
-          const responseText = typeof result?.response === "string" ? result.response : JSON.stringify(result);
+          const result = await runAgentWithRepairRetry(
+            createAgent ?? (() => agent),
+            incomingMessage,
+            (errorMessage) => [
+              "The previous Discord interaction run failed with a runtime error.",
+              `Error: ${errorMessage}`,
+              "Start over from scratch with a fresh solution path.",
+              incomingMessage,
+            ].join("\n"),
+            async (runAgent) => {
+              await runAgent.loadConversation(conversationId);
+            }
+          );
+          const responseText = result.result.response;
           const reaction = pickAgentReaction(responseText);
 
           await appendGatewayEvent(db, conversationId, "Gateway webhook received", {
@@ -1686,8 +1710,20 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
       const incomingMessage = resolveGatewayUserName(config, normalized.userName)
         ? `[${config.portal} / ${resolveGatewayUserName(config, normalized.userName)}] ${webhookMessage}`
         : `[${config.portal}] ${webhookMessage}`;
-      const result = await agent.run(incomingMessage);
-      const responseText = typeof result?.response === "string" ? result.response : JSON.stringify(result);
+      const result = await runAgentWithRepairRetry(
+        createAgent ?? (() => agent),
+        incomingMessage,
+        (errorMessage) => [
+          "The previous gateway webhook run failed with a runtime error.",
+          `Error: ${errorMessage}`,
+          "Start over from scratch with a fresh solution path.",
+          incomingMessage,
+        ].join("\n"),
+        async (runAgent) => {
+          await runAgent.loadConversation(conversationId);
+        }
+      );
+      const responseText = result.result.response;
       const reaction = pickAgentReaction(responseText);
       await appendGatewayEvent(db, conversationId, "Gateway webhook received", {
         source: "gateway",

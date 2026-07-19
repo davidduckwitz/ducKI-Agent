@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import type { Agent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createApiResponse, createApiError } from "@ducki/shared";
+import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 
 export const tasksRouter: IRouter = Router();
 
@@ -105,18 +106,40 @@ tasksRouter.post("/:id/run", async (req, res, next) => {
       label: `Task #${taskId}`,
     });
 
-    const runResult = await agent.run(prompt, {
-      contextCaps: {
-        maxSystemPromptChars: envCap("AGENT_TASK_MAX_SYSTEM_PROMPT_CHARS", 50000, 2000),
-        maxDynamicMemoryChars: envCap("AGENT_TASK_MAX_DYNAMIC_MEMORY_CHARS", 6000, 0),
-        maxContextMessages: envCap("AGENT_TASK_MAX_CONTEXT_MESSAGES", 24, 1),
-        maxContextChars: envCap("AGENT_TASK_MAX_CONTEXT_CHARS", 45000, 2000),
-        maxContextMessageChars: envCap("AGENT_TASK_MAX_CONTEXT_MESSAGE_CHARS", 5000, 200),
+    const runResult = await runAgentWithRepairRetry(
+      createAgent ?? (() => agent),
+      prompt,
+      (errorMessage) => [
+        "The previous task run failed with a runtime error.",
+        `Error: ${errorMessage}`,
+        "Restart from scratch with a fresh solution path.",
+        "Diagnose the root cause, avoid repeating the failing step, and return the corrected task result.",
+        prompt,
+      ].join("\n"),
+      async (runAgent) => {
+        if (task.projectId) {
+          await runAgent.startConversation({
+            name: `Task Run #${taskId}`,
+            projectId: task.projectId,
+          });
+          return;
+        }
+
+        await runAgent.startConversation({ name: `Task Run #${taskId}` });
       },
-    });
+      {
+        contextCaps: {
+          maxSystemPromptChars: envCap("AGENT_TASK_MAX_SYSTEM_PROMPT_CHARS", 50000, 2000),
+          maxDynamicMemoryChars: envCap("AGENT_TASK_MAX_DYNAMIC_MEMORY_CHARS", 6000, 0),
+          maxContextMessages: envCap("AGENT_TASK_MAX_CONTEXT_MESSAGES", 24, 1),
+          maxContextChars: envCap("AGENT_TASK_MAX_CONTEXT_CHARS", 45000, 2000),
+          maxContextMessageChars: envCap("AGENT_TASK_MAX_CONTEXT_MESSAGE_CHARS", 5000, 200),
+        },
+      }
+    );
     const updated = await db.updateTask(taskId, {
       status: "completed",
-      result: runResult.response,
+      result: runResult.result.response,
     });
 
     res.json(createApiResponse({ task: updated, run: runResult }));

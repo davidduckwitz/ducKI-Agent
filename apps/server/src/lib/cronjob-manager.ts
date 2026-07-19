@@ -1,6 +1,7 @@
 import type { Agent } from "@ducki/agent";
 import { computeNextRun, type CronJobSelect, type DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
+import { runAgentWithRepairRetry } from "./agent-retry.js";
 
 interface PromptPayload {
   prompt?: string;
@@ -144,17 +145,27 @@ export class CronjobManager {
       "Use tools where necessary. Keep the final result concise and actionable.",
     ].join("\n");
 
-    const agent = this.createAgent();
-    if (task.projectId) {
-      await agent.startConversation({ name: `Cron Task #${taskId}`, projectId: task.projectId });
-    } else {
-      await agent.startConversation({ name: `Cron Task #${taskId}` });
-    }
-
     try {
-      const run = await agent.run(prompt);
-      await this.db.updateTask(taskId, { status: "completed", result: run.response });
-      return run.response;
+      const run = await runAgentWithRepairRetry(
+        this.createAgent,
+        prompt,
+        (errorMessage) => [
+          "The previous cron task run failed with a runtime error.",
+          `Error: ${errorMessage}`,
+          "Start a fresh attempt from scratch and produce a corrected solution.",
+          prompt,
+        ].join("\n"),
+        async (runAgent) => {
+          if (task.projectId) {
+            await runAgent.startConversation({ name: `Cron Task #${taskId}`, projectId: task.projectId });
+            return;
+          }
+
+          await runAgent.startConversation({ name: `Cron Task #${taskId}` });
+        }
+      );
+      await this.db.updateTask(taskId, { status: "completed", result: run.result.response });
+      return run.result.response;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.db.updateTask(taskId, { status: "failed", result: message });
@@ -167,14 +178,23 @@ export class CronjobManager {
     const prompt = payload.prompt?.trim() || job.targetRef?.trim();
     if (!prompt) throw new Error("Prompt cronjob requires payload.prompt or targetRef");
 
-    const agent = this.createAgent();
-    await agent.startConversation({
-      name: payload.conversationName?.trim() || `Cron Prompt #${job.id}`,
-      projectId: payload.projectId,
-    });
-
-    const run = await agent.run(prompt);
-    return run.response;
+    const run = await runAgentWithRepairRetry(
+      this.createAgent,
+      prompt,
+      (errorMessage) => [
+        "The previous cron prompt run failed with a runtime error.",
+        `Error: ${errorMessage}`,
+        "Try again from a clean start with a new solution path.",
+        prompt,
+      ].join("\n"),
+      async (runAgent) => {
+        await runAgent.startConversation({
+          name: payload.conversationName?.trim() || `Cron Prompt #${job.id}`,
+          projectId: payload.projectId,
+        });
+      }
+    );
+    return run.result.response;
   }
 
   private async runToolJob(job: CronJobSelect): Promise<string> {
@@ -199,13 +219,22 @@ export class CronjobManager {
     if (!skillSlug) throw new Error("Skill cronjob requires targetRef skill slug");
 
     const prompt = payload.prompt?.trim() || "Execute the scheduled skill run and report the outcome.";
-    const agent = this.createAgent();
-    await agent.startConversation({
-      name: payload.conversationName?.trim() || `Cron Skill #${job.id}`,
-      projectId: payload.projectId,
-    });
-
-    const run = await agent.run(`/${skillSlug} ${prompt}`);
-    return run.response;
+    const run = await runAgentWithRepairRetry(
+      this.createAgent,
+      `/${skillSlug} ${prompt}`,
+      (errorMessage) => [
+        "The previous cron skill run failed with a runtime error.",
+        `Error: ${errorMessage}`,
+        "Retry from scratch with a new solution path and return the corrected result.",
+        `/${skillSlug} ${prompt}`,
+      ].join("\n"),
+      async (runAgent) => {
+        await runAgent.startConversation({
+          name: payload.conversationName?.trim() || `Cron Skill #${job.id}`,
+          projectId: payload.projectId,
+        });
+      }
+    );
+    return run.result.response;
   }
 }
