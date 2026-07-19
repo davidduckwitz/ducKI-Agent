@@ -143,6 +143,38 @@ function buildConversationName(config: MessagingGatewayConfig, externalConversat
   return `[${config.portal}] ${config.name} · ${hint}`;
 }
 
+function buildGatewaySessionName(baseName: string): string {
+  return `${baseName} · session ${new Date().toISOString()}`;
+}
+
+function parseNewSessionCommand(
+  rawMessage: string,
+  options: { allowBare?: boolean } = {}
+): { requestedNewSession: boolean; forwardedMessage: string; commandOnly: boolean } {
+  const message = rawMessage.trim();
+  if (!message) {
+    return { requestedNewSession: false, forwardedMessage: "", commandOnly: false };
+  }
+
+  const markerMatch = message.match(/^-new-(?:\s+|$)/i);
+  const bareMatch = options.allowBare ? message.match(/^new(?:\s+|$)/i) : null;
+  const match = markerMatch ?? bareMatch;
+  if (!match) {
+    return { requestedNewSession: false, forwardedMessage: message, commandOnly: false };
+  }
+
+  const forwardedMessage = message.slice(match[0].length).trim();
+  return {
+    requestedNewSession: true,
+    forwardedMessage,
+    commandOnly: forwardedMessage.length === 0,
+  };
+}
+
+function buildNewSessionReply(): string {
+  return "Neue Chat-Session gestartet. Sende jetzt deine naechste Nachricht ohne alten Kontext.";
+}
+
 function resolveGatewayExternalConversationId(config: MessagingGatewayConfig, providedExternalConversationId: string): string {
   const configuredChannelHint = config.channelHint?.trim();
   const provided = providedExternalConversationId.trim();
@@ -637,15 +669,21 @@ async function getOrCreateGatewayConversation(
   db: DatabaseService,
   config: MessagingGatewayConfig,
   externalConversationId: string,
-  projectId?: number
+  projectId?: number,
+  forceNew = false
 ): Promise<number> {
   const prefix = gatewayConversationPrefix(config);
   const conversations = await db.listConversations(projectId);
-  const existing = conversations.find((conversation) => conversation.name.startsWith(prefix) && conversation.name.includes(externalConversationId));
-  if (existing) return existing.id;
+  const matches = conversations.filter((conversation) => conversation.name.startsWith(prefix) && conversation.name.includes(externalConversationId));
+  if (!forceNew && matches.length > 0) {
+    const newest = matches.reduce((latest, current) => (current.id > latest.id ? current : latest));
+    return newest.id;
+  }
 
   const created = await db.createConversation({
-    name: buildConversationName(config, externalConversationId),
+    name: forceNew
+      ? buildGatewaySessionName(buildConversationName(config, externalConversationId))
+      : buildConversationName(config, externalConversationId),
     projectId,
   });
   return created.id;
@@ -1000,6 +1038,9 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
       res.status(400).json(createApiError("message is required"));
       return;
     }
+    const inboundSessionCommand = config.portal === "discord"
+      ? parseNewSessionCommand(message)
+      : { requestedNewSession: false, forwardedMessage: message, commandOnly: false };
 
     const externalConversationId = resolveGatewayExternalConversationId(config, providedExternalConversationId);
     const channelName = resolveGatewayChannelName(config, body.channelName);
@@ -1009,7 +1050,13 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
       return;
     }
 
-    const conversationId = await getOrCreateGatewayConversation(db, config, externalConversationId, body.projectId);
+    const conversationId = await getOrCreateGatewayConversation(
+      db,
+      config,
+      externalConversationId,
+      body.projectId,
+      inboundSessionCommand.requestedNewSession
+    );
     const attachmentRecords = await Promise.all((body.attachments ?? []).map(async (attachment, index) => {
       const saved = await saveGatewayAttachment(config, externalConversationId, attachment, index);
       return {
@@ -1043,6 +1090,9 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
     const agentMessageBase = useTranscriptOnlyForAgent && transcriptText.length > 0
       ? transcriptText
       : message;
+    const effectiveAgentMessageBase = inboundSessionCommand.requestedNewSession
+      ? inboundSessionCommand.forwardedMessage
+      : agentMessageBase;
 
     const filteredAttachmentHints = attachmentHints.filter((_, index) => {
       if (!useTranscriptOnlyForAgent) return true;
@@ -1051,8 +1101,57 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
     });
 
     const messageWithAttachmentHints = filteredAttachmentHints.length > 0
-      ? `${agentMessageBase}\n${filteredAttachmentHints.join("\n")}`
-      : agentMessageBase;
+      ? `${effectiveAgentMessageBase}\n${filteredAttachmentHints.join("\n")}`.trim()
+      : effectiveAgentMessageBase;
+
+    if (inboundSessionCommand.commandOnly) {
+      const resetReply = buildNewSessionReply();
+      await appendGatewayEvent(db, conversationId, "Gateway session reset", {
+        source: "gateway",
+        type: "session_reset",
+        portal: config.portal,
+        configId: config.id,
+        externalConversationId,
+        channelName,
+        userName,
+      });
+
+      await applyDiscordReactionWithLog(
+        db,
+        conversationId,
+        config,
+        externalConversationId,
+        body.sourceMessageId,
+        "♻️",
+        "processed"
+      );
+
+      await sendGatewayReply(
+        config,
+        externalConversationId,
+        resetReply,
+        "♻️",
+        {
+          source: "gateway",
+          portal: config.portal,
+          configId: config.id,
+          channelName,
+          userName,
+          mode: body.mode ?? "text",
+          command: "new_session",
+        }
+      );
+
+      res.json(createApiResponse({
+        conversationId,
+        replyText: resetReply,
+        result: { response: resetReply, command: "new_session", reset: true },
+        portal: config.portal,
+        configId: config.id,
+        reaction: "♻️",
+      }));
+      return;
+    }
 
     if (hasAudioAttachments && !hasVoiceTranscript) {
       const responseText = buildVoiceTranscriptionMissingReply(
@@ -1354,7 +1453,32 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
       void (async () => {
         let runId: string | undefined;
         try {
-          const conversationId = await getOrCreateGatewayConversation(db, config, discordInteraction.externalConversationId, undefined);
+          const interactionSessionCommand = parseNewSessionCommand(discordInteraction.message, { allowBare: true });
+          const conversationId = await getOrCreateGatewayConversation(
+            db,
+            config,
+            discordInteraction.externalConversationId,
+            undefined,
+            interactionSessionCommand.requestedNewSession
+          );
+
+          if (interactionSessionCommand.commandOnly) {
+            const resetReply = buildNewSessionReply();
+            await appendGatewayEvent(db, conversationId, "Gateway session reset", {
+              source: "gateway",
+              type: "session_reset",
+              portal: config.portal,
+              configId: config.id,
+              externalConversationId: discordInteraction.externalConversationId,
+              channelName: resolveGatewayChannelName(config, discordInteraction.channelName),
+              userName: resolveGatewayUserName(config, discordInteraction.userName),
+              mode: "interaction",
+              applicationId: discordInteraction.applicationId,
+            });
+            await updateDiscordInteractionResponse(discordInteraction.applicationId, discordInteraction.interactionToken, resetReply);
+            return;
+          }
+
           await agent.loadConversation(conversationId);
           const label = `${config.portal}:${config.name}`;
           runId = agentRegistry.register({
@@ -1364,9 +1488,12 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
           });
 
           const interactionUserName = resolveGatewayUserName(config, discordInteraction.userName);
+          const interactionMessage = interactionSessionCommand.requestedNewSession
+            ? interactionSessionCommand.forwardedMessage
+            : discordInteraction.message;
           const incomingMessage = interactionUserName
-            ? `[${config.portal} / ${interactionUserName}] ${discordInteraction.message}`
-            : `[${config.portal}] ${discordInteraction.message}`;
+            ? `[${config.portal} / ${interactionUserName}] ${interactionMessage}`
+            : `[${config.portal}] ${interactionMessage}`;
           const result = await agent.run(incomingMessage);
           const responseText = typeof result?.response === "string" ? result.response : JSON.stringify(result);
           const reaction = pickAgentReaction(responseText);
@@ -1428,7 +1555,17 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
       return;
     }
 
-    const conversationId = await getOrCreateGatewayConversation(db, config, normalized.externalConversationId, undefined);
+    const webhookSessionCommand = config.portal === "discord"
+      ? parseNewSessionCommand(normalized.message)
+      : { requestedNewSession: false, forwardedMessage: normalized.message, commandOnly: false };
+
+    const conversationId = await getOrCreateGatewayConversation(
+      db,
+      config,
+      normalized.externalConversationId,
+      undefined,
+      webhookSessionCommand.requestedNewSession
+    );
     await agent.loadConversation(conversationId);
     const label = `${config.portal}:${config.name}`;
     const runId = agentRegistry.register({
@@ -1438,9 +1575,53 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
     });
 
     try {
+      if (webhookSessionCommand.commandOnly) {
+        const resetReply = buildNewSessionReply();
+        await appendGatewayEvent(db, conversationId, "Gateway session reset", {
+          source: "gateway",
+          type: "session_reset",
+          portal: config.portal,
+          configId: config.id,
+          channelName: resolveGatewayChannelName(config, normalized.channelName),
+          externalConversationId: normalized.externalConversationId,
+          userName: resolveGatewayUserName(config, normalized.userName),
+          mode: "webhook",
+        });
+
+        await sendGatewayReply(
+          config,
+          normalized.externalConversationId,
+          resetReply,
+          "♻️",
+          {
+            source: "gateway",
+            portal: config.portal,
+            configId: config.id,
+            channelName: resolveGatewayChannelName(config, normalized.channelName),
+            userName: resolveGatewayUserName(config, normalized.userName),
+            command: "new_session",
+          }
+        );
+
+        await appendGatewayEvent(db, conversationId, "Outbound reply sent", {
+          source: "gateway",
+          type: "outbound_reply",
+          portal: config.portal,
+          configId: config.id,
+          externalConversationId: normalized.externalConversationId,
+          reaction: "♻️",
+        });
+
+        res.json(createApiResponse({ conversationId, replyText: resetReply, result: { response: resetReply, command: "new_session", reset: true }, portal: config.portal, configId: config.id, reaction: "♻️" }));
+        return;
+      }
+
+      const webhookMessage = webhookSessionCommand.requestedNewSession
+        ? webhookSessionCommand.forwardedMessage
+        : normalized.message;
       const incomingMessage = resolveGatewayUserName(config, normalized.userName)
-        ? `[${config.portal} / ${resolveGatewayUserName(config, normalized.userName)}] ${normalized.message}`
-        : `[${config.portal}] ${normalized.message}`;
+        ? `[${config.portal} / ${resolveGatewayUserName(config, normalized.userName)}] ${webhookMessage}`
+        : `[${config.portal}] ${webhookMessage}`;
       const result = await agent.run(incomingMessage);
       const responseText = typeof result?.response === "string" ? result.response : JSON.stringify(result);
       const reaction = pickAgentReaction(responseText);

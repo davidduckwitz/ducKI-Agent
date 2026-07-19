@@ -178,7 +178,13 @@ async function resolveDiscordBridgeConfig(db: Awaited<ReturnType<typeof getDatab
 function normalizeApiKey(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	if (!trimmed) return undefined;
-	return trimmed.replace(/^Bearer\s+/i, "").trim() || undefined;
+	const normalized = trimmed.replace(/^Bearer\s+/i, "").trim();
+	if (!normalized) return undefined;
+	const lowered = normalized.toLowerCase();
+	if (["lm-studio", "not-needed", "none", "null", "undefined"].includes(lowered)) {
+		return undefined;
+	}
+	return normalized;
 }
 
 function readSettingValue(
@@ -275,17 +281,17 @@ function parseMcpServerConfigs(raw: string | undefined): MCPServerConfig[] {
 }
 
 function buildAgentFactory(
-	provider: ReturnType<typeof createProvider>,
+	providerRef: { current: ReturnType<typeof createProvider> },
 	db: Awaited<ReturnType<typeof getDatabase>>,
-	workflowEngine: WorkflowEngine,
+	workflowEngineRef: { current: WorkflowEngine },
 	runtimeTools: ToolExecutor[]
 ) {
 	return () => {
-		const agent = new Agent(provider, db);
+		const agent = new Agent(providerRef.current, db);
 		for (const tool of runtimeTools) {
 			agent.executor.registerTool(tool);
 		}
-		agent.executor.registerTool(createWorkflowManagementTool(workflowEngine));
+		agent.executor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
 		agent.executor.registerTool(createCronjobManagementTool(db));
 		return agent;
 	};
@@ -444,8 +450,9 @@ async function bootstrap(): Promise<void> {
 	const mcpServers = parseMcpServerConfigs(await db.getSetting(MCP_SERVERS_SETTING));
 	await mcpRegistry.syncServers(mcpServers);
 	const runtimeTools: ToolExecutor[] = [...allTools, createMcpTool(mcpRegistry)];
-	const workflowEngine = new WorkflowEngine(provider, db);
-	const createAgent = buildAgentFactory(provider, db, workflowEngine, runtimeTools);
+	const providerRef: { current: ReturnType<typeof createProvider> } = { current: provider };
+	const workflowEngineRef: { current: WorkflowEngine } = { current: new WorkflowEngine(providerRef.current, db) };
+	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools);
 	const defaultAgent = createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
 	cronjobManager.start();
@@ -455,10 +462,19 @@ async function bootstrap(): Promise<void> {
 	await wikiService.start();
 
 	app.locals["db"] = db;
-	app.locals["provider"] = provider;
-	app.locals["workflowEngine"] = workflowEngine;
+	app.locals["provider"] = providerRef.current;
+	app.locals["workflowEngine"] = workflowEngineRef.current;
 	app.locals["agent"] = defaultAgent;
 	app.locals["createAgent"] = createAgent;
+	app.locals["reloadProvider"] = async () => {
+		const reloaded = await loadProviderFromSettings(db);
+		providerRef.current = reloaded.provider;
+		workflowEngineRef.current = new WorkflowEngine(providerRef.current, db);
+		app.locals["provider"] = providerRef.current;
+		app.locals["workflowEngine"] = workflowEngineRef.current;
+		logger.info("Provider reloaded", { provider: reloaded.providerName });
+		return reloaded.providerName;
+	};
 	app.locals["agentRegistry"] = agentRegistry;
 	app.locals["discordGatewayStatus"] = discordGatewayStatus;
 	app.locals["cronjobManager"] = cronjobManager;

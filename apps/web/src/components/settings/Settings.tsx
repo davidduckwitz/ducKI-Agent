@@ -110,7 +110,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
     description: "Optionaler Schluessel fuer LM Studio Proxy/API",
     type: "password",
     section: "API",
-    defaultValue: "lm-studio",
+    defaultValue: "",
   },
   {
     key: "AUTO_UPDATE_ENABLED",
