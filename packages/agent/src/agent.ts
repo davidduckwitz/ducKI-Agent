@@ -1843,7 +1843,7 @@ export class Agent {
           action: reasoning.action,
           confidence: reasoning.confidence,
           toolName: reasoning.toolName,
-          thinking: reasoning.thinking.slice(0, 240),
+          thinking: typeof reasoning.thinking === "string" ? reasoning.thinking.slice(0, 240) : "",
         });
 
         if (
@@ -2013,7 +2013,7 @@ export class Agent {
           attempt: reflectionAttempt,
           quality: reflectionResult.quality,
           shouldRetry: reflectionResult.shouldRetry,
-          issues: reflectionResult.issues.slice(0, 3),
+          issues: Array.isArray(reflectionResult.issues) ? reflectionResult.issues.slice(0, 3) : [],
         });
 
         if (!reflectionResult.shouldRetry) break;
