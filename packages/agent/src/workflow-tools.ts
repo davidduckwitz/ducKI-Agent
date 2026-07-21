@@ -166,6 +166,65 @@ function isHttpUrl(value: string | undefined): boolean {
   return /^https?:\/\//i.test(raw);
 }
 
+function gatewayConversationPrefix(config: GatewayConfig): string {
+  return `[${config.portal}] ${config.name}`;
+}
+
+function buildGatewayConversationName(config: GatewayConfig, externalConversationId: string): string {
+  const hint = config.channelHint?.trim() || externalConversationId.trim();
+  return `${gatewayConversationPrefix(config)} · ${hint}`;
+}
+
+async function resolveGatewayConversationId(
+  db: DatabaseService,
+  config: GatewayConfig,
+  externalConversationId: string
+): Promise<number> {
+  const prefix = gatewayConversationPrefix(config);
+  const conversations = await db.listConversations();
+  const matches = conversations.filter((conversation) =>
+    conversation.name.startsWith(prefix) && conversation.name.includes(externalConversationId)
+  );
+
+  if (matches.length > 0) {
+    const newest = matches.reduce((latest, current) => (current.id > latest.id ? current : latest));
+    return newest.id;
+  }
+
+  const created = await db.createConversation({
+    name: buildGatewayConversationName(config, externalConversationId),
+  });
+  return created.id;
+}
+
+async function appendGatewayOutboundMessage(
+  db: DatabaseService,
+  config: GatewayConfig,
+  externalConversationId: string,
+  content: string
+): Promise<void> {
+  const trimmed = content.trim();
+  if (!trimmed) return;
+
+  try {
+    const conversationId = await resolveGatewayConversationId(db, config, externalConversationId);
+    await db.addMessage({
+      conversationId,
+      role: "assistant",
+      content: trimmed,
+      metadata: JSON.stringify({
+        source: "gateway",
+        type: "outbound_tool_send",
+        portal: config.portal,
+        configId: config.id,
+        externalConversationId,
+      }),
+    });
+  } catch {
+    // Outbound send should not fail just because conversation persistence fails.
+  }
+}
+
 export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
   void db;
   const memoryTool: ToolExecutor = {
@@ -862,6 +921,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
                 status: response.status,
               });
             }
+            await appendGatewayOutboundMessage(db, config, target, message);
             return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "bot_api", tokenSource });
           }
 
@@ -881,6 +941,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
                 status: response.status,
               });
             }
+            await appendGatewayOutboundMessage(db, config, target, message);
             return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook" });
           }
 
@@ -918,6 +979,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
               status: response.status,
             });
           }
+          await appendGatewayOutboundMessage(db, config, target, message);
           return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "bot_api" });
         }
 
@@ -956,6 +1018,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
             status: response.status,
           });
         }
+        await appendGatewayOutboundMessage(db, config, target, message);
         return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook" });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
