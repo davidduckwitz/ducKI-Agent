@@ -54,6 +54,14 @@ describe("agent tool-call parser", () => {
     expect(parsed?.input).toEqual({ action: "list_configs" });
   });
 
+  it("parses unterminated bracket format when payload itself is complete", () => {
+    const agent = createAgentForParserTests();
+    const parsed = parseToolCall(agent, '[TOOL:gateway({"action":"list_configs"})');
+
+    expect(parsed?.toolName).toBe("gateway");
+    expect(parsed?.input).toEqual({ action: "list_configs" });
+  });
+
   it("returns undefined for malformed calls", () => {
     const agent = createAgentForParserTests();
     const parsed = parseToolCall(agent, "[TOOL:gateway=]");

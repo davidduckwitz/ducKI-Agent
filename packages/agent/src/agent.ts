@@ -1150,9 +1150,21 @@ export class Agent {
   }
 
   private extractToolCall(response: string): { toolName: string; input: Record<string, unknown> } | undefined {
-    const bracketBodyMatch = response.match(/\[TOOL:([^\]]+)\]/);
-    if (bracketBodyMatch?.[1]) {
-      const body = bracketBodyMatch[1].trim();
+    const markerIndex = response.indexOf("[TOOL:");
+    const bracketBody = (() => {
+      const bracketBodyMatch = response.match(/\[TOOL:([^\]]+)\]/);
+      if (bracketBodyMatch?.[1]) return bracketBodyMatch[1].trim();
+
+      // Fallback for unterminated variants like: [TOOL:name({...})
+      if (markerIndex >= 0) {
+        return response.slice(markerIndex + "[TOOL:".length).trim();
+      }
+
+      return undefined;
+    })();
+
+    if (bracketBody) {
+      const body = bracketBody;
 
       // Variant A: [TOOL:name({...})]
       const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
@@ -1671,6 +1683,7 @@ export class Agent {
     let finalResponse = "";
     let consecutiveToolFailures = 0;
     const repeatedToolCalls = new Map<string, number>();
+    let malformedToolCallAttempts = 0;
 
     while (iterations < controls.maxIterations) {
       if (this.stopRequested) {
@@ -1833,6 +1846,32 @@ export class Agent {
       this.history.add(assistantMessage);
 
       let parsedToolCall = this.extractToolCall(response);
+      const hasToolCallMarker = /\[TOOL:/.test(response) || response.includes("<|tool_call>call:");
+
+      if (hasToolCallMarker && !parsedToolCall) {
+        malformedToolCallAttempts++;
+        emit("guardrail", "Malformed tool call detected", {
+          attempt: malformedToolCallAttempts,
+          responsePreview: response.slice(0, 280),
+        });
+
+        if (malformedToolCallAttempts >= 2) {
+          finalResponse =
+            "Ich konnte den Tool-Aufruf nicht sicher parsen. Bitte sende die Anweisung erneut, damit ich den Aufruf korrekt ausfuehren kann.";
+          break;
+        }
+
+        const repairHint: LLMMessage = {
+          role: "system",
+          content:
+            "Your previous tool call format was malformed or incomplete. Re-emit exactly one valid tool call in one of these forms: [TOOL:name({json})] or <|tool_call>call:name({json}). Do not add prose.",
+        };
+        await this.conversation.addMessage(repairHint);
+        this.history.add(repairHint);
+        continue;
+      }
+
+      malformedToolCallAttempts = 0;
       if (!parsedToolCall) {
         const reasoning = await this.reasoner.reason(
           [...messages, assistantMessage],
