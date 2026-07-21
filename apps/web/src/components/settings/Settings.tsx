@@ -621,6 +621,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory"];
+type SettingsTab = SettingField["section"] | "Other";
 
 export function Settings() {
   const { t } = useI18n();
@@ -632,6 +633,7 @@ export function Settings() {
   });
 
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const [activeTab, setActiveTab] = useState<SettingsTab>("Provider");
 
   const save = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) =>
@@ -642,9 +644,69 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
+  const tabs: SettingsTab[] = customSettings.length > 0 ? [...SECTIONS, "Other"] : [...SECTIONS];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
+
+  const renderField = (field: SettingField) => {
+    const value = getDisplayValue(field);
+
+    return (
+      <div key={field.key} className="space-y-1 border-b border-gray-800 pb-3 last:border-b-0 last:pb-0">
+        <label className="text-sm text-gray-100 block">{field.label}</label>
+        <p className="text-xs text-gray-400">{field.description}</p>
+        <p className="text-xs text-gray-500 font-mono">{field.key}</p>
+
+        <div className="flex gap-2 items-start">
+          {field.type === "textarea" && (
+            <textarea
+              className="input flex-1 min-h-28"
+              value={value}
+              onChange={(e) =>
+                setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
+              }
+            />
+          )}
+
+          {field.type === "select" && (
+            <select
+              className="input flex-1"
+              value={value}
+              onChange={(e) =>
+                setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
+              }
+            >
+              {field.options?.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {(field.type === "text" || field.type === "password" || field.type === "number") && (
+            <input
+              className="input flex-1"
+              type={field.type}
+              value={value}
+              onChange={(e) =>
+                setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
+              }
+            />
+          )}
+
+          <button
+            onClick={() => saveField(field.key, value)}
+            className="btn-primary flex items-center gap-1"
+            disabled={save.isPending}
+          >
+            <Save className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const saveField = (key: string, value: string): void => {
     save.mutate({ key, value });
@@ -672,75 +734,35 @@ export function Settings() {
         </div>
       </div>
 
-      {SECTIONS.map((section) => {
-        const fields = PREDEFINED_FIELDS.filter((field) => field.section === section);
-        return (
-          <div key={section} className="card space-y-3">
-            <h2 className="text-lg font-semibold">{section}</h2>
+      <div className="card p-2">
+        <div className="flex flex-wrap gap-2">
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab;
+            const label = tab === "Other" ? t("settingsPage.otherSettings") : tab;
+            return (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={isActive
+                  ? "btn-primary"
+                  : "btn-secondary"}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-            {fields.map((field) => {
-              const value = getDisplayValue(field);
+      {activeTab !== "Other" && (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">{activeTab}</h2>
+          {PREDEFINED_FIELDS.filter((field) => field.section === activeTab).map((field) => renderField(field))}
+        </div>
+      )}
 
-              return (
-                <div key={field.key} className="space-y-1 border-b border-gray-800 pb-3 last:border-b-0 last:pb-0">
-                  <label className="text-sm text-gray-100 block">{field.label}</label>
-                  <p className="text-xs text-gray-400">{field.description}</p>
-                  <p className="text-xs text-gray-500 font-mono">{field.key}</p>
-
-                  <div className="flex gap-2 items-start">
-                    {field.type === "textarea" && (
-                      <textarea
-                        className="input flex-1 min-h-28"
-                        value={value}
-                        onChange={(e) =>
-                          setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
-                        }
-                      />
-                    )}
-
-                    {field.type === "select" && (
-                      <select
-                        className="input flex-1"
-                        value={value}
-                        onChange={(e) =>
-                          setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
-                        }
-                      >
-                        {field.options?.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-
-                    {(field.type === "text" || field.type === "password" || field.type === "number") && (
-                      <input
-                        className="input flex-1"
-                        type={field.type}
-                        value={value}
-                        onChange={(e) =>
-                          setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
-                        }
-                      />
-                    )}
-
-                    <button
-                      onClick={() => saveField(field.key, value)}
-                      className="btn-primary flex items-center gap-1"
-                      disabled={save.isPending}
-                    >
-                      <Save className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
-
-      {customSettings.length > 0 && (
+      {activeTab === "Other" && customSettings.length > 0 && (
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">{t("settingsPage.otherSettings")}</h2>
           {customSettings.map((setting) => (
