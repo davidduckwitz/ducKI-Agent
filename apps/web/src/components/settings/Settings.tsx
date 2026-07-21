@@ -431,6 +431,30 @@ const PREDEFINED_FIELDS: SettingField[] = [
     defaultValue: "1",
   },
   {
+    key: "AGENT_REFLECTION_STORE_MEMORY",
+    label: "Reflection -> Memory",
+    description: "Speichert Reflection-Erkenntnisse (Issues/Qualitaet) als lernbare Long-Term Memory.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
+    key: "AGENT_REFLECTION_META_REVIEW",
+    label: "Meta Reflection",
+    description: "Fuehrt nach Reflection eine zweite Reflexion ueber das bereits verbesserte Ergebnis aus.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
     label: "Reasoner Min Confidence",
     description: "Mindest-Confidence, bevor Reasoner eine Antwort oder Tool-Ausfuehrung uebersteuern darf.",

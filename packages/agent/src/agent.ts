@@ -88,6 +88,8 @@ interface AgentRuntimeControls {
   enableAutoMemory: boolean;
   enableReflection: boolean;
   reflectionMaxRetries: number;
+  reflectionStoreMemory: boolean;
+  reflectionMetaReview: boolean;
   reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;
   maxRepeatedToolCall: number;
@@ -1315,6 +1317,8 @@ export class Agent {
       enableAutoMemory: this.enableAutoMemory,
       enableReflection: this.enableReflection,
       reflectionMaxRetries: this.enableReflection ? 1 : 0,
+      reflectionStoreMemory: false,
+      reflectionMetaReview: false,
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
@@ -1346,6 +1350,8 @@ export class Agent {
         enableAutoMemory: this.parseBooleanSetting(get("AGENT_AUTO_MEMORY"), defaults.enableAutoMemory),
         enableReflection: this.parseBooleanSetting(get("AGENT_ENABLE_REFLECTION"), defaults.enableReflection),
         reflectionMaxRetries: this.parseNumberSetting(get("AGENT_REFLECTION_MAX_RETRIES"), defaults.reflectionMaxRetries, 0, 3),
+        reflectionStoreMemory: this.parseBooleanSetting(get("AGENT_REFLECTION_STORE_MEMORY"), defaults.reflectionStoreMemory),
+        reflectionMetaReview: this.parseBooleanSetting(get("AGENT_REFLECTION_META_REVIEW"), defaults.reflectionMetaReview),
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
@@ -2040,6 +2046,8 @@ export class Agent {
       }
     }
 
+    let reflectionQuality: string | undefined;
+    let reflectionIssueSnapshot: string[] = [];
     if (controls.enableReflection && controls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
       for (let reflectionAttempt = 1; reflectionAttempt <= controls.reflectionMaxRetries; reflectionAttempt++) {
         const reflectionResult = await this.reflection.evaluate(
@@ -2047,6 +2055,10 @@ export class Agent {
           this.sanitizeFinalResponse(finalResponse),
           `toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
         );
+        reflectionQuality = reflectionResult.quality;
+        reflectionIssueSnapshot = Array.isArray(reflectionResult.issues)
+          ? reflectionResult.issues.slice(0, 5)
+          : [];
 
         emit("decision", "Reflection evaluation complete", {
           attempt: reflectionAttempt,
@@ -2068,6 +2080,48 @@ export class Agent {
 
         finalResponse = improved;
       }
+    }
+
+    if (controls.enableReflection && controls.reflectionMetaReview && finalResponse.trim().length > 0) {
+      const metaReflection = await this.reflection.evaluate(
+        effectiveInput,
+        this.sanitizeFinalResponse(finalResponse),
+        `meta-review=true; priorQuality=${reflectionQuality ?? "unknown"}; priorIssues=${reflectionIssueSnapshot.join(" | ")}`
+      );
+
+      emit("decision", "Meta reflection evaluation complete", {
+        quality: metaReflection.quality,
+        shouldRetry: metaReflection.shouldRetry,
+        issues: Array.isArray(metaReflection.issues) ? metaReflection.issues.slice(0, 3) : [],
+      });
+
+      const metaImproved = metaReflection.improvedResponse?.trim();
+      if (metaReflection.shouldRetry && metaImproved && metaImproved !== finalResponse.trim()) {
+        finalResponse = metaImproved;
+      }
+
+      if (controls.reflectionStoreMemory && Array.isArray(metaReflection.issues) && metaReflection.issues.length > 0) {
+        const learning = [
+          "Reflection learning",
+          `Quality: ${metaReflection.quality}`,
+          `Issues: ${metaReflection.issues.slice(0, 3).join("; ")}`,
+          `Suggestions: ${(Array.isArray(metaReflection.suggestions) ? metaReflection.suggestions.slice(0, 2) : []).join("; ")}`,
+        ]
+          .filter((part) => part.trim().length > 0)
+          .join(" | ");
+        await this.memory.addLongTermIfNovel(learning, 6, this.conversation.id);
+      }
+    }
+
+    if (controls.enableReflection && controls.reflectionStoreMemory && reflectionIssueSnapshot.length > 0) {
+      const reflectionLearning = [
+        "Reflection learning",
+        reflectionQuality ? `Quality: ${reflectionQuality}` : "",
+        `Issues: ${reflectionIssueSnapshot.slice(0, 3).join("; ")}`,
+      ]
+        .filter((part) => part.trim().length > 0)
+        .join(" | ");
+      await this.memory.addLongTermIfNovel(reflectionLearning, 5, this.conversation.id);
     }
 
     // Add to memory
