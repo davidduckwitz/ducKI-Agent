@@ -765,7 +765,9 @@ function encodeDiscordReactionEmoji(emoji: string): string {
   return encodeURIComponent(trimmed);
 }
 
-const DISCORD_MESSAGE_MAX_CHARS = 3900;
+// Discord message content is limited to 2000 characters.
+// Keep a small buffer to avoid edge cases after trimming/formatting.
+const DISCORD_MESSAGE_MAX_CHARS = 1900;
 
 function splitForDiscord(content: string, maxChars = DISCORD_MESSAGE_MAX_CHARS): string[] {
   const text = content.trim();
@@ -913,17 +915,38 @@ async function sendDiscordReply(botToken: string, channelId: string, text: strin
 }
 
 async function updateDiscordInteractionResponse(applicationId: string, interactionToken: string, text: string): Promise<void> {
+  const chunks = splitForDiscord(text);
+  if (chunks.length === 0) return;
+
+  const first = chunks[0] ?? "";
   const response = await fetch(`https://discord.com/api/v10/webhooks/${encodeURIComponent(applicationId)}/${encodeURIComponent(interactionToken)}/messages/@original`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ content: text }),
+    body: JSON.stringify({ content: first }),
   });
 
   if (!response.ok) {
     const body = await readResponseBody(response);
     throw new Error(`Discord interaction update failed: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`);
+  }
+
+  if (chunks.length <= 1) return;
+
+  for (const chunk of chunks.slice(1)) {
+    const followUpResponse = await fetch(`https://discord.com/api/v10/webhooks/${encodeURIComponent(applicationId)}/${encodeURIComponent(interactionToken)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content: chunk }),
+    });
+
+    if (!followUpResponse.ok) {
+      const body = await readResponseBody(followUpResponse);
+      throw new Error(`Discord interaction follow-up failed: ${followUpResponse.status} ${followUpResponse.statusText}${body ? ` - ${body}` : ""}`);
+    }
   }
 }
 

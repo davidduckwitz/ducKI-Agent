@@ -195,6 +195,17 @@ export class DatabaseService {
   }
 
   async deleteProject(id: number): Promise<void> {
+    const projectConversations = await this.db
+      .select({ id: schema.conversations.id })
+      .from(schema.conversations)
+      .where(eq(schema.conversations.projectId, id))
+      .all();
+
+    for (const conversation of projectConversations) {
+      await this.deleteConversation(conversation.id);
+    }
+
+    await this.db.delete(schema.tasks).where(eq(schema.tasks.projectId, id)).run();
     await this.db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
   }
 
