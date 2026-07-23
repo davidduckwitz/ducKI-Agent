@@ -155,6 +155,51 @@ memoryRouter.post("/actions", async (req, res, next) => {
       return;
     }
 
+    if (action === "pending_list") {
+      const pending = await db.getMemories(scopeConversationId, undefined, "pending");
+      res.json(
+        createApiResponse(
+          pending.map((entry) => ({
+            id: String(entry.id),
+            createdAt: entry.createdAt,
+            payload: {
+              content: entry.content,
+              type: entry.type,
+              importance: entry.importance,
+              conversationId: entry.conversationId,
+            },
+          }))
+        )
+      );
+      return;
+    }
+
+    if (action === "approve") {
+      const pendingId = Number(req.body?.pendingId);
+      const approved = Boolean(req.body?.approved);
+      if (!Number.isFinite(pendingId) || pendingId <= 0) {
+        res.status(400).json({ success: false, error: "pendingId is required", timestamp: new Date().toISOString() });
+        return;
+      }
+
+      const entries = await db.getMemories(undefined, undefined, "pending");
+      const match = entries.find((entry) => entry.id === pendingId);
+      if (!match) {
+        res.status(404).json({ success: false, error: `No pending memory with id ${pendingId}`, timestamp: new Date().toISOString() });
+        return;
+      }
+
+      if (!approved) {
+        await db.deleteMemory(pendingId);
+        res.json(createApiResponse({ approved: false, removed: true, id: pendingId }));
+        return;
+      }
+
+      const updated = await db.updateMemoryStatus(pendingId, "approved");
+      res.json(createApiResponse({ approved: true, entry: updated }));
+      return;
+    }
+
     if (action === "batch") {
       const operations = Array.isArray(req.body?.operations) ? req.body.operations : [];
       if (operations.length === 0) {

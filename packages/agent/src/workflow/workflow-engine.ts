@@ -173,6 +173,32 @@ export class WorkflowEngine {
     });
   }
 
+  private pickNextNodeBatch(workflow: WorkflowGraph): WorkflowNode[] {
+    const batch: WorkflowNode[] = [];
+    const processed = new Set<string>();
+
+    for (const node of workflow.nodes) {
+      if (processed.has(node.id)) continue;
+      if (node.status !== "pending") continue;
+
+      const deps = node.dependsOn ?? [];
+      if (!deps.every((depId) => {
+        const dep = workflow.nodes.find((n) => n.id === depId);
+        return dep?.status === "completed";
+      })) {
+        continue;
+      }
+
+      batch.push(node);
+      processed.add(node.id);
+
+      // Stop if we've found enough nodes to parallelize
+      if (batch.length >= 4) break;
+    }
+
+    return batch;
+  }
+
   private buildRoleSystemPrompt(role: MultiAgentRole): string {
     const tools = this.executor?.listTools() ?? [];
     const toolContext = tools.length
@@ -260,9 +286,25 @@ export class WorkflowEngine {
     let safety = workflow.nodes.length + 5;
     while (safety > 0) {
       safety--;
-      const next = this.pickNextNode(workflow);
-      if (!next) break;
-      await this.executeNode(workflow, next);
+      const batch = this.pickNextNodeBatch(workflow);
+      if (batch.length === 0) break;
+
+      if (batch.length === 1) {
+        const node = batch[0];
+        if (node) {
+          await this.executeNode(workflow, node);
+        }
+      } else {
+        // Execute multiple independent nodes in parallel
+        this.logger.debug("Executing workflow nodes in parallel", { count: batch.length });
+        await Promise.allSettled(batch.map((node) => {
+          if (node) {
+            return this.executeNode(workflow, node);
+          }
+          return Promise.resolve();
+        }));
+      }
+
       const failed = workflow.nodes.some((node) => node.status === "failed");
       if (failed) break;
     }

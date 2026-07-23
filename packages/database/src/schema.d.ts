@@ -541,6 +541,18 @@ export declare const memories: import("drizzle-orm/sqlite-core").SQLiteTableWith
             enumValues: undefined;
             baseColumn: never;
         }, object>;
+        status: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "status";
+            tableName: "memories";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
         createdAt: import("drizzle-orm/sqlite-core").SQLiteColumn<{
             name: "created_at";
             tableName: "memories";

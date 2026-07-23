@@ -14,15 +14,22 @@ import { Reflection } from "./reflection/reflection.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
 import { resolveToolAlias, resolveToolAction } from "./tools/tool-aliases.js";
+import { ToolExecutionGraph } from "./executor/tool-graph.js";
+import { skillSelector } from "./skill-selector/selector.js";
+import { ConversationCompressor } from "./conversation/compressor.js";
+import { modeDetector } from "./config/mode-detector.js";
+import { toolTraceCollector } from "./executor/tool-traces.js";
 
-import { AgentOptions, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
+import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
+// Event Emitter for Agent lifecycle events (chunk streaming, state updates)
 
 const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
 Use the available tools to create and manage projects and tasks, then work them through to completion.
 When a request needs execution, plan first, create or update project/task records as needed, then use tools to carry out the work.
 Always think step-by-step, keep state in the database, and return concise progress updates.
 Use ./shared-workspace as collaborative file area for user-provided artifacts and generated deliverables.
-When you want to call a tool, emit exactly [TOOL:name({json})] with valid JSON arguments.`;
+When you want to call a tool, emit exactly [TOOL:name({json})] with valid JSON arguments.
+If a step genuinely needs several independent tool calls that do not depend on each other's results (e.g. reading two unrelated files, calling two different HTTP endpoints), you may emit multiple [TOOL:name({json})] markers in the same response and they will run concurrently. Do not do this when one call's result is needed as input to another - emit those one at a time instead.`;
 
 export class Agent {
   readonly name: string;
@@ -44,6 +51,8 @@ export class Agent {
   private logger: Logger;
   private skillsRoot: string;
   private stopRequested = false;
+  private toolGraph: ToolExecutionGraph;
+  private conversationCompressor: ConversationCompressor;
   private readonly maxConsecutiveToolFailures = parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3");
   private readonly maxRepeatedToolCall = parseInt(process.env["AGENT_MAX_REPEATED_TOOL_CALL"] ?? "3");
   private readonly enableAutoSkillSelection =
@@ -58,6 +67,7 @@ export class Agent {
   constructor(
     private readonly provider: LLMProvider,
     private readonly db: DatabaseService,
+    private readonly eventEmitter: AgentEventEmitter | undefined = undefined,
     options: AgentOptions = {}
   ) {
     this.name = options.name ?? "DucKI";
@@ -88,6 +98,8 @@ export class Agent {
     this.reasoner = new Reasoner(provider, this.logger);
     this.reflection = new Reflection(provider, this.logger);
     this.history = new History();
+    this.toolGraph = new ToolExecutionGraph();
+    this.conversationCompressor = new ConversationCompressor(provider);
   }
 
   async startConversation(options: { name?: string; projectId?: number } = {}): Promise<number> {
@@ -121,10 +133,22 @@ export class Agent {
       ...options,
       onChunk: (chunk) => {
         armTimeout();
+        try {
+          this.eventEmitter?.emitChunk(chunk);
+        } catch (e) {
+          console.error("Error emitting chunk event:", e);
+        }
+        // Always forward to the caller-provided callback so streaming works
+        // whether or not an eventEmitter is wired to this agent instance.
         options.onChunk?.(chunk);
       },
       onEvent: (event) => {
         armTimeout();
+        try {
+          this.eventEmitter?.emitEvent(event);
+        } catch (e) {
+          console.error("Error emitting event:", e);
+        }
         options.onEvent?.(event);
       },
     };
@@ -152,28 +176,27 @@ export class Agent {
 
     armTimeout();
     const runLoopPromise = this.runLoop(userInput, toolsUsed, iterations, controls, wrappedOptions);
+    // If the timeout wins the race below, runLoop keeps executing until it observes
+    // stopRequested. Swallow any late rejection so it never surfaces as an unhandled
+    // rejection (the race already propagated the timeout error to the caller).
     void runLoopPromise.catch((error) => {
-      if (timedOut) {
-        this.logger.warn("Agent run settled after timeout", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      if (!settled) return;
+      this.logger.warn("Agent run loop settled after timeout/stop", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
     try {
       const result = await Promise.race([runLoopPromise, timeoutPromise]);
       settled = true;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       this.status = this.stopRequested ? "stopped" : "idle";
       return result;
     } catch (error) {
       settled = true;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       this.status = timedOut || this.stopRequested ? "stopped" : "error";
       throw error;
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      if (!timedOut) {
-        this.stopRequested = false;
-      }
     }
   }
 
@@ -207,6 +230,80 @@ export class Agent {
     const suffix = "\n...[truncated]";
     const keep = Math.max(0, maxChars - suffix.length);
     return `${value.slice(0, keep)}${suffix}`;
+  }
+
+  private shouldUseLightweightMode(userInput: string, hasRecentSkillUsage: boolean): boolean {
+    return !userInput.trim().startsWith("/")
+      && userInput.length < 150
+      && !hasRecentSkillUsage;
+  }
+
+  private async compressMessage(message: LLMMessage): Promise<LLMMessage> {
+    if (typeof message.content !== "string" || message.content.length < 1500) {
+      return message;
+    }
+    try {
+      const summaryResult = await this.provider.generate([
+        {
+          role: "system",
+          content: "Compress the following message into 1-2 sentences, preserving key information.",
+        },
+        {
+          role: "user",
+          content: message.content,
+        },
+      ]);
+      return {
+        ...message,
+        content: summaryResult.content,
+        metadata: {
+          ...(typeof message.metadata === "object" ? message.metadata : {}),
+          compressed: true,
+          originalLength: message.content.length,
+        },
+      };
+    } catch (error) {
+      this.logger.warn("Message compression failed, using original", {
+        error: error instanceof Error ? error.message : String(error),
+        messageLength: message.content.length,
+      });
+      return message;
+    }
+  }
+
+  private buildCompressedConversationWindow(
+    maxMessages: number,
+    maxChars: number,
+    useCompression: boolean
+  ): LLMMessage[] {
+    const allMessages = this.conversation.getMessages();
+    if (allMessages.length === 0) return [];
+
+    const selected: LLMMessage[] = [];
+    let usedChars = 0;
+
+    for (let index = Math.max(0, allMessages.length - maxMessages); index < allMessages.length; index++) {
+      const message = allMessages[index];
+      if (!message) continue;
+
+      let content = typeof message.content === "string" ? message.content : "";
+      if (useCompression && content.length > 1500) {
+        content = content.substring(0, 800) + "\n...[message compressed]";
+      } else {
+        content = this.truncateText(content, Math.max(200, 2000));
+      }
+
+      const nextChars = usedChars + content.length;
+      if (selected.length > 0 && nextChars > maxChars) break;
+
+      selected.push({
+        ...message,
+        content,
+      });
+      usedChars = nextChars;
+    }
+
+    return selected;
   }
 
   private parseFrontmatter(content: string): {
@@ -345,6 +442,7 @@ export class Agent {
   }
 
   private scoreSkillMatch(input: string, skill: SkillManifest): number {
+    // Calculate Jaccard similarity (token-based matching)
     const inputTokens = new Set(this.tokenizeForMatching(input));
     const skillTokens = new Set(this.tokenizeForMatching(`${skill.slug} ${skill.name} ${skill.description ?? ""}`));
     if (inputTokens.size === 0 || skillTokens.size === 0) return 0;
@@ -355,40 +453,50 @@ export class Agent {
     }
 
     const union = new Set([...inputTokens, ...skillTokens]).size;
-    let score = union === 0 ? 0 : intersection / union;
+    const jaccardScore = union === 0 ? 0 : intersection / union;
 
+    // Get semantic similarity from embeddings (P3.3)
+    const semanticScore = skillSelector.calculateSemanticSimilarity(input, skill.slug);
+
+    // Use SkillSelector's advanced scoring (P2.3)
+    // Combines Jaccard, semantic similarity, and success rate
+    let score = skillSelector.scoreSkill(input, skill, jaccardScore, semanticScore);
+
+    // Preserve explicit keyword boosting for domain-specific skills
     const normalizedInput = input.toLowerCase();
+    const boostAmount = 0.1; // Smaller boost since SkillSelector already scored
+
     if (
       skill.slug === "workflow-orchestrator" &&
       /(workflow|graph|editor|node|edge|orchestr|run|resume|pipeline)/.test(normalizedInput)
     ) {
-      score += 0.45;
+      score = Math.min(1, score + boostAmount);
     }
 
     if (/(review|analyse|analyze|bug|risk|regression)/.test(normalizedInput) && skill.slug === "code-review") {
-      score += 0.35;
+      score = Math.min(1, score + boostAmount);
     }
 
     if (/(test|tdd|red\s*green|spec)/.test(normalizedInput) && skill.slug === "test-driven-development") {
-      score += 0.35;
+      score = Math.min(1, score + boostAmount);
     }
 
     if (/(plan|roadmap|milestone|strategie|strategy)/.test(normalizedInput) && skill.slug === "plan") {
-      score += 0.3;
+      score = Math.min(1, score + boostAmount);
     }
 
     if (
       /(wiki|wissen|knowledge|dokumentation|docs|nachschlagen|recherche|quelle|sources|llm-wiki)/.test(normalizedInput) &&
       /(llm-wiki|knowledge-base|wiki)/.test(skill.slug)
     ) {
-      score += 0.5;
+      score = Math.min(1, score + boostAmount);
     }
 
     if (
       /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput) &&
       /(datum-uhrzeit-tag|datum-uhrzeit|date-time)/.test(skill.slug)
     ) {
-      score += 0.55;
+      score = Math.min(1, score + boostAmount);
     }
 
     return Math.min(1, score);
@@ -1117,11 +1225,20 @@ export class Agent {
       const fallbackMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=\(\{](.*)$/);
       if (fallbackMatch?.[1]) {
         const toolName = fallbackMatch[1];
-        const tail = fallbackMatch[2] ?? "";
+        let tail = fallbackMatch[2] ?? "";
         const firstBrace = tail.indexOf("{");
         const lastBrace = tail.lastIndexOf("}");
         if (firstBrace >= 0 && lastBrace > firstBrace) {
           const args = this.parseLooseObject(tail.slice(firstBrace, lastBrace + 1));
+          if (args) {
+            return this.resolveToolNameAndInput(toolName, args);
+          }
+        }
+
+        // New Variant E: Direct function call style like [TOOL:name({"a":1})] with no trailing content or extra text
+        const directCallMatch = tail.match(/^<|tool_call>call:([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
+        if (directCallMatch?.[1]) {
+          const args = this.parseLooseObject(directCallMatch[1]);
           if (args) {
             return this.resolveToolNameAndInput(toolName, args);
           }
@@ -1140,6 +1257,64 @@ export class Agent {
     }
 
     return undefined;
+  }
+
+  /**
+   * Parses a single [TOOL:...] bracket body into a tool call, using the same variant
+   * matching as extractToolCall. Kept standalone (not shared code) so extractToolCall's
+   * hardened malformed-input handling stays untouched - this only backs the additive
+   * multi-call batch path in extractAllToolCalls below (P2.1).
+   */
+  private parseBracketBody(body: string): { toolName: string; input: Record<string, unknown> } | undefined {
+    const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
+    if (callMatch?.[1]) {
+      const args = this.parseLooseObject(callMatch[2] ?? "{}");
+      if (args) return this.resolveToolNameAndInput(callMatch[1], args);
+    }
+
+    const equalsMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(\{[^]*\})\s*$/);
+    if (equalsMatch?.[1]) {
+      const args = this.parseLooseObject(equalsMatch[2] ?? "{}");
+      if (args) return this.resolveToolNameAndInput(equalsMatch[1], args);
+    }
+
+    const compactObjectMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
+    if (compactObjectMatch?.[1]) {
+      const args = this.parseLooseObject(compactObjectMatch[2] ?? "{}");
+      if (args) return this.resolveToolNameAndInput(compactObjectMatch[1], args);
+    }
+
+    const fallbackMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*[:=\(\{](.*)$/);
+    if (fallbackMatch?.[1]) {
+      const toolName = fallbackMatch[1];
+      const tail = fallbackMatch[2] ?? "";
+      const firstBrace = tail.indexOf("{");
+      const lastBrace = tail.lastIndexOf("}");
+      if (firstBrace >= 0 && lastBrace > firstBrace) {
+        const args = this.parseLooseObject(tail.slice(firstBrace, lastBrace + 1));
+        if (args) return this.resolveToolNameAndInput(toolName, args);
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Detects multiple [TOOL:name({...})] markers in one LLM response. Additive on top of
+   * extractToolCall (which only ever looks at the first marker): when a response contains
+   * more than one bracket call, the run loop routes them through the tool dependency graph
+   * for concurrent execution instead of the single-call path (P2.1). Responses with 0 or 1
+   * markers fall straight back to the existing, unmodified single-call handling.
+   */
+  private extractAllToolCalls(response: string): Array<{ toolName: string; input: Record<string, unknown> }> {
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    for (const match of response.matchAll(/\[TOOL:([^\]]+)\]/g)) {
+      const body = match[1]?.trim();
+      if (!body) continue;
+      const parsed = this.parseBracketBody(body);
+      if (parsed) calls.push(parsed);
+    }
+    return calls;
   }
 
   private buildToolCallSignature(toolName: string, input: Record<string, unknown>): string {
@@ -1318,7 +1493,7 @@ export class Agent {
       toolInput: Record<string, unknown>,
       toolResult: ToolResult
     ): Promise<void> => {
-      if (!controls.enableAutoMemory) return;
+      if (!adjustedControls.enableAutoMemory) return;
       if (!toolResult.success) return;
 
       try {
@@ -1355,7 +1530,49 @@ export class Agent {
       }
     };
 
-    const installedSkillManifests = this.loadSkillManifests();
+    // Determine agent mode (full, lightweight, or chatbot) - P3.2
+    const explicitMode = options.agentMode ?? "full";
+    const recentHistory = this.history.getLast(3);
+    const hasRecentSkillUsage = recentHistory.some((entry) => entry.role === "tool" || entry.toolName);
+
+    let effectiveMode: "full" | "lightweight" | "chatbot" = explicitMode;
+    let modeDetection: ReturnType<typeof modeDetector.detectMode> | undefined;
+    if (explicitMode === "full" && !hasRecentSkillUsage) {
+      modeDetection = modeDetector.detectMode(userInput);
+      if (modeDetection.preferredMode !== "full" && modeDetection.confidence >= 0.7) {
+        effectiveMode = modeDetection.preferredMode;
+      }
+    }
+    // Fallback heuristic kept as a secondary signal in case the classifier misses obvious
+    // short/simple inputs (e.g. confidence just under threshold).
+    const detectedLightweightMode = effectiveMode === "full"
+      && this.shouldUseLightweightMode(userInput, hasRecentSkillUsage);
+    if (detectedLightweightMode) {
+      effectiveMode = "lightweight";
+    }
+
+    if (effectiveMode !== "full") {
+      emit("mode_selected", `Agent operating in ${effectiveMode} mode`, {
+        mode: effectiveMode,
+        autoDetected: Boolean(modeDetection) || detectedLightweightMode,
+        complexity: modeDetection?.estimatedComplexity,
+        confidence: modeDetection?.confidence,
+        inputLength: userInput.length,
+        hasSkillPrefix: userInput.trim().startsWith("/"),
+      });
+    }
+
+    // In lightweight/chatbot modes, limit iterations and disable planning/reflection
+    const adjustedControls = { ...controls };
+    if (effectiveMode === "lightweight") {
+      adjustedControls.maxIterations = Math.min(2, controls.maxIterations);
+      adjustedControls.enableReflection = false;
+    } else if (effectiveMode === "chatbot") {
+      adjustedControls.maxIterations = 1;
+      adjustedControls.enableReflection = false;
+    }
+
+    const installedSkillManifests = effectiveMode === "full" ? this.loadSkillManifests() : [];
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);
     const enabledAllowlist = new Set(controls.enabledSkillAllowlist);
     const allowlistCandidates = installedSkillManifests.filter((skill) => enabledAllowlist.has(skill.slug));
@@ -1412,6 +1629,12 @@ export class Agent {
     const activeSkills = activeSkillManifests.map((skill) => this.loadSkillContent(skill));
     const activeSkillSlugs = activeSkills.map((skill) => skill.slug);
     const workflowOrchestratorActive = activeSkillSlugs.includes("workflow-orchestrator");
+
+    // Register skill embeddings for semantic indexing (P3.3)
+    for (const skill of activeSkills) {
+      const skillContent = `${skill.name} ${skill.description || ""} ${skill.content?.slice(0, 500) || ""}`;
+      skillSelector.registerSkillEmbedding(skill.slug, skillContent);
+    }
 
     emit("decision", "Skill behavior controls applied", {
       behavior: controls.skillBehavior,
@@ -1490,11 +1713,40 @@ export class Agent {
     this.history.add(userMessage);
 
     const memoryContext = await this.memory.buildSystemContext(this.conversation.id);
+
+    // Conversation compression (P3.1): summarize older history once per run so long
+    // conversations don't keep growing the LLM context unbounded. Only kicks in past the
+    // threshold and only in full mode; recent messages still flow through unmodified via
+    // buildConversationWindow below - this just adds a synopsis of what got cut off.
+    let conversationSummaryContext = "";
+    if (effectiveMode === "full") {
+      const allConversationMessages = this.conversation.getMessages();
+      if (this.conversationCompressor.shouldCompress(allConversationMessages.length)) {
+        try {
+          const { summaries } = await this.conversationCompressor.buildCompressedContext(allConversationMessages, 20);
+          if (summaries.length > 0) {
+            conversationSummaryContext = `\n\n## Earlier Conversation Summary\n${summaries
+              .map((s, i) => `[Part ${i + 1}] ${s.summary}${s.keyDecisions.length > 0 ? ` (Key points: ${s.keyDecisions.join("; ")})` : ""}`)
+              .join("\n")}`;
+            emit("decision", "Older conversation history compressed", {
+              segments: summaries.length,
+              totalMessages: allConversationMessages.length,
+            });
+          }
+        } catch (error) {
+          this.logger.warn("Conversation compression failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+
     const availableTools = this.executor.listTools();
     const toolContext = availableTools.length > 0
       ? `\n\n## Available Tools\n${availableTools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n")}`
       : "";
-    const planContext = this.enablePlanning
+    const enablePlanningInMode = this.enablePlanning && effectiveMode === "full";
+    let planContext = enablePlanningInMode
       ? await this.planner.createPlan(effectiveInput, availableTools.map((tool) => tool.name))
       : undefined;
     if (planContext) {
@@ -1531,6 +1783,7 @@ export class Agent {
       toolContext +
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
       memoryContext +
+      conversationSummaryContext +
       "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- Treat only explicit requests to send, post, answer, or reply on Discord as outbound gateway operations, not normal chat replies.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- If the Discord target is unclear, ask for the target channel instead of guessing.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
 
     const compactBaseSystemPrompt =
@@ -1540,6 +1793,7 @@ export class Agent {
       toolContext +
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
       memoryContext +
+      conversationSummaryContext +
       "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- Treat only explicit requests to send, post, answer, or reply on Discord as outbound gateway operations, not normal chat replies.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- If the Discord target is unclear, ask for the target channel instead of guessing.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
 
     const minimalBaseSystemPrompt =
@@ -1584,11 +1838,17 @@ export class Agent {
     };
 
     const contextCaps = options.contextCaps;
-    const maxSystemPromptChars = withOverride(contextCaps?.maxSystemPromptChars, envCap("AGENT_MAX_SYSTEM_PROMPT_CHARS", 120000, 2000), 2000);
-    const maxDynamicMemoryChars = withOverride(contextCaps?.maxDynamicMemoryChars, envCap("AGENT_MAX_DYNAMIC_MEMORY_CHARS", 24000, 0), 0);
-    const maxContextMessages = withOverride(contextCaps?.maxContextMessages, envCap("AGENT_MAX_CONTEXT_MESSAGES", 60, 1), 1);
-    const maxContextChars = withOverride(contextCaps?.maxContextChars, envCap("AGENT_MAX_CONTEXT_CHARS", 120000, 2000), 2000);
-    const maxContextMessageChars = withOverride(contextCaps?.maxContextMessageChars, envCap("AGENT_MAX_CONTEXT_MESSAGE_CHARS", 12000, 200), 200);
+    const basMaxSystemPromptChars = envCap("AGENT_MAX_SYSTEM_PROMPT_CHARS", effectiveMode === "full" ? 120000 : 20000, 2000);
+    const basMaxDynamicMemoryChars = envCap("AGENT_MAX_DYNAMIC_MEMORY_CHARS", effectiveMode === "full" ? 24000 : 0, 0);
+    const basMaxContextMessages = envCap("AGENT_MAX_CONTEXT_MESSAGES", effectiveMode === "full" ? 60 : 8, 1);
+    const basMaxContextChars = envCap("AGENT_MAX_CONTEXT_CHARS", effectiveMode === "full" ? 120000 : 60000, 2000);
+    const basMaxContextMessageChars = envCap("AGENT_MAX_CONTEXT_MESSAGE_CHARS", effectiveMode === "full" ? 12000 : 2000, 200);
+
+    const maxSystemPromptChars = withOverride(contextCaps?.maxSystemPromptChars, basMaxSystemPromptChars, 2000);
+    const maxDynamicMemoryChars = withOverride(contextCaps?.maxDynamicMemoryChars, basMaxDynamicMemoryChars, 0);
+    const maxContextMessages = withOverride(contextCaps?.maxContextMessages, basMaxContextMessages, 1);
+    const maxContextChars = withOverride(contextCaps?.maxContextChars, basMaxContextChars, 2000);
+    const maxContextMessageChars = withOverride(contextCaps?.maxContextMessageChars, basMaxContextMessageChars, 200);
 
     if (contextCaps) {
       emit("guardrail", "Run-specific context caps applied", {
@@ -1605,7 +1865,7 @@ export class Agent {
     const repeatedToolCalls = new Map<string, number>();
     let malformedToolCallAttempts = 0;
 
-    while (iterations < controls.maxIterations) {
+    while (iterations < adjustedControls.maxIterations) {
       if (this.stopRequested) {
         emit("reasoning", "Run wurde vom Benutzer gestoppt.");
         break;
@@ -1633,6 +1893,7 @@ export class Agent {
 
         const selected: LLMMessage[] = [];
         let usedChars = 0;
+        const useCompression = effectiveMode !== "full";
 
         for (let index = allMessages.length - 1; index >= 0; index--) {
           const message = allMessages[index];
@@ -1640,7 +1901,12 @@ export class Agent {
           if (selected.length >= Math.max(1, messageLimit)) break;
 
           const rawContent = typeof message.content === "string" ? message.content : "";
-          const clippedContent = this.truncateText(rawContent, Math.max(200, maxContextMessageChars));
+          let clippedContent = rawContent;
+          if (useCompression && rawContent.length > 1500) {
+            clippedContent = rawContent.substring(0, 800) + "\n...[message compressed]";
+          } else {
+            clippedContent = this.truncateText(rawContent, Math.max(200, maxContextMessageChars));
+          }
           const nextChars = usedChars + clippedContent.length;
           if (selected.length > 0 && nextChars > Math.max(2000, charLimit)) break;
 
@@ -1689,8 +1955,18 @@ export class Agent {
 
       const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
         if (options.stream && this.provider.supportsStreaming()) {
-          const result = await this.provider.generateStream(messages, {});
-          return result.content;
+          try {
+            // The provider streams internally and resolves with the full response.
+            // The completed response is emitted to the caller once via the break
+            // paths below (options.onChunk(response)), so we do not forward per-delta
+            // chunks here to avoid duplicating the content.
+            const result = await this.provider.generateStream(messages, {});
+            return result.content;
+          } catch (e) {
+            this.logger.warn(`Streaming failed for LLM response: ${String(e)}. Falling back to synchronous generation.`);
+            const syncResult = await this.provider.generate(messages);
+            return syncResult.content;
+          }
         }
         const result = await this.provider.generate(messages);
         return result.content;
@@ -1764,6 +2040,114 @@ export class Agent {
       const assistantMessage: LLMMessage = { role: "assistant", content: response };
       await this.conversation.addMessage(assistantMessage);
       this.history.add(assistantMessage);
+
+      // Multi tool-call batch path (P2.1): only engages when the response contains more
+      // than one [TOOL:...] marker. A single marker (the overwhelmingly common case) falls
+      // straight through to the existing single-call logic below, unchanged.
+      const bracketToolCalls = this.extractAllToolCalls(response);
+      if (bracketToolCalls.length > 1) {
+        emit("decision", "Multiple tool calls detected, evaluating parallel execution", {
+          count: bracketToolCalls.length,
+          tools: bracketToolCalls.map((c) => c.toolName),
+        });
+
+        const executionBatches = this.toolGraph.buildExecutionPlan(
+          bracketToolCalls.map((call, idx) => ({
+            toolName: call.toolName,
+            input: call.input,
+            id: `batch_${iterations}_${idx}`,
+          }))
+        );
+
+        let anyBatchFailure = false;
+
+        for (const batch of executionBatches) {
+          const resultById = new Map<string, ToolResult>();
+          const validCalls: Array<{ id: string; toolName: string; input: Record<string, unknown> }> = [];
+
+          for (const call of batch) {
+            const callId = call.id ?? `${call.toolName}_${JSON.stringify(call.input)}`;
+            const signature = this.buildToolCallSignature(call.toolName, call.input);
+            const seen = (repeatedToolCalls.get(signature) ?? 0) + 1;
+            repeatedToolCalls.set(signature, seen);
+            if (seen > adjustedControls.maxRepeatedToolCall) {
+              resultById.set(callId, { success: false, data: null, error: "Repeated tool call blocked" });
+              continue;
+            }
+            const preflight = this.preflightToolInput(call.toolName, call.input, controls);
+            if (!preflight.ok) {
+              resultById.set(callId, { success: false, data: null, error: preflight.error });
+              continue;
+            }
+            validCalls.push({ id: callId, toolName: call.toolName, input: preflight.input });
+          }
+
+          const isParallel = validCalls.length > 1;
+          const batchStartTime = Date.now();
+          const executedResults = validCalls.length > 0 ? await this.executor.executeBatch(validCalls) : [];
+          const batchDurationMs = Date.now() - batchStartTime;
+          for (const executed of executedResults) {
+            resultById.set(executed.id, executed.result);
+          }
+
+          for (const call of batch) {
+            const callId = call.id ?? `${call.toolName}_${JSON.stringify(call.input)}`;
+            const toolResult: ToolResult = resultById.get(callId) ?? {
+              success: false,
+              data: null,
+              error: "Unknown batch execution error",
+            };
+
+            toolTraceCollector.recordTrace({
+              toolName: call.toolName,
+              inputSize: JSON.stringify(call.input).length,
+              resultSize: JSON.stringify(toolResult).length,
+              durationMs: isParallel ? batchDurationMs : Math.round(batchDurationMs / Math.max(1, batch.length)),
+              success: toolResult.success,
+              error: toolResult.error,
+              parallelized: isParallel,
+              timestamp: new Date().toISOString(),
+              executionIndex: iterations,
+            });
+
+            toolsUsed.push(call.toolName);
+            emit("tool_result", `Tool-Ergebnis: ${call.toolName}`, {
+              toolName: call.toolName,
+              success: toolResult.success,
+              error: toolResult.error,
+              parallelized: isParallel,
+            });
+
+            const toolResultMessage: LLMMessage = {
+              role: "tool",
+              content: JSON.stringify(toolResult),
+              toolCallId: callId,
+            };
+            await this.conversation.addMessage(toolResultMessage);
+            this.history.add(toolResultMessage, call.toolName);
+            await rememberSuccessfulTool(call.toolName, call.input, toolResult);
+
+            if (!toolResult.success) anyBatchFailure = true;
+          }
+        }
+
+        consecutiveToolFailures = anyBatchFailure ? consecutiveToolFailures + 1 : 0;
+        if (consecutiveToolFailures >= adjustedControls.maxConsecutiveToolFailures) {
+          emit("guardrail", "Stopping after repeated tool failures", {
+            consecutiveToolFailures,
+            maxConsecutiveToolFailures: adjustedControls.maxConsecutiveToolFailures,
+          });
+          finalResponse =
+            "Ich habe die Ausfuehrung gestoppt, weil mehrere Tool-Fehler hintereinander aufgetreten sind. Ich kann als naechstes eine gezielte Fehlerbehebung starten.";
+          break;
+        }
+
+        if (this.stopRequested) {
+          emit("reasoning", "Tool-Ausführung abgeschlossen, Stop-Anfrage berücksichtigt.");
+          break;
+        }
+        continue;
+      }
 
       let parsedToolCall = this.extractToolCall(response);
       const hasToolCallMarker = /\[TOOL:/.test(response) || response.includes("<|tool_call>call:");
@@ -1872,11 +2256,11 @@ export class Agent {
       const signature = this.buildToolCallSignature(parsedToolCall.toolName, parsedToolCall.input);
       const seen = (repeatedToolCalls.get(signature) ?? 0) + 1;
       repeatedToolCalls.set(signature, seen);
-      if (seen > controls.maxRepeatedToolCall) {
+      if (seen > adjustedControls.maxRepeatedToolCall) {
         emit("guardrail", "Repeated tool call blocked", {
           toolName: parsedToolCall.toolName,
           repetition: seen,
-          max: controls.maxRepeatedToolCall,
+          max: adjustedControls.maxRepeatedToolCall,
         });
         finalResponse =
           "Ich stoppe hier, weil derselbe Tool-Aufruf mehrfach wiederholt wurde. Ich kann den Ablauf jetzt mit angepassten Parametern fortsetzen, wenn du kurz bestätigst, welche Variante gewuenscht ist.";
@@ -1890,9 +2274,25 @@ export class Agent {
 
       try {
         const preflight = this.preflightToolInput(parsedToolCall.toolName, parsedToolCall.input, controls);
+        const startTime = Date.now();
         const toolResult = preflight.ok
           ? await this.executor.execute(parsedToolCall.toolName, preflight.input)
           : { success: false, data: null, error: preflight.error };
+        const executionTime = Date.now() - startTime;
+
+        // Record execution trace (P3.4)
+        toolTraceCollector.recordTrace({
+          toolName: parsedToolCall.toolName,
+          inputSize: JSON.stringify(parsedToolCall.input).length,
+          resultSize: JSON.stringify(toolResult).length,
+          durationMs: executionTime,
+          success: toolResult.success,
+          error: toolResult.error,
+          parallelized: false,
+          timestamp: new Date().toISOString(),
+          executionIndex: iterations,
+        });
+
         toolsUsed.push(parsedToolCall.toolName);
         emit("tool_result", `Tool-Ergebnis: ${parsedToolCall.toolName}`, {
           toolName: parsedToolCall.toolName,
@@ -1929,15 +2329,39 @@ export class Agent {
               hint: recoveryHint,
             });
           }
+
+          // Plan refinement on consecutive failures (P2.2)
+          if (consecutiveToolFailures === 2) {
+            try {
+              const currentPlan = planContext;
+              if (currentPlan && enablePlanningInMode) {
+                const feedback = `Tool '${parsedToolCall.toolName}' failed twice. Error: ${String(toolResult.error ?? "unknown")}. Need alternative approach.`;
+                const refinedPlan = await this.planner.refinePlan(currentPlan, feedback);
+                if (refinedPlan) {
+                  planContext = refinedPlan;
+                  emit("decision", "Plan refined after tool failures", {
+                    toolName: parsedToolCall.toolName,
+                    newSteps: refinedPlan.steps.length,
+                    feedback,
+                  });
+                }
+              }
+            } catch (refinementError) {
+              this.logger.warn("Plan refinement failed", {
+                error: refinementError instanceof Error ? refinementError.message : String(refinementError),
+              });
+            }
+          }
+
           emit("decision", "Tool execution failed", {
             toolName: parsedToolCall.toolName,
             consecutiveToolFailures,
-            maxConsecutiveToolFailures: controls.maxConsecutiveToolFailures,
+            maxConsecutiveToolFailures: adjustedControls.maxConsecutiveToolFailures,
           });
-          if (consecutiveToolFailures >= controls.maxConsecutiveToolFailures) {
+          if (consecutiveToolFailures >= adjustedControls.maxConsecutiveToolFailures) {
             emit("guardrail", "Stopping after repeated tool failures", {
               consecutiveToolFailures,
-              maxConsecutiveToolFailures: controls.maxConsecutiveToolFailures,
+              maxConsecutiveToolFailures: adjustedControls.maxConsecutiveToolFailures,
             });
             finalResponse =
               "Ich habe die Ausfuehrung gestoppt, weil mehrere Tool-Fehler hintereinander aufgetreten sind. Ich kann als naechstes eine gezielte Fehlerbehebung starten.";
@@ -1962,8 +2386,8 @@ export class Agent {
 
     let reflectionQuality: string | undefined;
     let reflectionIssueSnapshot: string[] = [];
-    if (controls.enableReflection && controls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
-      for (let reflectionAttempt = 1; reflectionAttempt <= controls.reflectionMaxRetries; reflectionAttempt++) {
+    if (adjustedControls.enableReflection && adjustedControls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
+      for (let reflectionAttempt = 1; reflectionAttempt <= adjustedControls.reflectionMaxRetries; reflectionAttempt++) {
         const reflectionResult = await this.reflection.evaluate(
           effectiveInput,
           this.sanitizeFinalResponse(finalResponse),
@@ -1996,7 +2420,7 @@ export class Agent {
       }
     }
 
-    if (controls.enableReflection && controls.reflectionMetaReview && finalResponse.trim().length > 0) {
+    if (adjustedControls.enableReflection && adjustedControls.reflectionMetaReview && finalResponse.trim().length > 0) {
       const metaReflection = await this.reflection.evaluate(
         effectiveInput,
         this.sanitizeFinalResponse(finalResponse),
@@ -2023,11 +2447,11 @@ export class Agent {
         ]
           .filter((part) => part.trim().length > 0)
           .join(" | ");
-        await this.memory.addLongTermIfNovel(learning, 6, this.conversation.id);
+        await this.memory.addLongTermIfNovel(learning, 6, this.conversation.id, "pending");
       }
     }
 
-    if (controls.enableReflection && controls.reflectionStoreMemory && reflectionIssueSnapshot.length > 0) {
+    if (adjustedControls.enableReflection && adjustedControls.reflectionStoreMemory && reflectionIssueSnapshot.length > 0) {
       const reflectionLearning = [
         "Reflection learning",
         reflectionQuality ? `Quality: ${reflectionQuality}` : "",
@@ -2035,7 +2459,7 @@ export class Agent {
       ]
         .filter((part) => part.trim().length > 0)
         .join(" | ");
-      await this.memory.addLongTermIfNovel(reflectionLearning, 5, this.conversation.id);
+      await this.memory.addLongTermIfNovel(reflectionLearning, 5, this.conversation.id, "pending");
     }
 
     // Add to memory
@@ -2044,6 +2468,20 @@ export class Agent {
       2,
       this.conversation.id
     );
+
+    // Record skill usage metrics (P2.3)
+    for (const skillSlug of activeSkillSlugs) {
+      const success = finalResponse.trim().length > 0 && !finalResponse.includes("fehlgeschlagen");
+      skillSelector.recordSkillUsage(skillSlug, success, iterations);
+    }
+
+    // Prune old skill metrics periodically
+    if (Math.random() < 0.01) {
+      skillSelector.pruneOldMetrics();
+    }
+
+    // Record actual mode outcome for self-calibration (P3.2)
+    modeDetector.recordActualComplexity(userInput, effectiveMode, iterations);
 
     return {
       response: this.sanitizeFinalResponse(finalResponse),

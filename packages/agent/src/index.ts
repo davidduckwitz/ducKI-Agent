@@ -1,5 +1,5 @@
 export { Agent } from "./agent.js";
-export { AgentOptions, AgentRunResult } from "./config/interfaces_types.js"
+export { AgentOptions, AgentRunResult, AgentRunEvent, AgentRunEventType, AgentRunOptions } from "./config/interfaces_types.js"
 export { ConversationManager } from "./conversation/conversation.js";
 export { MemorySystem } from "./memory/memory.js";
 export { Planner } from "./planner/planner.js";

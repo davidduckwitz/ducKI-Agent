@@ -34,7 +34,7 @@ export class DatabaseService {
             `CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, tool_call_id TEXT, tool_result TEXT, created_at TEXT NOT NULL)`,
             `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER REFERENCES projects(id), title TEXT NOT NULL, description TEXT, status TEXT NOT NULL DEFAULT 'pending', priority TEXT NOT NULL DEFAULT 'medium', subtasks TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
             `CREATE TABLE IF NOT EXISTS tools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_schema TEXT, last_used TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-            `CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), type TEXT NOT NULL DEFAULT 'short-term', content TEXT NOT NULL, importance INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)`,
+            `CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), type TEXT NOT NULL DEFAULT 'short-term', content TEXT NOT NULL, importance INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'approved', created_at TEXT NOT NULL)`,
             `CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, embedding TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL)`,
             `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
             `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT NOT NULL, message TEXT NOT NULL, context TEXT, timestamp TEXT NOT NULL)`,
@@ -46,6 +46,9 @@ export class DatabaseService {
             await this.client.execute(sql);
         }
         await this.client.execute(`ALTER TABLE messages ADD COLUMN metadata TEXT`).catch(() => {
+            // Older databases may already have the column or reject duplicate adds.
+        });
+        await this.client.execute(`ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'`).catch(() => {
             // Older databases may already have the column or reject duplicate adds.
         });
     }
@@ -191,15 +194,20 @@ export class DatabaseService {
             throw new Error("Failed to add memory");
         return result;
     }
-    async getMemories(conversationId, type) {
+    async getMemories(conversationId, type, status) {
         const conditions = [];
         if (conversationId !== undefined)
             conditions.push(eq(schema.memories.conversationId, conversationId));
         if (type !== undefined)
             conditions.push(eq(schema.memories.type, type));
+        if (status !== undefined)
+            conditions.push(eq(schema.memories.status, status));
         if (conditions.length === 0)
             return this.db.select().from(schema.memories).orderBy(desc(schema.memories.importance)).all();
         return this.db.select().from(schema.memories).where(and(...conditions)).orderBy(desc(schema.memories.importance)).all();
+    }
+    async updateMemoryStatus(id, status) {
+        return this.db.update(schema.memories).set({ status }).where(eq(schema.memories.id, id)).returning().get();
     }
     async deleteMemory(id) {
         await this.db.delete(schema.memories).where(eq(schema.memories.id, id)).run();

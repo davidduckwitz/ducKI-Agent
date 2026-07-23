@@ -50,7 +50,12 @@ export class MemorySystem {
     await this.addLongTermIfNovel(content, importance, conversationId);
   }
 
-  async addLongTermIfNovel(content: string, importance = 5, conversationId?: number): Promise<boolean> {
+  async addLongTermIfNovel(
+    content: string,
+    importance = 5,
+    conversationId?: number,
+    status: "approved" | "pending" = "approved"
+  ): Promise<boolean> {
     const normalized = this.normalize(content);
     if (!normalized) return false;
 
@@ -61,8 +66,8 @@ export class MemorySystem {
       return false;
     }
 
-    await this.db.addMemory({ content: normalized, importance, type: "long-term", conversationId });
-    this.logger.debug("Long-term memory added", { content: normalized.slice(0, 60), importance });
+    await this.db.addMemory({ content: normalized, importance, type: "long-term", conversationId, status });
+    this.logger.debug("Long-term memory added", { content: normalized.slice(0, 60), importance, status });
     return true;
   }
 
@@ -105,7 +110,7 @@ export class MemorySystem {
       .join(" | ");
 
     const importance = resultText.length >= 80 ? 8 : 7;
-    const stored = await this.addLongTermIfNovel(content, importance, conversationId);
+    const stored = await this.addLongTermIfNovel(content, importance, conversationId, "pending");
 
     return {
       shouldRemember: true,
@@ -167,7 +172,7 @@ export class MemorySystem {
       }
 
       const importance = action === "run" || action === "resume" ? 7 : 6;
-      const stored = await this.addLongTermIfNovel(content, importance, conversationId);
+      const stored = await this.addLongTermIfNovel(content, importance, conversationId, "pending");
       return {
         shouldRemember: true,
         stored,
@@ -196,7 +201,7 @@ export class MemorySystem {
           reason: "low_signal_content",
         };
       }
-      const stored = await this.addLongTermIfNovel(content, 6, conversationId);
+      const stored = await this.addLongTermIfNovel(content, 6, conversationId, "pending");
       return {
         shouldRemember: true,
         stored,
@@ -220,7 +225,7 @@ export class MemorySystem {
   }
 
   async getRelevantContext(query: string, limit = 5): Promise<string[]> {
-    const longTerm = await this.db.getMemories(undefined, "long-term");
+    const longTerm = await this.db.getMemories(undefined, "long-term", "approved");
     return longTerm
       .filter((m) => m.content.toLowerCase().includes(query.toLowerCase()))
       .slice(0, limit)
@@ -285,8 +290,8 @@ export class MemorySystem {
   }
 
   private async getKnowledgePool(conversationId: number | undefined, includeSemantic: boolean): Promise<string[]> {
-    const longTerm = await this.db.getMemories(conversationId, "long-term");
-    const semantic = includeSemantic ? await this.db.getMemories(conversationId, "semantic") : [];
+    const longTerm = await this.db.getMemories(conversationId, "long-term", "approved");
+    const semantic = includeSemantic ? await this.db.getMemories(conversationId, "semantic", "approved") : [];
     return [...longTerm, ...semantic].map((entry) => entry.content);
   }
 

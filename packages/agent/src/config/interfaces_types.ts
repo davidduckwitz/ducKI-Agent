@@ -1,3 +1,4 @@
+
 export interface AgentOptions {
   name?: string;
   systemPrompt?: string;
@@ -30,9 +31,10 @@ export interface AgentRunOptions {
   onChunk?: (chunk: string) => void;
   onEvent?: (event: AgentRunEvent) => void;
   contextCaps?: AgentRunContextCaps;
+  agentMode?: "full" | "lightweight" | "chatbot";
 }
 
-export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
+export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | "mode_selected";
 
 export interface AgentRunEvent {
   type: AgentRunEventType;
@@ -85,3 +87,11 @@ export interface AgentRuntimeControls {
   autoSkillFallbackNone: boolean;
   enabledSkillAllowlist: string[];
 }
+
+// Event Emitter for Agent lifecycle events (chunk streaming, state updates)
+export interface AgentRunEventEmitter {
+  emitChunk(chunk: string): void;
+  emitEvent(event: AgentRunEvent): void;
+}
+
+export type AgentEventEmitter = AgentRunEventEmitter;

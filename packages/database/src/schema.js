@@ -70,6 +70,7 @@ export const memories = sqliteTable("memories", {
     type: text("type").notNull().default("short-term"), // short-term, long-term, episodic, semantic
     content: text("content").notNull(),
     importance: integer("importance").notNull().default(1),
+    status: text("status").notNull().default("approved"), // approved, pending
     createdAt: text("created_at").notNull(),
 });
 // ============================================================

@@ -116,17 +116,20 @@ tasksRouter.post("/:id/run", async (req, res, next) => {
         "Diagnose the root cause, avoid repeating the failing step, and return the corrected task result.",
         prompt,
       ].join("\n"),
-      async (runAgent) => {
-        if (task.projectId) {
-          await runAgent.startConversation({
-            name: `Task Run #${taskId}`,
-            projectId: task.projectId,
-          });
-          return;
-        }
+        async (runAgent) => {
+            // Reuse the conversation created above so retries append to the same
+            // thread. loadConversation expects a numeric id, not an options object.
+            if (conversationId) {
+              await runAgent.loadConversation(conversationId);
+              return;
+            }
 
-        await runAgent.startConversation({ name: `Task Run #${taskId}` });
-      },
+            await runAgent.startConversation(
+              task.projectId
+                ? { name: `Task Run #${taskId}`, projectId: task.projectId }
+                : { name: `Task Run #${taskId}` }
+            );
+          },
       {
         contextCaps: {
           maxSystemPromptChars: envCap("AGENT_TASK_MAX_SYSTEM_PROMPT_CHARS", 50000, 2000),

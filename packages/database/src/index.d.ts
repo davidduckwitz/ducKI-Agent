@@ -39,7 +39,8 @@ export declare class DatabaseService {
     updateTask(id: number, data: Partial<Omit<TaskInsert, "id" | "createdAt">>): Promise<schema.TaskSelect | undefined>;
     deleteTask(id: number): Promise<void>;
     addMemory(data: Omit<MemoryInsert, "createdAt">): Promise<MemorySelect>;
-    getMemories(conversationId?: number, type?: string): Promise<MemorySelect[]>;
+    getMemories(conversationId?: number, type?: string, status?: string): Promise<MemorySelect[]>;
+    updateMemoryStatus(id: number, status: string): Promise<MemorySelect | undefined>;
     deleteMemory(id: number): Promise<void>;
     addEmbedding(data: Omit<EmbeddingInsert, "createdAt">): Promise<EmbeddingSelect>;
     getEmbeddings(): Promise<EmbeddingSelect[]>;

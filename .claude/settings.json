@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm --filter @ducki/agent run build)",
+      "Bash(pnpm --filter @ducki/server run typecheck)"
+    ]
+  }
+}

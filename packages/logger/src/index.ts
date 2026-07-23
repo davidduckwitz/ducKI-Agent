@@ -90,19 +90,25 @@ class Logger {
 
     const formatted = this.formatMessage(entry);
 
+    // Route warn/error to stderr so process managers and log shippers that split
+    // stdout/stderr (or filter by level) actually see them.
+    const write = level === "warn" || level === "error" ? console.error : console.log;
+
     // Console output with colors
     if (this.colorize && process.stdout.isTTY) {
-      console.log(`${COLORS[level]}${formatted}${RESET}`);
+      write(`${COLORS[level]}${formatted}${RESET}`);
     } else {
-      console.log(formatted);
+      write(formatted);
     }
 
     // File output
     if (this.logFile) {
       try {
         appendFileSync(this.logFile, formatted + "\n");
-      } catch {
-        // Ignore file write errors to avoid infinite loops
+      } catch (err) {
+        // Surface the write failure once on the console instead of silently dropping
+        // log lines - losing logs invisibly makes production issues unreviewable.
+        console.error(`[Logger] Failed to write to log file ${this.logFile}:`, err);
       }
     }
   }

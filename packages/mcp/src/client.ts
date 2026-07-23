@@ -27,6 +27,7 @@ export class MCPClient {
   private reconnecting = false;
   private reconnectAttempts = 0;
   private refreshTimer: NodeJS.Timeout | null = null;
+  private refreshFailures = 0;
 
   constructor(
     private readonly serverId: string,
@@ -63,25 +64,41 @@ export class MCPClient {
   }
 
   private scheduleRefresh(): void {
-    if (this.refreshTimer) clearInterval(this.refreshTimer);
-    this.refreshTimer = setInterval(async () => {
-      if (this.stopping) return;
-      try {
-        const tools = await this.fetchTools();
-        this.applyTools(tools);
-        if (!this.connected) {
-          this.connected = true;
-          this.reconnectAttempts = 0;
+    if (this.refreshTimer) clearTimeout(this.refreshTimer);
+
+    const scheduleNext = (delayMs: number) => {
+      this.refreshTimer = setTimeout(async () => {
+        if (this.stopping) return;
+        try {
+          const tools = await this.fetchTools();
+          this.applyTools(tools);
+          if (!this.connected) {
+            this.connected = true;
+            this.reconnectAttempts = 0;
+          }
+          this.refreshFailures = 0;
+          scheduleNext(this.toolsRefreshMs);
+        } catch (error) {
+          this.connected = false;
+          this.refreshFailures++;
+          const nextDelay = Math.min(
+            this.toolsRefreshMs * Math.pow(1.5, this.refreshFailures - 1),
+            30000
+          ) + Math.random() * 1000;
+
+          this.logger.warn("MCP tools refresh failed", {
+            url: this.serverUrl,
+            failures: this.refreshFailures,
+            nextRetryMs: nextDelay,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          void this.ensureReconnect();
+          scheduleNext(nextDelay);
         }
-      } catch (error) {
-        this.connected = false;
-        this.logger.warn("MCP tools refresh failed", {
-          url: this.serverUrl,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        void this.ensureReconnect();
-      }
-    }, this.toolsRefreshMs);
+      }, delayMs);
+    };
+
+    scheduleNext(this.toolsRefreshMs);
   }
 
   private async ensureReconnect(): Promise<void> {

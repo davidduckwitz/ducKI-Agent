@@ -105,13 +105,14 @@ export const shellTool: ToolExecutor = {
     } catch (error: unknown) {
       if (error instanceof Error) {
         const execError = error as Error & { status?: number; stderr?: string; stdout?: string };
+        const errorMessage = execError.stderr?.trim() || error.message || `Command exited with code ${execError.status ?? 1}`;
         return {
           success: false,
           data: {
             output: execError.stdout ?? "",
             exitCode: execError.status ?? 1,
           },
-          error: execError.stderr ?? error.message,
+          error: errorMessage,
         };
       }
       return { success: false, data: null, error: String(error) };

@@ -217,12 +217,11 @@ chatRouter.post("/", async (req, res, next) => {
         routedMessage,
       ].join("\n"),
       async (runAgent) => {
-        if (activeConversationId) {
-          await runAgent.loadConversation(activeConversationId);
-          return;
-        }
-
-        await runAgent.startConversation();
+        // activeConversationId is always set by this point (either the caller-provided id,
+        // or the one just created above) - reuse it here instead of calling
+        // startConversation() again, which previously created a second, disconnected
+        // conversation row that only the very first message of every new chat ever wrote to.
+        await runAgent.loadConversation(activeConversationId);
       }
     );
     res.json(createApiResponse(result.result));

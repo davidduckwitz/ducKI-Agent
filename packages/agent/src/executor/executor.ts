@@ -1,6 +1,12 @@
 import type { ToolDefinition, ToolResult, ToolExecutor } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
 
+export interface ToolCallWithId {
+  id: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
 export class Executor {
   private tools = new Map<string, ToolExecutor>();
 
@@ -70,5 +76,43 @@ export class Executor {
       name: t.name,
       description: t.description,
     }));
+  }
+
+  /**
+   * Execute multiple tool calls in parallel.
+   * Returns array of results in the same order as input calls.
+   */
+  async executeBatch(calls: ToolCallWithId[]): Promise<Array<{ id: string; result: ToolResult }>> {
+    const startTime = Date.now();
+    const promises = calls.map(async (call) => ({
+      id: call.id,
+      result: await this.execute(call.toolName, call.input),
+    }));
+
+    const results = await Promise.allSettled(promises);
+    const executionTime = Date.now() - startTime;
+
+    this.logger.info("Batch tool execution completed", {
+      total: calls.length,
+      executionTime,
+      results: results.map((r) => (r.status === "fulfilled" ? "success" : "error")),
+    });
+
+    return results.map((result, index) => {
+      if (result.status === "fulfilled") {
+        return result.value;
+      }
+      // Handle promise rejection
+      const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      return {
+        id: calls[index]?.id || `error_${index}`,
+        result: {
+          success: false,
+          data: null,
+          error: `Batch execution failed: ${error}`,
+          metadata: { toolName: calls[index]?.toolName || "unknown", executionTime: 0 },
+        } as ToolResult,
+      };
+    });
   }
 }

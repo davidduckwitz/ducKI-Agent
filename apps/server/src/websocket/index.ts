@@ -45,28 +45,36 @@ export function setupWebSocket(
 
     // Chat with streaming
     socket.on("chat:message", async (data: { message: string; conversationId?: number }) => {
-      const agent = createAgent();
-      registerActiveAgent(socket.id, agent);
       let registryRunId: string | undefined;
+      const runAgents: Agent[] = [];
+      // Tracked separately from the resolved id below so the catch block can still report
+      // a conversationId even if the failure happened before resolution completed.
+      let conversationId: number | undefined = data.conversationId;
       try {
-        let conversationId: number;
+        // Determine the conversation directly via the database instead of spinning up a
+        // throwaway Agent instance just to call startConversation()/loadConversation() -
+        // that instance was previously discarded and never used to actually run the
+        // message, which also meant the "Stop" button targeted the wrong agent.
+        let resolvedConversationId: number;
         if (data.conversationId) {
-          await agent.loadConversation(data.conversationId);
-          conversationId = data.conversationId;
+          resolvedConversationId = data.conversationId;
         } else {
-          const convId = await agent.startConversation();
-          socket.emit("chat:conversation", { conversationId: convId });
-          conversationId = convId;
+          const conv = await db.createConversation({
+            name: `Conversation ${new Date().toLocaleString()}`,
+          });
+          resolvedConversationId = conv.id;
+          socket.emit("chat:conversation", { conversationId: resolvedConversationId });
         }
+        conversationId = resolvedConversationId;
 
         registryRunId = agentRegistry.register({
           source: "chat_ws",
           socketId: socket.id,
-          conversationId,
+          conversationId: resolvedConversationId,
           label: "WebSocket Chat",
         });
 
-        socket.emit("chat:start", { timestamp: new Date().toISOString() });
+        socket.emit("chat:start", { timestamp: new Date().toISOString(), conversationId: resolvedConversationId });
 
         const result = await runAgentWithRepairRetry(
           createAgent,
@@ -78,40 +86,40 @@ export function setupWebSocket(
             data.message,
           ].join("\n"),
           async (runAgent) => {
-            if (data.conversationId) {
-              await runAgent.loadConversation(data.conversationId);
-              return;
-            }
-
-            await runAgent.startConversation();
+            registerActiveAgent(socket.id, runAgent);
+            runAgents.push(runAgent);
+            await runAgent.loadConversation(resolvedConversationId);
           },
           {
             stream: true,
             onChunk: (chunk) => {
-              socket.emit("chat:chunk", { content: chunk });
+              socket.emit("chat:chunk", { content: chunk, conversationId: resolvedConversationId });
             },
             onEvent: (event: AgentRunEvent) => {
-              socket.emit("chat:event", event);
+              socket.emit("chat:event", { ...event, conversationId: resolvedConversationId });
             },
           }
         );
 
-        socket.emit("chat:complete", result.result);
+        socket.emit("chat:complete", { ...result.result, conversationId: resolvedConversationId });
       } catch (error) {
         socket.emit("chat:error", {
           error: error instanceof Error ? error.message : String(error),
+          conversationId,
         });
       } finally {
         if (registryRunId) {
           agentRegistry.unregister(registryRunId);
         }
-        unregisterActiveAgent(socket.id, agent);
+        for (const runAgent of runAgents) {
+          unregisterActiveAgent(socket.id, runAgent);
+        }
       }
     });
 
-    socket.on("chat:stop", () => {
+    socket.on("chat:stop", (data?: { conversationId?: number }) => {
       stopSocketAgents(socket.id);
-      socket.emit("chat:stopped", { timestamp: new Date().toISOString() });
+      socket.emit("chat:stopped", { timestamp: new Date().toISOString(), conversationId: data?.conversationId });
     });
 
     // Task updates
