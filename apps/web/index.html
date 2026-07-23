@@ -1,17 +1,41 @@
 <!doctype html>
-<html lang="de" class="dark">
+<html lang="de">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DucKI Agent</title>
     <link rel="icon" type="image/svg+xml" href="/duck.svg" />
+    <script>
+      (function () {
+        try {
+          var mode = localStorage.getItem("ducki.theme.mode") || "dark";
+          var accent = localStorage.getItem("ducki.theme.accent") || "blue";
+          var resolvedDark =
+            mode === "dark" ||
+            (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.classList.toggle("dark", resolvedDark);
+          root.setAttribute("data-accent", accent);
+        } catch (e) {}
+      })();
+    </script>
     <style>
       html,
       body {
         margin: 0;
         min-height: 100%;
+      }
+
+      html.dark,
+      html.dark body {
         background: #030712;
         color: #ffffff;
+      }
+
+      html:not(.dark),
+      html:not(.dark) body {
+        background: #ffffff;
+        color: #0f172a;
       }
 
       #initial-loader {
@@ -20,9 +44,16 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: radial-gradient(circle at 20% 20%, #111827 0%, #030712 55%, #000000 100%);
         z-index: 9999;
         transition: opacity 0.25s ease;
+      }
+
+      html.dark #initial-loader {
+        background: radial-gradient(circle at 20% 20%, #111827 0%, #030712 55%, #000000 100%);
+      }
+
+      html:not(.dark) #initial-loader {
+        background: radial-gradient(circle at 20% 20%, #f8fafc 0%, #e2e8f0 55%, #cbd5e1 100%);
       }
 
       #initial-loader.is-hidden {
@@ -60,7 +91,7 @@
       }
     </style>
   </head>
-  <body class="bg-gray-950 text-white">
+  <body class="bg-background text-foreground">
     <div id="initial-loader" aria-live="polite" aria-busy="true">
       <div class="initial-loader-content">
         <div class="initial-loader-spinner" aria-hidden="true"></div>

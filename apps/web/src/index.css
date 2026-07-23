@@ -3,14 +3,95 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 217 91% 60%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 222 47% 4%;
+    --foreground: 210 20% 98%;
+    --card: 222 39% 9%;
+    --card-foreground: 210 20% 98%;
+    --popover: 222 39% 9%;
+    --popover-foreground: 210 20% 98%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 25% 16%;
+    --secondary-foreground: 210 20% 98%;
+    --muted: 217 25% 16%;
+    --muted-foreground: 218 11% 65%;
+    --accent: 217 25% 16%;
+    --accent-foreground: 210 20% 98%;
+    --destructive: 0 63% 42%;
+    --destructive-foreground: 210 20% 98%;
+    --border: 217 19% 20%;
+    --input: 217 19% 20%;
+    --ring: 217 91% 60%;
+  }
+
+  /* Akzentfarben-Presets, ueberschreiben --primary/--ring unabhaengig vom Light/Dark-Modus */
+  [data-accent="blue"] {
+    --primary: 217 91% 60%;
+    --primary-foreground: 210 40% 98%;
+    --ring: 217 91% 60%;
+  }
+  [data-accent="violet"] {
+    --primary: 258 90% 66%;
+    --primary-foreground: 210 40% 98%;
+    --ring: 258 90% 66%;
+  }
+  [data-accent="green"] {
+    --primary: 142 71% 40%;
+    --primary-foreground: 144 61% 97%;
+    --ring: 142 71% 40%;
+  }
+  [data-accent="orange"] {
+    --primary: 24 95% 53%;
+    --primary-foreground: 26 83% 14%;
+    --ring: 24 95% 53%;
+  }
+  [data-accent="rose"] {
+    --primary: 346 77% 50%;
+    --primary-foreground: 355 100% 97%;
+    --ring: 346 77% 50%;
+  }
+  [data-accent="zinc"] {
+    --primary: 240 5% 34%;
+    --primary-foreground: 0 0% 98%;
+    --ring: 240 5% 34%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
   body {
-    @apply antialiased;
+    @apply antialiased bg-background text-foreground;
   }
 
   /* Template-style scrollbars for supporting browsers */
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(107, 114, 128, 0.75) transparent;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.4) transparent;
   }
 
   *::-webkit-scrollbar {
@@ -23,14 +104,14 @@
   }
 
   *::-webkit-scrollbar-thumb {
-    background-color: rgba(75, 85, 99, 0.85);
+    background-color: hsl(var(--muted-foreground) / 0.45);
     border-radius: 9999px;
     border: 2px solid transparent;
     background-clip: content-box;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background-color: rgba(107, 114, 128, 0.95);
+    background-color: hsl(var(--muted-foreground) / 0.65);
   }
 
   *::-webkit-scrollbar-corner {
@@ -40,21 +121,21 @@
 
 @layer components {
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+    @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-background;
   }
   .btn-primary {
-    @apply btn bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500;
+    @apply btn bg-primary hover:bg-primary/90 text-primary-foreground focus:ring-ring;
   }
   .btn-secondary {
-    @apply btn bg-gray-700 hover:bg-gray-600 text-gray-100 focus:ring-gray-500;
+    @apply btn bg-secondary hover:bg-secondary/80 text-secondary-foreground focus:ring-ring;
   }
   .btn-danger {
-    @apply btn bg-red-600 hover:bg-red-700 text-white focus:ring-red-500;
+    @apply btn bg-destructive hover:bg-destructive/90 text-destructive-foreground focus:ring-destructive;
   }
   .card {
-    @apply bg-gray-900 border border-gray-800 rounded-xl p-4;
+    @apply bg-card text-card-foreground border border-border rounded-xl p-4;
   }
   .input {
-    @apply bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent;
+    @apply bg-background border border-input rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent;
   }
 }

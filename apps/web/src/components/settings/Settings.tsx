@@ -1,9 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Settings as SettingsIcon, Save, Sparkles } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
+import { useTheme } from "../theme/ThemeProvider";
+import { ACCENT_COLORS, THEME_MODES, type AccentColor, type ThemeMode } from "../../lib/theme";
+import { cn } from "../../lib/utils";
 
 interface Setting {
   key: string;
@@ -645,7 +648,80 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory"];
-type SettingsTab = SettingField["section"] | "Other";
+type SettingsTab = SettingField["section"] | "Other" | "Theme";
+
+const THEME_MODE_ICONS: Record<ThemeMode, typeof Monitor> = {
+  system: Monitor,
+  light: Sun,
+  dark: Moon,
+};
+
+const ACCENT_SWATCH_CLASS: Record<AccentColor, string> = {
+  blue: "bg-[hsl(217,91%,60%)]",
+  violet: "bg-[hsl(258,90%,66%)]",
+  green: "bg-[hsl(142,71%,40%)]",
+  orange: "bg-[hsl(24,95%,53%)]",
+  rose: "bg-[hsl(346,77%,50%)]",
+  zinc: "bg-[hsl(240,5%,34%)]",
+};
+
+function ThemeSettingsTab() {
+  const { t } = useI18n();
+  const { mode, setMode, accent, setAccent } = useTheme();
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-sm font-semibold mb-1">{t("themeSettings.modeTitle")}</h3>
+        <p className="text-xs text-gray-400 mb-3">{t("themeSettings.modeDescription")}</p>
+        <div className="flex flex-wrap gap-2">
+          {THEME_MODES.map((value) => {
+            const Icon = THEME_MODE_ICONS[value];
+            const isActive = mode === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setMode(value)}
+                className={isActive ? "btn-primary flex items-center gap-2" : "btn-secondary flex items-center gap-2"}
+              >
+                <Icon className="w-4 h-4" />
+                {t(`themeSettings.mode.${value}`)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-sm font-semibold mb-1">{t("themeSettings.accentTitle")}</h3>
+        <p className="text-xs text-gray-400 mb-3">{t("themeSettings.accentDescription")}</p>
+        <div className="flex flex-wrap gap-3">
+          {ACCENT_COLORS.map((value) => {
+            const isActive = accent === value;
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setAccent(value)}
+                title={t(`themeSettings.accent.${value}`)}
+                className={cn(
+                  "relative w-10 h-10 rounded-full border-2 transition",
+                  ACCENT_SWATCH_CLASS[value],
+                  isActive ? "border-white" : "border-transparent hover:border-gray-500"
+                )}
+              >
+                {isActive && (
+                  <Check className="w-4 h-4 text-white absolute inset-0 m-auto drop-shadow" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function Settings() {
   const { t } = useI18n();
@@ -668,7 +744,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? [...SECTIONS, "Other"] : [...SECTIONS];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "Other"] : ["Theme", ...SECTIONS];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -762,7 +838,7 @@ export function Settings() {
         <div className="flex flex-wrap gap-2">
           {tabs.map((tab) => {
             const isActive = activeTab === tab;
-            const label = tab === "Other" ? t("settingsPage.otherSettings") : tab;
+            const label = tab === "Other" ? t("settingsPage.otherSettings") : tab === "Theme" ? t("themeSettings.tabLabel") : tab;
             return (
               <button
                 key={tab}
@@ -779,7 +855,14 @@ export function Settings() {
         </div>
       </div>
 
-      {activeTab !== "Other" && (
+      {activeTab === "Theme" && (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">{t("themeSettings.tabLabel")}</h2>
+          <ThemeSettingsTab />
+        </div>
+      )}
+
+      {activeTab !== "Other" && activeTab !== "Theme" && (
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">{activeTab}</h2>
           {PREDEFINED_FIELDS.filter((field) => field.section === activeTab).map((field) => renderField(field))}

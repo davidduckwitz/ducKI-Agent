@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { I18nProvider } from "./lib/i18n";
+import { ThemeProvider } from "./components/theme/ThemeProvider";
+import { Toaster } from "./components/ui/sonner";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -27,9 +29,12 @@ const hideInitialLoader = () => {
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <I18nProvider>
-        <App />
-      </I18nProvider>
+      <ThemeProvider>
+        <I18nProvider>
+          <App />
+          <Toaster position="bottom-right" />
+        </I18nProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   </React.StrictMode>
 );

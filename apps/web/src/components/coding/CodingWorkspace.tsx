@@ -1,15 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, Eye, FileText, FolderOpen, Plus, Save, Send, Trash2, Upload, X } from "lucide-react";
+import { ArrowRightLeft, Eye, Plus, Save, Send, Trash2, Upload, X } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
-
-interface CodingProject {
-  slug: string;
-  name: string;
-}
+import { useCodingSession } from "../../lib/codingSessionStore";
 
 interface CodingFileItem {
   path: string;
@@ -89,13 +85,11 @@ export function CodingWorkspace() {
   const { messages, sendMessage, isLoading, setConversationId, setMessages } = useAppStore();
   const creatingConversationRef = useRef<Record<string, boolean>>({});
 
+  const { selectedProject, setSelectedProject, selectedPath, setSelectedPath } = useCodingSession();
   const [newProjectName, setNewProjectName] = useState("");
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [selectedProject, setSelectedProject] = useState("");
-  const [selectedPath, setSelectedPath] = useState("");
-  const [newFilePath, setNewFilePath] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [moveTarget, setMoveTarget] = useState("");
   const [chatInput, setChatInput] = useState("");
@@ -131,12 +125,6 @@ export function CodingWorkspace() {
   const codingSettingRaw = settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value;
   const codingEnabled = String(codingSettingRaw ?? "false").trim().toLowerCase() === "true";
   const codingSettingReady = !settingsQuery.isLoading && Boolean(settingsQuery.data);
-
-  const projectsQuery = useQuery({
-    queryKey: ["coding", "projects"],
-    queryFn: () => api.coding.listProjects() as Promise<CodingProject[]>,
-    enabled: codingSettingReady && codingEnabled,
-  });
 
   const activeConversationId = selectedProject ? projectConversationMap[selectedProject] : undefined;
 
@@ -240,18 +228,10 @@ export function CodingWorkspace() {
   }, [conversationMessagesQuery.data, setMessages]);
 
   useEffect(() => {
-    if (!codingSettingReady) return;
-    if (!codingEnabled) {
+    if (codingSettingReady && !codingEnabled) {
       setSelectedProject("");
-      return;
     }
-    if (!selectedProject && (projectsQuery.data?.length ?? 0) > 0) {
-      setSelectedProject(projectsQuery.data?.[0]?.slug ?? "");
-    }
-    if (selectedProject && !(projectsQuery.data ?? []).some((p) => p.slug === selectedProject)) {
-      setSelectedProject(projectsQuery.data?.[0]?.slug ?? "");
-    }
-  }, [codingSettingReady, codingEnabled, projectsQuery.data, selectedProject]);
+  }, [codingSettingReady, codingEnabled, setSelectedProject]);
 
   const filesQuery = useQuery({
     queryKey: ["coding", "files", selectedProject],
@@ -362,14 +342,6 @@ export function CodingWorkspace() {
     const nonUser = fromBottom.find((msg) => msg.role !== "user");
     return nonUser ?? fromBottom[0] ?? null;
   }, [messages]);
-
-  const sortedFiles = useMemo(() => {
-    const list = [...(filesQuery.data?.files ?? [])];
-    return list.sort((a, b) => {
-      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
-      return a.path.localeCompare(b.path);
-    });
-  }, [filesQuery.data?.files]);
 
   const createProjectFromModal = () => {
     const name = newProjectName.trim();
@@ -503,115 +475,39 @@ export function CodingWorkspace() {
 
       <div className="grid grid-cols-1 xl:grid-cols-[320px,1fr] gap-4 h-[calc(100%-108px)] min-h-[620px]">
         <section className="card overflow-hidden flex flex-col">
-          <div className="space-y-2 border-b border-gray-800 pb-3">
-            <p className="text-xs uppercase tracking-wide text-gray-500">{t("codingPage.project")}</p>
-            <select
-              className="input w-full"
-              value={selectedProject}
-              onChange={(e) => {
-                setSelectedProject(e.target.value);
-                setSelectedPath("");
-                setEditorContent("");
-              }}
-            >
-              {(projectsQuery.data ?? []).length === 0 && <option value="">{t("codingPage.noProjects")}</option>}
-              {(projectsQuery.data ?? []).map((project) => (
-                <option key={project.slug} value={project.slug}>
-                  {project.slug}
-                </option>
-              ))}
-            </select>
-          </div>
-
           {selectedProject ? (
-            <div className="mt-3 space-y-3 min-h-0 flex-1 flex flex-col">
-              <div className="space-y-2">
-                <p className="text-xs uppercase tracking-wide text-gray-500">{t("codingPage.newFilePath")}</p>
-                <div className="flex gap-2">
-                  <input
-                    className="input flex-1"
-                    value={newFilePath}
-                    onChange={(e) => setNewFilePath(e.target.value)}
-                    placeholder={t("codingPage.newFilePath")}
-                  />
-                  <button
-                    className="btn-secondary"
-                    onClick={() => writeFile.mutate({ path: newFilePath, content: "" })}
-                    disabled={!newFilePath.trim() || writeFile.isPending}
-                    title={t("common.create")}
-                  >
-                    <Plus className="w-4 h-4" />
-                  </button>
-                </div>
+            <div className="min-h-0 flex-1 flex flex-col space-y-2">
+              <h2 className="text-sm font-semibold">{t("codingPage.chatTitle")}</h2>
+              <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 min-h-[96px] flex-1 overflow-y-auto">
+                {lastChatOutput ? (
+                  <>
+                    <div className="text-[11px] text-gray-400 mb-1">{lastChatOutput.role}</div>
+                    <div className="whitespace-pre-wrap break-words text-sm">{lastChatOutput.content}</div>
+                  </>
+                ) : (
+                  <p className="text-sm text-gray-500">Noch keine Chat-Ausgabe vorhanden.</p>
+                )}
               </div>
 
-              <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-2 min-h-0 flex-1 overflow-y-auto">
-                <p className="text-xs text-gray-500 mb-2">
-                  {t("codingPage.files")}: {sortedFiles.length}
-                </p>
-                <div className="space-y-1">
-                  {sortedFiles.map((file) => (
-                    file.type === "directory" ? (
-                      <div
-                        key={file.path}
-                        className="w-full text-left rounded-lg border border-gray-800/80 bg-gray-900/50 px-3 py-2 opacity-80"
-                      >
-                        <span className="flex items-center gap-2 min-w-0">
-                          <FolderOpen className="w-4 h-4 text-yellow-300" />
-                          <span className="truncate text-sm">{file.path}</span>
-                        </span>
-                      </div>
-                    ) : (
-                      <button
-                        key={file.path}
-                        onClick={() => setSelectedPath(file.path)}
-                        className={`w-full text-left rounded-lg border px-3 py-2 ${
-                          selectedPath === file.path ? "border-blue-500 bg-blue-500/10" : "border-gray-800 bg-gray-900 hover:border-gray-700"
-                        }`}
-                      >
-                        <span className="flex items-center gap-2 min-w-0">
-                          <FileText className="w-4 h-4 text-blue-300" />
-                          <span className="truncate text-sm">{file.path}</span>
-                        </span>
-                      </button>
-                    )
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3 space-y-2">
-                <h2 className="text-sm font-semibold">{t("codingPage.chatTitle")}</h2>
-                <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 min-h-[96px] max-h-44 overflow-y-auto">
-                  {lastChatOutput ? (
-                    <>
-                      <div className="text-[11px] text-gray-400 mb-1">{lastChatOutput.role}</div>
-                      <div className="whitespace-pre-wrap break-words text-sm">{lastChatOutput.content}</div>
-                    </>
-                  ) : (
-                    <p className="text-sm text-gray-500">Noch keine Chat-Ausgabe vorhanden.</p>
-                  )}
-                </div>
-
-                <textarea
-                  className="input w-full min-h-20"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder={t("codingPage.chatPlaceholder")}
-                />
-                <button
-                  className="btn-primary w-full"
-                  onClick={() => {
-                    void sendCodingPrompt();
-                  }}
-                  disabled={!chatInput.trim() || isLoading || isEnsuringConversation}
-                >
-                  <Send className="w-4 h-4 inline mr-1" />
-                  {t("codingPage.send")}
-                </button>
-              </div>
+              <textarea
+                className="input w-full min-h-20"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder={t("codingPage.chatPlaceholder")}
+              />
+              <button
+                className="btn-primary w-full"
+                onClick={() => {
+                  void sendCodingPrompt();
+                }}
+                disabled={!chatInput.trim() || isLoading || isEnsuringConversation}
+              >
+                <Send className="w-4 h-4 inline mr-1" />
+                {t("codingPage.send")}
+              </button>
             </div>
           ) : (
-            <p className="text-sm text-gray-500 mt-3">{t("codingPage.noProjects")}</p>
+            <p className="text-sm text-gray-500">{t("codingPage.noProjects")}</p>
           )}
         </section>
 
