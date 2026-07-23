@@ -20,33 +20,34 @@ Schalte niemals den nodejs aus. nutze auf keinen fall killtask node.exe.
 insights.json reinitialisiert
 node btc-puzzle/init.js --update-insights
 
-→ Neue Messdatei erstellt, Fortschritt korrekt konfiguriert.
-
 Batch-Processing reduziert
 node btc-puzzle/batch.js --size 1000
 
-→ Reduzierung auf 1.000 Combos/Batch zur Stabilität.
+1.000 Combos/Batch zur Stabilität.
 
 Worker-Recovery aktiviert
 node btc-puzzle/repair_workers.js --threads 2-3
 
-→ Worker 2 & 3 neuinitialisiert, alle Threads laufen stabil.
-
 # Files & ordner nutzen
-shared-workspace/btc-puzzle | grep -E 'solver|worker'
+Directory: apps/server/shared-workspace/btc-puzzle/ | grep -E 'solver|worker'
 solver_state.json  
 solver-optimized.js  
 solve.js  
 worker-healthcheck.log*
 
-Create only on Task, and use it again
+# Wortliste = english.txt (2048 BIP39-Wörter)  
+
+# Create only on Task, and use it again
+Task #2 (BTC BLM 0.2 Puzzle)
 
 🔔 Notifizierung geplant in 30 Minunts:
 Aktiviert Worker-Failover: Umswitch zu solver-parallel.js (Basic Thread-Modul) falls Coverage < 0.5% bleibt.
 
 # Security-first Implementation:
 Dry-run write: Validate file creation without actual modification.
-Use allowed paths: Write directly to shared-workspace/btc-puzzle/.
+Use allowed paths: Write directly to apps/server/shared-workspace/btc-puzzle/.
 Message sanitization: Ensure any worker communication avoids XSS risks.
 
-Use Memory to Remembering
+# Use Memory & LM-Wiki to Remembering & Learning 
+korrekter Funktionsreihenfolge (loadState vor main)
+derive.js erstellen (falls noch nicht vorhanden)

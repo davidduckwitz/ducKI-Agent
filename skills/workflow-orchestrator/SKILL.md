@@ -1,9 +1,9 @@
 ﻿---
 name: workflow-orchestrator
 description: "Create and control workflow graphs via the workflow tool with a strict plan-build-run-resume loop."
-related_skills: [fast-answer, plan, history-search, llm-wiki, browser-control, shared-workspace-ops, code-review, test-driven-development]
+related_skills: [memory, fast-answer, plan, history-search, llm-wiki, browser-control, shared-workspace-ops, code-review, test-driven-development]
 
-primary_skills: [plan, history-search]
+primary_skills: [memory, plan, history-search]
 fallback_skills: [code-review, test-driven-development]
 version: 1.0.0
 ---
@@ -15,7 +15,7 @@ Use this skill when the task should be executed as a reusable workflow graph ins
 
 ## Primary Rule
 Always prefer managing work through the workflow tool lifecycle:
-1. Understand goal and constraints. (Check skill fast-answer)
+1. Understand goal and constraints. (Check skill Memory and fast-answer)
 2. Read Memory for help and Create or update a workflow graph.
 3. Run or resume workflow execution.
 4. Report status and next actions.
