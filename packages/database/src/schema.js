@@ -17,6 +17,7 @@ export const messages = sqliteTable("messages", {
     conversationId: integer("conversation_id").references(() => conversations.id),
     role: text("role").notNull(), // user, assistant, system, tool
     content: text("content").notNull(),
+    metadata: text("metadata"),
     toolCallId: text("tool_call_id"),
     toolResult: text("tool_result"),
     createdAt: text("created_at").notNull(),
@@ -113,5 +114,38 @@ export const toolExecutions = sqliteTable("tool_executions", {
     executionTime: real("execution_time"),
     conversationId: integer("conversation_id").references(() => conversations.id),
     createdAt: text("created_at").notNull(),
+});
+// ============================================================
+// Cron Jobs
+// ============================================================
+export const cronJobs = sqliteTable("cron_jobs", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    name: text("name").notNull(),
+    schedule: text("schedule").notNull(),
+    targetType: text("target_type").notNull(), // task, prompt, tool, skill
+    targetRef: text("target_ref"),
+    payload: text("payload"), // JSON
+    enabled: integer("enabled").notNull().default(1),
+    lastRunAt: text("last_run_at"),
+    nextRunAt: text("next_run_at"),
+    lastStatus: text("last_status"), // success, failed
+    lastError: text("last_error"),
+    lastResult: text("last_result"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+});
+// ============================================================
+// LLM Wiki Entries
+// ============================================================
+export const llmWikiEntries = sqliteTable("llm_wiki_entries", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    sourcePath: text("source_path").notNull().unique(),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    contentHash: text("content_hash").notNull(),
+    status: text("status").notNull().default("candidate"), // candidate, approved, rejected, error
+    metadata: text("metadata"), // JSON
+    learnedAt: text("learned_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
 });
 //# sourceMappingURL=schema.js.map

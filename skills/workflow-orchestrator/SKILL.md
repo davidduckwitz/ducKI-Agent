@@ -1,7 +1,7 @@
 ﻿---
 name: workflow-orchestrator
 description: "Create and control workflow graphs via the workflow tool with a strict plan-build-run-resume loop."
-related_skills: [memory, fast-answer, plan, history-search, llm-wiki, browser-control, shared-workspace-ops, code-review, test-driven-development]
+related_skills: [memory, plan, history-search, llm-wiki, browser-control, shared-workspace-ops, code-review, test-driven-development]
 
 primary_skills: [memory, plan, history-search]
 fallback_skills: [code-review, test-driven-development]

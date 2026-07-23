@@ -8,6 +8,7 @@ export interface LLMMessage {
     content: string;
     toolCallId?: string;
     toolCalls?: ToolCall[];
+    metadata?: string | Record<string, unknown>;
 }
 export interface ToolCall {
     id: string;
@@ -117,4 +118,18 @@ export type DeepPartial<T> = {
 };
 export type Nullable<T> = T | null;
 export declare function isNonNullable<T>(value: Nullable<T>): value is T;
+export declare const SpeechToTextProviderNameSchema: z.ZodEnum<["openai", "ollama", "silero", "local", "nodejs-whisper"]>;
+export type SpeechToTextProviderName = z.infer<typeof SpeechToTextProviderNameSchema>;
+export interface SpeechToTextProviderConfig {
+    name: SpeechToTextProviderName;
+    baseUrl?: string;
+    apiKey?: string;
+    model?: string;
+}
+export interface SpeechToTextProvider {
+    readonly name: string;
+    transcribe(audioBuffer: Buffer, options?: {
+        language?: string;
+    }): Promise<string>;
+}
 //# sourceMappingURL=index.d.ts.map

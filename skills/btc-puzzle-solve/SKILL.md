@@ -1,7 +1,11 @@
 ---
 name: btc-puzzle-solve
 description: Führt Bitcoin-Puzzle BIP39-Suche aus und meldet via Discord
+related_skills: [memory, coding-system, shared-workspace-ops, plan, history-search, workflow-orchestrator]
+primary_skills: [memory, coding-system, test-driven-development]
+fallback_skills: [memory, plan, history-search]
 ---
+# skill has no own tool - use only tools in this descriptions
 
 # BTC Puzzle Solve 0.2-btc-puzzle
 Url: https://privatekeys.pw/puzzles/0.2-btc-puzzle

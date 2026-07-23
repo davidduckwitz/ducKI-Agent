@@ -34,4 +34,11 @@ export function createApiError(error) {
 export function isNonNullable(value) {
     return value !== null && value !== undefined;
 }
+// ============================================================
+// Speech-to-Text Provider Types
+// ============================================================
+export const SpeechToTextProviderNameSchema = z.enum(["openai", "ollama", "silero", "local", "nodejs-whisper"]);
+// ============================================================
+// API Response Types
+// ============================================================
 //# sourceMappingURL=index.js.map

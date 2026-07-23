@@ -1,10 +1,10 @@
 ﻿---
 name: plan
 description: "Planning mode: actionable plan only, no direct implementation in this turn."
-related_skills: [fast-answer, history-search, llm-wiki, test-driven-development, code-review, workflow-orchestrator]
+related_skills: [memory, history-search, llm-wiki, test-driven-development, code-review, workflow-orchestrator]
 
-primary_skills: [history-search, llm-wiki]
-fallback_skills: [test-driven-development, code-review]
+primary_skills: [memory, history-search, llm-wiki, workflow-orchestrator]
+fallback_skills: [workflow-orchestrator, test-driven-development, code-review]
 version: 1.0.0
 source: "Inspired by https://github.com/NousResearch/hermes-agent/blob/main/skills/software-development/plan/SKILL.md"
 ---
@@ -33,8 +33,6 @@ Nutze diesen Skill, wenn der User einen belastbaren Umsetzungsplan erwartet und 
 - Akzeptanzkriterien sind messbar.
 
 ## Skill Interop
-
-- Vor Plan-Erstellung mit `fast-answer` pruefen, ob die Anfrage ohne Plan geloest werden kann.
 - Historische Loesungen ueber `history-search` in Annahmen/Risiken einbeziehen.
 - Bei Wissens-/Doku-Anteilen `llm-wiki` als Quelle im Plan nennen.
 - Fuer Implementierungsphasen `test-driven-development` und fuer Abnahme `code-review` als nachgelagerte Schritte einplanen.

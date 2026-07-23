@@ -5,103 +5,17 @@ import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ConversationManager } from "./conversation.js";
-import { MemorySystem } from "./memory.js";
-import { Planner } from "./planner.js";
-import { Executor } from "./executor.js";
-import { Reasoner } from "./reasoner.js";
-import { Reflection } from "./reflection.js";
-import { History } from "./history.js";
-import { createWorkflowTools } from "./workflow-tools.js";
-import { resolveToolAlias, resolveToolAction } from "./tool-aliases.js";
+import { ConversationManager } from "./conversation/conversation.js";
+import { MemorySystem } from "./memory/memory.js";
+import { Planner } from "./planner/planner.js";
+import { Executor } from "./executor/executor.js";
+import { Reasoner } from "./reasoner/reasoner.js";
+import { Reflection } from "./reflection/reflection.js";
+import { History } from "./history/history.js";
+import { createWorkflowTools } from "./workflow/workflow-tools.js";
+import { resolveToolAlias, resolveToolAction } from "./tools/tool-aliases.js";
 
-export interface AgentOptions {
-  name?: string;
-  systemPrompt?: string;
-  maxIterations?: number;
-  timeoutMs?: number;
-  enableReflection?: boolean;
-  enablePlanning?: boolean;
-  enableAutoMemory?: boolean;
-}
-
-export type AgentStatus = "idle" | "running" | "paused" | "error" | "stopped";
-
-export interface AgentRunResult {
-  response: string;
-  iterations: number;
-  toolsUsed: string[];
-  conversationId?: number;
-}
-
-export interface AgentRunContextCaps {
-  maxSystemPromptChars?: number;
-  maxDynamicMemoryChars?: number;
-  maxContextMessages?: number;
-  maxContextChars?: number;
-  maxContextMessageChars?: number;
-}
-
-export interface AgentRunOptions {
-  stream?: boolean;
-  onChunk?: (chunk: string) => void;
-  onEvent?: (event: AgentRunEvent) => void;
-  contextCaps?: AgentRunContextCaps;
-}
-
-export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
-
-export interface AgentRunEvent {
-  type: AgentRunEventType;
-  message: string;
-  data?: Record<string, unknown>;
-  timestamp: string;
-}
-
-interface SkillManifest {
-  slug: string;
-  name: string;
-  description?: string;
-  path: string;
-  primarySkills: string[];
-  relatedSkills: string[];
-  fallbackSkills: string[];
-}
-
-interface SkillSummary extends SkillManifest {
-  content: string;
-}
-
-interface SkillScore {
-  skill: SkillManifest;
-  score: number;
-  overlap: number;
-}
-
-interface AgentRuntimeControls {
-  maxIterations: number;
-  timeoutMs: number;
-  shellToolTimeoutMs: number;
-  httpToolTimeoutMs: number;
-  browserToolTimeoutMs: number;
-  gitToolTimeoutMs: number;
-  enableAutoMemory: boolean;
-  enableReflection: boolean;
-  reflectionMaxRetries: number;
-  reflectionStoreMemory: boolean;
-  reflectionMetaReview: boolean;
-  reasonerUseToolMinConfidence: number;
-  maxConsecutiveToolFailures: number;
-  maxRepeatedToolCall: number;
-  enableAutoSkillSelection: boolean;
-  autoSkillScoreThreshold: number;
-  autoSkillMarginThreshold: number;
-  autoSkillMinInputLength: number;
-  autoSkillMinOverlap: number;
-  skillBehavior: "automatic" | "active";
-  autoSkillFallbackNone: boolean;
-  enabledSkillAllowlist: string[];
-}
+import { AgentOptions, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
 
 const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
 Use the available tools to create and manage projects and tasks, then work them through to completion.

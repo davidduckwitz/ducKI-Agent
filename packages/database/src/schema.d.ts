@@ -117,6 +117,18 @@ export declare const messages: import("drizzle-orm/sqlite-core").SQLiteTableWith
             enumValues: [string, ...string[]];
             baseColumn: never;
         }, object>;
+        metadata: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "metadata";
+            tableName: "messages";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
         toolCallId: import("drizzle-orm/sqlite-core").SQLiteColumn<{
             name: "tool_call_id";
             tableName: "messages";
@@ -848,6 +860,296 @@ export declare const toolExecutions: import("drizzle-orm/sqlite-core").SQLiteTab
     };
     dialect: "sqlite";
 }>;
+export declare const cronJobs: import("drizzle-orm/sqlite-core").SQLiteTableWithColumns<{
+    name: "cron_jobs";
+    schema: undefined;
+    columns: {
+        id: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "id";
+            tableName: "cron_jobs";
+            dataType: "number";
+            columnType: "SQLiteInteger";
+            data: number;
+            driverParam: number;
+            notNull: true;
+            hasDefault: true;
+            enumValues: undefined;
+            baseColumn: never;
+        }, object>;
+        name: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "name";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        schedule: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "schedule";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        targetType: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "target_type";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        targetRef: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "target_ref";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        payload: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "payload";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        enabled: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "enabled";
+            tableName: "cron_jobs";
+            dataType: "number";
+            columnType: "SQLiteInteger";
+            data: number;
+            driverParam: number;
+            notNull: true;
+            hasDefault: true;
+            enumValues: undefined;
+            baseColumn: never;
+        }, object>;
+        lastRunAt: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "last_run_at";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        nextRunAt: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "next_run_at";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        lastStatus: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "last_status";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        lastError: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "last_error";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        lastResult: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "last_result";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        createdAt: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "created_at";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        updatedAt: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "updated_at";
+            tableName: "cron_jobs";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+    };
+    dialect: "sqlite";
+}>;
+export declare const llmWikiEntries: import("drizzle-orm/sqlite-core").SQLiteTableWithColumns<{
+    name: "llm_wiki_entries";
+    schema: undefined;
+    columns: {
+        id: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "id";
+            tableName: "llm_wiki_entries";
+            dataType: "number";
+            columnType: "SQLiteInteger";
+            data: number;
+            driverParam: number;
+            notNull: true;
+            hasDefault: true;
+            enumValues: undefined;
+            baseColumn: never;
+        }, object>;
+        sourcePath: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "source_path";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        title: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "title";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        content: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "content";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        contentHash: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "content_hash";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        status: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "status";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: true;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        metadata: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "metadata";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: false;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        learnedAt: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "learned_at";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+        updatedAt: import("drizzle-orm/sqlite-core").SQLiteColumn<{
+            name: "updated_at";
+            tableName: "llm_wiki_entries";
+            dataType: "string";
+            columnType: "SQLiteText";
+            data: string;
+            driverParam: string;
+            notNull: true;
+            hasDefault: false;
+            enumValues: [string, ...string[]];
+            baseColumn: never;
+        }, object>;
+    };
+    dialect: "sqlite";
+}>;
 export type ConversationInsert = typeof conversations.$inferInsert;
 export type ConversationSelect = typeof conversations.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
@@ -866,4 +1168,8 @@ export type SettingInsert = typeof settings.$inferInsert;
 export type SettingSelect = typeof settings.$inferSelect;
 export type LogInsert = typeof logs.$inferInsert;
 export type LogSelect = typeof logs.$inferSelect;
+export type CronJobInsert = typeof cronJobs.$inferInsert;
+export type CronJobSelect = typeof cronJobs.$inferSelect;
+export type LlmWikiEntryInsert = typeof llmWikiEntries.$inferInsert;
+export type LlmWikiEntrySelect = typeof llmWikiEntries.$inferSelect;
 //# sourceMappingURL=schema.d.ts.map

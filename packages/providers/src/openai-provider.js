@@ -1,4 +1,27 @@
 import OpenAI from "openai";
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function toPositiveInt(value, fallback) {
+    const parsed = Number.parseInt(value ?? "", 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+function normalizeBaseUrl(baseUrl) {
+    const trimmed = baseUrl.trim().replace(/\/+$/g, "");
+    if (!trimmed)
+        return baseUrl;
+    return trimmed
+        .replace(/\/chat\/completions$/i, "")
+        .replace(/\/responses$/i, "");
+}
+function shouldOmitAuthorizationHeader(apiKey) {
+    const normalized = apiKey.trim().toLowerCase();
+    if (!normalized)
+        return true;
+    if (["lm-studio", "not-needed", "none", "null", "undefined"].includes(normalized))
+        return true;
+    return false;
+}
 function toOpenAIMessages(messages) {
     return messages.map((m) => {
         if (m.role === "tool") {
@@ -18,24 +41,106 @@ export class OpenAIProvider {
     model;
     client;
     defaultOptions;
+    maxRetries;
+    baseRetryDelayMs;
     constructor(options) {
+        const rawApiKey = options.apiKey ?? "";
+        const normalizedApiKey = rawApiKey.replace(/^Bearer\s+/i, "").trim();
+        const omitAuthorizationHeader = shouldOmitAuthorizationHeader(normalizedApiKey);
+        const baseURL = normalizeBaseUrl(options.baseUrl);
         this.model = options.model;
         this.defaultOptions = options.defaultOptions ?? {};
+        const customFetch = async (input, init) => {
+            if (!omitAuthorizationHeader) {
+                return fetch(input, init);
+            }
+            const headers = new Headers(init?.headers ?? {});
+            headers.delete("Authorization");
+            return fetch(input, { ...(init ?? {}), headers });
+        };
         this.client = new OpenAI({
-            apiKey: options.apiKey ?? process.env["OPENAI_API_KEY"] ?? "",
-            baseURL: options.baseUrl,
+            apiKey: omitAuthorizationHeader ? "sk-no-auth-required" : normalizedApiKey,
+            baseURL,
+            fetch: customFetch,
         });
+        this.maxRetries = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRIES"], 2);
+        this.baseRetryDelayMs = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRY_BASE_MS"], 1200);
+    }
+    getStatusCode(error) {
+        if (!error || typeof error !== "object")
+            return undefined;
+        const maybeError = error;
+        return typeof maybeError.status === "number" ? maybeError.status : undefined;
+    }
+    getRetryAfterMs(error) {
+        if (!error || typeof error !== "object")
+            return undefined;
+        const maybeError = error;
+        const headers = maybeError.headers;
+        if (!headers)
+            return undefined;
+        if (typeof headers.get === "function") {
+            const raw = headers.get("retry-after");
+            if (!raw)
+                return undefined;
+            const seconds = Number.parseFloat(raw);
+            if (Number.isFinite(seconds) && seconds > 0)
+                return Math.round(seconds * 1000);
+            return undefined;
+        }
+        if (typeof headers === "object" && headers !== null) {
+            const raw = headers["retry-after"];
+            if (typeof raw === "string") {
+                const seconds = Number.parseFloat(raw);
+                if (Number.isFinite(seconds) && seconds > 0)
+                    return Math.round(seconds * 1000);
+            }
+        }
+        return undefined;
+    }
+    isRateLimitError(error) {
+        return this.getStatusCode(error) === 429;
+    }
+    createRetryDelayMs(attempt, error) {
+        const retryAfterMs = this.getRetryAfterMs(error);
+        if (retryAfterMs && retryAfterMs > 0)
+            return retryAfterMs;
+        const expDelay = this.baseRetryDelayMs * Math.pow(2, attempt - 1);
+        const jitter = Math.floor(Math.random() * 250);
+        return expDelay + jitter;
+    }
+    async withRateLimitRetry(fn) {
+        let attempt = 0;
+        let lastError;
+        while (attempt <= this.maxRetries) {
+            try {
+                return await fn();
+            }
+            catch (error) {
+                lastError = error;
+                if (!this.isRateLimitError(error) || attempt >= this.maxRetries) {
+                    break;
+                }
+                const delayMs = this.createRetryDelayMs(attempt + 1, error);
+                await sleep(delayMs);
+                attempt++;
+            }
+        }
+        if (this.isRateLimitError(lastError)) {
+            throw new Error("429 Provider returned error after retries (rate limited)");
+        }
+        throw lastError;
     }
     async generate(messages, options) {
         const merged = { ...this.defaultOptions, ...options };
-        const completion = await this.client.chat.completions.create({
+        const completion = await this.withRateLimitRetry(() => this.client.chat.completions.create({
             model: this.model,
             messages: toOpenAIMessages(messages),
             temperature: merged.temperature,
             top_p: merged.topP,
             max_tokens: merged.maxTokens,
             stream: false,
-        });
+        }));
         const choice = completion.choices[0];
         if (!choice)
             throw new Error("No completion choice returned");
@@ -52,14 +157,14 @@ export class OpenAIProvider {
     }
     async generateStream(messages, options, onChunk) {
         const merged = { ...this.defaultOptions, ...options };
-        const stream = await this.client.chat.completions.create({
+        const stream = await this.withRateLimitRetry(() => this.client.chat.completions.create({
             model: this.model,
             messages: toOpenAIMessages(messages),
             temperature: merged.temperature,
             top_p: merged.topP,
             max_tokens: merged.maxTokens,
             stream: true,
-        });
+        }));
         let fullContent = "";
         let promptTokens = 0;
         let completionTokens = 0;

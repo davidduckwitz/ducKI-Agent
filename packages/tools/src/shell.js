@@ -1,4 +1,20 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+function looksUnixShellCommand(command) {
+    return /\b(grep|sed|awk|tail|head|tr|cut|xargs)\b|\/home\/|\/dev\/null|\*\.json|\|\|\s*true/.test(command);
+}
+function findBashOnWindows() {
+    try {
+        const output = execSync("where bash", { encoding: "utf8", timeout: 3000 });
+        const first = output
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .find((line) => line.length > 0);
+        return first;
+    }
+    catch {
+        return undefined;
+    }
+}
 export const shellTool = {
     name: "shell",
     description: "Execute shell commands in a controlled environment",
@@ -19,6 +35,7 @@ export const shellTool = {
         const command = input["command"];
         const cwd = input["cwd"] ?? process.cwd();
         const timeout = input["timeout"] ?? 30000;
+        const isWindows = process.platform === "win32";
         // Basic safety checks - block dangerous commands
         const dangerousPatterns = [
             /rm\s+-rf\s+\/\s*/,
@@ -37,6 +54,30 @@ export const shellTool = {
             }
         }
         try {
+            if (isWindows && looksUnixShellCommand(command)) {
+                const bashPath = findBashOnWindows();
+                if (!bashPath) {
+                    return {
+                        success: false,
+                        data: null,
+                        error: "Unix shell command detected on Windows, but bash is not available. Use PowerShell commands or install Git Bash/WSL.",
+                    };
+                }
+                const output = execFileSync(bashPath, ["-lc", command], {
+                    cwd,
+                    encoding: "utf8",
+                    timeout,
+                    maxBuffer: 10 * 1024 * 1024,
+                });
+                return {
+                    success: true,
+                    data: {
+                        output: output.trim(),
+                        exitCode: 0,
+                        shell: "bash",
+                    },
+                };
+            }
             const output = execSync(command, {
                 cwd,
                 encoding: "utf8",

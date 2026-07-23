@@ -1,9 +1,9 @@
 ---
 name: coding-system
 description: "Nutze den Coding-Bereich fuer AI/Vibe Coding mit projektgebundenem Chat und Datei-Editor im shared-workspace/coding."
-related_skills: [shared-workspace-ops, shared-workspace-api-first, browser-control, test-driven-development, code-review]
-primary_skills: [shared-workspace-ops, test-driven-development]
-fallback_skills: [code-review, workflow-orchestrator]
+related_skills: [shared-workspace-ops, browser-control, test-driven-development, code-review, security-skill]
+primary_skills: [shared-workspace-ops, test-driven-development, code-review, security-skill]
+fallback_skills: [shared-workspace-api-first, code-review, workflow-orchestrator, security-skill]
 version: 1.0.0
 ---
 
