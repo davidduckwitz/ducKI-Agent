@@ -1,49 +1,46 @@
 ﻿---
 name: datum-uhrzeit-tag
-description: "Gibt Datum, Uhrzeit und/oder Wochentag aus. Steuerbar ueber skillInput." 
+description: "Provides current date, time, and/or day of the week. Controllable via skillInput."
 related_skills: [fast-answer, cronjobs, shared-workspace-ops]
-
 primary_skills: [fast-answer]
 fallback_skills: [cronjobs, shared-workspace-ops]
-version: 1.0.0
+version: 1.1.0
 script: script.js
 ---
 
-# Datum/Uhrzeit/Tag Skill
+# Date/Time/Day Skill
 
-## Zweck
-Dieser Skill zeigt Datum, Uhrzeit und/oder Wochentag an.
+## Goal
+Displays the current date, time, and/or day of the week in a structured format.
 
-## Trigger
-Nutze diesen Skill automatisch bei Fragen wie:
-
-- "Welchen Tag haben wir heute?"
-- "Wie spaet ist es?"
-- "Welches Datum ist heute?"
-- "Welche Uhrzeit haben wir heute"
+## Triggers
+Use this skill automatically for queries such as:
 - "What day is it today?"
+- "What time is it?"
+- "What is today's date?"
 - "Current date and time"
+- "What's the date?"
 
-## Ausfuehrungsregel
-Bei diesen Anfragen zuerst diesen Skill ausfuehren, nicht auf Shell-Datumsbefehle ausweichen.
+## Execution Rules
+For these requests, always execute this skill first; do not fallback to shell date commands.
 
-- Kein `date` Shell-Befehl verwenden.
-- Stattdessen `skill_manage` mit `action: "execute"` und `name: "datum-uhrzeit-tag"` nutzen.
-- Fuer reine Wochentag-Frage `input: { "showDay": true, "showDate": false, "showTime": false }` setzen.
-- Fuer reine Uhrzeit-Frage `input: { "showTime": true, "showDate": false, "showDay": false }` setzen.
-- Fuer reine Datumsfrage `input: { "showDate": true, "showTime": false, "showDay": false }` setzen.
+- Do not use the `date` shell command.
+- Instead, use `skill_manage` with `action: "execute"` and `name: "datum-uhrzeit-tag"`.
+- For pure day-of-week queries: set `input: { "showDay": true, "showDate": false, "showTime": false }`.
+- For pure time queries: set `input: { "showTime": true, "showDate": false, "showDay": false }`.
+- For pure date queries: set `input: { "showDate": true, "showTime": false, "showDay": false }`.
 
-## Verwendung
-Der Skill liest optionale Werte aus `skillInput`:
+## Usage
+The skill reads optional values from `skillInput`:
 
-- `showDate` (boolean): Datum ausgeben
-- `showTime` (boolean): Uhrzeit ausgeben
-- `showDay` (boolean): Wochentag ausgeben
-- `locale` (string): Locale fuer Formatierung, z. B. `de-DE` oder `en-GB`
+- `showDate` (boolean): Display the date.
+- `showTime` (boolean): Display the time.
+- `showDay` (boolean): Display the day of the week.
+- `locale` (string): Locale for formatting, e.g., `de-DE` or `en-GB`.
 
-Wenn keiner der drei Schalter gesetzt ist, werden standardmaessig alle drei Informationen ausgegeben.
+If none of the three flags are set, all three pieces of information will be provided by default.
 
-## Beispiele
+## Examples
 ```json
 { "showDate": true, "showTime": false, "showDay": true, "locale": "de-DE" }
 ```
@@ -52,13 +49,10 @@ Wenn keiner der drei Schalter gesetzt ist, werden standardmaessig alle drei Info
 { "showTime": true }
 ```
 
-## Ausgabe
-Das Script schreibt die Ausgabe in `console.log` und liefert ein Ergebnisobjekt zurueck.
+## Output
+The script logs the output to `console.log` and returns a result object.
 
 ## Skill Interop
-
-- Dieser Skill wird bevorzugt aus `fast-answer` heraus delegiert, sobald Zeit/Datum/Tag gefragt ist.
-- Fuer geplante Zeitmeldungen `cronjobs` mit `targetType=skill` auf `datum-uhrzeit-tag` nutzen.
-- Wenn Ausgaben als Datei gespeichert werden sollen, Ergebnis ueber `shared-workspace-ops` persistieren.
-
-
+- This skill is preferred for delegation from `fast-answer` as soon as time/date/day is requested.
+- For scheduled time messages, use `cronjobs` with `targetType=skill` pointing to `datum-uhrzeit-tag`.
+- If output needs to be saved as a file, persist the result via `shared-workspace-ops`.

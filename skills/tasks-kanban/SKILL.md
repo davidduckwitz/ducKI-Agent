@@ -1,20 +1,19 @@
 ---
 name: tasks-kanban
-description: "Steuert Task- und Kanban-Ablaeufe robust: korrekt anlegen, in running setzen, sauber abschliessen oder failen."
+description: "Robustly manages task and kanban workflows: correctly creating, starting, completing, or failing tasks."
 related_skills: [plan, code-review, test-driven-development, history-search]
-
 primary_skills: [plan]
 fallback_skills: [code-review, history-search]
-version: 1.0.0
+version: 1.1.0
 ---
 
-# Tasks / Kanban Bedienung
+# Tasks / Kanban Management
 
-## Zweck
-Nutze diesen Skill fuer alle Arbeiten, bei denen Tasks im Kanban-Board erstellt, bearbeitet, gestartet, abgeschlossen oder fehlgeschlagen markiert werden muessen.
+## Goal
+Use this skill for all work where tasks in the Kanban board must be created, managed, started, completed, or marked as failed.
 
 ## Tool Contract
-Nutze Tool `task` mit diesen Actions:
+Use the `task` tool with these actions:
 - `create`
 - `list`
 - `get`
@@ -24,80 +23,71 @@ Nutze Tool `task` mit diesen Actions:
 - `fail`
 - `delete`
 
-Unterstuetzte Statuswerte:
+Supported status values:
 - `pending`
 - `running`
 - `completed`
 - `failed`
 - `cancelled`
 
-## Kernregeln
-1. Wenn Arbeit laenger als eine direkte Ein-Satz-Antwort dauert, existiert ein Task.
-2. Bevor du eine Umsetzung startest: Task auf `running` setzen (`task:start`).
-3. Nach erfolgreicher Umsetzung und Verifikation: Task auf `completed` setzen (`task:complete`).
-4. Bei blockierendem Fehler: Task auf `failed` setzen (`task:fail`) und Fehlergrund klar benennen.
-5. Lass niemals einen Task unbegruendet in `running` stehen.
-6. Nutze keine freien Status-Strings ausser den erlaubten Werten.
+## Core Rules
+1. If the work takes longer than a direct single-sentence response, a task must exist.
+2. Before starting any implementation: Set the task to `running` (`task:start`).
+3. After successful implementation and verification: Set the task to `completed` (`task:complete`).
+4. In case of a blocking error: Set the task to `failed` (`task:fail`) and clearly state the reason for failure.
+5. Never leave a task in `running` status without active progress.
+6. Do not use free-form status strings; use only the allowed values.
 
-## Standard-Ablauf
-1. **Pruefen/finden**
-- Wenn Task-ID bekannt: `task:get`.
-- Wenn nicht klar: `task:list` und passenden Task identifizieren.
+## Standard Workflow
+1. **Check/Find**:
+   - If the Task ID is known: Use `task:get`.
+   - If not clear: Use `task:list` and identify the appropriate task.
 
-2. **Anlegen (falls noetig)**
-- Mit `task:create` anlegen, inkl. klarer `title` und kurzer `description`.
-- Falls Kontext bekannt, `projectId` setzen.
-- Initialstatus ist `pending`.
+2. **Create (if needed)**:
+   - Create using `task:create` with a clear `title` and concise `description`.
+   - Set `projectId` if the context is known.
+   - Initial status is `pending`.
 
-3. **Starten**
-- Direkt vor aktiver Arbeit: `task:start`.
-- Bei mehreren Teilaufgaben zuerst Plan erstellen, dann starten.
+3. **Start**:
+   - Immediately before active work begins: Use `task:start`.
+   - If there are multiple sub-tasks, create a plan first, then start each sequentially.
 
-4. **Bearbeiten/fortschreiben**
-- Mit `task:update` Titel/Beschreibung/Prioritaet/Status nur gezielt anpassen.
-- Status nur dann manuell via `update` setzen, wenn `start/complete/fail` semantisch nicht passt.
+4. **Edit/Update**:
+   - Use `task:update` to modify Title, Description, Priority, or Status only as needed.
+   - Only manually set status via `update` if `start/complete/fail` are not semantically appropriate.
 
-5. **Abschluss**
-- Nur `task:complete`, wenn Definition of Done erreicht ist:
-- Implementierung fertig
-- relevante Checks ausgefuehrt (z. B. typecheck/tests/lint)
-- bekannte Blocker dokumentiert oder behoben
+5. **Completion**:
+   - Only use `task:complete` when the Definition of Done (DoD) is reached:
+     - Implementation is finished.
+     - Relevant checks performed (e.g., typecheck, tests, lint).
+     - Known blockers are documented or resolved.
 
-6. **Fehlerfall**
-- Wenn Arbeit technisch blockiert oder reproduzierbar scheitert:
-- `task:fail`
-- Grund + naechster sinnvoller Schritt nennen
+6. **Failure**:
+   - If work is technically blocked or fails reproducibly:
+     - Use `task:fail`.
+     - State the reason + the next sensible step.
 
-## Entscheidungsmatrix fuer Abschluss
-- `completed`:
-- Ergebnis erreicht und verifiziert.
-
-- `failed`:
-- Ziel aktuell nicht erreichbar (z. B. harter Build-Fehler, fehlende Credentials, externe Abhaengigkeit down).
-
-- `pending`:
-- Aufgabe ist eingeplant, aber noch nicht gestartet.
-
-- `running`:
-- Aufgabe wird aktiv bearbeitet.
-
-- `cancelled`:
-- Nur verwenden, wenn Nutzer oder Prozess den Task explizit verwirft.
+## Decision Matrix for Completion
+- `completed`: Result achieved and verified.
+- `failed`: Target currently unreachable (e.g., hard build error, missing credentials, external dependency down).
+- `pending`: Task is planned but not yet started.
+- `running`: Task is actively being worked on.
+- `cancelled`: Only use if the user or process explicitly discards the task.
 
 ## Guardrails
-- Keine stillen Task-Wechsel ohne Rueckmeldung.
-- Keine Loeschung (`delete`) ohne klaren Grund.
-- Bei Unsicherheit lieber `task:update` mit praeziser Beschreibung als falsches `complete`.
-- Nach `fail` nie sofort `complete`, ohne neue erfolgreiche Ausfuehrung.
+- No silent task transitions without user feedback.
+- No deletion (`delete`) without a clear justification.
+- In case of uncertainty, prefer `task:update` with a precise description over an incorrect `complete`.
+- After a `fail`, never move directly to `complete` without a successful new execution.
 
-## Empfohlenes Antwortformat an den Nutzer
-1. Task-ID und aktueller Status
-2. Was ausgefuehrt wurde
-3. Ergebnis (inkl. Verifikation)
-4. Naechster Schritt oder Abschlussgrund
+## Recommended Response Format to User
+1. Task ID and current status.
+2. What was executed.
+3. Result (including verification).
+4. Next step or reason for completion/failure.
 
 ## Skill Interop
-- Nutze `plan`, wenn Scope oder Reihenfolge unklar ist.
-- Nutze `test-driven-development` fuer saubere Verifikation vor `complete`.
-- Nutze `code-review` fuer Abschlusskontrolle bei riskanten Aenderungen.
-- Nutze `history-search`, um bestehende Task-Muster wiederzuverwenden.
+- Use `plan` when scope or sequence is unclear.
+- Use `test-driven-development` for clean verification before `complete`.
+- Use `code-review` for final checks on risky changes.
+- Use `history-search` to reuse existing task patterns.

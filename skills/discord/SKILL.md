@@ -2,87 +2,73 @@
 name: discord
 description: "Reliable Discord send flow using gateway configs, diagnostics, and recovery steps"
 related_skills: [shared-workspace-ops, cronjobs, workflow-orchestrator]
-
 primary_skills: [shared-workspace-ops]
 fallback_skills: [cronjobs, workflow-orchestrator]
-version: 1.1.0
+version: 1.2.0
 ---
 
-# Discord
+# Discord Gateway Skill
 
-## Zweck
-Zuverlaessig an Discord senden, ohne URL-Raterei oder unsichere Annahmen.
-Nutze immer die vorhandene Gateway-Konfiguration und reagiere auf Diagnosen strukturiert.
+## Goal
+Send messages to Discord reliably by using established gateway configurations. Avoid URL guessing, hardcoded endpoints, or unsafe assumptions. Always react to diagnostic data structurally.
 
-## Wann nutzen
-- Der Nutzer will eine Nachricht an Discord senden.
-- Eine Anfrage nennt "Discord", "Gateway", "Channel", "senden" oder "reply".
-- Outbound-Nachrichten aus UI-Chat sollen in einem Discord-Kanal landen.
+## When to Use
+- When the user wants to send a message to Discord.
+- When an instruction mentions "Discord", "Gateway", "Channel", "send", "reply", or "notify".
+- Outbound messages from UI chats should land in a Discord channel that was either explicitly mentioned by the user, is the last used, or is the default channel in the settings.
 
-## Ablauf
-1. Nachricht und Zielkandidaten extrahieren.
-2. Zwingend zuerst `gateway` mit `action=list_configs` ausfuehren.
-3. Discord-Config auswaehlen:
-	 - `portal=discord`
-	 - `enabled=true`
-	 - bevorzugt `outboundReady=true`
-4. Ziel bestimmen:
-	 - zuerst `externalConversationId` oder `channelId` aus Nutzertext
-	 - sonst `defaultTarget` aus Config
-5. Mit `gateway action=send` senden.
-6. Ergebnis pruefen und bei Fehlern diagnosebasiert recovern.
+## Execution Flow
+1. **Extract**: Identify the message content and potential target candidates (IDs, aliases, or names).
+2. **Discovery (Mandatory)**: Execute `gateway` with `action=list_configs` first to see available transports.
+3. **Config Selection**: Filter for a Discord configuration that meets these criteria:
+   - `portal=discord`
+   - `enabled=true`
+   - **Preference**: `outboundReady=true`
+4. **Target Resolution**:
+   - Priority 1: `externalConversationId` or `channelId` explicitly provided in the user's text.
+   - Priority 2: `defaultTarget` from the selected Discord configuration.
+5. **Transmission**: Execute `gateway action=send` with the resolved config and target.
+6. **Verification**: Check the result. If it fails, perform recovery based on the provided diagnostic code.
 
-## Harte Regeln
-- Nie zuerst nach `http://localhost...` oder frei erfundenen Endpoints fragen.
-- Nie direkt HTTP an Discord bauen, wenn `gateway` Tool verfuegbar ist.
-- Vor jedem Send-Versuch zuerst `list_configs` im selben Lauf.
-- Bei Konflikt zwischen mehreren Discord-Configs bevorzugt explizite Nutzerangaben (`configId`, Ziel-ID).
+## Hard Rules
+- **No Guessing**: Never ask for `http://localhost...` or invent endpoints. Use the gateway.
+- **No Direct HTTP**: Never construct direct HTTP requests to Discord if the `gateway` tool is available.
+- **Sequential Flow**: Always perform `list_configs` in the same turn before any send attempt.
+- **Explicit over Default**: If multiple configs exist, prioritize the one matching the user's explicit `configId` or target ID.
 
-## Woher kommen Channel und Token
+## Configuration & Resolution
 
-Quelle der Konfiguration:
-- Primar aus Setting `MESSAGING_GATEWAYS` (gespeichert ueber Gateway-UI/API).
-- Laden ueber `gateway` Tool mit `action=list_configs`.
+### Transport Source
+The configuration is primarily sourced from the `MESSAGING_GATEWAYS` setting (managed via UI/API).
 
-Wichtige Felder pro Gateway-Config:
-- `id`: eindeutige Config-ID
-- `portal`: fuer Discord immer `discord`
-- `enabled`: nur aktivierte Configs verwenden
-- `defaultTarget`: entspricht dem konfigurierten `channelHint` (Default Channel-ID)
-- `outboundReady`: zeigt, ob Outbound-Transport verfuegbar ist
+### Key Configuration Fields
+- `id`: Unique configuration ID.
+- `portal`: Must be `discord` for this skill.
+- `enabled`: Only use configurations where `enabled=true`.
+- `defaultTarget`: The configured default channel (ID).
+- `outboundReady`: Indicates if the outbound transport is ready for use.
 
-Token- und Transport-Aufloesung (Discord):
-1. Bot-Token aus Env `DISCORD_BOT_TOKEN` (hoechste Prioritaet)
-2. Sonst Config `authToken` (als Bot-Token)
-3. Sonst Config `webhookSecret`, falls URL (Webhook-Transport)
-4. Wenn nichts davon vorhanden ist: Diagnose `discord_transport_not_configured`
+### Token & Transport Resolution (Discord)
+1. **Bot Token**: Highest priority. Check environment variable `DISCORD_BOT_TOKEN`.
+2. **Auth Token**: Fallback to `authToken` in the configuration (as a Bot Token).
+3. **Webhook Secret**: If a URL is provided, use `webhookSecret` for Webhook transport.
+4. **Failure**: If none are found, return diagnostic: `discord_transport_not_configured`.
 
-Ziel-Channel-Aufloesung:
-1. `externalConversationId` aus Tool-Input
-2. Alias `channelId` aus Tool-Input
-3. Sonst `defaultTarget` aus `list_configs`
-4. Wenn leer: Diagnose `missing_target`
-
-Wie laden (Pflichtablauf):
-1. `gateway {"action":"list_configs"}`
-2. Discord-Config mit `enabled=true` und bevorzugt `outboundReady=true` waehlen
-3. Ziel bestimmen (Input zuerst, dann `defaultTarget`)
-4. `gateway {"action":"send", ...}` ausfuehren
-5. Bei Fehlern `data.diagnostic.code` auswerten und gezielt recovern
+### Target Channel Resolution
+1. `externalConversationId` from tool input.
+2. Alias `channelId` from tool input.
+3. `defaultTarget` from the `list_configs` output.
+4. **Failure**: If all are empty, return diagnostic: `missing_target`.
 
 ## Tool Patterns
 
-### 1) Verfuegbare Configs laden
-
+### 1. List Available Configs
 ```json
 {"action":"list_configs"}
 ```
+*Expected Output*: List containing `id`, `portal`, `enabled`, `defaultTarget`, `outboundReady`.
 
-Erwartung:
-- Rueckgabe enthaelt `id`, `portal`, `enabled`, `defaultTarget`, `outboundReady`.
-
-### 2) Nachricht senden (Discord)
-
+### 2. Send Message (Discord)
 ```json
 {
 	"action": "send",
@@ -92,9 +78,7 @@ Erwartung:
 	"message": "<text>"
 }
 ```
-
-Alternative wenn Channel direkt genannt ist:
-
+*Alternative (Direct Channel)*:
 ```json
 {
 	"action": "send",
@@ -104,37 +88,32 @@ Alternative wenn Channel direkt genannt ist:
 }
 ```
 
-## Diagnose und Recovery
+## Diagnostics & Recovery
+When the `gateway` tool fails, use the `error` message combined with `data.diagnostic.code`:
 
-Wenn `gateway` fehlschlaegt, nutze `error` plus `data.diagnostic.code`:
+- `config_not_found`:
+  - Re-run `list_configs` immediately and select the correct Discord config.
+- `missing_target`:
+  - Use `externalConversationId/channelId` from the request; otherwise, use `defaultTarget`.
+  - If still missing, explicitly ask the user for a Channel ID.
+- `discord_transport_not_configured`:
+  - Inform the user clearly that the Bot Token or Discord Webhook is missing.
+- `discord_http_error` or `discord_webhook_http_error`:
+  - State the HTTP status and attempt one retry with an alternative Discord configuration (if available).
+- `missing_message`:
+  - Ask the user to reformulate the message or reconstruct it from the context.
 
-- `config_not_found`
-	- Sofort `list_configs` erneut ausfuehren und passende Discord-Config waehlen.
-- `missing_target`
-	- `externalConversationId/channelId` aus Anfrage nutzen, sonst `defaultTarget`.
-	- Nur wenn beides fehlt, gezielt nach Channel-ID fragen.
-- `discord_transport_not_configured`
-	- Melde klar: Bot-Token oder Discord-Webhook fehlt.
-- `discord_http_error` oder `discord_webhook_http_error`
-	- HTTP-Status nennen und einmal mit alternativer Discord-Config erneut versuchen.
-- `missing_message`
-	- Nachricht neu formulieren lassen oder aus Kontext rekonstruieren.
-
-## Antwortformat
-- Bei Erfolg kurz bestaetigen: gesendet, welche Config, welches Ziel.
-- Bei Fehlern konkret sagen was fehlt und naechsten klaren Schritt nennen.
-- Keine pauschalen Fragen nach URLs, wenn Diagnosedaten bereits konkrete Ursache liefern.
+## Output Format
+- **Success**: Brief confirmation: "Sent to [Channel/Config Name]."
+- **Failure**: Specifically state what is missing and provide the next clear step.
+- **No Hallucinations**: Do not ask for URLs if the diagnostic data already identifies a specific cause (e.g., missing token).
 
 ## Guardrails
-- Nicht direkt nach einer hypothetischen localhost-URL fragen, wenn Gateway-Config vorhanden sein kann.
-- Bei Sendefehlern zuerst `list_configs` erneut ausfuehren und Outbound-Bereitschaft pruefen.
-- Fehler immer mit Ursache und Diagnose-Code zurueckgeben.
-- Keine Endlosschleifen: maximal ein Retry mit anderer passender Config.
+- Do not ask for hypothetical localhost URLs if a gateway configuration is available.
+- On send failure, re-verify `list_configs` and check `outboundReady` status before retrying.
+- **No Infinite Loops**: Maximum one retry with a different suitable configuration.
 
 ## Skill Interop
-
-- Wenn Discord-Nachrichten als Datei/Artefakt abgelegt werden sollen, `shared-workspace-ops` nutzen.
-- Bei geplanten, wiederkehrenden Sendungen `cronjobs` nutzen.
-- Fuer umfangreiche, mehrstufige Gateway-Prozesse `workflow-orchestrator` einsetzen.
-
-
+- Use `shared-workspace-ops` if Discord messages need to be stored as files/artifacts.
+- Use `cronjobs` for scheduled, recurring Discord messages.
+- Use `workflow-orchestrator` for complex, multi-step gateway processes.

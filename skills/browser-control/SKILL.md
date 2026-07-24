@@ -1,7 +1,6 @@
 ﻿---
 name: browser-control
 description: Use the browser tool to inspect, control, and verify browser-based flows safely
-
 related_skills: [shared-workspace-ops, shared-workspace-api-first, workflow-orchestrator, plan, fast-answer]
 primary_skills: [shared-workspace-ops]
 fallback_skills: [shared-workspace-api-first, workflow-orchestrator]
@@ -14,7 +13,7 @@ Use the `browser` tool whenever you need to inspect a browser page, verify UI be
 ## Rules
 
 - Prefer `action=detect` first if browser availability is uncertain.
-- Use `action=launch` to start a browser session before any navigation or interaction.
+- Use `action=launch` to start a browser session before any navigation or interaction. Never use `open` as an action; use `launch` to start the session and `goto` to navigate to a URL.
 - Keep one session per task when possible, and reuse it instead of launching multiple browsers.
 - Use `goto`, `click`, `type`, `press`, `wait`, and `evaluate` for targeted interactions.
 - Use `list_pages` when you need to understand open tabs or page targets.
@@ -233,5 +232,3 @@ Use these patterns when a browser action fails. Prefer one recovery step at a ti
 - Screenshots, PDFs, Downloads, Exportdateien.
 - Wenn ein Browser-Lauf in mehrere Schritte zerfaellt, erstelle zuerst mit `plan` eine Schrittfolge oder nutze `workflow-orchestrator` fuer Wiederholbarkeit.
 - Wenn nur eine direkte Kurzantwort noetig ist, pruefe vor Browser-Aktionen mit `fast-answer`, ob Browser-Control ueberhaupt erforderlich ist.
-
-

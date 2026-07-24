@@ -2,7 +2,6 @@
 name: plan
 description: "Planning mode: actionable plan only, no direct implementation in this turn."
 related_skills: [memory, history-search, llm-wiki, test-driven-development, code-review, workflow-orchestrator]
-
 primary_skills: [memory, history-search, llm-wiki, workflow-orchestrator]
 fallback_skills: [workflow-orchestrator, test-driven-development, code-review]
 version: 1.0.0
