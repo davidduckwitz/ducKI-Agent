@@ -25,6 +25,8 @@ import type {
   EmbeddingSelect,
   CronJobInsert,
   CronJobSelect,
+  ArchivedConversationInsert,
+  ArchivedConversationSelect,
   LlmWikiEntryInsert,
   LlmWikiEntrySelect,
   DynamicToolInsert,
@@ -69,7 +71,8 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, level TEXT NOT NULL, message TEXT NOT NULL, context TEXT, timestamp TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS tool_executions (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, input TEXT, output TEXT, success INTEGER NOT NULL, execution_time REAL, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL)`,
-      `CREATE TABLE IF NOT EXISTS cron_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, schedule TEXT NOT NULL, target_type TEXT NOT NULL, target_ref TEXT, payload TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run_at TEXT, next_run_at TEXT, last_status TEXT, last_error TEXT, last_result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS cron_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, schedule TEXT NOT NULL, target_type TEXT NOT NULL, target_ref TEXT, payload TEXT, enabled INTEGER NOT NULL DEFAULT 1, conversation_id INTEGER REFERENCES conversations(id), last_run_at TEXT, next_run_at TEXT, last_status TEXT, last_error TEXT, last_result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS archived_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, original_conversation_id INTEGER NOT NULL, name TEXT NOT NULL, project_id INTEGER, message_count INTEGER NOT NULL, archived_at TEXT NOT NULL, metadata TEXT)`,
       `CREATE TABLE IF NOT EXISTS llm_wiki_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, source_path TEXT NOT NULL UNIQUE, title TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', metadata TEXT, learned_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS dynamic_tools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL, parameters TEXT NOT NULL, script TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     ];
@@ -90,6 +93,10 @@ export class DatabaseService {
     });
 
     await this.client.execute(`ALTER TABLE tasks ADD COLUMN created_by TEXT`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+
+    await this.client.execute(`ALTER TABLE cron_jobs ADD COLUMN conversation_id INTEGER REFERENCES conversations(id)`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
     });
   }
@@ -297,6 +304,53 @@ export class DatabaseService {
     await this.db.delete(schema.memories).where(eq(schema.memories.id, id)).run();
   }
 
+  async searchMemories(
+    keywords: string[],
+    conversationId?: number,
+    type?: string,
+    status: string = "approved",
+    limit: number = 10
+  ): Promise<MemorySelect[]> {
+    const conditions = [];
+    if (conversationId !== undefined) conditions.push(eq(schema.memories.conversationId, conversationId));
+    if (type !== undefined) conditions.push(eq(schema.memories.type, type));
+    if (status !== undefined) conditions.push(eq(schema.memories.status, status));
+
+    let memories = conditions.length > 0
+      ? await this.db.select().from(schema.memories).where(and(...conditions)).all()
+      : await this.db.select().from(schema.memories).all();
+
+    const scored = memories
+      .map(m => ({
+        entry: m,
+        score: this.scoreMemoryRelevance(m.content, keywords),
+      }))
+      .filter(s => s.score > 0)
+      .sort((a, b) => (b.score - a.score) || (b.entry.importance - a.entry.importance))
+      .slice(0, limit)
+      .map(s => s.entry);
+
+    return scored;
+  }
+
+  private scoreMemoryRelevance(content: string, keywords: string[]): number {
+    if (keywords.length === 0) return 0;
+
+    const normalized = content.toLowerCase();
+    let score = 0;
+
+    for (const keyword of keywords) {
+      const keywordLower = keyword.toLowerCase().trim();
+      if (!keywordLower) continue;
+
+      if (normalized.includes(keywordLower)) {
+        score += 1;
+      }
+    }
+
+    return score;
+  }
+
   // ============================================================
   // Embeddings
   // ============================================================
@@ -443,6 +497,23 @@ export class DatabaseService {
     return this.db.select().from(schema.logs).orderBy(desc(schema.logs.timestamp)).limit(limit).all();
   }
 
+  async cleanupLogs(maxEntries: number = 100): Promise<number> {
+    const allLogs = await this.db.select({ id: schema.logs.id }).from(schema.logs).orderBy(desc(schema.logs.id)).all();
+
+    if (allLogs.length <= maxEntries) {
+      return 0;
+    }
+
+    const idsToDelete = allLogs.slice(maxEntries).map(log => log.id);
+    if (idsToDelete.length === 0) return 0;
+
+    for (const id of idsToDelete) {
+      await this.db.delete(schema.logs).where(eq(schema.logs.id, id)).run();
+    }
+
+    return idsToDelete.length;
+  }
+
   // ============================================================
   // Cron Jobs
   // ============================================================
@@ -579,6 +650,78 @@ export class DatabaseService {
       await this.db.delete(schema.dynamicTools).where(eq(schema.dynamicTools.id, tool.id)).run();
     }
     return owned.length;
+  }
+
+  // ============================================================
+  // Conversation Archival & Cleanup
+  // ============================================================
+  async getMessageCount(conversationId: number): Promise<number> {
+    const result = await this.db.select().from(schema.messages).where(eq(schema.messages.conversationId, conversationId)).all();
+    return result.length;
+  }
+
+  async archiveConversation(conversationId: number, reason?: string): Promise<ArchivedConversationSelect> {
+    const conversation = await this.getConversation(conversationId);
+    if (!conversation) throw new Error(`Conversation ${conversationId} not found`);
+
+    const messageCount = await this.getMessageCount(conversationId);
+    const now = new Date().toISOString();
+
+    const archived = await this.db
+      .insert(schema.archivedConversations)
+      .values({
+        originalConversationId: conversationId,
+        name: conversation.name,
+        projectId: conversation.projectId,
+        messageCount,
+        archivedAt: now,
+        metadata: reason ? JSON.stringify({ reason }) : null,
+      })
+      .returning()
+      .get();
+
+    if (!archived) throw new Error("Failed to archive conversation");
+    return archived;
+  }
+
+  async deleteOldMessages(conversationId: number, keepLatestCount: number): Promise<number> {
+    const allMessages = await this.getMessages(conversationId);
+    const toDelete = Math.max(0, allMessages.length - keepLatestCount);
+
+    if (toDelete === 0) return 0;
+
+    const idsToDelete = allMessages.slice(0, toDelete).map(m => m.id);
+    for (const id of idsToDelete) {
+      await this.db.delete(schema.messages).where(eq(schema.messages.id, id)).run();
+    }
+
+    return idsToDelete.length;
+  }
+
+  async cleanupConversations(keepLatestPerConversation: number): Promise<{ conversationsProcessed: number; messagesDeleted: number }> {
+    const conversations = await this.listConversations();
+    let messagesDeleted = 0;
+
+    for (const conversation of conversations) {
+      const deleted = await this.deleteOldMessages(conversation.id, keepLatestPerConversation);
+      messagesDeleted += deleted;
+    }
+
+    return { conversationsProcessed: conversations.length, messagesDeleted };
+  }
+
+  async listArchivedConversations(limit = 100): Promise<ArchivedConversationSelect[]> {
+    const capped = Math.max(1, Math.min(1000, Number(limit)));
+    return this.db
+      .select()
+      .from(schema.archivedConversations)
+      .orderBy(desc(schema.archivedConversations.archivedAt))
+      .limit(capped)
+      .all();
+  }
+
+  async deleteArchivedConversation(id: number): Promise<void> {
+    await this.db.delete(schema.archivedConversations).where(eq(schema.archivedConversations.id, id)).run();
   }
 
   get raw(): LibSQLDatabase<typeof schema> {

@@ -119,6 +119,131 @@
   }
 }
 
+/* DucKI mascot: idle (sitting) / flying (working, wings flapping) / landing (transient). */
+.ducky-mascot {
+  overflow: visible;
+}
+
+.ducky-flightgroup {
+  transform-origin: 30px 40px;
+}
+
+.ducky-flightgroup[data-ducky-state="flying"] {
+  animation: ducky-hover 0.55s ease-in-out infinite;
+}
+
+.ducky-flightgroup[data-ducky-state="landing"] {
+  animation: ducky-land 0.62s cubic-bezier(0.34, 1.2, 0.64, 1) 1;
+}
+
+.ducky-flightgroup[data-ducky-state="idle"] {
+  animation: ducky-idle-bob 3.4s ease-in-out infinite;
+}
+
+.ducky-wing {
+  transform-origin: 27px 33px;
+  transform: rotate(-8deg);
+}
+
+.ducky-wing[data-ducky-state="flying"] {
+  animation: ducky-flap 0.32s ease-in-out infinite;
+}
+
+.ducky-wing[data-ducky-state="landing"] {
+  animation: ducky-flap 0.42s ease-in-out 3;
+}
+
+.ducky-feet {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.ducky-feet[data-ducky-state="flying"] {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.7);
+}
+
+.ducky-eye[data-ducky-state="idle"] {
+  transform-origin: 45px 21px;
+  animation: ducky-blink 4.2s ease-in-out infinite;
+}
+
+.ducky-shadow {
+  fill: rgb(0 0 0 / 0.18);
+  transform-origin: 34px 55px;
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.ducky-shadow[data-ducky-state="flying"] {
+  transform: scale(0.7);
+  opacity: 0.3;
+}
+
+.ducky-shadow[data-ducky-state="landing"] {
+  transform: scale(0.9);
+  opacity: 0.5;
+}
+
+.ducky-shadow[data-ducky-state="idle"] {
+  transform: scale(1);
+  opacity: 0.6;
+}
+
+@keyframes ducky-flap {
+  0%,
+  100% {
+    transform: rotate(-8deg);
+  }
+  50% {
+    transform: rotate(-62deg);
+  }
+}
+
+@keyframes ducky-hover {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(-3deg);
+  }
+}
+
+@keyframes ducky-land {
+  0% {
+    transform: translateY(-6px);
+  }
+  55% {
+    transform: translateY(2px);
+  }
+  75% {
+    transform: translateY(-2px);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes ducky-idle-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-1.2px);
+  }
+}
+
+@keyframes ducky-blink {
+  0%,
+  90%,
+  100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.15);
+  }
+}
+
 @layer components {
   .btn {
     @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-background;

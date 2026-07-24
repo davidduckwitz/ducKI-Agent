@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import type { DatabaseService } from "@ducki/database";
+import type { PromptManager } from "../lib/prompt-manager.js";
 import { createApiResponse } from "@ducki/shared";
 
 export const memoryRouter: IRouter = Router();
@@ -266,32 +267,78 @@ memoryRouter.post("/actions", async (req, res, next) => {
 
 memoryRouter.get("/profile", async (req, res, next) => {
   try {
+    const promptManager = req.app.locals["promptManager"] as PromptManager | undefined;
     const db = req.app.locals["db"] as DatabaseService;
-    const [agentEntries, humanEntries] = await Promise.all([
-      findByPrefix(db, "long-term", AGENT_BEHAVIOR_PREFIX),
-      findByPrefix(db, "semantic", HUMAN_INFO_PREFIX),
-    ]);
 
-    const latestAgent = agentEntries.sort((a, b) => b.id - a.id)[0];
-    const latestHuman = humanEntries.sort((a, b) => b.id - a.id)[0];
+    let systemPrompt = "";
+    let agentBehavior = "";
+    let humanInfo = "";
 
-    res.json(createApiResponse({
-      agentBehavior: latestAgent ? extractPrefixed(latestAgent.content, AGENT_BEHAVIOR_PREFIX) : "",
-      humanInfo: latestHuman ? extractPrefixed(latestHuman.content, HUMAN_INFO_PREFIX) : "",
-    }));
+    if (promptManager) {
+      [systemPrompt, agentBehavior, humanInfo] = await Promise.all([
+        promptManager.getPrompt("system"),
+        promptManager.getPrompt("agent"),
+        promptManager.getPrompt("human"),
+      ]);
+    } else {
+      const [agentEntries, humanEntries] = await Promise.all([
+        findByPrefix(db, "long-term", AGENT_BEHAVIOR_PREFIX),
+        findByPrefix(db, "semantic", HUMAN_INFO_PREFIX),
+      ]);
+
+      const latestAgent = agentEntries.sort((a, b) => b.id - a.id)[0];
+      const latestHuman = humanEntries.sort((a, b) => b.id - a.id)[0];
+
+      agentBehavior = latestAgent ? extractPrefixed(latestAgent.content, AGENT_BEHAVIOR_PREFIX) : "";
+      humanInfo = latestHuman ? extractPrefixed(latestHuman.content, HUMAN_INFO_PREFIX) : "";
+
+      const systemPromptSetting = await db.getSetting("AGENT_SYSTEM_PROMPT");
+      systemPrompt = systemPromptSetting ?? "";
+    }
+
+    res.json(createApiResponse({ systemPrompt, agentBehavior, humanInfo }));
   } catch (e) { next(e); }
 });
 
 memoryRouter.put("/profile", async (req, res, next) => {
   try {
+    const promptManager = req.app.locals["promptManager"] as PromptManager | undefined;
     const db = req.app.locals["db"] as DatabaseService;
+    const systemPrompt = String(req.body?.systemPrompt ?? "").trim();
     const agentBehavior = String(req.body?.agentBehavior ?? "").trim();
     const humanInfo = String(req.body?.humanInfo ?? "").trim();
 
-    await upsertProfileEntry(db, "long-term", AGENT_BEHAVIOR_PREFIX, agentBehavior, 9);
-    await upsertProfileEntry(db, "semantic", HUMAN_INFO_PREFIX, humanInfo, 9);
+    if (promptManager) {
+      await Promise.all([
+        systemPrompt ? promptManager.savePrompt("system", systemPrompt) : Promise.resolve(),
+        agentBehavior ? promptManager.savePrompt("agent", agentBehavior) : Promise.resolve(),
+        humanInfo ? promptManager.savePrompt("human", humanInfo) : Promise.resolve(),
+      ]);
+    } else {
+      if (systemPrompt) {
+        await db.setSetting("AGENT_SYSTEM_PROMPT", systemPrompt);
+      }
+      await upsertProfileEntry(db, "long-term", AGENT_BEHAVIOR_PREFIX, agentBehavior, 9);
+      await upsertProfileEntry(db, "semantic", HUMAN_INFO_PREFIX, humanInfo, 9);
+    }
 
-    res.json(createApiResponse({ saved: true, agentBehavior, humanInfo }));
+    res.json(createApiResponse({ saved: true, systemPrompt, agentBehavior, humanInfo }));
+  } catch (e) { next(e); }
+});
+
+memoryRouter.post("/search", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const keywords = Array.isArray(req.body?.keywords) ? req.body.keywords : [];
+    const conversationId = req.body?.conversationId ? Number(req.body.conversationId) : undefined;
+    const limit = req.body?.limit ?? 10;
+
+    if (keywords.length === 0) {
+      return res.status(400).json({ success: false, error: "keywords array is required", timestamp: new Date().toISOString() });
+    }
+
+    const results = await db.searchMemories(keywords, conversationId, "long-term", "approved", limit);
+    res.json(createApiResponse(results));
   } catch (e) { next(e); }
 });
 

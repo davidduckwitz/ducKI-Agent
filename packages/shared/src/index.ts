@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolve, sep } from "node:path";
 
 // ============================================================
 // Agent Types
@@ -206,6 +207,37 @@ export interface SpeechToTextProviderConfig {
 export interface SpeechToTextProvider {
   readonly name: string;
   transcribe(audioBuffer: Buffer, options?: { language?: string }): Promise<string>;
+}
+
+// ============================================================
+// Filesystem Utilities
+// ============================================================
+
+/**
+ * Resolves a user/LLM-supplied relative path against a root directory,
+ * rejecting anything that would escape it. Tolerates a redundant leading
+ * "shared-workspace/" segment since some call sites hint file paths to the
+ * LLM with that prefix and others don't - callers referencing a file back
+ * may echo either form.
+ */
+export function resolveWithinRoot(root: string, relativePath: string): string {
+  const withoutPrefix = String(relativePath ?? "")
+    .replaceAll("\\", "/")
+    .replace(/^\/+/, "")
+    .replace(/^shared-workspace\/+/i, "")
+    .trim();
+
+  if (!withoutPrefix || withoutPrefix.includes("..")) {
+    throw new Error(`Invalid path: ${relativePath}`);
+  }
+
+  const absoluteRoot = resolve(root);
+  const absolute = resolve(absoluteRoot, withoutPrefix);
+  if (absolute !== absoluteRoot && !absolute.startsWith(absoluteRoot + sep)) {
+    throw new Error(`Path escapes workspace root: ${relativePath}`);
+  }
+
+  return absolute;
 }
 
 // ============================================================

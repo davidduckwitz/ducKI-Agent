@@ -1,12 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, type LucideIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useTheme } from "../theme/ThemeProvider";
 import { ACCENT_COLORS, THEME_MODES, type AccentColor, type ThemeMode } from "../../lib/theme";
 import { cn } from "../../lib/utils";
+import { ChatCleanupSettings } from "./ChatCleanupSettings";
+import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
   key: string;
@@ -96,7 +98,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
     label: "OpenAI API Key",
     description: "Schluessel fuer OpenAI API",
     type: "password",
-    section: "API",
+    section: "Provider",
     defaultValue: "",
   },
   {
@@ -104,7 +106,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
     label: "OpenRouter API Key",
     description: "Schluessel fuer OpenRouter API",
     type: "password",
-    section: "API",
+    section: "Provider",
     defaultValue: "",
   },
   {
@@ -112,7 +114,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
     label: "LM Studio API Key",
     description: "Optionaler Schluessel fuer LM Studio Proxy/API",
     type: "password",
-    section: "API",
+    section: "Provider",
     defaultValue: "",
   },
   {
@@ -566,14 +568,6 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
-    key: "AGENT_SYSTEM_PROMPT",
-    label: "System Prompt",
-    description: "Globaler Prompt fuer das Agent-Verhalten",
-    type: "textarea",
-    section: "Agent",
-    defaultValue: SYSTEM_PROMPT_FALLBACK,
-  },
-  {
     key: "MEMORY_SHORT_TERM_LIMIT",
     label: "Short-Term Memory Limit",
     description: "Maximale Anzahl kurzzeitiger Memory-Eintraege",
@@ -684,7 +678,14 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme";
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup";
+
+const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
+  ...TAB_ICONS,
+  Theme: Palette,
+  "Chat Cleanup": Trash2,
+  Other: SettingsIcon,
+};
 
 const THEME_MODE_ICONS: Record<ThemeMode, typeof Monitor> = {
   system: Monitor,
@@ -709,7 +710,7 @@ function ThemeSettingsTab() {
     <div className="space-y-6">
       <div>
         <h3 className="text-sm font-semibold mb-1">{t("themeSettings.modeTitle")}</h3>
-        <p className="text-xs text-gray-400 mb-3">{t("themeSettings.modeDescription")}</p>
+        <p className="text-xs text-muted-foreground mb-3">{t("themeSettings.modeDescription")}</p>
         <div className="flex flex-wrap gap-2">
           {THEME_MODES.map((value) => {
             const Icon = THEME_MODE_ICONS[value];
@@ -731,7 +732,7 @@ function ThemeSettingsTab() {
 
       <div>
         <h3 className="text-sm font-semibold mb-1">{t("themeSettings.accentTitle")}</h3>
-        <p className="text-xs text-gray-400 mb-3">{t("themeSettings.accentDescription")}</p>
+        <p className="text-xs text-muted-foreground mb-3">{t("themeSettings.accentDescription")}</p>
         <div className="flex flex-wrap gap-3">
           {ACCENT_COLORS.map((value) => {
             const isActive = accent === value;
@@ -787,7 +788,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "Other"] : ["Theme", ...SECTIONS];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -796,10 +797,10 @@ export function Settings() {
     const value = getDisplayValue(field);
 
     return (
-      <div key={field.key} className="space-y-1 border-b border-gray-800 pb-3 last:border-b-0 last:pb-0">
-        <label className="text-sm text-gray-100 block">{field.label}</label>
-        <p className="text-xs text-gray-400">{field.description}</p>
-        <p className="text-xs text-gray-500 font-mono">{field.key}</p>
+      <div key={field.key} className="space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
+        <label className="text-sm text-foreground block">{field.label}</label>
+        <p className="text-xs text-muted-foreground">{field.description}</p>
+        <p className="text-xs text-muted-foreground/70 font-mono">{field.key}</p>
 
         <div className="flex gap-2 items-start">
           {field.type === "textarea" && (
@@ -881,16 +882,20 @@ export function Settings() {
         <div className="flex flex-wrap gap-2">
           {tabs.map((tab) => {
             const isActive = activeTab === tab;
-            const label = tab === "Other" ? t("settingsPage.otherSettings") : tab === "Theme" ? t("themeSettings.tabLabel") : tab;
+            let label: string = tab;
+            if (tab === "Other") label = t("settingsPage.otherSettings");
+            else if (tab === "Theme") label = t("themeSettings.tabLabel");
+
+            const Icon = TAB_ICON_LOOKUP[tab];
+
             return (
               <button
                 key={tab}
                 type="button"
                 onClick={() => setActiveTab(tab)}
-                className={isActive
-                  ? "btn-primary"
-                  : "btn-secondary"}
+                className={cn(isActive ? "btn-primary" : "btn-secondary", "flex items-center gap-2")}
               >
+                {Icon && <Icon className="w-4 h-4" />}
                 {label}
               </button>
             );
@@ -905,10 +910,90 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && (
+      {activeTab === "Chat Cleanup" && (
         <div className="card space-y-3">
-          <h2 className="text-lg font-semibold">{activeTab}</h2>
-          {PREDEFINED_FIELDS.filter((field) => field.section === activeTab).map((field) => renderField(field))}
+          <ChatCleanupSettings />
+        </div>
+      )}
+
+      {activeTab === "Provider" && (
+        <div className="space-y-4">
+          <div className="card space-y-3 border-2 border-primary/40">
+            <div className="flex items-center gap-2">
+              <Cpu className="w-5 h-5 text-primary" />
+              <h2 className="text-lg font-semibold">Aktiver Provider</h2>
+            </div>
+            {renderField(PREDEFINED_FIELDS.find((f) => f.key === "DEFAULT_PROVIDER") as SettingField)}
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            {PROVIDER_META.map((provider) => {
+              const activeProviderValue = getDisplayValue(PREDEFINED_FIELDS.find((f) => f.key === "DEFAULT_PROVIDER") as SettingField);
+              const isProviderActive = activeProviderValue === provider.id;
+              const providerFields = PREDEFINED_FIELDS.filter((f) => PROVIDER_FIELD_MAP[f.key] === provider.id);
+
+              return (
+                <div
+                  key={provider.id}
+                  className={cn(
+                    "card border-2 space-y-3",
+                    isProviderActive ? PROVIDER_BORDER_CLASS[provider.color] : "border-border"
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="text-3xl leading-none">{provider.emoji}</div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold">{provider.label}</h3>
+                        {isProviderActive && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-primary text-primary-foreground">
+                            Aktiv
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">{provider.description}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-3 pt-2 border-t border-border">
+                    {providerFields.map((field) => renderField(field))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && (
+        <div className="space-y-4">
+          {(SUBSECTIONS[activeTab] ?? []).map((group) => {
+            const groupKeys = new Set(group.keys);
+            const fields = PREDEFINED_FIELDS.filter((f) => f.section === activeTab && groupKeys.has(f.key));
+            if (fields.length === 0) return null;
+            const Icon = group.icon;
+
+            return (
+              <div key={group.name} className="card space-y-3">
+                <div className="flex items-center gap-2">
+                  <Icon className="w-4 h-4 text-primary" />
+                  <h3 className="font-semibold">{group.name}</h3>
+                </div>
+                <div className="space-y-3">{fields.map((field) => renderField(field))}</div>
+              </div>
+            );
+          })}
+
+          {(() => {
+            const grouped = new Set((SUBSECTIONS[activeTab] ?? []).flatMap((g) => g.keys));
+            const rest = PREDEFINED_FIELDS.filter((f) => f.section === activeTab && !grouped.has(f.key));
+            if (rest.length === 0) return null;
+            return (
+              <div className="card space-y-3">
+                <h3 className="font-semibold">{activeTab}</h3>
+                <div className="space-y-3">{rest.map((field) => renderField(field))}</div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -916,8 +1001,8 @@ export function Settings() {
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">{t("settingsPage.otherSettings")}</h2>
           {customSettings.map((setting) => (
-            <div key={setting.key} className="space-y-1 border-b border-gray-800 pb-3 last:border-b-0 last:pb-0">
-              <p className="text-xs text-gray-500 font-mono">{setting.key}</p>
+            <div key={setting.key} className="space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
+              <p className="text-xs text-muted-foreground/70 font-mono">{setting.key}</p>
               <div className="flex gap-2">
                 <input
                   className="input flex-1"
@@ -938,8 +1023,8 @@ export function Settings() {
       )}
 
       {(settings as Setting[]).length === 0 && (
-        <div className="text-center text-gray-500 py-8">
-          <SettingsIcon className="w-10 h-10 mx-auto mb-3 text-gray-700" />
+        <div className="text-center text-muted-foreground py-8">
+          <SettingsIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground/60" />
           <p>{t("settingsPage.defaultsHint")}</p>
         </div>
       )}

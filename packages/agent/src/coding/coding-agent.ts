@@ -2,6 +2,8 @@ import type { LLMProvider } from "@ducki/providers";
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor } from "@ducki/shared";
 import { filesystemTool, gitTool, shellTool, skillsTool } from "@ducki/tools";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter } from "../config/interfaces_types.js";
 import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
@@ -11,7 +13,7 @@ const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding a
 Discipline:
 1. Plan the concrete files and steps before making any change.
 2. Never edit a file you have not first read via the filesystem tool's "read" action.
-3. Make minimal, targeted edits - do not restructure unrelated code.
+3. Make minimal, targeted edits - do not restructure unrelated code. Prefer the filesystem tool's "edit" action (exact text replacement) over "write" for changes to existing files; only use "write" for new files or a genuine full-file replacement.
 4. After every change, verify it: re-read the file or run a build/test command via the shell tool.
 5. If a verification command fails, diagnose the ACTUAL error output before retrying - do not guess or repeat the same fix blindly.
 6. Use the git tool to inspect diffs/status when useful, but never push or force operations unless explicitly asked.
@@ -54,6 +56,8 @@ export interface CodingRunResult {
 export class CodingAgent {
   private readonly agent: Agent;
   private readonly defaultMaxAttempts: number;
+  private readonly sandboxRoot: string | undefined;
+  private skillContent: string = "";
 
   constructor(
     provider: LLMProvider,
@@ -62,10 +66,13 @@ export class CodingAgent {
     options: CodingAgentOptions = {}
   ) {
     this.defaultMaxAttempts = Math.max(1, options.maxAttempts ?? 4);
+    this.sandboxRoot = options.sandboxRoot;
+
+    const basePrompt = options.systemPrompt ?? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}`;
 
     this.agent = new Agent(provider, db, eventEmitter, {
       name: options.name ?? "CodingAgent",
-      systemPrompt: options.systemPrompt ?? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}`,
+      systemPrompt: basePrompt,
       maxIterations: options.maxIterations ?? 30,
     });
 
@@ -73,6 +80,49 @@ export class CodingAgent {
     for (const tool of [fsTool, gitTool, shellTool, skillsTool, ...(options.extraTools ?? [])]) {
       this.agent.executor.registerTool(tool);
     }
+  }
+
+  private autoSelectCodingSkill(goal: string): string | undefined {
+    const skillKeywords = {
+      "test-driven-development": ["test", "tdd", "unit test", "jest", "vitest", "spec"],
+      "code-review": ["review", "quality", "style", "lint", "format"],
+      "debugging": ["debug", "error", "bug", "fix", "crash"],
+      "planning": ["plan", "architecture", "design", "structure"],
+    };
+
+    const goalLower = goal.toLowerCase();
+    for (const [skill, keywords] of Object.entries(skillKeywords)) {
+      if (keywords.some(kw => goalLower.includes(kw))) {
+        return skill;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Best-effort default so "no verifyCommand" doesn't silently mean "no check
+   * at all" - falls back to a project-detected typecheck/build, or undefined
+   * if nothing detectable exists (never fabricates a command that would fail
+   * for unrelated reasons).
+   */
+  private detectDefaultVerifyCommand(): string | undefined {
+    if (!this.sandboxRoot) return undefined;
+    if (existsSync(join(this.sandboxRoot, "tsconfig.json"))) {
+      return "npx tsc --noEmit";
+    }
+    const packageJsonPath = join(this.sandboxRoot, "package.json");
+    if (existsSync(packageJsonPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+          scripts?: Record<string, string>;
+        };
+        if (pkg.scripts?.["build"]) return "npm run build";
+      } catch {
+        // malformed package.json - nothing detectable, fall through
+      }
+    }
+    return undefined;
   }
 
   get executor() {
@@ -83,23 +133,38 @@ export class CodingAgent {
     const maxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
     const conversationId = await this.agent.startConversation({ name: `CodingAgent: ${goal.slice(0, 60)}` });
 
+    const detectedSkill = this.autoSelectCodingSkill(goal);
+    let verifyCommand = opts.verifyCommand;
+
+    if (!verifyCommand && detectedSkill) {
+      if (detectedSkill === "test-driven-development") {
+        verifyCommand = "npm test";
+      } else if (detectedSkill === "code-review") {
+        verifyCommand = "npm run lint";
+      }
+    }
+
+    if (!verifyCommand) {
+      verifyCommand = this.detectDefaultVerifyCommand();
+    }
+
     let lastSummary = "";
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const prompt = attempt === 1 ? goal : this.buildFollowUpPrompt(goal, lastSummary);
       const runResult = await this.agent.run(prompt);
       lastSummary = runResult.response;
 
-      if (!opts.verifyCommand) {
+      if (!verifyCommand) {
         return { success: true, summary: lastSummary, attempts: attempt, conversationId };
       }
 
-      const verifyResult = await this.agent.executor.execute("shell", { command: opts.verifyCommand });
+      const verifyResult = await this.agent.executor.execute("shell", { command: verifyCommand });
       if (verifyResult.success) {
         return { success: true, summary: lastSummary, attempts: attempt, conversationId };
       }
 
       const verifyError = verifyResult.error ?? JSON.stringify(verifyResult.data ?? "");
-      lastSummary = `${lastSummary}\n\nVerification command "${opts.verifyCommand}" failed:\n${verifyError}`;
+      lastSummary = `${lastSummary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`;
 
       if (attempt === maxAttempts) {
         return { success: false, summary: lastSummary, attempts: attempt, conversationId };

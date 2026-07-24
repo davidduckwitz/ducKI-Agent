@@ -1,7 +1,10 @@
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
+import { resolveWithinRoot } from "@ducki/shared";
 import { browserTool } from "@ducki/tools";
 import { previewSplit, commitSplit } from "../tasks/task-split-service.js";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, extname, resolve } from "node:path";
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 type TaskPriority = "low" | "medium" | "high" | "critical";
@@ -175,6 +178,97 @@ function isHttpUrl(value: string | undefined): boolean {
   return /^https?:\/\//i.test(raw);
 }
 
+const SHARED_ROOT = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
+const MAX_DISCORD_ATTACHMENT_BYTES = 8 * 1024 * 1024; // conservative Discord free-tier per-file limit
+const MAX_DISCORD_ATTACHMENTS = 10; // Discord's per-message attachment limit
+
+const DISCORD_MIME_BY_EXT: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".json": "application/json",
+  ".csv": "text/csv",
+  ".zip": "application/zip",
+};
+
+interface DiscordAttachmentFile {
+  name: string;
+  data: Buffer;
+  type: string;
+}
+
+/**
+ * Loads shared-workspace files for an outbound Discord send. Paths come from the LLM
+ * (tool input), so they're resolved through resolveWithinRoot to reject traversal, and
+ * capped in size/count to match Discord's own attachment limits before we ever hit the network.
+ */
+function loadDiscordAttachments(paths: string[]): DiscordAttachmentFile[] {
+  if (paths.length === 0) return [];
+  if (paths.length > MAX_DISCORD_ATTACHMENTS) {
+    throw new Error(`Too many attachments (${paths.length}); Discord allows at most ${MAX_DISCORD_ATTACHMENTS} per message.`);
+  }
+
+  return paths.map((relativePath) => {
+    const absolute = resolveWithinRoot(SHARED_ROOT, relativePath);
+    if (!existsSync(absolute)) {
+      throw new Error(`Attachment not found in shared workspace: ${relativePath}`);
+    }
+    const size = statSync(absolute).size;
+    if (size > MAX_DISCORD_ATTACHMENT_BYTES) {
+      throw new Error(
+        `Attachment too large: ${relativePath} (${Math.round(size / 1024)}KB, max ${Math.round(MAX_DISCORD_ATTACHMENT_BYTES / 1024)}KB)`
+      );
+    }
+    const ext = extname(absolute).toLowerCase();
+    return {
+      name: basename(absolute),
+      data: readFileSync(absolute),
+      type: DISCORD_MIME_BY_EXT[ext] ?? "application/octet-stream",
+    };
+  });
+}
+
+/**
+ * Sends a Discord message, falling back to a plain JSON POST when there are no files
+ * (identical behavior to before this feature existed) and to multipart/form-data with
+ * payload_json + files[n] parts when attachments are present.
+ */
+async function sendDiscordMessageMultipart(
+  url: string,
+  authHeader: string | undefined,
+  content: string,
+  files: DiscordAttachmentFile[]
+): Promise<Response> {
+  if (files.length === 0) {
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        ...(authHeader ? { Authorization: authHeader } : {}),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  const form = new FormData();
+  form.append("payload_json", JSON.stringify({ content }));
+  files.forEach((file, index) => {
+    form.append(`files[${index}]`, new Blob([new Uint8Array(file.data)], { type: file.type }), file.name);
+  });
+
+  return fetch(url, {
+    method: "POST",
+    headers: authHeader ? { Authorization: authHeader } : undefined,
+    body: form,
+  });
+}
+
 function gatewayConversationPrefix(config: GatewayConfig): string {
   return `[${config.portal}] ${config.name}`;
 }
@@ -210,7 +304,8 @@ async function appendGatewayOutboundMessage(
   db: DatabaseService,
   config: GatewayConfig,
   externalConversationId: string,
-  content: string
+  content: string,
+  attachmentNames?: string[]
 ): Promise<void> {
   const trimmed = content.trim();
   if (!trimmed) return;
@@ -227,6 +322,7 @@ async function appendGatewayOutboundMessage(
         portal: config.portal,
         configId: config.id,
         externalConversationId,
+        attachments: attachmentNames?.length ? attachmentNames : undefined,
       }),
     });
   } catch {
@@ -859,6 +955,12 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           externalConversationId: { type: "string", description: "Target id (Discord channel id, Telegram chat id, etc.)" },
           channelId: { type: "string", description: "Alias for externalConversationId" },
           message: { type: "string", description: "Message content to send" },
+          attachments: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Optional shared-workspace-relative file paths to attach (images/documents), e.g. 'chat-uploads/photo.png'. Discord only. Max 10 files, 8MB each.",
+          },
         },
         required: ["action"],
       },
@@ -941,15 +1043,34 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           const envToken = String(process.env["DISCORD_BOT_TOKEN"] ?? "").trim();
           const tokenSource = configToken ? "config.authToken" : envToken ? "env.DISCORD_BOT_TOKEN" : "none";
           const botToken = resolveDiscordBotToken(config);
+
+          const attachmentPaths = Array.isArray(input["attachments"])
+            ? (input["attachments"] as unknown[]).map(String).filter((p) => p.trim().length > 0)
+            : [];
+          let attachmentFiles: DiscordAttachmentFile[];
+          try {
+            attachmentFiles = loadDiscordAttachments(attachmentPaths);
+          } catch (attachmentError) {
+            return failWithDiagnostic(
+              attachmentError instanceof Error ? attachmentError.message : String(attachmentError),
+              {
+                code: "attachment_error",
+                configId: config.id,
+                portal: config.portal,
+                target,
+                attachmentPaths,
+              }
+            );
+          }
+          const attachmentNames = attachmentFiles.map((f) => f.name);
+
           if (botToken) {
-            const response = await fetch(`https://discord.com/api/v10/channels/${encodeURIComponent(target)}/messages`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bot ${botToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ content: message }),
-            });
+            const response = await sendDiscordMessageMultipart(
+              `https://discord.com/api/v10/channels/${encodeURIComponent(target)}/messages`,
+              `Bot ${botToken}`,
+              message,
+              attachmentFiles
+            );
             if (!response.ok) {
               return failWithDiagnostic(`Discord send failed: HTTP ${response.status}`, {
                 code: "discord_http_error",
@@ -961,16 +1082,25 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
                 status: response.status,
               });
             }
-            await appendGatewayOutboundMessage(db, config, target, message);
-            return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "bot_api", tokenSource });
+            await appendGatewayOutboundMessage(db, config, target, message, attachmentNames);
+            return ok({
+              sent: true,
+              portal: config.portal,
+              configId: config.id,
+              target,
+              transport: "bot_api",
+              tokenSource,
+              attachments: attachmentNames,
+            });
           }
 
           if (isHttpUrl(config.webhookSecret)) {
-            const response = await fetch(String(config.webhookSecret), {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ content: message }),
-            });
+            const response = await sendDiscordMessageMultipart(
+              String(config.webhookSecret),
+              undefined,
+              message,
+              attachmentFiles
+            );
             if (!response.ok) {
               return failWithDiagnostic(`Discord webhook send failed: HTTP ${response.status}`, {
                 code: "discord_webhook_http_error",
@@ -981,8 +1111,8 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
                 status: response.status,
               });
             }
-            await appendGatewayOutboundMessage(db, config, target, message);
-            return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook" });
+            await appendGatewayOutboundMessage(db, config, target, message, attachmentNames);
+            return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook", attachments: attachmentNames });
           }
 
           return failWithDiagnostic("Discord gateway requires DISCORD_BOT_TOKEN/authToken or webhookSecret webhook URL.", {

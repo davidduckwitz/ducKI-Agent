@@ -1,0 +1,224 @@
+import {
+  Cpu,
+  KeyRound,
+  RefreshCw,
+  Mic,
+  MessageSquare,
+  Terminal,
+  Gauge,
+  Clock,
+  Wrench,
+  Sparkles,
+  Target,
+  Database,
+  BookOpen,
+  type LucideIcon,
+} from "lucide-react";
+
+export interface ProviderMeta {
+  id: string;
+  label: string;
+  emoji: string;
+  description: string;
+  color: "blue" | "green" | "purple" | "amber";
+}
+
+// One box per LLM provider - all its fields (base url, model, api key) are
+// pulled together here even though they live in different PREDEFINED_FIELDS
+// sections, so the user configures a provider end-to-end in one place.
+export const PROVIDER_META: ProviderMeta[] = [
+  {
+    id: "lmstudio",
+    label: "LM Studio",
+    emoji: "🖥️",
+    description: "Lokales, kostenloses LLM über den LM Studio Server",
+    color: "blue",
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    emoji: "🤖",
+    description: "GPT-4o und weitere Modelle über die offizielle OpenAI API",
+    color: "green",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    emoji: "🌐",
+    description: "Zugriff auf viele Modelle verschiedener Anbieter über eine API",
+    color: "purple",
+  },
+  {
+    id: "ollama",
+    label: "Ollama",
+    emoji: "🦙",
+    description: "Lokal gehostete Open-Source-Modelle über Ollama",
+    color: "amber",
+  },
+];
+
+export const PROVIDER_FIELD_MAP: Record<string, string> = {
+  OPENAI_MODEL: "openai",
+  OPENAI_API_KEY: "openai",
+  OPENROUTER_MODEL: "openrouter",
+  OPENROUTER_API_KEY: "openrouter",
+  LM_STUDIO_BASE_URL: "lmstudio",
+  LM_STUDIO_MODEL: "lmstudio",
+  LM_STUDIO_API_KEY: "lmstudio",
+  OLLAMA_BASE_URL: "ollama",
+  OLLAMA_MODEL: "ollama",
+};
+
+export const PROVIDER_BORDER_CLASS: Record<ProviderMeta["color"], string> = {
+  blue: "border-blue-500",
+  green: "border-green-500",
+  purple: "border-purple-500",
+  amber: "border-amber-500",
+};
+
+export interface SubsectionGroup {
+  name: string;
+  icon: LucideIcon;
+  keys: string[];
+}
+
+// Groups the flat field list of each non-Provider tab into named boxes so
+// related settings (e.g. all Auto-Update fields) render together.
+export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
+  API: [
+    {
+      name: "Auto-Update",
+      icon: RefreshCw,
+      keys: [
+        "AUTO_UPDATE_ENABLED",
+        "AUTO_UPDATE_REPO_URL",
+        "AUTO_UPDATE_BRANCH",
+        "AUTO_UPDATE_INTERVAL_MIN",
+        "AUTO_UPDATE_REQUIRE_CLEAN_WORKTREE",
+        "AUTO_UPDATE_WORKDIR",
+      ],
+    },
+  ],
+  Speech: [
+    {
+      name: "Standard-Transkription (nodejs-whisper)",
+      icon: Mic,
+      keys: [
+        "DEFAULT_SPEECH_TO_TEXT_PROVIDER",
+        "NODEJS_WHISPER_MODEL_NAME",
+        "NODEJS_WHISPER_MODEL_ROOT_PATH",
+        "NODEJS_WHISPER_AUTO_DOWNLOAD",
+        "NODEJS_WHISPER_USE_CUDA",
+        "NODEJS_WHISPER_LANGUAGE",
+        "NODEJS_WHISPER_TIMEOUT_MS",
+        "NODEJS_WHISPER_INPUT_EXT",
+      ],
+    },
+    {
+      name: "Discord Sprachnachrichten",
+      icon: MessageSquare,
+      keys: [
+        "DISCORD_VOICE_STT_PROVIDER",
+        "DISCORD_VOICE_STT_MODEL",
+        "DISCORD_VOICE_STT_COMMAND",
+        "DISCORD_VOICE_STT_ARGS",
+        "DISCORD_VOICE_STT_TIMEOUT_MS",
+      ],
+    },
+    {
+      name: "Lokales STT-Kommando",
+      icon: Terminal,
+      keys: [
+        "LOCAL_STT_COMMAND",
+        "LOCAL_STT_ARGS",
+        "LOCAL_STT_WORKDIR",
+        "LOCAL_STT_TIMEOUT_MS",
+        "LOCAL_STT_INPUT_EXT",
+      ],
+    },
+  ],
+  Agent: [
+    {
+      name: "Basis & Limits",
+      icon: Gauge,
+      keys: [
+        "AGENT_MAX_ITERATIONS",
+        "AGENT_TIMEOUT_MS",
+        "AGENT_MAX_TOOL_FAILURES",
+        "AGENT_MAX_REPEATED_TOOL_CALL",
+        "CODING_ENABLED",
+      ],
+    },
+    {
+      name: "Tool-Timeouts",
+      icon: Clock,
+      keys: [
+        "AGENT_TOOL_TIMEOUT_SHELL_MS",
+        "AGENT_TOOL_TIMEOUT_HTTP_MS",
+        "AGENT_TOOL_TIMEOUT_BROWSER_MS",
+        "AGENT_TOOL_TIMEOUT_GIT_MS",
+      ],
+    },
+    {
+      name: "Self-Repair & Reflection",
+      icon: Wrench,
+      keys: [
+        "AGENT_SELF_REPAIR",
+        "AGENT_SELF_REPAIR_MAX_ATTEMPTS",
+        "AGENT_ENABLE_REFLECTION",
+        "AGENT_REFLECTION_MAX_RETRIES",
+        "AGENT_REFLECTION_STORE_MEMORY",
+        "AGENT_REFLECTION_META_REVIEW",
+        "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
+        "AGENT_AUTO_MEMORY",
+      ],
+    },
+    {
+      name: "Skill-Auswahl",
+      icon: Sparkles,
+      keys: [
+        "AGENT_AUTO_SKILL_SELECTION",
+        "AGENT_SKILL_BEHAVIOR",
+        "AGENT_AUTO_SKILL_FALLBACK_NONE",
+        "AGENT_AUTO_SKILL_THRESHOLD",
+        "AGENT_AUTO_SKILL_MARGIN",
+        "AGENT_AUTO_SKILL_MIN_INPUT_LEN",
+        "AGENT_AUTO_SKILL_MIN_OVERLAP",
+      ],
+    },
+  ],
+  Memory: [
+    {
+      name: "Memory-Limits",
+      icon: Target,
+      keys: [
+        "MEMORY_SHORT_TERM_LIMIT",
+        "MEMORY_IMPORTANCE_THRESHOLD",
+        "AGENT_MEMORY_CHAR_LIMIT",
+        "USER_MEMORY_CHAR_LIMIT",
+      ],
+    },
+    {
+      name: "LLM-Wiki",
+      icon: BookOpen,
+      keys: [
+        "WIKI_ENABLED",
+        "WIKI_SHARED_SOURCE_PATH",
+        "WIKI_SHARED_SOURCE_AUTO_MEMORY",
+        "WIKI_AUTO_APPROVE",
+        "WIKI_SHARED_SOURCE_MAX_FILE_SIZE_KB",
+        "WIKI_INGEST_INTERVAL_MS",
+        "WIKI_CHUNK_SIZE_CHARS",
+        "WIKI_CHUNK_OVERLAP_CHARS",
+      ],
+    },
+  ],
+};
+
+export const TAB_ICONS: Record<string, LucideIcon> = {
+  Provider: Cpu,
+  API: KeyRound,
+  Speech: Mic,
+  Agent: Sparkles,
+  Memory: Database,
+};

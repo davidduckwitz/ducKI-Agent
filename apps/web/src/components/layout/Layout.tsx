@@ -12,7 +12,6 @@ import {
   Brain,
   ScrollText,
   Settings,
-  Bot,
   Send,
   Wifi,
   WifiOff,
@@ -37,6 +36,7 @@ import { useTheme } from "../theme/ThemeProvider";
 import { THEME_MODES, type ThemeMode } from "../../lib/theme";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { CodingSidebarPanel } from "../coding/CodingSidebarPanel";
+import { DuckyMascot } from "../chat/DuckyMascot";
 
 interface NavItem {
   to: string;
@@ -232,7 +232,11 @@ export function Layout() {
         <div className="p-4 border-b border-border">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Bot className="w-6 h-6 text-primary" />
+              <DuckyMascot
+                working={runningCount > 0}
+                size={28}
+                title={runningCount > 0 ? t("layout.duckyWorkingTitle") : t("layout.duckyIdleTitle")}
+              />
               <span className="font-bold text-lg">DucKI</span>
             </div>
             <ThemeModeSwitcher />

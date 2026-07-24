@@ -263,6 +263,21 @@ export class Agent {
     return `${value.slice(0, keep)}${suffix}`;
   }
 
+  private extractMemoryKeywords(signals: string[]): string[] {
+    const keywords = new Set<string>();
+
+    for (const signal of signals) {
+      if (!signal || typeof signal !== "string") continue;
+
+      const text = signal.toLowerCase();
+      const tokens = text.split(/\W+/).filter(t => t.length > 3);
+
+      tokens.slice(0, 3).forEach(t => keywords.add(t));
+    }
+
+    return Array.from(keywords).slice(0, 8);
+  }
+
   private shouldUseLightweightMode(userInput: string, hasRecentSkillUsage: boolean): boolean {
     return !userInput.trim().startsWith("/")
       && userInput.length < 150
@@ -1858,6 +1873,7 @@ export class Agent {
         autoSkillFallbackNone: this.parseBooleanSetting(get("AGENT_AUTO_SKILL_FALLBACK_NONE"), defaults.autoSkillFallbackNone),
         enabledSkillAllowlist: this.parseSlugListSetting(get("ENABLED_SKILLS")),
         enabledOptionalTools: this.parseSlugListSetting(get("ENABLED_OPTIONAL_TOOLS")),
+        alwaysLoadSkills: this.parseSlugListSetting(get("ALWAYS_LOAD_SKILLS")),
       };
     } catch {
       return defaults;
@@ -2005,7 +2021,12 @@ export class Agent {
     const selectedSlugs = new Set(prioritizedRequestedSkillManifests.map((skill) => skill.slug));
     const autoSkillSelection = this.selectAutoSkill(effectiveInput, allowlistCandidates, selectedSlugs, controls);
     const autoSkill = autoSkillSelection.selected;
-    let activeSkillManifests: SkillManifest[] = [...prioritizedRequestedSkillManifests];
+
+    const alwaysLoadSkills = controls.alwaysLoadSkills
+      ? installedSkillManifests.filter((skill) => controls.alwaysLoadSkills!.includes(skill.slug))
+      : [];
+
+    let activeSkillManifests: SkillManifest[] = [...alwaysLoadSkills, ...prioritizedRequestedSkillManifests];
 
     if (controls.skillBehavior === "active") {
       const additionalActive = allowlistCandidates.filter((skill) => !selectedSlugs.has(skill.slug));
@@ -2114,7 +2135,11 @@ export class Agent {
     }
 
     // Add user message
-    const userMessage: LLMMessage = { role: "user", content: effectiveInput };
+    const userMessage: LLMMessage = {
+      role: "user",
+      content: effectiveInput,
+      metadata: options.attachments?.length ? { attachments: options.attachments } : undefined,
+    };
     await this.conversation.addMessage(userMessage);
     this.history.add(userMessage);
 
@@ -2299,10 +2324,13 @@ export class Agent {
       ];
       let dynamicMemoryContext = "";
       try {
-        dynamicMemoryContext = await this.memory.buildDynamicContext(dynamicMemorySignals, this.conversation.id, 5);
+        const memoryKeywords = this.extractMemoryKeywords(dynamicMemorySignals);
+        dynamicMemoryContext = memoryKeywords.length > 0
+          ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 5)
+          : "";
         if (dynamicMemoryContext) {
           emit("reasoning", "Memory-Kontext abgerufen.", {
-            signals: dynamicMemorySignals.slice(0, 5),
+            keywords: memoryKeywords.slice(0, 5),
           });
         }
       } catch (memoryError) {

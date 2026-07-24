@@ -6,6 +6,9 @@ import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useCodingSession } from "../../lib/codingSessionStore";
+import { DuckyMascot } from "../chat/DuckyMascot";
+import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
+import type { AgentEventType, RenderedChatMessage } from "../chat/chatTypes";
 
 interface CodingFileItem {
   path: string;
@@ -23,15 +26,7 @@ interface PersistedMessage {
   createdAt: string;
 }
 
-interface StoreChatMessage {
-  id: string;
-  role: "user" | "assistant" | "system" | "event" | "tool";
-  content: string;
-  timestamp: string;
-  eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
-  eventData?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-}
+type StoreChatMessage = RenderedChatMessage;
 
 const PROJECT_CONVERSATION_MAP_KEY = "coding.project.conversations.v1";
 
@@ -82,8 +77,11 @@ function isImageFile(path: string): boolean {
 export function CodingWorkspace() {
   const { t } = useI18n();
   const qc = useQueryClient();
-  const { messages, sendMessage, isLoading, setConversationId, setMessages } = useAppStore();
+  const { messages, sendMessage, isLoading, streamingContent, setConversationId, setMessages } = useAppStore();
   const creatingConversationRef = useRef<Record<string, boolean>>({});
+  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const chatViewportRef = useRef<HTMLDivElement>(null);
 
   const { selectedProject, setSelectedProject, selectedPath, setSelectedPath } = useCodingSession();
   const [newProjectName, setNewProjectName] = useState("");
@@ -188,14 +186,23 @@ export function CodingWorkspace() {
     const mapped: StoreChatMessage[] = persisted.map((msg) => {
       const metadata = parseMessageMetadata(msg.metadata);
       if (msg.role === "event") {
-        let eventType: StoreChatMessage["eventType"];
+        let eventType: AgentEventType | undefined;
         let eventData: Record<string, unknown> | undefined;
 
         if (msg.toolResult) {
           try {
             const parsed = JSON.parse(msg.toolResult) as { eventType?: string; data?: Record<string, unknown> };
             const type = parsed.eventType;
-            if (type === "plan" || type === "iteration" || type === "tool_call" || type === "tool_result" || type === "reasoning" || type === "decision" || type === "guardrail") {
+            if (
+              type === "plan" ||
+              type === "iteration" ||
+              type === "tool_call" ||
+              type === "tool_result" ||
+              type === "reasoning" ||
+              type === "decision" ||
+              type === "guardrail" ||
+              type === "mode_selected"
+            ) {
               eventType = type;
             }
             eventData = parsed.data;
@@ -226,6 +233,14 @@ export function CodingWorkspace() {
 
     setMessages(mapped as never);
   }, [conversationMessagesQuery.data, setMessages]);
+
+  useEffect(() => {
+    setExpandedEvents({});
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streamingContent]);
 
   useEffect(() => {
     if (codingSettingReady && !codingEnabled) {
@@ -336,12 +351,6 @@ export function CodingWorkspace() {
       readFileQuery.data?.isText &&
       (readFileQuery.data.content ?? "") !== editorContent
   );
-
-  const lastChatOutput = useMemo(() => {
-    const fromBottom = [...messages].reverse();
-    const nonUser = fromBottom.find((msg) => msg.role !== "user");
-    return nonUser ?? fromBottom[0] ?? null;
-  }, [messages]);
 
   const createProjectFromModal = () => {
     const name = newProjectName.trim();
@@ -477,16 +486,36 @@ export function CodingWorkspace() {
         <section className="card overflow-hidden flex flex-col">
           {selectedProject ? (
             <div className="min-h-0 flex-1 flex flex-col space-y-2">
-              <h2 className="text-sm font-semibold">{t("codingPage.chatTitle")}</h2>
-              <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 min-h-[96px] flex-1 overflow-y-auto">
-                {lastChatOutput ? (
-                  <>
-                    <div className="text-[11px] text-gray-400 mb-1">{lastChatOutput.role}</div>
-                    <div className="whitespace-pre-wrap break-words text-sm">{lastChatOutput.content}</div>
-                  </>
-                ) : (
-                  <p className="text-sm text-gray-500">Noch keine Chat-Ausgabe vorhanden.</p>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold">{t("codingPage.chatTitle")}</h2>
+                <DuckyMascot
+                  working={isLoading}
+                  size={24}
+                  title={isLoading ? t("chat.duckyWorkingTitle") : t("chat.duckyIdleTitle")}
+                />
+              </div>
+              <div
+                ref={chatViewportRef}
+                className="rounded-lg border border-gray-800 bg-gray-900 p-2 min-h-[160px] flex-1 overflow-y-auto space-y-2"
+              >
+                {messages.length === 0 && !isLoading && (
+                  <p className="text-sm text-gray-500 p-1">{t("chat.noOutputYet")}</p>
                 )}
+                {messages.map((msg) =>
+                  msg.role === "event" ? (
+                    <EventRow
+                      key={msg.id}
+                      msg={msg}
+                      t={t}
+                      expanded={expandedEvents[msg.id] ?? false}
+                      onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
+                    />
+                  ) : (
+                    <MessageRow key={msg.id} msg={msg} compactMode t={t} />
+                  )
+                )}
+                {isLoading && <StreamingRow compactMode streamingContent={streamingContent} t={t} />}
+                <div ref={chatBottomRef} />
               </div>
 
               <textarea

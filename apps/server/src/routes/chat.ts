@@ -3,6 +3,7 @@ import type { Agent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
+import { ChatCleanupService } from "../lib/chat-cleanup-service.js";
 
 export const chatRouter: IRouter = Router();
 
@@ -262,6 +263,107 @@ chatRouter.delete("/conversations/:id", async (req, res, next) => {
 
     await db.deleteConversation(conversationId);
     res.json(createApiResponse({ deleted: true, id: conversationId }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.post("/conversations/:id/archive", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const conversationId = parseInt(req.params["id"] ?? "0", 10);
+    const { reason } = req.body as { reason?: string };
+
+    if (!Number.isFinite(conversationId) || conversationId <= 0) {
+      res.status(400).json(createApiError("Invalid conversation id"));
+      return;
+    }
+
+    const existing = await db.getConversation(conversationId);
+    if (!existing) {
+      res.status(404).json(createApiError("Conversation not found"));
+      return;
+    }
+
+    const archived = await db.archiveConversation(conversationId, reason);
+    res.json(createApiResponse({ archived: true, archiveId: archived.id }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.get("/archived", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const limitRaw = req.query["limit"] as string | undefined;
+    const limit = limitRaw ? Math.max(1, Math.min(200, parseInt(limitRaw, 10))) : 100;
+    const archived = await db.listArchivedConversations(limit);
+    res.json(createApiResponse(archived));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.delete("/archived/:id", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const archiveId = parseInt(req.params["id"] ?? "0", 10);
+
+    if (!Number.isFinite(archiveId) || archiveId <= 0) {
+      res.status(400).json(createApiError("Invalid archive id"));
+      return;
+    }
+
+    await db.deleteArchivedConversation(archiveId);
+    res.json(createApiResponse({ deleted: true, id: archiveId }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.get("/cleanup/config", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const logger = req.app.locals["logger"] || console;
+    const cleanup = new ChatCleanupService(db, logger as any);
+    const config = await cleanup.loadConfig();
+    res.json(createApiResponse(config));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.post("/cleanup/config", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const logger = req.app.locals["logger"] || console;
+    const cleanup = new ChatCleanupService(db, logger as any);
+    const { maxMessagesPerConversation, archiveAfterDaysInactive, autoCleanupEnabled } = req.body as {
+      maxMessagesPerConversation?: number;
+      archiveAfterDaysInactive?: number;
+      autoCleanupEnabled?: boolean;
+    };
+
+    await cleanup.saveConfig({
+      maxMessagesPerConversation,
+      archiveAfterDaysInactive,
+      autoCleanupEnabled,
+    });
+
+    const updated = await cleanup.loadConfig();
+    res.json(createApiResponse(updated));
+  } catch (error) {
+    next(error);
+  }
+});
+
+chatRouter.post("/cleanup/run", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const logger = req.app.locals["logger"] || console;
+    const cleanup = new ChatCleanupService(db, logger as any);
+    const result = await cleanup.runGlobalCleanup();
+    res.json(createApiResponse(result));
   } catch (error) {
     next(error);
   }

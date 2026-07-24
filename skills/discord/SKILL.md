@@ -88,6 +88,19 @@ The configuration is primarily sourced from the `MESSAGING_GATEWAYS` setting (ma
 }
 ```
 
+### 3. Send Message with Attachments (Discord)
+Add `attachments`: an array of shared-workspace-relative file paths (images or documents). Max 10 files, 8MB each - larger or missing files return an `attachment_error` diagnostic instead of sending.
+```json
+{
+	"action": "send",
+	"portal": "discord",
+	"channelId": "<channel-id>",
+	"message": "<text>",
+	"attachments": ["chat-uploads/photo.png"]
+}
+```
+Paths may optionally be prefixed with `shared-workspace/` (as sometimes shown in file hints) - it is stripped automatically.
+
 ## Diagnostics & Recovery
 When the `gateway` tool fails, use the `error` message combined with `data.diagnostic.code`:
 
@@ -102,6 +115,8 @@ When the `gateway` tool fails, use the `error` message combined with `data.diagn
   - State the HTTP status and attempt one retry with an alternative Discord configuration (if available).
 - `missing_message`:
   - Ask the user to reformulate the message or reconstruct it from the context.
+- `attachment_error`:
+  - The `error` message states the exact cause (file not found in shared workspace, too large, or too many files). Re-check the path (must be shared-workspace-relative, e.g. from a prior upload or tool output) and retry, or drop the attachment and send text only.
 
 ## Output Format
 - **Success**: Brief confirmation: "Sent to [Channel/Config Name]."

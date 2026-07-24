@@ -30,7 +30,9 @@ import { agentRegistry } from "./lib/agent-registry.js";
 import { CronjobManager } from "./lib/cronjob-manager.js";
 import { createMcpTool } from "./lib/mcp-tool.js";
 import { UpdateManager } from "./lib/update-manager.js";
+import { setupDefaultCronjobs } from "./lib/default-cronjobs.js";
 import { LlmWikiService } from "./lib/llm-wiki-service.js";
+import { PromptManager } from "./lib/prompt-manager.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
@@ -222,6 +224,30 @@ function parseProviderName(value: string | undefined): ProviderName {
 		return normalized;
 	}
 	return "lmstudio";
+}
+
+async function ensureLogCleanupCron(db: Awaited<ReturnType<typeof getDatabase>>): Promise<void> {
+	try {
+		const existing = await db.listCronJobs();
+		if (existing.find(j => j.name === "log-cleanup-daily")) {
+			return;
+		}
+
+		await db.createCronJob({
+			name: "log-cleanup-daily",
+			schedule: "0 2 * * *",
+			targetType: "tool",
+			targetRef: "logs",
+			payload: JSON.stringify({ action: "cleanup", maxEntries: 100 }),
+			enabled: 1,
+		});
+
+		logger.info("Log cleanup cron job created", { schedule: "0 2 * * * (2 AM daily)" });
+	} catch (error) {
+		logger.warn("Failed to create log cleanup cron job", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabase>>) {
@@ -513,12 +539,17 @@ async function bootstrap(): Promise<void> {
 	const defaultAgent = createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
 	cronjobManager.start();
+	await ensureLogCleanupCron(db);
+	await setupDefaultCronjobs(db, logger);
 	const updateManager = new UpdateManager(db, logger.child("UpdateManager"));
 	updateManager.start();
+	const promptManager = new PromptManager(db, logger.child("PromptManager"));
+	await promptManager.initialize();
 	const wikiService = new LlmWikiService(db, logger.child("LlmWikiService"));
 	await wikiService.start();
 
 	app.locals["db"] = db;
+	app.locals["logger"] = logger;
 	app.locals["provider"] = providerRef.current;
 	app.locals["workflowEngine"] = workflowEngineRef.current;
 	app.locals["agent"] = defaultAgent;
@@ -540,6 +571,7 @@ async function bootstrap(): Promise<void> {
 	app.locals["discordGatewayStatus"] = discordGatewayStatus;
 	app.locals["cronjobManager"] = cronjobManager;
 	app.locals["updateManager"] = updateManager;
+	app.locals["promptManager"] = promptManager;
 	app.locals["wikiService"] = wikiService;
 	app.locals["mcpRegistry"] = mcpRegistry;
 

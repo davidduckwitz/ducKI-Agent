@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { io, type Socket } from "socket.io-client";
 import { translations, type Language, type TranslationTree } from "./translations";
+import type { AgentEventType } from "../components/chat/chatTypes";
 
 const LANGUAGE_STORAGE_KEY = "ducki.language";
 
@@ -42,18 +43,25 @@ function formatChatErrorMessage(rawError: string): string {
   return `${t("chat.errorPrefix")} ${rawError}`;
 }
 
-interface ChatMessage {
+export interface ChatAttachment {
+  name: string;
+  path?: string;
+  url?: string;
+  mimeType?: string;
+}
+
+export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system" | "event" | "tool";
   content: string;
   timestamp: string;
-  eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
+  eventType?: AgentEventType;
   eventData?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
 interface ChatEvent {
-  type: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
+  type: AgentEventType;
   message: string;
   data?: Record<string, unknown>;
   timestamp: string;
@@ -82,7 +90,7 @@ interface AppState {
   // Actions
   initSocket: () => void;
   disconnectSocket: () => void;
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, attachments?: ChatAttachment[]) => void;
   stopMessage: () => void;
   clearChat: () => void;
   setConversationId: (id: number | undefined) => void;
@@ -252,7 +260,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ socket: null, connected: false });
   },
 
-  sendMessage: (content: string) => {
+  sendMessage: (content: string, attachments?: ChatAttachment[]) => {
     const { socket, conversationId, isLoading } = get();
     if (!socket || !content.trim() || isLoading) return;
 
@@ -261,6 +269,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       role: "user",
       content,
       timestamp: new Date().toISOString(),
+      metadata: attachments && attachments.length > 0 ? { attachments } : undefined,
     };
 
     // Set isLoading synchronously (not waiting for the server's "chat:start" ack) so the
@@ -276,7 +285,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // chat:conversation handler recognize the id is stale and ignore it.
       awaitingNewConversation: conversationId === undefined,
     }));
-    socket.emit("chat:message", { message: content, conversationId });
+    socket.emit("chat:message", { message: content, conversationId, attachments });
   },
 
   stopMessage: () => {

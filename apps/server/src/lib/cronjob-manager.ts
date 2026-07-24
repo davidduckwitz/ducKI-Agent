@@ -2,6 +2,7 @@ import type { Agent } from "@ducki/agent";
 import { computeNextRun, type CronJobSelect, type DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { runAgentWithRepairRetry } from "./agent-retry.js";
+import { ChatCleanupService } from "./chat-cleanup-service.js";
 
 interface PromptPayload {
   prompt?: string;
@@ -112,6 +113,14 @@ export class CronjobManager {
   }
 
   private async dispatch(job: CronJobSelect): Promise<string> {
+    if (job.targetType === "tool" && job.targetRef === "logs") {
+      return this.runLogsMaintenanceJob(job);
+    }
+
+    if (job.targetType === "cleanup") {
+      return this.runCleanupJob(job);
+    }
+
     switch (job.targetType) {
       case "task":
         return this.runTaskJob(job);
@@ -156,12 +165,17 @@ export class CronjobManager {
           prompt,
         ].join("\n"),
         async (runAgent) => {
-          if (task.projectId) {
-            await runAgent.startConversation({ name: `Cron Task #${taskId}`, projectId: task.projectId });
-            return;
-          }
+          let conversationId = job.conversationId;
 
-          await runAgent.startConversation({ name: `Cron Task #${taskId}` });
+          if (!conversationId) {
+            conversationId = await runAgent.startConversation({
+              name: `Cron Task #${taskId}`,
+              projectId: task.projectId,
+            });
+            await this.db.updateCronJob(job.id, { conversationId });
+          } else {
+            await runAgent.loadConversation(conversationId);
+          }
         }
       );
       await this.db.updateTask(taskId, { status: "completed", result: run.result.response });
@@ -188,10 +202,17 @@ export class CronjobManager {
         prompt,
       ].join("\n"),
       async (runAgent) => {
-        await runAgent.startConversation({
-          name: payload.conversationName?.trim() || `Cron Prompt #${job.id}`,
-          projectId: payload.projectId,
-        });
+        let conversationId = job.conversationId;
+
+        if (!conversationId) {
+          conversationId = await runAgent.startConversation({
+            name: payload.conversationName?.trim() || `Cron Prompt #${job.id}`,
+            projectId: payload.projectId,
+          });
+          await this.db.updateCronJob(job.id, { conversationId });
+        } else {
+          await runAgent.loadConversation(conversationId);
+        }
       }
     );
     return run.result.response;
@@ -229,12 +250,43 @@ export class CronjobManager {
         `/${skillSlug} ${prompt}`,
       ].join("\n"),
       async (runAgent) => {
-        await runAgent.startConversation({
-          name: payload.conversationName?.trim() || `Cron Skill #${job.id}`,
-          projectId: payload.projectId,
-        });
+        let conversationId = job.conversationId;
+
+        if (!conversationId) {
+          conversationId = await runAgent.startConversation({
+            name: payload.conversationName?.trim() || `Cron Skill #${job.id}`,
+            projectId: payload.projectId,
+          });
+          await this.db.updateCronJob(job.id, { conversationId });
+        } else {
+          await runAgent.loadConversation(conversationId);
+        }
       }
     );
     return run.result.response;
+  }
+
+  private async runLogsMaintenanceJob(job: CronJobSelect): Promise<string> {
+    interface LogsPayload {
+      action?: string;
+      maxEntries?: number;
+    }
+
+    const payload = this.parsePayload<LogsPayload>(job.payload);
+    const action = payload.action?.toLowerCase() || "cleanup";
+    const maxEntries = payload.maxEntries ?? 100;
+
+    if (action === "cleanup") {
+      const deleted = await this.db.cleanupLogs(maxEntries);
+      return `Cleaned up ${deleted} old log entries, keeping last ${maxEntries}`;
+    }
+
+    throw new Error(`Unknown logs maintenance action '${action}'`);
+  }
+
+  private async runCleanupJob(job: CronJobSelect): Promise<string> {
+    const cleanup = new ChatCleanupService(this.db, this.logger);
+    const result = await cleanup.runGlobalCleanup();
+    return JSON.stringify(result);
   }
 }

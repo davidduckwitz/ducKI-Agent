@@ -155,6 +155,7 @@ export const cronJobs = sqliteTable("cron_jobs", {
   targetRef: text("target_ref"),
   payload: text("payload"), // JSON
   enabled: integer("enabled").notNull().default(1),
+  conversationId: integer("conversation_id").references(() => conversations.id),
   lastRunAt: text("last_run_at"),
   nextRunAt: text("next_run_at"),
   lastStatus: text("last_status"), // success, failed
@@ -162,6 +163,19 @@ export const cronJobs = sqliteTable("cron_jobs", {
   lastResult: text("last_result"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+// ============================================================
+// Archived Conversations
+// ============================================================
+export const archivedConversations = sqliteTable("archived_conversations", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  originalConversationId: integer("original_conversation_id").notNull(),
+  name: text("name").notNull(),
+  projectId: integer("project_id"),
+  messageCount: integer("message_count").notNull(),
+  archivedAt: text("archived_at").notNull(),
+  metadata: text("metadata"), // JSON - retention policy, reason, etc.
 });
 
 // ============================================================
@@ -199,6 +213,8 @@ export type LogInsert = typeof logs.$inferInsert;
 export type LogSelect = typeof logs.$inferSelect;
 export type CronJobInsert = typeof cronJobs.$inferInsert;
 export type CronJobSelect = typeof cronJobs.$inferSelect;
+export type ArchivedConversationInsert = typeof archivedConversations.$inferInsert;
+export type ArchivedConversationSelect = typeof archivedConversations.$inferSelect;
 export type LlmWikiEntryInsert = typeof llmWikiEntries.$inferInsert;
 export type LlmWikiEntrySelect = typeof llmWikiEntries.$inferSelect;
 export type DynamicToolInsert = typeof dynamicTools.$inferInsert;

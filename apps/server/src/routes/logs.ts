@@ -13,4 +13,13 @@ logsRouter.get("/", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+logsRouter.post("/cleanup", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const maxEntries = req.body?.maxEntries ?? 100;
+    const deleted = await db.cleanupLogs(maxEntries);
+    res.json(createApiResponse({ deleted, remaining: maxEntries }));
+  } catch (e) { next(e); }
+});
+
 

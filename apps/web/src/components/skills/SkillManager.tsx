@@ -28,6 +28,12 @@ interface DraftSkill {
   description: string;
 }
 
+interface SkillConfig {
+  alwaysLoad: boolean;
+  enabled: boolean;
+  pinned: boolean;
+}
+
 interface SkillExecutionResult {
   slug: string;
   executed: boolean;
@@ -218,8 +224,14 @@ export function SkillManager() {
     return parseEnabledSkills(setting?.value);
   }, [settings]);
 
+  const alwaysLoadedSkills = useMemo(() => {
+    const setting = settings.find((item) => item.key === "ALWAYS_LOAD_SKILLS");
+    return parseEnabledSkills(setting?.value);
+  }, [settings]);
+
   const enabledSet = useMemo(() => new Set(enabledSkills), [enabledSkills]);
   const pinnedSet = useMemo(() => new Set(pinnedSkills), [pinnedSkills]);
+  const alwaysLoadedSet = useMemo(() => new Set(alwaysLoadedSkills), [alwaysLoadedSkills]);
 
   const selectedDetail = useQuery({
     queryKey: ["skills", selectedSlug],
@@ -243,6 +255,14 @@ export function SkillManager() {
   const savePinnedSkills = useMutation({
     mutationFn: (nextPinned: string[]) =>
       api.settings.set("PINNED_SKILLS", JSON.stringify(nextPinned)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+
+  const saveAlwaysLoadedSkills = useMutation({
+    mutationFn: (nextAlwaysLoaded: string[]) =>
+      api.settings.set("ALWAYS_LOAD_SKILLS", JSON.stringify(nextAlwaysLoaded)),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
     },
@@ -311,9 +331,23 @@ export function SkillManager() {
     saveEnabledSkills.mutate(Array.from(next).sort());
   };
 
+  const toggleAlwaysLoad = (slug: string): void => {
+    const next = new Set(alwaysLoadedSet);
+    if (next.has(slug)) {
+      next.delete(slug);
+    } else {
+      next.add(slug);
+    }
+    saveAlwaysLoadedSkills.mutate(Array.from(next).sort());
+  };
+
   const sortedSkills = useMemo(() => {
     const collator = new Intl.Collator("de", { sensitivity: "base" });
     return [...skills].sort((a, b) => {
+      const aAlwaysLoad = alwaysLoadedSet.has(a.slug) ? 0 : 1;
+      const bAlwaysLoad = alwaysLoadedSet.has(b.slug) ? 0 : 1;
+      if (aAlwaysLoad !== bAlwaysLoad) return aAlwaysLoad - bAlwaysLoad;
+
       const aPinned = pinnedSet.has(a.slug) ? 0 : 1;
       const bPinned = pinnedSet.has(b.slug) ? 0 : 1;
       if (aPinned !== bPinned) return aPinned - bPinned;
@@ -323,7 +357,7 @@ export function SkillManager() {
       if (aEnabled !== bEnabled) return aEnabled - bEnabled;
       return collator.compare(a.name, b.name);
     });
-  }, [skills, enabledSet, pinnedSet]);
+  }, [skills, enabledSet, pinnedSet, alwaysLoadedSet]);
 
   const visibleSkills = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -455,10 +489,14 @@ export function SkillManager() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <div className="card">
           <p className="text-xs text-gray-400">{t("skillsPage.total")}</p>
           <p className="text-2xl font-semibold">{skills.length}</p>
+        </div>
+        <div className="card border-purple-500/30 bg-purple-500/5">
+          <p className="text-xs text-purple-200">Always Loaded</p>
+          <p className="text-2xl font-semibold text-purple-100">{alwaysLoadedSet.size}</p>
         </div>
         <div className="card border-amber-500/30 bg-amber-500/5">
           <p className="text-xs text-amber-200">{t("skillsPage.pinned")}</p>
@@ -533,6 +571,19 @@ export function SkillManager() {
                     </button>
 
                     <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => toggleAlwaysLoad(skill.slug)}
+                        disabled={saveAlwaysLoadedSkills.isPending}
+                        className={`inline-flex items-center justify-center p-1.5 rounded-md text-xs border transition ${
+                          alwaysLoadedSet.has(skill.slug)
+                            ? "border-purple-500/50 bg-purple-500/15 text-purple-200"
+                            : "border-gray-700 bg-gray-800 text-gray-400"
+                        }`}
+                        title={alwaysLoadedSet.has(skill.slug) ? "Always Load aktiv" : "Zum Always Load hinzufügen"}
+                      >
+                        <span className="text-xs font-bold">∞</span>
+                      </button>
+
                       <button
                         onClick={() => togglePinned(skill.slug)}
                         disabled={savePinnedSkills.isPending}

@@ -230,7 +230,6 @@ export class LlmWikiService {
           continue;
         }
 
-        await this.db.deleteLlmWikiEntriesBySourcePrefix(basePrefix);
         await removeExistingWikiMemoriesByPrefix(this.db, rel, { broad: true });
 
         const chunks = chunkContent(content, chunkSize, chunkOverlap);

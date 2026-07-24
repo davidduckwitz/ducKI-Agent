@@ -9,8 +9,10 @@ import {
   rmSync,
   statSync,
   renameSync,
+  unlinkSync,
 } from "node:fs";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, extname } from "node:path";
+import { randomBytes } from "node:crypto";
 
 const SHARED_BASE_PATH = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
 
@@ -27,6 +29,43 @@ function isInsideBase(basePath: string, candidatePath: string): boolean {
   const base = normalizeForCompare(basePath);
   const candidate = normalizeForCompare(candidatePath);
   return candidate === base || candidate.startsWith(`${base}/`);
+}
+
+function validateContent(filePath: string, content: string): string | undefined {
+  if (extname(filePath).toLowerCase() === ".json") {
+    try {
+      JSON.parse(content);
+    } catch (error) {
+      return `Refusing to write invalid JSON to ${filePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Writes content via temp-file + rename (atomic on the same volume) and keeps
+ * a .bak copy of the previous version, so a truncated/garbled LLM completion
+ * can never leave the target file half-written and the prior version is
+ * always recoverable.
+ */
+function atomicWrite(filePath: string, content: string): void {
+  if (existsSync(filePath)) {
+    copyFileSync(filePath, `${filePath}.bak`);
+  }
+  const tmpPath = join(dirname(filePath), `.${randomBytes(6).toString("hex")}.tmp`);
+  writeFileSync(tmpPath, content, "utf8");
+  try {
+    renameSync(tmpPath, filePath);
+  } catch (error) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // best-effort cleanup
+    }
+    throw error;
+  }
 }
 
 function resolvePath(inputPath: string, options: PathOptions): string {
@@ -63,14 +102,17 @@ export const filesystemTool: ToolExecutor = {
       properties: {
         action: {
           type: "string",
-          enum: ["read", "write", "append", "delete", "list", "mkdir", "exists", "stat", "move", "copy"],
-          description: "Operation to perform: read (file content), write (create/overwrite file), append (add to file), delete (remove), list (directory contents), mkdir (create directory), exists (check if exists), stat (file info), move (rename/move), copy (duplicate)",
+          enum: ["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy"],
+          description: "Operation to perform: read (file content), write (create/overwrite file), append (add to file), edit (replace an exact substring in an existing file - PREFER this over write for changes to existing files), delete (remove), list (directory contents), mkdir (create directory), exists (check if exists), stat (file info), move (rename/move), copy (duplicate)",
         },
         path: {
           type: "string",
           description: "REQUIRED: Full file or directory path. Examples: /shared-workspace/config.json, ./data/file.txt, data/subfolder/. Must be provided.",
         },
         content: { type: "string", description: "Content to write (for write/append)" },
+        oldString: { type: "string", description: "For edit: exact existing text to replace. Must match exactly once unless replaceAll is set." },
+        newString: { type: "string", description: "For edit: text to replace oldString with." },
+        replaceAll: { type: "boolean", default: false, description: "For edit: replace every occurrence of oldString instead of requiring a unique match." },
         encoding: { type: "string", default: "utf8" },
         recursive: { type: "boolean", default: false },
         destination: { type: "string", description: "Destination path for move action" },
@@ -117,10 +159,12 @@ export const filesystemTool: ToolExecutor = {
           if (!existsSync(dir) && !createDirs) {
             return { success: false, data: null, error: `Parent directory does not exist: ${dir}` };
           }
+          const validationError = validateContent(filePath, content);
+          if (validationError) return { success: false, data: null, error: validationError };
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, bytes: content.length } };
           }
-          writeFileSync(filePath, content, "utf8");
+          atomicWrite(filePath, content);
           return { success: true, data: { path: filePath, bytes: content.length } };
         }
 
@@ -134,8 +178,45 @@ export const filesystemTool: ToolExecutor = {
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, bytes: content.length } };
           }
-          writeFileSync(filePath, content, { encoding: "utf8", flag: "a" });
+          const previous = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
+          const combined = previous + content;
+          const validationError = validateContent(filePath, combined);
+          if (validationError) return { success: false, data: null, error: validationError };
+          atomicWrite(filePath, combined);
           return { success: true, data: { path: filePath } };
+        }
+
+        case "edit": {
+          const oldString = input["oldString"] as string | undefined;
+          const newString = input["newString"] as string | undefined;
+          const replaceAll = (input["replaceAll"] as boolean | undefined) ?? false;
+          if (!oldString) return { success: false, data: null, error: "oldString required for edit" };
+          if (newString === undefined) return { success: false, data: null, error: "newString required for edit" };
+          if (!existsSync(filePath)) {
+            return { success: false, data: null, error: `File not found: ${filePath}` };
+          }
+          const original = readFileSync(filePath, "utf8");
+          const occurrences = original.split(oldString).length - 1;
+          if (occurrences === 0) {
+            return { success: false, data: null, error: `oldString not found in file: ${filePath}` };
+          }
+          if (occurrences > 1 && !replaceAll) {
+            return {
+              success: false,
+              data: null,
+              error: `oldString is not unique (${occurrences} matches) in ${filePath}. Provide more surrounding context or set replaceAll:true.`,
+            };
+          }
+          const updated = replaceAll
+            ? original.split(oldString).join(newString)
+            : original.replace(oldString, newString);
+          const validationError = validateContent(filePath, updated);
+          if (validationError) return { success: false, data: null, error: validationError };
+          if (dryRun) {
+            return { success: true, data: { dryRun: true, action, path: filePath, occurrences } };
+          }
+          atomicWrite(filePath, updated);
+          return { success: true, data: { path: filePath, occurrences } };
         }
 
         case "delete": {

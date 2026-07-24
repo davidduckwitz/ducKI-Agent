@@ -72,6 +72,7 @@ export function MemoryBrowser() {
   const { t } = useI18n();
   const qc = useQueryClient();
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [systemPrompt, setSystemPrompt] = useState("");
   const [agentBehavior, setAgentBehavior] = useState("");
   const [humanInfo, setHumanInfo] = useState("");
   const [page, setPage] = useState(1);
@@ -155,6 +156,7 @@ export function MemoryBrowser() {
 
   useEffect(() => {
     if (!profileQuery.data) return;
+    setSystemPrompt(profileQuery.data.systemPrompt ?? "");
     setAgentBehavior(profileQuery.data.agentBehavior ?? "");
     setHumanInfo(profileQuery.data.humanInfo ?? "");
   }, [profileQuery.data]);
@@ -167,7 +169,7 @@ export function MemoryBrowser() {
   }, [wikiStatusQuery.data]);
 
   const saveProfile = useMutation({
-    mutationFn: (payload: { agentBehavior: string; humanInfo: string }) => api.memory.saveProfile(payload),
+    mutationFn: (payload: { systemPrompt: string; agentBehavior: string; humanInfo: string }) => api.memory.saveProfile(payload),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["memory"] });
       await qc.invalidateQueries({ queryKey: ["memory", "profile"] });
@@ -722,13 +724,22 @@ export function MemoryBrowser() {
       )}
 
       {activeTab === "profile" && (
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+        <div className="card space-y-3">
+          <div className="flex items-center gap-2 text-sm text-gray-300">
+            <Brain className="w-4 h-4 text-purple-300" />
+            System Prompt
+          </div>
+          <p className="text-sm text-gray-200 whitespace-pre-wrap min-h-[120px] max-h-[200px] overflow-y-auto text-xs">
+            {systemPrompt.trim().length > 0 ? systemPrompt : t("memoryPage.noEntryYet")}
+          </p>
+        </div>
         <div className="card space-y-3">
           <div className="flex items-center gap-2 text-sm text-gray-300">
             <Brain className="w-4 h-4 text-blue-300" />
             Agentenverhalten
           </div>
-          <p className="text-sm text-gray-200 whitespace-pre-wrap min-h-[120px]">
+          <p className="text-sm text-gray-200 whitespace-pre-wrap min-h-[120px] max-h-[200px] overflow-y-auto text-xs">
             {agentBehavior.trim().length > 0 ? agentBehavior : t("memoryPage.noEntryYet")}
           </p>
         </div>
@@ -737,7 +748,7 @@ export function MemoryBrowser() {
             <UserRound className="w-4 h-4 text-emerald-300" />
             Infos zum Mensch
           </div>
-          <p className="text-sm text-gray-200 whitespace-pre-wrap min-h-[120px]">
+          <p className="text-sm text-gray-200 whitespace-pre-wrap min-h-[120px] max-h-[200px] overflow-y-auto text-xs">
             {humanInfo.trim().length > 0 ? humanInfo : t("memoryPage.noEntryYet")}
           </p>
         </div>
@@ -754,7 +765,20 @@ export function MemoryBrowser() {
               </button>
             </div>
 
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto">
+              <div className="space-y-2">
+                <label className="text-sm text-gray-300 flex items-center gap-2">
+                  <Brain className="w-4 h-4 text-purple-300" />
+                  System Prompt
+                </label>
+                <textarea
+                  className="input w-full min-h-[100px] font-mono text-xs"
+                  placeholder="System-weite Anweisungen für den Agent..."
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                />
+              </div>
+
               <div className="space-y-2">
                 <label className="text-sm text-gray-300 flex items-center gap-2">
                   <Brain className="w-4 h-4 text-blue-300" />
@@ -787,7 +811,7 @@ export function MemoryBrowser() {
                 </button>
                 <button
                   className="btn-primary flex items-center gap-2"
-                  onClick={() => saveProfile.mutate({ agentBehavior, humanInfo })}
+                  onClick={() => saveProfile.mutate({ systemPrompt, agentBehavior, humanInfo })}
                   disabled={saveProfile.isPending}
                 >
                   <Save className="w-4 h-4" />

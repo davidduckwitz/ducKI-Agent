@@ -275,6 +275,19 @@ export class MemorySystem {
     return `\n\n## Retrieved Memory\n${picked.map((content) => `- ${content}`).join("\n")}`;
   }
 
+  async buildDynamicContextWithKeywords(
+    keywords: string[],
+    conversationId?: number,
+    limit = 6
+  ): Promise<string> {
+    if (keywords.length === 0) return "";
+
+    const results = await this.db.searchMemories(keywords, conversationId, "long-term", "approved", limit);
+
+    if (results.length === 0) return "";
+    return `\n\n## Retrieved Memory (Keywords: ${keywords.join(", ")})\n${results.map(r => `- ${r.content}`).join("\n")}`;
+  }
+
   summarizeConversation(messages: LLMMessage[]): string {
     const userMessages = messages.filter((m) => m.role === "user").map((m) => m.content);
     const assistantMessages = messages

@@ -123,6 +123,29 @@ sharedRouter.get("/download", (req, res) => {
   }
 });
 
+sharedRouter.get("/view", (req, res) => {
+  try {
+    ensureSharedRoot();
+    const relativePath = String(req.query["path"] ?? "");
+    if (!relativePath) {
+      res.status(400).json(createApiError("path query parameter is required"));
+      return;
+    }
+
+    const absolutePath = absoluteFromRelative(relativePath);
+    if (!existsSync(absolutePath)) {
+      res.status(404).json(createApiError("File not found"));
+      return;
+    }
+
+    // Intentionally no Content-Disposition header - unlike /download, this lets the
+    // browser render the file inline (e.g. <img src>) using the auto-detected Content-Type.
+    res.sendFile(absolutePath);
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
 sharedRouter.post("/write", (req, res) => {
   try {
     ensureSharedRoot();

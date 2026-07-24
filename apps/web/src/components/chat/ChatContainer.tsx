@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Trash2, Bot, User, Wrench, BrainCircuit, GitBranch, Activity, Paperclip, Square, Image as ImageIcon, X, PanelLeft } from "lucide-react";
-import { useAppStore } from "../../lib/store";
+import { Send, Trash2, Paperclip, Square, Image as ImageIcon, X, PanelLeft } from "lucide-react";
+import { useAppStore, type ChatAttachment } from "../../lib/store";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { DuckyMascot } from "./DuckyMascot";
+import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
+import type { AgentEventType, RenderedChatMessage } from "./chatTypes";
 
 interface ConversationItem {
   id: number;
@@ -22,16 +25,6 @@ interface PersistedMessage {
   toolCallId?: string | null;
   toolResult?: string | null;
   createdAt: string;
-}
-
-interface RenderedChatMessage {
-  id: string;
-  role: "user" | "assistant" | "system" | "event" | "tool";
-  content: string;
-  timestamp: string;
-  eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
-  eventData?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
 }
 
 function parseMessageMetadata(raw?: string | null): Record<string, unknown> | undefined {
@@ -57,27 +50,6 @@ function compareMessages(a: RenderedChatMessage, b: RenderedChatMessage): number
 
   return 0;
 }
-
-const eventIcon = (eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail") => {
-  if (eventType === "plan") return <GitBranch className="w-4 h-4 text-indigo-300" />;
-  if (eventType === "tool_call" || eventType === "tool_result") return <Wrench className="w-4 h-4 text-amber-300" />;
-  if (eventType === "iteration") return <Activity className="w-4 h-4 text-blue-300" />;
-  if (eventType === "decision" || eventType === "guardrail") return <BrainCircuit className="w-4 h-4 text-emerald-300" />;
-  return <BrainCircuit className="w-4 h-4 text-purple-300" />;
-};
-
-const eventLabel = (
-  t: (key: string) => string,
-  eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail"
-) => {
-  if (eventType === "plan") return t("chat.eventPlan");
-  if (eventType === "tool_call") return t("chat.eventToolCall");
-  if (eventType === "tool_result") return t("chat.eventToolResult");
-  if (eventType === "iteration") return t("chat.eventIteration");
-  if (eventType === "decision") return t("chat.eventDecision");
-  if (eventType === "guardrail") return t("chat.eventGuardrail");
-  return t("chat.eventReasoning");
-};
 
 export function ChatContainer() {
   const { t } = useI18n();
@@ -108,9 +80,7 @@ export function ChatContainer() {
   const pendingPrependHeightRef = useRef<number | null>(null);
   const stickToBottomRef = useRef(true);
 
-  const defaultExpandedForType = (
-    eventType?: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail"
-  ) => false;
+  const defaultExpandedForType = (eventType?: AgentEventType) => false;
 
   const conversationsQuery = useInfiniteQuery({
     queryKey: ["chat", "conversations", "page"],
@@ -168,7 +138,7 @@ export function ChatContainer() {
           const metadata = parseMessageMetadata(msg.metadata);
 
           if (msg.role === "event") {
-            let eventType: "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | undefined;
+            let eventType: AgentEventType | undefined;
             let eventData: Record<string, unknown> | undefined;
 
             if (msg.toolResult) {
@@ -182,7 +152,8 @@ export function ChatContainer() {
                   type === "tool_result" ||
                   type === "reasoning" ||
                   type === "decision" ||
-                  type === "guardrail"
+                  type === "guardrail" ||
+                  type === "mode_selected"
                 ) {
                   eventType = type;
                 }
@@ -322,10 +293,10 @@ export function ChatContainer() {
     if ((!input.trim() && attachedFiles.length === 0) || isLoading || uploading) return;
 
     let uploadSummary = "";
+    const attachments: ChatAttachment[] = [];
     if (attachedFiles.length > 0) {
       setUploading(true);
       try {
-        const uploadedPaths: string[] = [];
         for (const file of attachedFiles) {
           const contentBase64 = await toBase64(file);
           const uploaded = await api.shared.uploadFile({
@@ -333,11 +304,11 @@ export function ChatContainer() {
             contentBase64,
             folder: "chat-uploads",
           });
-          uploadedPaths.push(uploaded.path);
+          attachments.push({ name: file.name, path: uploaded.path, mimeType: file.type || undefined });
         }
 
-        const imagePaths = uploadedPaths.filter((p) => /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(p));
-        const list = uploadedPaths.map((p) => `- shared-workspace/${p}`).join("\n");
+        const imagePaths = attachments.filter((a) => a.mimeType?.startsWith("image/")).map((a) => a.path);
+        const list = attachments.map((a) => `- shared-workspace/${a.path}`).join("\n");
         uploadSummary = `\n\n${t("chat.attachedFilesHeader")}\n${list}`;
         if (analyzeImages && imagePaths.length > 0) {
           uploadSummary += `\n\n${t("chat.pleaseAnalyzeImages")}\n${imagePaths
@@ -352,7 +323,7 @@ export function ChatContainer() {
     const finalInput = `${input.trim()}${uploadSummary}`.trim();
     if (!finalInput) return;
 
-    sendMessage(finalInput);
+    sendMessage(finalInput, attachments.length > 0 ? attachments : undefined);
     setInput("");
     setAttachedFiles([]);
     setAnalyzeImages(false);
@@ -452,6 +423,11 @@ export function ChatContainer() {
             {t("chat.chats")}
           </button>
           <h1 className="font-semibold truncate">Chat</h1>
+          <DuckyMascot
+            working={isLoading}
+            size={28}
+            title={isLoading ? t("chat.duckyWorkingTitle") : t("chat.duckyIdleTitle")}
+          />
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -485,156 +461,27 @@ export function ChatContainer() {
         )}
         {messages.length === 0 && (
           <div className="text-center text-gray-500 mt-20">
-            <Bot className="w-12 h-12 mx-auto mb-4 text-gray-700" />
+            <DuckyMascot working={false} size={56} className="mx-auto mb-4 opacity-80" />
             <p>{t("chat.startConversation")}</p>
           </div>
         )}
 
-        {messages.map((msg) => (
+        {messages.map((msg) =>
           msg.role === "event" ? (
-            <details
+            <EventRow
               key={msg.id}
-              open={expandedEvents[msg.id] ?? defaultExpandedForType(msg.eventType)}
-              onToggle={(e) => {
-                const isOpen = (e.currentTarget as HTMLDetailsElement).open;
-                setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }));
-              }}
-              className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs text-indigo-100"
-            >
-              <summary className="list-none cursor-pointer select-none flex items-center justify-between gap-3">
-                <span className="flex items-center gap-2 min-w-0">
-                  {eventIcon(msg.eventType)}
-                  <span className="font-medium whitespace-nowrap">{eventLabel(t, msg.eventType)}</span>
-                  <span className="text-indigo-200/80 truncate">{msg.content}</span>
-                </span>
-                <span className="text-[10px] text-indigo-200/70 whitespace-nowrap">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
-                </span>
-              </summary>
-              <div className="mt-2 pl-6 space-y-2">
-                <div className="text-indigo-100 whitespace-pre-wrap">{msg.content}</div>
-                {msg.eventData && (
-                  <pre className="rounded border border-indigo-400/20 bg-black/20 p-2 text-[11px] whitespace-pre-wrap overflow-x-auto">
-                    {JSON.stringify(msg.eventData, null, 2)}
-                  </pre>
-                )}
-              </div>
-            </details>
+              msg={msg}
+              t={t}
+              expanded={expandedEvents[msg.id] ?? defaultExpandedForType(msg.eventType)}
+              onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
+            />
           ) : (
-            <div
-              key={msg.id}
-              className={`flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}
-            >
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                msg.role === "user" ? "bg-blue-600" : "bg-gray-700"
-              }`}>
-                {msg.role === "user" ? (
-                  <User className="w-4 h-4" />
-                ) : (
-                  <Bot className="w-4 h-4" />
-                )}
-              </div>
-              <div
-                className={`${compactMode ? "max-w-[94%] sm:max-w-[82%] lg:max-w-[74%] rounded-lg px-3 py-2 text-[13px]" : "max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-xl px-4 py-3 text-sm"} whitespace-pre-wrap ${
-                  msg.role === "user"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-800 text-gray-100"
-                }`}
-              >
-                {(() => {
-                  const metadata = msg.metadata as
-                    | {
-                        portal?: string;
-                        mode?: string;
-                        agentEmoji?: string;
-                        attachments?: Array<Record<string, unknown>>;
-                        voice?: { transcript?: string };
-                      }
-                    | undefined;
-
-                  if (!metadata) return null;
-
-                  return (
-                  <div className="mb-2 flex flex-wrap gap-1 text-[10px]">
-                    {typeof metadata.portal === "string" && (
-                      <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 uppercase tracking-wide">
-                        {metadata.portal}
-                      </span>
-                    )}
-                    {typeof metadata.mode === "string" && (
-                      <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 capitalize">
-                        {metadata.mode}
-                      </span>
-                    )}
-                    {typeof metadata.agentEmoji === "string" && (
-                      <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5">
-                        {metadata.agentEmoji}
-                      </span>
-                    )}
-                  </div>
-                  );
-                })()}
-                {msg.content}
-                {(() => {
-                  const metadata = msg.metadata as
-                    | {
-                        attachments?: Array<Record<string, unknown>>;
-                      }
-                    | undefined;
-
-                  if (!metadata?.attachments || metadata.attachments.length === 0) return null;
-
-                  return (
-                  <div className="mt-2 space-y-1 text-[11px] opacity-90">
-                    {metadata.attachments.map((attachment, index) => (
-                      <div key={index} className="rounded border border-white/10 bg-black/20 px-2 py-1">
-                        <div className="font-medium">{String(attachment.name ?? `${t("chat.fileLabel")} ${index + 1}`)}</div>
-                        <div className="opacity-80 break-all">
-                          {String(attachment.path ?? attachment.url ?? attachment.mimeType ?? t("chat.noAttachmentLabel"))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  );
-                })()}
-                {(() => {
-                  const metadata = msg.metadata as
-                    | {
-                        voice?: { transcript?: string };
-                      }
-                    | undefined;
-
-                  if (!metadata?.voice) return null;
-
-                  return (
-                  <div className="mt-2 rounded border border-white/10 bg-black/20 px-2 py-1 text-[11px] opacity-90">
-                    <div className="font-medium">{t("chat.voiceInput")}</div>
-                    <div className="opacity-80">{String(metadata.voice.transcript ?? "")}</div>
-                  </div>
-                  );
-                })()}
-              </div>
-            </div>
+            <MessageRow key={msg.id} msg={msg} compactMode={compactMode} t={t} />
           )
-        ))}
+        )}
 
         {/* Streaming */}
-        {isLoading && (
-          <div className="flex gap-3">
-            <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center shrink-0">
-              <Bot className="w-4 h-4" />
-            </div>
-            <div className={`${compactMode ? "max-w-[94%] sm:max-w-[82%] lg:max-w-[74%] rounded-lg px-3 py-2 text-[13px]" : "max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-xl px-4 py-3 text-sm"} bg-gray-800 text-gray-100 whitespace-pre-wrap`}>
-              {streamingContent || (
-                <span className="flex gap-1">
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+        {isLoading && <StreamingRow compactMode={compactMode} streamingContent={streamingContent} t={t} />}
 
         <div ref={bottomRef} />
         </div>

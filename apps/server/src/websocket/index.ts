@@ -44,7 +44,11 @@ export function setupWebSocket(
     logger.info("Client connected", { id: socket.id });
 
     // Chat with streaming
-    socket.on("chat:message", async (data: { message: string; conversationId?: number }) => {
+    socket.on("chat:message", async (data: {
+      message: string;
+      conversationId?: number;
+      attachments?: Array<{ name: string; path?: string; url?: string; mimeType?: string }>;
+    }) => {
       let registryRunId: string | undefined;
       const runAgents: Agent[] = [];
       // Tracked separately from the resolved id below so the catch block can still report
@@ -92,6 +96,7 @@ export function setupWebSocket(
           },
           {
             stream: true,
+            attachments: data.attachments,
             onChunk: (chunk) => {
               socket.emit("chat:chunk", { content: chunk, conversationId: resolvedConversationId });
             },

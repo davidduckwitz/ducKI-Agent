@@ -166,9 +166,9 @@ export const api = {
       approved?: boolean;
     }) => request<unknown>("/memory/actions", { method: "POST", body: JSON.stringify(payload) }),
     delete: (id: number) => request<{ deleted: boolean; id: number }>(`/memory/${id}`, { method: "DELETE" }),
-    getProfile: () => request<{ agentBehavior: string; humanInfo: string }>("/memory/profile"),
-    saveProfile: (payload: { agentBehavior: string; humanInfo: string }) =>
-      request<{ saved: boolean; agentBehavior: string; humanInfo: string }>("/memory/profile", {
+    getProfile: () => request<{ systemPrompt: string; agentBehavior: string; humanInfo: string }>("/memory/profile"),
+    saveProfile: (payload: { systemPrompt: string; agentBehavior: string; humanInfo: string }) =>
+      request<{ saved: boolean; systemPrompt: string; agentBehavior: string; humanInfo: string }>("/memory/profile", {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
@@ -249,6 +249,7 @@ export const api = {
     readFile: (path: string) =>
       request<{ path: string; size: number; isText: boolean; content?: string; contentBase64?: string }>(`/shared/read?path=${encodeURIComponent(path)}`),
     downloadUrl: (path: string) => `${BASE_URL}/shared/download?path=${encodeURIComponent(path)}`,
+    viewUrl: (path: string) => `${BASE_URL}/shared/view?path=${encodeURIComponent(path)}`,
     writeFile: (path: string, content: string) =>
       request<{ written: boolean; path: string }>("/shared/write", {
         method: "POST",

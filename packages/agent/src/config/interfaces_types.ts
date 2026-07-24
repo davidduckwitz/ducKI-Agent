@@ -26,12 +26,20 @@ export interface AgentRunContextCaps {
   maxContextMessageChars?: number;
 }
 
+export interface AgentRunAttachment {
+  name: string;
+  path?: string;
+  url?: string;
+  mimeType?: string;
+}
+
 export interface AgentRunOptions {
   stream?: boolean;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: AgentRunEvent) => void;
   contextCaps?: AgentRunContextCaps;
   agentMode?: "full" | "lightweight" | "chatbot";
+  attachments?: AgentRunAttachment[];
 }
 
 export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | "mode_selected";
@@ -89,6 +97,7 @@ export interface AgentRuntimeControls {
   autoSkillFallbackNone: boolean;
   enabledSkillAllowlist: string[];
   enabledOptionalTools: string[];
+  alwaysLoadSkills?: string[];
 }
 
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
