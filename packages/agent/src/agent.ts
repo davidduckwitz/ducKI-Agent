@@ -1224,6 +1224,30 @@ export class Agent {
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
+  /** Check if braces/brackets/parens are balanced (not inside a string) in text.
+   *  Used to decide if a newline in Hermes payload is truly a terminator or just prose.
+   */
+  private isBracketBalanced(text: string): boolean {
+    let depth = 0;
+    let inString = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const prevChar = i > 0 ? text[i - 1] : "";
+
+      if (char === '"' && prevChar !== "\\") {
+        inString = !inString;
+      }
+
+      if (!inString) {
+        if (char === "{" || char === "[" || char === "(") depth++;
+        if (char === "}" || char === "]" || char === ")") depth--;
+      }
+    }
+
+    return depth === 0;
+  }
+
   private extractHermesCall(response: string): { toolName: string; args: string } | undefined {
     // Support multiple Hermes/ChatML markers: <|tool_call>call:, <|tool_call>, or variations
     const markers = ["<|tool_call>call:", "<|tool_call>", "<|im_function>"];
@@ -1242,19 +1266,28 @@ export class Agent {
 
     const afterStart = response.slice(start + marker.length);
 
-    // Find end markers (various formats)
-    const endMarkers = [
-      { marker: "<|tool_call|>", name: "close_hermes" },
-      { marker: "<|/tool_call|>", name: "close_xml" },
-      { marker: "<tool_call/>", name: "self_close" },
-      { marker: "\n", name: "newline" }
-    ];
+    // Find explicit end markers first
+    const explicitEnds = ["<|tool_call|>", "<|/tool_call|>", "<tool_call/>"];
+    let end = -1;
+    for (const m of explicitEnds) {
+      const idx = afterStart.indexOf(m);
+      if (idx >= 0 && (end < 0 || idx < end)) end = idx;
+    }
 
-    let end = afterStart.length;
-    for (const { marker: endMarker } of endMarkers) {
-      const endIdx = afterStart.indexOf(endMarker);
-      if (endIdx >= 0 && endIdx < end) {
-        end = endIdx;
+    // If no explicit marker, use newline only if brackets are balanced
+    // (else a `\n` inside a JSON string cuts the payload early)
+    if (end < 0) {
+      const newlineIdx = afterStart.indexOf("\n");
+      if (newlineIdx >= 0) {
+        const upToNewline = afterStart.slice(0, newlineIdx);
+        if (this.isBracketBalanced(upToNewline)) {
+          end = newlineIdx;
+        } else {
+          // Brackets unbalanced at first \n, keep going
+          end = afterStart.length;
+        }
+      } else {
+        end = afterStart.length;
       }
     }
 
@@ -1363,6 +1396,48 @@ export class Agent {
     return undefined;
   }
 
+  /** Scans from startPos to find a bracket-delimited payload by counting depth,
+   *  correctly handling nested JSON with `]` inside strings/arrays.
+   *  Returns the payload body (between [ and ]) and the index of the closing bracket,
+   *  or undefined if no closing ] is found (fallback: rest of string).
+   */
+  private scanBracketPayload(response: string, startPos: number): { body: string; endIndex: number } | undefined {
+    if (startPos >= response.length) return undefined;
+
+    let depth = 0;
+    let inString = false;
+
+    for (let i = startPos; i < response.length; i++) {
+      const char = response[i];
+      const prevChar = i > 0 ? response[i - 1] : "";
+
+      // Handle string escaping: "..." where \" inside doesn't flip the flag
+      if (char === '"' && prevChar !== "\\") {
+        inString = !inString;
+      }
+
+      if (!inString) {
+        if (char === "{" || char === "[" || char === "(") depth++;
+        if (char === "}" || char === "]" || char === ")") {
+          depth--;
+          // Found closing bracket at depth 0
+          if (depth < 0 || (depth === 0 && char === "]")) {
+            return {
+              body: response.slice(startPos, i).trim(),
+              endIndex: i
+            };
+          }
+        }
+      }
+    }
+
+    // Fallback: if no closing ] found, take rest of string
+    return {
+      body: response.slice(startPos).trim(),
+      endIndex: response.length
+    };
+  }
+
   private extractToolCall(response: string): { toolName: string; input: Record<string, unknown> } | undefined {
     // Try new format first: <|tool_call>call:name({...})<tool_call|>
     // Extract by finding the opening <|tool_call>call: and looking for matching closing markers
@@ -1387,39 +1462,8 @@ export class Agent {
     }
 
     const markerIndex = response.indexOf("[TOOL:");
-    const bracketBody = (() => {
-      if (markerIndex < 0) return undefined;
-
-      // Find the closing ] by counting bracket depth for nested JSON
-      let depth = 0;
-      let inString = false;
-      let escaped = false;
-      const startPos = markerIndex + "[TOOL:".length;
-
-      for (let i = startPos; i < response.length; i++) {
-        const char = response[i];
-        const prevChar = i > 0 ? response[i - 1] : "";
-
-        // Handle string escaping
-        if (char === '"' && prevChar !== "\\") {
-          inString = !inString;
-        }
-
-        if (!inString) {
-          if (char === "{" || char === "[" || char === "(") depth++;
-          if (char === "}" || char === "]" || char === ")") {
-            depth--;
-            // If we found the closing bracket at depth 0, capture the body
-            if (depth < 0 || (depth === 0 && char === "]")) {
-              return response.slice(startPos, i).trim();
-            }
-          }
-        }
-      }
-
-      // Fallback: if no closing ] found, take rest of string
-      return response.slice(startPos).trim();
-    })();
+    const scanResult = markerIndex >= 0 ? this.scanBracketPayload(response, markerIndex + "[TOOL:".length) : undefined;
+    const bracketBody = scanResult?.body;
 
     if (bracketBody) {
       const body = bracketBody;
@@ -1473,15 +1517,6 @@ export class Agent {
             return this.resolveToolNameAndInput(toolName, args);
           }
         }
-
-        // New Variant E: Direct function call style like [TOOL:name({"a":1})] with no trailing content or extra text
-        const directCallMatch = tail.match(/^<|tool_call>call:([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
-        if (directCallMatch?.[1]) {
-          const args = this.parseLooseObject(directCallMatch[1]);
-          if (args) {
-            return this.resolveToolNameAndInput(toolName, args);
-          }
-        }
       }
 
       return undefined;
@@ -1499,10 +1534,51 @@ export class Agent {
   }
 
   /**
+   * Extracts all [TOOL:...] bracket calls from a response using scanBracketPayload,
+   * avoiding silent drops of payloads containing `]` (array values, strings with brackets).
+   * Returns found calls plus unparsed markers for guardrail reporting.
+   */
+  private extractAllToolCalls(response: string): {
+    calls: Array<{ toolName: string; input: Record<string, unknown> }>;
+    markerCount: number;
+    unparsed: string[];
+  } {
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    const unparsed: string[] = [];
+    let fromIndex = 0;
+    let markerCount = 0;
+
+    while (true) {
+      const markerIndex = response.indexOf("[TOOL:", fromIndex);
+      if (markerIndex < 0) break;
+
+      markerCount++;
+      const scanResult = this.scanBracketPayload(response, markerIndex + "[TOOL:".length);
+      if (!scanResult) {
+        fromIndex = markerIndex + "[TOOL:".length;
+        continue;
+      }
+
+      const body = scanResult.body;
+      const parsed = this.parseBracketBody(body);
+      if (parsed) {
+        calls.push(parsed);
+      } else {
+        // Marker found but unparseable; record for guardrail reporting
+        unparsed.push(`[TOOL:${body}]`);
+      }
+
+      fromIndex = scanResult.endIndex + 1;
+    }
+
+    return { calls, markerCount, unparsed };
+  }
+
+  /**
    * Parses a single [TOOL:...] bracket body into a tool call, using the same variant
    * matching as extractToolCall. Kept standalone (not shared code) so extractToolCall's
    * hardened malformed-input handling stays untouched - this only backs the additive
-   * multi-call batch path in extractAllToolCalls below (P2.1).
+   * multi-call batch path in extractAllToolCalls above.
    */
   private parseBracketBody(body: string): { toolName: string; input: Record<string, unknown> } | undefined {
     const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
@@ -1538,23 +1614,6 @@ export class Agent {
     return undefined;
   }
 
-  /**
-   * Detects multiple [TOOL:name({...})] markers in one LLM response. Additive on top of
-   * extractToolCall (which only ever looks at the first marker): when a response contains
-   * more than one bracket call, the run loop routes them through the tool dependency graph
-   * for concurrent execution instead of the single-call path (P2.1). Responses with 0 or 1
-   * markers fall straight back to the existing, unmodified single-call handling.
-   */
-  private extractAllToolCalls(response: string): Array<{ toolName: string; input: Record<string, unknown> }> {
-    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
-    for (const match of response.matchAll(/\[TOOL:([^\]]+)\]/g)) {
-      const body = match[1]?.trim();
-      if (!body) continue;
-      const parsed = this.parseBracketBody(body);
-      if (parsed) calls.push(parsed);
-    }
-    return calls;
-  }
 
   private buildToolCallSignature(toolName: string, input: Record<string, unknown>): string {
     const stable = JSON.stringify(input, Object.keys(input).sort());
@@ -2499,7 +2558,17 @@ export class Agent {
       // Multi tool-call batch path (P2.1): only engages when the response contains more
       // than one [TOOL:...] marker. A single marker (the overwhelmingly common case) falls
       // straight through to the existing single-call logic below, unchanged.
-      const bracketToolCalls = this.extractAllToolCalls(response);
+      const extractResult = this.extractAllToolCalls(response);
+      const bracketToolCalls = extractResult.calls;
+
+      if (extractResult.markerCount > extractResult.calls.length && extractResult.unparsed.length > 0) {
+        emit("guardrail", "Partially parsed multi-tool-call batch", {
+          markerCount: extractResult.markerCount,
+          parsed: extractResult.calls.length,
+          unparsed: extractResult.unparsed,
+        });
+      }
+
       if (bracketToolCalls.length > 1) {
         emit("decision", "Multiple tool calls detected, evaluating parallel execution", {
           count: bracketToolCalls.length,
