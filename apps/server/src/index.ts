@@ -306,6 +306,9 @@ function buildAgentFactory(
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
 		agent.executor.registerTool(createCronjobManagementTool(db));
 		agent.executor.registerTool(createToolFactoryTool(db, agent.executor));
+		for (const tool of createWorkflowTools(db)) {
+			agent.executor.registerTool(tool);
+		}
 		return agent;
 	};
 }
