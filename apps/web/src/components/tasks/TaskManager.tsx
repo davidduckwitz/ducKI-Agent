@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, CheckSquare, Circle, Clock, Play, FolderOpen, X, Save } from "lucide-react";
+import { Plus, Trash2, CheckSquare, Circle, Clock, Play, FolderOpen, X, Save, Split } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 
 interface Task {
   id: number;
   projectId?: number;
+  parentTaskId?: number;
   title: string;
   description?: string;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
@@ -14,6 +15,12 @@ interface Task {
   createdAt: string;
   updatedAt?: string;
   result?: string;
+}
+
+interface SplitSubtaskDraft {
+  title: string;
+  description: string;
+  estimatedMinutes?: number;
 }
 
 interface Project {
@@ -50,6 +57,7 @@ export function TaskManager() {
   const [selectedProjectId, setSelectedProjectId] = useState<number | "all">("all");
   const [draggedTaskId, setDraggedTaskId] = useState<number | null>(null);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [splitPreview, setSplitPreview] = useState<{ complexity?: number; subtasks: SplitSubtaskDraft[] } | null>(null);
   const [taskEditForm, setTaskEditForm] = useState({
     title: "",
     description: "",
@@ -106,7 +114,24 @@ export function TaskManager() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tasks"] }),
   });
 
+  const previewSplit = useMutation({
+    mutationFn: (id: number) => api.tasks.split(id, { dryRun: true }),
+    onSuccess: (result) => {
+      setSplitPreview({ complexity: result.complexity, subtasks: result.subtasks });
+    },
+  });
+
+  const commitSplit = useMutation({
+    mutationFn: ({ id, subtasks }: { id: number; subtasks: SplitSubtaskDraft[] }) =>
+      api.tasks.split(id, { dryRun: false, subtasks }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+      setSplitPreview(null);
+    },
+  });
+
   useEffect(() => {
+    setSplitPreview(null);
     if (!selectedTask) return;
     setTaskEditForm({
       title: selectedTask.title,
@@ -139,6 +164,8 @@ export function TaskManager() {
     const project = (projects as Project[]).find((item) => item.id === projectId);
     return project?.name ?? `#${projectId}`;
   };
+
+  const subtasksOf = (taskId: number): Task[] => (tasks as Task[]).filter((item) => item.parentTaskId === taskId);
 
   const columns: Array<{ key: TaskColumnStatus; label: string; accent: string }> = [
     { key: "pending", label: t("tasks.backlog"), accent: "border-slate-600" },
@@ -283,9 +310,21 @@ export function TaskManager() {
                   <div className="flex items-start gap-2">
                     <div className="mt-0.5 shrink-0">{statusIcon(task.status)}</div>
                     <div className="flex-1 min-w-0">
-                      <p className={`font-medium ${task.status === "completed" ? "line-through text-gray-500" : ""}`}>
-                        {task.title}
-                      </p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className={`font-medium ${task.status === "completed" ? "line-through text-gray-500" : ""}`}>
+                          {task.title}
+                        </p>
+                        {task.parentTaskId && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">
+                            child of #{task.parentTaskId}
+                          </span>
+                        )}
+                        {!task.parentTaskId && subtasksOf(task.id).length > 0 && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                            {subtasksOf(task.id).filter((st) => st.status === "completed").length}/{subtasksOf(task.id).length} subtasks done
+                          </span>
+                        )}
+                      </div>
                       {task.description && (
                         <p className="text-sm text-gray-400 line-clamp-2">{task.description}</p>
                       )}
@@ -350,9 +389,9 @@ export function TaskManager() {
       </div>
 
       {selectedTask && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-          <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 shadow-2xl">
-            <div className="flex items-center justify-between p-4 border-b border-gray-800">
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 max-h-screen">
+          <div className="w-full max-w-2xl rounded-xl border border-gray-700 bg-gray-900 shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between p-4 border-b border-gray-800 flex-shrink-0">
               <h2 className="text-lg font-semibold">{t("tasks.taskDetails")} #{selectedTask.id}</h2>
               <button
                 onClick={() => setSelectedTask(null)}
@@ -362,7 +401,7 @@ export function TaskManager() {
               </button>
             </div>
 
-            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 flex-1 overflow-y-auto">
               <div className="md:col-span-2">
                 <label className="text-xs text-gray-400">{t("tasks.titleField")}</label>
                 <input
@@ -425,6 +464,80 @@ export function TaskManager() {
                 </select>
               </div>
 
+              {!selectedTask.parentTaskId && (
+                <div className="md:col-span-2 border-t border-gray-800 pt-3">
+                  {!splitPreview ? (
+                    <button
+                      onClick={() => previewSplit.mutate(selectedTask.id)}
+                      disabled={previewSplit.isPending}
+                      className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+                    >
+                      <Split className="w-4 h-4" />
+                      {t("tasks.splitIntoSubtasks")}
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold">{t("tasks.splitPreview")}</h3>
+                        {splitPreview.complexity !== undefined && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-300">
+                            {t("tasks.complexity")}: {splitPreview.complexity}/10
+                          </span>
+                        )}
+                      </div>
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {splitPreview.subtasks.map((subtask, index) => (
+                          <div key={index} className="rounded border border-gray-800 bg-gray-950/60 p-2 space-y-1">
+                            <input
+                              className="input w-full text-sm"
+                              value={subtask.title}
+                              onChange={(e) =>
+                                setSplitPreview((prev) => {
+                                  if (!prev) return prev;
+                                  const subtasks = [...prev.subtasks];
+                                  const current = subtasks[index];
+                                  if (!current) return prev;
+                                  subtasks[index] = { ...current, title: e.target.value };
+                                  return { ...prev, subtasks };
+                                })
+                              }
+                            />
+                            <textarea
+                              className="input w-full text-xs"
+                              rows={2}
+                              value={subtask.description}
+                              onChange={(e) =>
+                                setSplitPreview((prev) => {
+                                  if (!prev) return prev;
+                                  const subtasks = [...prev.subtasks];
+                                  const current = subtasks[index];
+                                  if (!current) return prev;
+                                  subtasks[index] = { ...current, description: e.target.value };
+                                  return { ...prev, subtasks };
+                                })
+                              }
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => commitSplit.mutate({ id: selectedTask.id, subtasks: splitPreview.subtasks })}
+                          disabled={commitSplit.isPending}
+                          className="btn-primary flex items-center gap-2 disabled:opacity-50"
+                        >
+                          <Split className="w-4 h-4" />
+                          {t("tasks.createSubtasks")}
+                        </button>
+                        <button onClick={() => setSplitPreview(null)} className="btn-secondary">
+                          {t("common.cancel")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {selectedTask.result && (
                 <div className="md:col-span-2">
                   <label className="text-xs text-gray-400">{t("common.result")}</label>
@@ -440,7 +553,7 @@ export function TaskManager() {
               </div>
             </div>
 
-            <div className="p-4 border-t border-gray-800 flex items-center justify-between">
+            <div className="p-4 border-t border-gray-800 flex items-center justify-between flex-shrink-0">
               <button
                 onClick={() => {
                   remove.mutate(selectedTask.id, {

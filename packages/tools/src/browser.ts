@@ -420,9 +420,8 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         const selector = String(input["selector"] ?? "").trim();
         const text = String(input["text"] ?? "");
         if (!selector) return fail("selector is required");
-        await session.page.waitForSelector(selector, { visible: true, timeout: Number(input["timeout"] ?? 10000) });
-        await session.page.click(selector);
-        await session.page.click(selector);
+        const timeout = Number(input["timeout"] ?? 10000);
+        await session.page.waitForSelector(selector, { visible: true, timeout });
         await session.page.click(selector);
         await session.page.type(selector, text);
         return ok({ typed: text.length, selector });

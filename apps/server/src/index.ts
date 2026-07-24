@@ -5,7 +5,17 @@ import helmet from "helmet";
 import { createServer } from "node:http";
 import { Buffer } from "node:buffer";
 import { Server as SocketIOServer } from "socket.io";
-import { Agent, WorkflowEngine, createWorkflowManagementTool, createCronjobManagementTool } from "@ducki/agent";
+import {
+	Agent,
+	WorkflowEngine,
+	createWorkflowManagementTool,
+	createCronjobManagementTool,
+	Executor,
+	createDynamicToolResolver,
+	createToolFactoryTool,
+	createCodingAgent,
+	type CodingAgent,
+} from "@ducki/agent";
 import { getDatabase } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
@@ -22,7 +32,8 @@ import { LlmWikiService } from "./lib/llm-wiki-service.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
-import { codingRouter } from "./routes/coding.js";
+import { codingRouter, CODING_ROOT } from "./routes/coding.js";
+import { codingAgentRouter } from "./routes/coding-agent.js";
 import { gatewayRouter } from "./routes/gateway.js";
 import { logsRouter } from "./routes/logs.js";
 import { mcpRouter } from "./routes/mcp.js";
@@ -293,6 +304,7 @@ function buildAgentFactory(
 		}
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
 		agent.executor.registerTool(createCronjobManagementTool(db));
+		agent.executor.registerTool(createToolFactoryTool(db, agent.executor));
 		return agent;
 	};
 }
@@ -311,6 +323,7 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/updates", updatesRouter);
 	app.use("/api/cronjobs", cronjobsRouter);
 	app.use("/api/coding", codingRouter);
+	app.use("/api/coding-agent", codingAgentRouter);
 	app.use("/api/workflows", workflowsRouter);
 	app.use("/api/gateway", gatewayRouter);
 	app.use("/api/mcp", mcpRouter);
@@ -451,7 +464,27 @@ async function bootstrap(): Promise<void> {
 	await mcpRegistry.syncServers(mcpServers);
 	const runtimeTools: ToolExecutor[] = [...allTools, createMcpTool(mcpRegistry)];
 	const providerRef: { current: ReturnType<typeof createProvider> } = { current: provider };
-	const workflowEngineRef: { current: WorkflowEngine } = { current: new WorkflowEngine(providerRef.current, db) };
+
+	// Persistent Executor dedicated to the WorkflowEngine (tool_call nodes dispatch
+	// through it directly), wired with the same DB-backed dynamic tool resolver used
+	// by every per-request Agent so dynamically registered tools resolve everywhere.
+	const workflowExecutor = new Executor(logger.child("WorkflowExecutor"), createDynamicToolResolver(db));
+	for (const tool of runtimeTools) {
+		workflowExecutor.registerTool(tool);
+	}
+	workflowExecutor.registerTool(createCronjobManagementTool(db));
+	workflowExecutor.registerTool(createToolFactoryTool(db, workflowExecutor));
+
+	const createCodingAgentFactory = (options?: { sandboxRoot?: string }): CodingAgent =>
+		createCodingAgent(providerRef.current, db, { sandboxRoot: options?.sandboxRoot ?? CODING_ROOT });
+
+	const workflowEngineRef: { current: WorkflowEngine } = {
+		current: new WorkflowEngine(providerRef.current, db, workflowExecutor, {
+			logger: logger.child("WorkflowEngine"),
+			codingAgentFactory: () => createCodingAgentFactory(),
+		}),
+	};
+	workflowExecutor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
 	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools);
 	const defaultAgent = createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
@@ -466,10 +499,14 @@ async function bootstrap(): Promise<void> {
 	app.locals["workflowEngine"] = workflowEngineRef.current;
 	app.locals["agent"] = defaultAgent;
 	app.locals["createAgent"] = createAgent;
+	app.locals["createCodingAgent"] = createCodingAgentFactory;
 	app.locals["reloadProvider"] = async () => {
 		const reloaded = await loadProviderFromSettings(db);
 		providerRef.current = reloaded.provider;
-		workflowEngineRef.current = new WorkflowEngine(providerRef.current, db);
+		workflowEngineRef.current = new WorkflowEngine(providerRef.current, db, workflowExecutor, {
+			logger: logger.child("WorkflowEngine"),
+			codingAgentFactory: () => createCodingAgentFactory(),
+		});
 		app.locals["provider"] = providerRef.current;
 		app.locals["workflowEngine"] = workflowEngineRef.current;
 		logger.info("Provider reloaded", { provider: reloaded.providerName });

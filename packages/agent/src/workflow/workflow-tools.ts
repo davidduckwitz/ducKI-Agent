@@ -1,6 +1,7 @@
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import { browserTool } from "@ducki/tools";
+import { previewSplit, commitSplit } from "../tasks/task-split-service.js";
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 type TaskPriority = "low" | "medium" | "high" | "critical";
@@ -615,7 +616,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
         properties: {
           action: {
             type: "string",
-            enum: ["create", "list", "get", "update", "start", "complete", "fail", "delete"],
+            enum: ["create", "list", "get", "update", "start", "complete", "fail", "delete", "split"],
           },
           id: { type: "number", description: "Task id" },
           projectId: { type: "number", description: "Project id" },
@@ -625,6 +626,8 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           priority: { type: "string", enum: ["low", "medium", "high", "critical"] },
           result: { type: "string", description: "Task result or completion summary" },
           subtasks: { description: "JSON array or array of subtasks" },
+          dryRun: { type: "boolean", description: "split: preview only (default true), false commits real subtask rows" },
+          ownerTag: { type: "string", description: "split: ownership tag for created subtasks, defaults to task_split:<id>" },
         },
         required: ["action"],
       },
@@ -634,6 +637,31 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
 
       try {
         switch (action) {
+          case "split": {
+            const parsedId = parseTaskId(input["id"]);
+            if (!Number.isFinite(parsedId)) return fail("Valid task id is required");
+            const id = Number(parsedId);
+            const dryRun = input["dryRun"] !== false;
+            const ownerTag = String(input["ownerTag"] ?? `task_split:${id}`);
+
+            const preview = await previewSplit(db, id);
+            if (dryRun) {
+              return ok({
+                dryRun: true,
+                parentTaskId: id,
+                complexity: preview.complexity,
+                subtasks: preview.subtasks,
+              });
+            }
+
+            const created = await commitSplit(db, preview.parentTask, preview.subtasks, ownerTag);
+            return ok({
+              dryRun: false,
+              parentTaskId: id,
+              ownerTag,
+              subtasks: mapTasks(created),
+            });
+          }
           case "create": {
             const title = String(input["title"] ?? "").trim();
             if (!title) return fail("Task title is required");

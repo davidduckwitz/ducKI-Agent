@@ -27,6 +27,8 @@ import type {
   CronJobSelect,
   LlmWikiEntryInsert,
   LlmWikiEntrySelect,
+  DynamicToolInsert,
+  DynamicToolSelect,
 } from "./schema.js";
 
 export type { LibSQLDatabase };
@@ -60,7 +62,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, description TEXT, folder TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, project_id INTEGER REFERENCES projects(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), role TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, tool_call_id TEXT, tool_result TEXT, created_at TEXT NOT NULL)`,
-      `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER REFERENCES projects(id), title TEXT NOT NULL, description TEXT, status TEXT NOT NULL DEFAULT 'pending', priority TEXT NOT NULL DEFAULT 'medium', subtasks TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER REFERENCES projects(id), title TEXT NOT NULL, description TEXT, status TEXT NOT NULL DEFAULT 'pending', priority TEXT NOT NULL DEFAULT 'medium', subtasks TEXT, result TEXT, parent_task_id INTEGER REFERENCES tasks(id), created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS tools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, config_schema TEXT, last_used TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), type TEXT NOT NULL DEFAULT 'short-term', content TEXT NOT NULL, importance INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'approved', created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL, embedding TEXT NOT NULL, metadata TEXT, created_at TEXT NOT NULL)`,
@@ -69,6 +71,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS tool_executions (id INTEGER PRIMARY KEY AUTOINCREMENT, tool_name TEXT NOT NULL, input TEXT, output TEXT, success INTEGER NOT NULL, execution_time REAL, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS cron_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, schedule TEXT NOT NULL, target_type TEXT NOT NULL, target_ref TEXT, payload TEXT, enabled INTEGER NOT NULL DEFAULT 1, last_run_at TEXT, next_run_at TEXT, last_status TEXT, last_error TEXT, last_result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS llm_wiki_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, source_path TEXT NOT NULL UNIQUE, title TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', metadata TEXT, learned_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS dynamic_tools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL, parameters TEXT NOT NULL, script TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -79,6 +82,14 @@ export class DatabaseService {
     });
 
     await this.client.execute(`ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+
+    await this.client.execute(`ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+
+    await this.client.execute(`ALTER TABLE tasks ADD COLUMN created_by TEXT`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
     });
   }
@@ -240,6 +251,24 @@ export class DatabaseService {
 
   async deleteTask(id: number): Promise<void> {
     await this.db.delete(schema.tasks).where(eq(schema.tasks.id, id)).run();
+  }
+
+  async getSubtasks(parentTaskId: number): Promise<schema.TaskSelect[]> {
+    return this.db
+      .select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.parentTaskId, parentTaskId))
+      .orderBy(schema.tasks.id)
+      .all();
+  }
+
+  async listTasksByOwner(createdBy: string): Promise<schema.TaskSelect[]> {
+    return this.db
+      .select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.createdBy, createdBy))
+      .orderBy(desc(schema.tasks.createdAt))
+      .all();
   }
 
   // ============================================================
@@ -516,6 +545,48 @@ export class DatabaseService {
 
   async deleteCronJob(id: number): Promise<void> {
     await this.db.delete(schema.cronJobs).where(eq(schema.cronJobs.id, id)).run();
+  }
+
+  // ============================================================
+  // Dynamic Tools
+  // ============================================================
+  async createDynamicTool(data: Omit<DynamicToolInsert, "id" | "createdAt" | "updatedAt">): Promise<DynamicToolSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db
+      .insert(schema.dynamicTools)
+      .values({ ...data, createdAt: now, updatedAt: now })
+      .returning()
+      .get();
+    if (!result) throw new Error("Failed to create dynamic tool");
+    return result;
+  }
+
+  async getDynamicToolByName(name: string): Promise<DynamicToolSelect | undefined> {
+    return this.db.select().from(schema.dynamicTools).where(eq(schema.dynamicTools.name, name)).get();
+  }
+
+  async listDynamicTools(createdBy?: string): Promise<DynamicToolSelect[]> {
+    if (createdBy !== undefined) {
+      return this.db
+        .select()
+        .from(schema.dynamicTools)
+        .where(eq(schema.dynamicTools.createdBy, createdBy))
+        .orderBy(desc(schema.dynamicTools.createdAt))
+        .all();
+    }
+    return this.db.select().from(schema.dynamicTools).orderBy(desc(schema.dynamicTools.createdAt)).all();
+  }
+
+  async deleteDynamicTool(name: string): Promise<void> {
+    await this.db.delete(schema.dynamicTools).where(eq(schema.dynamicTools.name, name)).run();
+  }
+
+  async deleteDynamicToolsByOwner(createdBy: string): Promise<number> {
+    const owned = await this.listDynamicTools(createdBy);
+    for (const tool of owned) {
+      await this.db.delete(schema.dynamicTools).where(eq(schema.dynamicTools.id, tool.id)).run();
+    }
+    return owned.length;
   }
 
   get raw(): LibSQLDatabase<typeof schema> {

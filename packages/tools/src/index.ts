@@ -7,6 +7,8 @@ import { shellTool } from "./shell.js";
 import { skillsTool } from "./skills.js";
 
 export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool };
+export { runScriptInSandbox, sanitizeRuntimeValue } from "./sandbox.js";
+export type { SandboxRuntime, SandboxVarNames, SandboxExecutionResult } from "./sandbox.js";
 
 export const allTools: ToolExecutor[] = [filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool];
 

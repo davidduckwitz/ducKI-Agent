@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text, real } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text, real, type AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 
 // ============================================================
 // Conversations
@@ -49,6 +49,8 @@ export const tasks = sqliteTable("tasks", {
   priority: text("priority").notNull().default("medium"), // low, medium, high, critical
   subtasks: text("subtasks"), // JSON
   result: text("result"),
+  parentTaskId: integer("parent_task_id").references((): AnySQLiteColumn => tasks.id),
+  createdBy: text("created_by"), // ownership tag, e.g. "task_split:<id>", "workflow:<id>", "tool:<name>:<invocationId>"
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -63,6 +65,21 @@ export const tools = sqliteTable("tools", {
   enabled: integer("enabled").notNull().default(1),
   configSchema: text("config_schema"), // JSON
   lastUsed: text("last_used"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// ============================================================
+// Dynamic Tools (runtime-registered tools, sandboxed script execution)
+// ============================================================
+export const dynamicTools = sqliteTable("dynamic_tools", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  description: text("description").notNull(),
+  parameters: text("parameters").notNull(), // JSON schema-like object
+  script: text("script").notNull(), // vm.Script source
+  enabled: integer("enabled").notNull().default(1),
+  createdBy: text("created_by"), // ownership tag
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -184,3 +201,5 @@ export type CronJobInsert = typeof cronJobs.$inferInsert;
 export type CronJobSelect = typeof cronJobs.$inferSelect;
 export type LlmWikiEntryInsert = typeof llmWikiEntries.$inferInsert;
 export type LlmWikiEntrySelect = typeof llmWikiEntries.$inferSelect;
+export type DynamicToolInsert = typeof dynamicTools.$inferInsert;
+export type DynamicToolSelect = typeof dynamicTools.$inferSelect;

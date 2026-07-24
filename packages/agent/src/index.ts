@@ -21,4 +21,14 @@ export type {
 	WorkflowRunSummary,
 	WorkflowNodeStatus,
 	WorkflowStatus,
+	WorkflowNodeKind,
 } from "./workflow/workflow-engine.js";
+export { TaskSplitter } from "./tasks/task-splitter.js";
+export type { SplitSubtask, SplitResult } from "./tasks/task-splitter.js";
+export { previewSplit, commitSplit } from "./tasks/task-split-service.js";
+export type { PreviewSplitResult } from "./tasks/task-split-service.js";
+export { createToolFactoryTool } from "./dynamic-tools/tool-factory-tool.js";
+export { createDynamicToolResolver, dynamicToolRowToDefinition } from "./dynamic-tools/dynamic-tool-resolver.js";
+export { TOOL_CALL_FORMAT_BLOCK } from "./agent.js";
+export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
+export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";

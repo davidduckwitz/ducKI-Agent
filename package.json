@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm -r --parallel --filter=!@ducki/cli run dev",
+    "dev": "node dev.js",
     "build": "pnpm -r run build",
     "test": "vitest run",
     "test:watch": "vitest",

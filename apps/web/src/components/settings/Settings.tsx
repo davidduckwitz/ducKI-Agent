@@ -730,6 +730,9 @@ export function Settings() {
   const { data: settings = [] } = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.settings.list() as Promise<Setting[]>,
+    staleTime: 0,
+    refetchOnMount: true,
+    gcTime: 0,
   });
 
   const [edits, setEdits] = useState<Record<string, string>>({});
@@ -738,7 +741,11 @@ export function Settings() {
   const save = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) =>
       api.settings.set(key, value),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      // Force refetch immediately
+      void qc.refetchQueries({ queryKey: ["settings"] });
+    },
   });
 
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));

@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Activity, ArrowRight, Bot, MessageSquare } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
+import { useSocket } from "../../lib/useSocket";
 
 interface LiveAgentItem {
   id: string;
@@ -23,15 +25,30 @@ function sourceLabel(source: LiveAgentItem["source"]): string {
 
 export function AgentsLiveView() {
   const navigate = useNavigate();
+  const socket = useSocket();
+  const [wsSnapshot, setWsSnapshot] = useState<{ runningCount: number; agents: LiveAgentItem[] } | null>(null);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    socket.on("agent:metrics", (snapshot: { runningCount: number; agents: LiveAgentItem[] }) => {
+      setWsSnapshot(snapshot);
+    });
+
+    return () => {
+      socket.off("agent:metrics");
+    };
+  }, [socket]);
 
   const live = useQuery({
     queryKey: ["agents", "live"],
     queryFn: () => api.agents.live(),
-    refetchInterval: 1500,
+    refetchInterval: 5000,
   });
 
-  const runningCount = live.data?.runningCount ?? 0;
-  const agents = (live.data?.agents ?? []) as LiveAgentItem[];
+  const snapshot = wsSnapshot ?? live.data;
+  const runningCount = snapshot?.runningCount ?? 0;
+  const agents = (snapshot?.agents ?? []) as LiveAgentItem[];
   const summary = live.data?.summary;
   const snapshotAt = live.data?.snapshotAt;
   const sourceMap = live.data?.sourceMap ?? {

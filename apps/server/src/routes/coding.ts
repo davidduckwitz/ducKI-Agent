@@ -7,7 +7,7 @@ import { dirname, extname, join, resolve } from "node:path";
 export const codingRouter: IRouter = Router();
 
 const SHARED_ROOT = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
-const CODING_ROOT = resolve(SHARED_ROOT, "coding");
+export const CODING_ROOT = resolve(SHARED_ROOT, "coding");
 
 const TEXT_EXTENSIONS = new Set([
   ".txt", ".md", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".yml", ".yaml", ".xml", ".csv", ".html", ".css",

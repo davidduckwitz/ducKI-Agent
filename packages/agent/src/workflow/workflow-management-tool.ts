@@ -21,6 +21,11 @@ function asRole(value: unknown): MultiAgentRole {
   return "manager";
 }
 
+function asKind(value: unknown): WorkflowNode["kind"] {
+  const normalized = String(value ?? "agent").toLowerCase();
+  return normalized === "tool_call" ? "tool_call" : "agent";
+}
+
 function normalizeNodes(value: unknown): WorkflowNode[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const nodes: WorkflowNode[] = [];
@@ -32,6 +37,11 @@ function normalizeNodes(value: unknown): WorkflowNode[] | undefined {
     const title = String(node["title"] ?? `Node ${index + 1}`);
     const prompt = String(node["prompt"] ?? "");
     const role = asRole(node["role"]);
+    const kind = asKind(node["kind"]);
+    const toolName = node["toolName"] !== undefined ? String(node["toolName"]) : undefined;
+    const toolInput = node["toolInput"] && typeof node["toolInput"] === "object"
+      ? (node["toolInput"] as Record<string, unknown>)
+      : undefined;
     const dependsOn = Array.isArray(node["dependsOn"])
       ? (node["dependsOn"] as unknown[]).map((dep) => String(dep)).filter((dep) => dep.length > 0)
       : [];
@@ -39,8 +49,11 @@ function normalizeNodes(value: unknown): WorkflowNode[] | undefined {
     nodes.push({
       id,
       title,
+      kind,
       prompt,
       role,
+      toolName,
+      toolInput,
       dependsOn,
       status: "pending",
     });
@@ -91,7 +104,13 @@ function validateNodesAndEdges(nodes: WorkflowNode[], edges: WorkflowGraph["edge
     if (String(node.title ?? "").trim().length === 0) {
       return `workflow: node '${id}' requires non-empty title`;
     }
-    if (String(node.prompt ?? "").trim().length === 0) {
+
+    const kind = node.kind ?? "agent";
+    if (kind === "tool_call") {
+      if (String(node.toolName ?? "").trim().length === 0) {
+        return `workflow: tool_call node '${id}' requires non-empty toolName`;
+      }
+    } else if (String(node.prompt ?? "").trim().length === 0) {
       return `workflow: node '${id}' requires non-empty prompt`;
     }
   }
@@ -159,7 +178,11 @@ export function createWorkflowManagementTool(workflowEngine: WorkflowEngine): To
             type: "string",
             enum: ["draft", "running", "completed", "failed"],
           },
-          nodes: { type: "array", description: "Workflow nodes" },
+          nodes: {
+            type: "array",
+            description:
+              "Workflow nodes. Each node is either kind:'agent' (role+prompt, LLM-driven, default) or kind:'tool_call' (toolName+toolInput, directly dispatched through the Executor). toolInput string values may reference a prior node's output via '{{nodeId.result}}'.",
+          },
           edges: { type: "array", description: "Workflow edges" },
         },
         required: ["action"],

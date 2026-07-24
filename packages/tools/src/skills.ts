@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, normalize, resolve } from "node:path";
-import { Script, createContext } from "node:vm";
+import { runScriptInSandbox } from "./sandbox.js";
 
 function resolveSkillsRoot(): string {
   const configured = process.env["SKILLS_PATH"]?.trim();
@@ -99,79 +99,6 @@ function extractInlineScript(content: string): string | undefined {
   const openMatch = content.match(/<script\b[^>]*>([\s\S]*)$/i);
   if (openMatch?.[1]?.trim()) return openMatch[1].trim();
   return undefined;
-}
-
-function sanitizeRuntimeValue(value: unknown, depth = 0): unknown {
-  if (depth > 6) {
-    throw new Error("Runtime payload is too deeply nested");
-  }
-  if (value === null || value === undefined) return value;
-  const valueType = typeof value;
-  if (valueType === "string" || valueType === "number" || valueType === "boolean") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    if (value.length > 500) {
-      throw new Error("Runtime payload array too large");
-    }
-    return value.map((item) => sanitizeRuntimeValue(item, depth + 1));
-  }
-  if (valueType === "object") {
-    const source = value as Record<string, unknown>;
-    const keys = Object.keys(source);
-    if (keys.length > 200) {
-      throw new Error("Runtime payload object too large");
-    }
-    const result: Record<string, unknown> = {};
-    for (const key of keys) {
-      result[key] = sanitizeRuntimeValue(source[key], depth + 1);
-    }
-    return result;
-  }
-
-  throw new Error("Runtime payload contains unsupported value type");
-}
-
-function runScriptInSandbox(script: string, runtime?: { input?: unknown; context?: unknown }): { logs: string[]; result: unknown } {
-  const logs: string[] = [];
-  const logger = (...args: unknown[]) => {
-    logs.push(
-      args
-        .map((arg) => {
-          if (typeof arg === "string") return arg;
-          try {
-            return JSON.stringify(arg);
-          } catch {
-            return String(arg);
-          }
-        })
-        .join(" ")
-    );
-  };
-
-  const context = createContext({
-    console: { log: logger, info: logger, warn: logger, error: logger },
-    Date,
-    Intl,
-    Math,
-    JSON,
-    Number,
-    String,
-    Boolean,
-    Array,
-    Object,
-    RegExp,
-    URL,
-    URLSearchParams,
-    skillInput: sanitizeRuntimeValue(runtime?.input),
-    skillContext: sanitizeRuntimeValue(runtime?.context),
-  });
-  const wrappedScript = `(function () {\n"use strict";\n${script}\n})();`;
-  const vmScript = new Script(wrappedScript);
-  return {
-    logs,
-    result: vmScript.runInContext(context, { timeout: 1500 }),
-  };
 }
 
 function skillNameFromPath(filePath: string): string | undefined {

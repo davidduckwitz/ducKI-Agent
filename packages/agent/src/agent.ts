@@ -19,17 +19,42 @@ import { skillSelector } from "./skill-selector/selector.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
+import { createDynamicToolResolver } from "./dynamic-tools/dynamic-tool-resolver.js";
 
 import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
+
+/**
+ * The tool-call format contract every parser in this file (extractToolCall,
+ * extractHermesCall, parseLooseObject, ...) is built against. Exported so other
+ * agent-like classes (e.g. CodingAgent) can compose it into their own system
+ * prompt without risking drift from the actual parser behavior.
+ */
+export const TOOL_CALL_FORMAT_BLOCK = `## Tool Call Format - CRITICAL RULES
+Emit tool calls EXACTLY in this format (JSON must be valid and complete):
+[TOOL:toolName({"key": "value", "number": 123})]
+
+Examples of CORRECT tool calls:
+- [TOOL:task({"action": "create", "title": "My Task", "projectId": 1})]
+- [TOOL:project({"action": "list"})]
+- [TOOL:shell({"command": "ls -la"})]
+
+Rules:
+1. ALL JSON keys must be in double quotes ("key" not 'key' or key)
+2. JSON values must be properly escaped and typed (strings in quotes, numbers without quotes)
+3. Do NOT use {json: ...} or {args: ...} - put the actual key-value pairs
+4. If multiple independent tool calls needed (no dependencies), emit multiple [TOOL:...] markers in same response
+5. For dependent calls (result needed as input), emit one at a time and wait for result
+6. Always close with )] - never leave it hanging`;
 
 const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
 Use the available tools to create and manage projects and tasks, then work them through to completion.
 When a request needs execution, plan first, create or update project/task records as needed, then use tools to carry out the work.
 Always think step-by-step, keep state in the database, and return concise progress updates.
 Use ./shared-workspace as collaborative file area for user-provided artifacts and generated deliverables.
-When you want to call a tool, emit exactly [TOOL:name({json})] with valid JSON arguments.
-If a step genuinely needs several independent tool calls that do not depend on each other's results (e.g. reading two unrelated files, calling two different HTTP endpoints), you may emit multiple [TOOL:name({json})] markers in the same response and they will run concurrently. Do not do this when one call's result is needed as input to another - emit those one at a time instead.`;
+
+${TOOL_CALL_FORMAT_BLOCK}`;
+
 
 export class Agent {
   readonly name: string;
@@ -91,7 +116,7 @@ export class Agent {
     this.conversation = new ConversationManager(db, this.logger);
     this.memory = new MemorySystem(db, this.logger);
     this.planner = new Planner(provider, this.logger);
-    this.executor = new Executor(this.logger);
+    this.executor = new Executor(this.logger, createDynamicToolResolver(db));
     for (const tool of createWorkflowTools(db)) {
       this.executor.registerTool(tool);
     }
@@ -202,10 +227,11 @@ export class Agent {
 
   private normalizeToolCallText(value: string): string {
     return value
+      // Decode Hermes quote markers
       .replaceAll('<|"|>', '"')
       .replaceAll("<|'|>", "'")
-      .replace(/,\s*'([A-Za-z_][A-Za-z0-9_\-]*)'\s*:/g, ",$1:")
-      .replace(/,\s*"([A-Za-z_][A-Za-z0-9_\-]*)"\s*:/g, ",$1:")
+      // Normalize quoted keys back to quoted keys (for JSON compatibility)
+      // Keep both quoted and unquoted as-is to support loose JSON parsing
       .trim();
   }
 
@@ -766,11 +792,11 @@ export class Agent {
     return { toolName: normalized, input: normalizedInput };
   }
 
-  private preflightToolInput(
+  private async preflightToolInput(
     toolName: string,
     input: Record<string, unknown>,
     controls: AgentRuntimeControls
-  ): { ok: true; input: Record<string, unknown> } | { ok: false; error: string } {
+  ): Promise<{ ok: true; input: Record<string, unknown> } | { ok: false; error: string }> {
     const normalizedName = toolName.trim().toLowerCase();
     const normalizedInput: Record<string, unknown> = { ...input };
 
@@ -792,7 +818,7 @@ export class Agent {
       }
     }
 
-    if (!this.executor.hasTool(normalizedName)) {
+    if (!(await this.executor.hasTool(normalizedName))) {
       return { ok: false, error: `Unknown tool '${normalizedName}'` };
     }
 
@@ -998,7 +1024,9 @@ export class Agent {
   }
 
   private parseHermesArgs(rawArgs: string): Record<string, unknown> | undefined {
-    const source = rawArgs;
+    const source = rawArgs.trim();
+    if (!source) return {};
+
     const out: Record<string, unknown> = {};
     let i = 0;
 
@@ -1009,9 +1037,23 @@ export class Agent {
       while (i < source.length && /\s/.test(source[i] ?? "")) i++;
     };
 
+    const peekChar = (): string | undefined => source[i];
+
     const readKey = (): string | undefined => {
       skipWs();
       const start = i;
+      // Support both quoted and unquoted keys
+      if ((source[i] ?? "") === '"') {
+        i++; // skip opening quote
+        while (i < source.length && source[i] !== '"') {
+          if (source[i] === "\\" && i + 1 < source.length) i++; // skip escape
+          i++;
+        }
+        if (source[i] === '"') i++; // skip closing quote
+        return source.slice(start + 1, i - 1);
+      }
+
+      // Unquoted key: alphanumeric, underscore, hyphen
       while (i < source.length && /[A-Za-z0-9_\-]/.test(source[i] ?? "")) i++;
       const key = source.slice(start, i).trim();
       return key.length > 0 ? key : undefined;
@@ -1027,7 +1069,7 @@ export class Agent {
         if (end < 0) return undefined;
 
         const remainder = source.slice(end + delimiter.length).trimStart();
-        if (remainder.length === 0 || remainder.startsWith(",")) {
+        if (remainder.length === 0 || remainder.startsWith(",") || remainder.startsWith("}")) {
           const value = source.slice(i, end);
           i = end + delimiter.length;
           return decodeTokenQuotes(value);
@@ -1041,99 +1083,146 @@ export class Agent {
 
     const readValue = (): unknown => {
       skipWs();
+      const ch = peekChar();
 
+      // Try Hermes-encoded quotes first
       const hermesQuoted = readDelimitedValue('<|"|>');
       if (hermesQuoted !== undefined) return hermesQuoted;
 
-      const singleQuoted = readDelimitedValue("<|'|>");
-      if (singleQuoted !== undefined) return singleQuoted;
+      const singleHermesQuoted = readDelimitedValue("<|'|>");
+      if (singleHermesQuoted !== undefined) return singleHermesQuoted;
 
-      if ((source[i] ?? "") === '"') {
+      // Try regular double quotes
+      if (ch === '"') {
         i++;
         let value = "";
         while (i < source.length) {
-          const ch = source[i] ?? "";
-          if (ch === '"') {
+          const c = source[i] ?? "";
+          if (c === '"') {
             i++;
             break;
           }
-          if (ch === "\\" && i + 1 < source.length) {
+          if (c === "\\" && i + 1 < source.length) {
             value += source[i + 1] ?? "";
             i += 2;
             continue;
           }
-          value += ch;
+          value += c;
           i++;
         }
         return decodeTokenQuotes(value);
       }
 
-      if ((source[i] ?? "") === "'") {
+      // Try single quotes
+      if (ch === "'") {
         i++;
         let value = "";
         while (i < source.length) {
-          const ch = source[i] ?? "";
-          if (ch === "'") {
+          const c = source[i] ?? "";
+          if (c === "'") {
             i++;
             break;
           }
-          if (ch === "\\" && i + 1 < source.length) {
+          if (c === "\\" && i + 1 < source.length) {
             value += source[i + 1] ?? "";
             i += 2;
             continue;
           }
-          value += ch;
+          value += c;
           i++;
         }
         return decodeTokenQuotes(value);
       }
 
+      // Try boolean/null/number literals
+      if (source.startsWith("true", i)) {
+        i += 4;
+        return true;
+      }
+      if (source.startsWith("false", i)) {
+        i += 5;
+        return false;
+      }
+      if (source.startsWith("null", i)) {
+        i += 4;
+        return null;
+      }
+
+      // Read unquoted value (number or bare string)
       const start = i;
-      while (i < source.length && (source[i] ?? "") !== "," && (source[i] ?? "") !== "}") i++;
+      while (i < source.length && !/[,}]/.test(source[i] ?? "")) i++;
       const raw = source.slice(start, i).trim();
-      if (raw === "true") return true;
-      if (raw === "false") return false;
-      if (raw === "null") return null;
+
+      if (raw.length === 0) return undefined;
+
       const asNum = Number(raw);
-      if (!Number.isNaN(asNum) && raw.length > 0) return asNum;
-      return decodeTokenQuotes(raw).replace(/[\s"']+$/g, "");
+      if (!Number.isNaN(asNum) && /^-?\d+(\.\d+)?$/.test(raw)) return asNum;
+
+      return decodeTokenQuotes(raw);
     };
 
+    // Main parsing loop
     while (i < source.length) {
       skipWs();
-      if (i >= source.length) break;
+      if (i >= source.length || peekChar() === "}") break;
 
       const key = readKey();
-      if (!key) return undefined;
+      if (!key) break;
+
       skipWs();
-      if ((source[i] ?? "") !== ":") return undefined;
-      i++;
+      const sep = peekChar();
+      if (sep !== ":" && sep !== "=") break; // Allow both : and = as separators
+      i++; // skip separator
 
       const value = readValue();
       out[key] = value;
 
       skipWs();
-      if ((source[i] ?? "") === ",") {
+      if (peekChar() === ",") {
         i++;
       }
     }
 
-    return out;
+    return Object.keys(out).length > 0 ? out : undefined;
   }
 
   private extractHermesCall(response: string): { toolName: string; args: string } | undefined {
-    const marker = "<|tool_call>call:";
-    const start = response.indexOf(marker);
+    // Support multiple Hermes/ChatML markers: <|tool_call>call:, <|tool_call>, or variations
+    const markers = ["<|tool_call>call:", "<|tool_call>", "<|im_function>"];
+    let start = -1;
+    let marker = "";
+
+    for (const m of markers) {
+      const idx = response.indexOf(m);
+      if (idx >= 0 && (start < 0 || idx < start)) {
+        start = idx;
+        marker = m;
+      }
+    }
+
     if (start < 0) return undefined;
 
     const afterStart = response.slice(start + marker.length);
-    const endMarkerA = afterStart.indexOf("<|tool_call|>");
-    const endMarkerB = afterStart.indexOf("<tool_call|>");
-    const endCandidates = [endMarkerA, endMarkerB].filter((n) => n >= 0);
-    const end = endCandidates.length > 0 ? Math.min(...endCandidates) : afterStart.length;
+
+    // Find end markers (various formats)
+    const endMarkers = [
+      { marker: "<|tool_call|>", name: "close_hermes" },
+      { marker: "<|/tool_call|>", name: "close_xml" },
+      { marker: "<tool_call/>", name: "self_close" },
+      { marker: "\n", name: "newline" }
+    ];
+
+    let end = afterStart.length;
+    for (const { marker: endMarker } of endMarkers) {
+      const endIdx = afterStart.indexOf(endMarker);
+      if (endIdx >= 0 && endIdx < end) {
+        end = endIdx;
+      }
+    }
+
     const callBody = afterStart.slice(0, end).trim();
 
-    // Hermes can emit either tool{...} or tool({...}). Support both forms.
+    // Match: toolName({"json": "value"}) or toolName{...}
     const parenMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
     if (parenMatch?.[1]) {
       const toolName = parenMatch[1].trim();
@@ -1144,6 +1233,18 @@ export class Agent {
       return { toolName, args };
     }
 
+    // Match: toolName{"json": "value"}
+    const braceMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
+    if (braceMatch?.[1]) {
+      const toolName = braceMatch[1].trim();
+      const rawJson = braceMatch[2] ?? "{}";
+      const args = rawJson.startsWith("{") && rawJson.endsWith("}")
+        ? rawJson.slice(1, -1)
+        : rawJson;
+      return { toolName, args };
+    }
+
+    // Fallback: extract first valid {..} block and tool name before it
     const firstBrace = callBody.indexOf("{");
     const lastBrace = callBody.lastIndexOf("}");
     if (firstBrace < 0 || lastBrace <= firstBrace) return undefined;
@@ -1157,23 +1258,72 @@ export class Agent {
 
   private parseLooseObject(text: string): Record<string, unknown> | undefined {
     const normalized = this.normalizeToolCallText(text);
+    if (!normalized || normalized.trim().length === 0) return {};
+
     const candidate = normalized.startsWith("{") ? normalized : `{${normalized}}`;
 
-    // Convert loose object keys (name: "x") into JSON keys ("name": "x").
-    const jsonish = candidate.replace(/([,{]\s*)([A-Za-z_][A-Za-z0-9_\-]*)(\s*:)/g, '$1"$2"$3');
-
+    // First attempt: Try parsing as-is (might already be valid JSON)
     try {
-      const parsed = JSON.parse(jsonish) as unknown;
+      const parsed = JSON.parse(candidate);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>;
       }
-      return undefined;
     } catch {
-      return undefined;
+      // Will try fixes below
     }
+
+    // Second attempt: Fix common issues
+    // 1. Convert unquoted keys to quoted keys: key: value => "key": value
+    // 2. Handle Hermes quote marks
+    // 3. Support = as separator in addition to :
+    let fixed = candidate;
+
+    // Fix unquoted keys at the start of objects/after commas
+    fixed = fixed.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_\-]*)\s*([:=])/g, '$1"$2"$3');
+
+    // Handle {json: {...}} case - wrap inner value properly
+    if (fixed.includes('"json":')) {
+      fixed = fixed.replace(/"json":\s*({[^]*})/g, '$1');
+    }
+    if (fixed.includes('"args":')) {
+      fixed = fixed.replace(/"args":\s*({[^]*})/g, '$1');
+    }
+
+    try {
+      const parsed = JSON.parse(fixed);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Will try manual parsing below
+    }
+
+    // Third attempt: Manual key-value parsing (most lenient)
+    // Falls back to Hermes args parser for last-resort parsing
+    const manualResult = this.parseHermesArgs(normalized);
+    if (manualResult) {
+      return manualResult;
+    }
+
+    // If no separators found, might be empty call like name()
+    if (!normalized.includes("=") && !normalized.includes(":")) {
+      return {};
+    }
+
+    return undefined;
   }
 
   private extractToolCall(response: string): { toolName: string; input: Record<string, unknown> } | undefined {
+    // Try new format first: <|tool_call>call:name({...})<tool_call|>
+    const newFormatMatch = response.match(/<\|tool_call>call:([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^)]*(?:\{[^}]*\}[^)]*)?)\)<tool_call\|>/);
+    if (newFormatMatch?.[1]) {
+      const toolName = newFormatMatch[1];
+      const args = this.parseLooseObject(`{${newFormatMatch[2]}}`);
+      if (args) {
+        return this.resolveToolNameAndInput(toolName, args);
+      }
+    }
+
     const markerIndex = response.indexOf("[TOOL:");
     const bracketBody = (() => {
       const bracketBodyMatch = response.match(/\[TOOL:([^\]]+)\]/);
@@ -2074,7 +2224,7 @@ export class Agent {
               resultById.set(callId, { success: false, data: null, error: "Repeated tool call blocked" });
               continue;
             }
-            const preflight = this.preflightToolInput(call.toolName, call.input, controls);
+            const preflight = await this.preflightToolInput(call.toolName, call.input, controls);
             if (!preflight.ok) {
               resultById.set(callId, { success: false, data: null, error: preflight.error });
               continue;
@@ -2154,9 +2304,15 @@ export class Agent {
 
       if (hasToolCallMarker && !parsedToolCall) {
         malformedToolCallAttempts++;
+
+        // Extract the problematic tool call for debugging
+        const toolCallMatch = response.match(/\[TOOL:([^\]]+)\]|<\|tool_call>call:([^<]+)/);
+        const problematicCall = toolCallMatch?.[1] || toolCallMatch?.[2] || response.slice(0, 100);
+
         emit("guardrail", "Malformed tool call detected", {
           attempt: malformedToolCallAttempts,
           responsePreview: response.slice(0, 280),
+          extractedCall: problematicCall?.slice(0, 100),
         });
 
         if (malformedToolCallAttempts >= 2) {
@@ -2168,7 +2324,20 @@ export class Agent {
         const repairHint: LLMMessage = {
           role: "system",
           content:
-            "Your previous tool call format was malformed or incomplete. Re-emit exactly one valid tool call in one of these forms: [TOOL:name({json})] or <|tool_call>call:name({json}). Do not add prose.",
+            `CRITICAL: Tool call format error. Use EXACTLY this format:
+[TOOL:toolName({"key": "value"})]
+
+RULES:
+1. ALL JSON keys MUST have quotes: "key" not key
+2. String values MUST have quotes: "text"
+3. Numbers MUST NOT have quotes: 123 not "123"
+4. Use : not = for key-value pairs
+5. Close properly with )])
+6. Do NOT use {json: ...} or {args: ...}
+
+Example: [TOOL:task({"action": "create", "title": "My Task", "projectId": 1})]
+
+Emit the corrected tool call with valid JSON only, no other text.`,
         };
         await this.conversation.addMessage(repairHint);
         this.history.add(repairHint);
@@ -2273,7 +2442,7 @@ export class Agent {
       });
 
       try {
-        const preflight = this.preflightToolInput(parsedToolCall.toolName, parsedToolCall.input, controls);
+        const preflight = await this.preflightToolInput(parsedToolCall.toolName, parsedToolCall.input, controls);
         const startTime = Date.now();
         const toolResult = preflight.ok
           ? await this.executor.execute(parsedToolCall.toolName, preflight.input)

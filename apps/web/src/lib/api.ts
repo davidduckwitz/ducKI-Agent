@@ -82,6 +82,15 @@ export const api = {
       request<unknown>(`/tasks/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     run: (id: number) => request<unknown>(`/tasks/${id}/run`, { method: "POST" }),
     delete: (id: number) => request<unknown>(`/tasks/${id}`, { method: "DELETE" }),
+    split: (
+      id: number,
+      data: { dryRun?: boolean; subtasks?: Array<{ title: string; description: string; estimatedMinutes?: number }> }
+    ) =>
+      request<{
+        parent: unknown;
+        complexity?: number;
+        subtasks: Array<{ title: string; description: string; estimatedMinutes?: number }>;
+      }>(`/tasks/${id}/split`, { method: "POST", body: JSON.stringify(data) }),
   },
 
   cronjobs: {
@@ -124,7 +133,8 @@ export const api = {
   },
 
   tools: {
-    list: () => request<{ name: string; description: string }[]>("/tools"),
+    list: () =>
+      request<Array<{ name: string; description: string; parameters?: Record<string, unknown> }>>("/tools"),
   },
 
   memory: {

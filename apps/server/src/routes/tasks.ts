@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import type { Agent } from "@ducki/agent";
+import { previewSplit, commitSplit } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
@@ -159,5 +160,36 @@ tasksRouter.post("/:id/run", async (req, res, next) => {
   }
 });
 
+tasksRouter.post("/:id/split", async (req, res, next) => {
+  const taskId = parseInt(req.params["id"] ?? "0");
+  if (!Number.isFinite(taskId) || taskId <= 0) {
+    res.status(400).json(createApiError("Invalid task id"));
+    return;
+  }
+
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const body = (req.body ?? {}) as { dryRun?: boolean; subtasks?: { title: string; description: string; estimatedMinutes?: number }[] };
+    const dryRun = body.dryRun !== false;
+
+    const preview = await previewSplit(db, taskId);
+    const subtasks = body.subtasks && body.subtasks.length > 0 ? body.subtasks : preview.subtasks;
+
+    if (dryRun) {
+      res.json(createApiResponse({ parent: preview.parentTask, complexity: preview.complexity, subtasks }));
+      return;
+    }
+
+    const created = await commitSplit(db, preview.parentTask, subtasks, `task_split:${taskId}`);
+    res.status(201).json(createApiResponse({ parent: preview.parentTask, subtasks: created }));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/not found/i.test(message)) {
+      res.status(404).json(createApiError(message));
+      return;
+    }
+    next(error);
+  }
+});
 
 

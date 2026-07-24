@@ -141,6 +141,10 @@ export const translations: Record<Language, TranslationTree> = {
       medium: "Mittel",
       low: "Niedrig",
       cancelled: "Abgebrochen",
+      splitIntoSubtasks: "In Teilaufgaben aufteilen",
+      splitPreview: "Vorschau der Teilaufgaben",
+      complexity: "Komplexitaet",
+      createSubtasks: "Teilaufgaben erstellen",
     },
     cronjobs: {
       title: "Cronjobs",
@@ -591,6 +595,10 @@ export const translations: Record<Language, TranslationTree> = {
       medium: "Medium",
       low: "Low",
       cancelled: "Cancelled",
+      splitIntoSubtasks: "Split into subtasks",
+      splitPreview: "Subtask preview",
+      complexity: "Complexity",
+      createSubtasks: "Create Subtasks",
     },
     cronjobs: {
       title: "Cronjobs",

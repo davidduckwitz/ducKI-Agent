@@ -1,21 +1,37 @@
 import { useMemo, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Play, RotateCcw, Save, Trash2, Link2, Zap } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Plus, Play, RotateCcw, Save, Trash2, Link2, Zap, Wrench, ExternalLink } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 
 type Role = "manager" | "research" | "coding" | "review" | "browser";
 type NodeStatus = "pending" | "running" | "completed" | "failed";
+type NodeKind = "agent" | "tool_call";
 
 type WorkflowNode = {
   id: string;
   title: string;
+  kind?: NodeKind;
   role: Role;
   prompt: string;
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  resultData?: unknown;
   status: NodeStatus;
   dependsOn?: string[];
   result?: string;
   position?: { x: number; y: number };
+  taskId?: number;
+};
+
+type ToolDefinition = {
+  name: string;
+  description: string;
+  parameters?: {
+    properties?: Record<string, { type?: string; enum?: string[]; description?: string }>;
+    required?: string[];
+  };
 };
 
 type WorkflowEdge = {
@@ -79,6 +95,12 @@ export function WorkflowGraphEditor() {
     queryKey: ["workflows"],
     queryFn: () => api.workflows.list() as Promise<Workflow[]>,
   });
+
+  const toolDefinitionsQuery = useQuery({
+    queryKey: ["tool-definitions"],
+    queryFn: () => api.tools.list(),
+  });
+  const toolDefinitions = (toolDefinitionsQuery.data ?? []) as ToolDefinition[];
 
   const selectedWorkflow = useMemo(() => {
     const workflows = workflowsQuery.data ?? [];
@@ -195,6 +217,23 @@ export function WorkflowGraphEditor() {
       ...workflow,
       nodes: workflow.nodes.map((node) => (node.id === nodeId ? { ...node, ...patch } : node)),
     }));
+  };
+
+  const selectedToolDef = selectedNode?.kind === "tool_call"
+    ? toolDefinitions.find((tool) => tool.name === selectedNode.toolName)
+    : undefined;
+
+  const updateToolInputField = (key: string, value: unknown) => {
+    if (!selectedNode) return;
+    updateNode(selectedNode.id, {
+      toolInput: { ...(selectedNode.toolInput ?? {}), [key]: value },
+    });
+  };
+
+  const insertToken = (key: string, nodeId: string) => {
+    if (!selectedNode) return;
+    const current = String((selectedNode.toolInput ?? {})[key] ?? "");
+    updateToolInputField(key, `${current}{{${nodeId}.result}}`);
   };
 
   const handleMouseMove = (event: MouseEvent<HTMLDivElement>) => {
@@ -332,7 +371,16 @@ export function WorkflowGraphEditor() {
                     cursor: dragState?.nodeId === node.id ? "grabbing" : "grab",
                   }}
                 >
-                  <div className="text-xs text-gray-400 uppercase">{formatRole(node.role)}</div>
+                  <div className="text-xs text-gray-400 uppercase flex items-center gap-1">
+                    {node.kind === "tool_call" ? (
+                      <>
+                        <Wrench className="w-3 h-3" />
+                        {node.toolName || "tool"}
+                      </>
+                    ) : (
+                      formatRole(node.role)
+                    )}
+                  </div>
                   <div className="font-semibold leading-tight mt-1 line-clamp-2">{node.title}</div>
                   <div className="text-xs mt-2 capitalize" style={{ color: edgeColor(node.status) }}>
                     {node.status}
@@ -414,21 +462,149 @@ export function WorkflowGraphEditor() {
                     value={selectedNode.title}
                     onChange={(e) => updateNode(selectedNode.id, { title: e.target.value })}
                   />
+
                   <select
                     className="input w-full"
-                    value={selectedNode.role}
-                    onChange={(e) => updateNode(selectedNode.id, { role: e.target.value as Role })}
+                    value={selectedNode.kind ?? "agent"}
+                    onChange={(e) =>
+                      updateNode(selectedNode.id, {
+                        kind: e.target.value as NodeKind,
+                        ...(e.target.value === "tool_call" ? { toolInput: selectedNode.toolInput ?? {} } : {}),
+                      })
+                    }
                   >
-                    {ROLES.map((role) => (
-                      <option key={role} value={role}>{formatRole(role)}</option>
-                    ))}
+                    <option value="agent">Agent (LLM)</option>
+                    <option value="tool_call">Tool Call</option>
                   </select>
-                  <textarea
-                    className="input w-full"
-                    rows={6}
-                    value={selectedNode.prompt}
-                    onChange={(e) => updateNode(selectedNode.id, { prompt: e.target.value })}
-                  />
+
+                  {(selectedNode.kind ?? "agent") === "agent" ? (
+                    <>
+                      <select
+                        className="input w-full"
+                        value={selectedNode.role}
+                        onChange={(e) => updateNode(selectedNode.id, { role: e.target.value as Role })}
+                      >
+                        {ROLES.map((role) => (
+                          <option key={role} value={role}>{formatRole(role)}</option>
+                        ))}
+                      </select>
+                      <textarea
+                        className="input w-full"
+                        rows={6}
+                        value={selectedNode.prompt}
+                        onChange={(e) => updateNode(selectedNode.id, { prompt: e.target.value })}
+                      />
+                    </>
+                  ) : (
+                    <div className="space-y-3 rounded-lg border border-gray-800 p-2">
+                      <div className="flex items-center gap-2 text-xs text-gray-400">
+                        <Wrench className="w-3.5 h-3.5" />
+                        Tool Call
+                      </div>
+                      <select
+                        className="input w-full text-sm"
+                        value={selectedNode.toolName ?? ""}
+                        onChange={(e) => updateNode(selectedNode.id, { toolName: e.target.value, toolInput: {} })}
+                      >
+                        <option value="">Select tool...</option>
+                        {toolDefinitions.map((tool) => (
+                          <option key={tool.name} value={tool.name}>{tool.name}</option>
+                        ))}
+                      </select>
+
+                      {selectedToolDef?.description && (
+                        <p className="text-xs text-gray-500">{selectedToolDef.description}</p>
+                      )}
+
+                      {selectedToolDef?.parameters?.properties &&
+                        Object.entries(selectedToolDef.parameters.properties).map(([key, prop]) => {
+                          const required = selectedToolDef.parameters?.required?.includes(key) ?? false;
+                          const value = (selectedNode.toolInput ?? {})[key];
+                          const isTextField = !prop.type || prop.type === "string";
+
+                          return (
+                            <div key={key} className="space-y-1">
+                              <label className="text-xs text-gray-400 block">
+                                {key}
+                                {required ? " *" : ""}
+                                {prop.description ? ` - ${prop.description}` : ""}
+                              </label>
+
+                              {prop.enum ? (
+                                <select
+                                  className="input w-full text-sm"
+                                  value={String(value ?? "")}
+                                  onChange={(e) => updateToolInputField(key, e.target.value)}
+                                >
+                                  <option value="">-</option>
+                                  {prop.enum.map((option) => (
+                                    <option key={option} value={option}>{option}</option>
+                                  ))}
+                                </select>
+                              ) : prop.type === "boolean" ? (
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(value)}
+                                  onChange={(e) => updateToolInputField(key, e.target.checked)}
+                                />
+                              ) : prop.type === "number" ? (
+                                <input
+                                  type="number"
+                                  className="input w-full text-sm"
+                                  value={typeof value === "number" ? value : ""}
+                                  onChange={(e) =>
+                                    updateToolInputField(key, e.target.value === "" ? undefined : Number(e.target.value))
+                                  }
+                                />
+                              ) : prop.type === "object" || prop.type === "array" ? (
+                                <textarea
+                                  className="input w-full text-xs font-mono"
+                                  rows={3}
+                                  value={
+                                    typeof value === "string"
+                                      ? value
+                                      : JSON.stringify(value ?? (prop.type === "array" ? [] : {}))
+                                  }
+                                  onChange={(e) => updateToolInputField(key, e.target.value)}
+                                  onBlur={(e) => {
+                                    try {
+                                      updateToolInputField(key, JSON.parse(e.target.value));
+                                    } catch {
+                                      // keep raw text until valid JSON is entered
+                                    }
+                                  }}
+                                />
+                              ) : (
+                                <input
+                                  className="input w-full text-sm"
+                                  value={String(value ?? "")}
+                                  onChange={(e) => updateToolInputField(key, e.target.value)}
+                                />
+                              )}
+
+                              {isTextField && (selectedNode.dependsOn ?? []).length > 0 && (
+                                <div className="flex flex-wrap gap-1">
+                                  {(selectedNode.dependsOn ?? []).map((depId) => {
+                                    const depNode = selectedWorkflow?.nodes.find((n) => n.id === depId);
+                                    return (
+                                      <button
+                                        key={depId}
+                                        type="button"
+                                        onClick={() => insertToken(key, depId)}
+                                        className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 hover:bg-gray-700"
+                                      >
+                                        + {depNode?.title ?? depId}.result
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+
                   <button
                     onClick={() => removeNode(selectedNode.id)}
                     className="btn-danger w-full flex items-center justify-center gap-2"
@@ -436,6 +612,17 @@ export function WorkflowGraphEditor() {
                     <Trash2 className="w-4 h-4" />
                     {t("workflowPage.removeNode")}
                   </button>
+
+                  {selectedNode.taskId && (
+                    <Link
+                      to="/tasks"
+                      className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      View Task #{selectedNode.taskId} in Task Manager
+                    </Link>
+                  )}
+
                   {selectedNode.result && (
                     <pre className="text-xs whitespace-pre-wrap bg-black/40 border border-gray-800 rounded-lg p-2 max-h-52 overflow-y-auto">
                       {selectedNode.result}

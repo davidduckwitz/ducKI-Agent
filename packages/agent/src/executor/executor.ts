@@ -7,10 +7,15 @@ export interface ToolCallWithId {
   input: Record<string, unknown>;
 }
 
+export type DynamicToolResolver = (name: string) => Promise<ToolExecutor | undefined>;
+
 export class Executor {
   private tools = new Map<string, ToolExecutor>();
 
-  constructor(private readonly logger: Logger) {}
+  constructor(
+    private readonly logger: Logger,
+    private readonly dynamicResolver?: DynamicToolResolver
+  ) {}
 
   registerTool(tool: ToolExecutor): void {
     this.tools.set(tool.name, tool);
@@ -21,8 +26,16 @@ export class Executor {
     this.tools.delete(name);
   }
 
-  hasTool(name: string): boolean {
-    return this.tools.has(name);
+  /**
+   * Checks whether a tool is available, including dynamically-registered tools
+   * that live in the database rather than the in-memory map (an Executor is
+   * recreated on every request, so this fallback is what lets a tool created by
+   * an earlier run still resolve here).
+   */
+  async hasTool(name: string): Promise<boolean> {
+    if (this.tools.has(name)) return true;
+    if (!this.dynamicResolver) return false;
+    return Boolean(await this.dynamicResolver(name));
   }
 
   getToolDefinitions(): ToolDefinition[] {
@@ -30,7 +43,10 @@ export class Executor {
   }
 
   async execute(toolName: string, input: Record<string, unknown>): Promise<ToolResult> {
-    const tool = this.tools.get(toolName);
+    let tool = this.tools.get(toolName);
+    if (!tool && this.dynamicResolver) {
+      tool = await this.dynamicResolver(toolName);
+    }
     if (!tool) {
       return {
         success: false,
