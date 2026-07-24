@@ -37,9 +37,17 @@ function targetToType(target: MemoryTarget): "long-term" | "semantic" {
   return target === "user" ? "semantic" : "long-term";
 }
 
-function targetLimit(target: MemoryTarget): number {
-  const raw = target === "user" ? process.env["USER_MEMORY_CHAR_LIMIT"] : process.env["AGENT_MEMORY_CHAR_LIMIT"];
+async function targetLimit(db: DatabaseService, target: MemoryTarget): Promise<number> {
+  const settingKey = target === "user" ? "USER_MEMORY_CHAR_LIMIT" : "AGENT_MEMORY_CHAR_LIMIT";
+  const envRaw = target === "user" ? process.env["USER_MEMORY_CHAR_LIMIT"] : process.env["AGENT_MEMORY_CHAR_LIMIT"];
   const fallback = target === "user" ? 1375 : 2200;
+  let raw = envRaw;
+  try {
+    const stored = await db.getSetting(settingKey);
+    if (stored !== undefined && stored.trim().length > 0) raw = stored;
+  } catch {
+    // fall back to env/default if settings lookup fails
+  }
   const parsed = Number(raw ?? fallback);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.floor(parsed);
@@ -342,6 +350,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
         if (ops.length === 0) return fail("operations is required and must include at least one valid operation");
 
         const current = await db.getMemories(Number.isFinite(conversationId) ? conversationId : undefined, type);
+        const currentUsage = contentSize(current.map((entry) => ({ content: entry.content })));
         const working: Array<{
           id: number;
           content: string;
@@ -403,8 +412,11 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
         }
 
         const projected = contentSize(working.map((entry) => ({ content: entry.content })));
-        const budget = targetLimit(target);
-        if (projected > budget) {
+        const budget = await targetLimit(db, target);
+        // Once existing memories already exceed the budget, still allow operations that
+        // shrink or hold the total steady (e.g. remove/replace) so the agent can recover;
+        // only block growth that would make an over-budget state worse.
+        if (projected > budget && projected >= currentUsage) {
           return fail(`Memory budget exceeded for target '${target}': ${projected}/${budget} chars`);
         }
 
@@ -480,7 +492,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           case "list": {
             const memories = await db.getMemories(Number.isFinite(conversationId) ? conversationId : undefined, type);
             const usage = contentSize(memories.map((entry) => ({ content: entry.content })));
-            return ok({ entries: memories.slice(0, limit), usage: `${usage}/${targetLimit(target)}`, target, type });
+            return ok({ entries: memories.slice(0, limit), usage: `${usage}/${await targetLimit(db, target)}`, target, type });
           }
           case "query": {
             const query = String(input["query"] ?? "").trim().toLowerCase();

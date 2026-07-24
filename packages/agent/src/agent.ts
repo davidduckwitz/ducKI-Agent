@@ -703,15 +703,24 @@ export class Agent {
       };
     }
 
-    if (normalized === "project" && normalizedInput["action"] === undefined) {
-      if (normalizedInput["id"] !== undefined) {
-        normalizedInput["action"] = "get";
-      } else if (normalizedInput["name"] !== undefined) {
-        normalizedInput["action"] = "create";
-      } else if (normalizedInput["description"] !== undefined || normalizedInput["folder"] !== undefined) {
-        normalizedInput["action"] = "update";
-      } else {
-        normalizedInput["action"] = "list";
+    if (normalized === "project") {
+      if (normalizedInput["name"] === undefined) {
+        const nameAlias = normalizedInput["project_name"] ?? normalizedInput["projectName"] ?? normalizedInput["title"];
+        if (nameAlias !== undefined) {
+          normalizedInput["name"] = nameAlias;
+        }
+      }
+
+      if (normalizedInput["action"] === undefined) {
+        if (normalizedInput["id"] !== undefined) {
+          normalizedInput["action"] = "get";
+        } else if (normalizedInput["name"] !== undefined) {
+          normalizedInput["action"] = "create";
+        } else if (normalizedInput["description"] !== undefined || normalizedInput["folder"] !== undefined) {
+          normalizedInput["action"] = "update";
+        } else {
+          normalizedInput["action"] = "list";
+        }
       }
     }
 
@@ -1281,12 +1290,17 @@ export class Agent {
     // Fix unquoted keys at the start of objects/after commas
     fixed = fixed.replace(/([{,]\s*)([A-Za-z_][A-Za-z0-9_\-]*)\s*([:=])/g, '$1"$2"$3');
 
-    // Handle {json: {...}} case - wrap inner value properly
-    if (fixed.includes('"json":')) {
-      fixed = fixed.replace(/"json":\s*({[^]*})/g, '$1');
+    // Handle {"json": {...}} / {"args": {...}} wrapper case - unwrap to the inner object.
+    // Anchored to the full string so the match consumes the wrapper's own braces exactly
+    // once (an unanchored replace here would swallow the outer closing brace too and leave
+    // a dangling duplicate, producing invalid JSON like `{{"action":"create"}}`).
+    const jsonWrap = fixed.match(/^\{\s*"json":\s*([^]*)\}\s*$/);
+    if (jsonWrap?.[1] !== undefined) {
+      fixed = jsonWrap[1].trim();
     }
-    if (fixed.includes('"args":')) {
-      fixed = fixed.replace(/"args":\s*({[^]*})/g, '$1');
+    const argsWrap = fixed.match(/^\{\s*"args":\s*([^]*)\}\s*$/);
+    if (argsWrap?.[1] !== undefined) {
+      fixed = argsWrap[1].trim();
     }
 
     try {
@@ -1299,14 +1313,21 @@ export class Agent {
     }
 
     // Third attempt: Manual key-value parsing (most lenient)
-    // Falls back to Hermes args parser for last-resort parsing
-    const manualResult = this.parseHermesArgs(normalized);
+    // Falls back to Hermes args parser for last-resort parsing.
+    // parseHermesArgs expects a bare "key: value, ..." body - callers pass text both with
+    // and without the object's own wrapping braces (e.g. the [TOOL:name({...})] bracket
+    // format keeps them, the <|tool_call> Hermes format strips them before calling here),
+    // so strip them if still present or the manual parser can't read past the leading `{`.
+    const innerBody = normalized.startsWith("{") && normalized.endsWith("}")
+      ? normalized.slice(1, -1)
+      : normalized;
+    const manualResult = this.parseHermesArgs(innerBody);
     if (manualResult) {
       return manualResult;
     }
 
     // If no separators found, might be empty call like name()
-    if (!normalized.includes("=") && !normalized.includes(":")) {
+    if (!innerBody.includes("=") && !innerBody.includes(":")) {
       return {};
     }
 
@@ -1539,6 +1560,181 @@ export class Agent {
     return undefined;
   }
 
+  /**
+   * Deterministic, non-LLM repair: snaps invalid enum-typed parameter values (e.g. a
+   * misspelled `action`) to the nearest value declared in the tool's own schema.
+   */
+  private deriveMechanicalRepair(
+    toolName: string,
+    toolInput: Record<string, unknown>
+  ): { toolName: string; input: Record<string, unknown> } | undefined {
+    const definition = this.executor.getToolDefinitions().find((d) => d.name === toolName);
+    const properties = (definition?.parameters as { properties?: Record<string, { enum?: unknown[] }> } | undefined)
+      ?.properties;
+    if (!properties) return undefined;
+
+    let changed = false;
+    const correctedInput: Record<string, unknown> = { ...toolInput };
+
+    for (const [key, schema] of Object.entries(properties)) {
+      const enumValues = Array.isArray(schema?.enum)
+        ? schema.enum.filter((v): v is string => typeof v === "string")
+        : undefined;
+      if (!enumValues || enumValues.length === 0) continue;
+
+      const current = toolInput[key];
+      if (typeof current !== "string" || current.trim().length === 0) continue;
+      if (enumValues.includes(current)) continue;
+
+      const nearest = this.nearestEnumMatch(current, enumValues);
+      if (nearest) {
+        correctedInput[key] = nearest;
+        changed = true;
+      }
+    }
+
+    if (!changed) return undefined;
+    return { toolName, input: correctedInput };
+  }
+
+  private nearestEnumMatch(value: string, candidates: string[]): string | undefined {
+    const normalized = value.trim().toLowerCase();
+    let best: string | undefined;
+    let bestDistance = Infinity;
+
+    for (const candidate of candidates) {
+      const candidateNormalized = candidate.toLowerCase();
+      if (candidateNormalized === normalized) return candidate;
+      const distance = this.levenshtein(normalized, candidateNormalized);
+      const threshold = Math.max(2, Math.floor(candidateNormalized.length * 0.4));
+      if (distance <= threshold && distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+
+    return best;
+  }
+
+  private levenshtein(a: string, b: string): number {
+    const rows = a.length + 1;
+    const cols = b.length + 1;
+    const matrix: number[][] = Array.from({ length: rows }, (_, i) => {
+      const row = new Array<number>(cols).fill(0);
+      row[0] = i;
+      return row;
+    });
+    for (let j = 0; j < cols; j++) {
+      const row = matrix[0];
+      if (row) row[j] = j;
+    }
+
+    for (let i = 1; i < rows; i++) {
+      for (let j = 1; j < cols; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        const current = matrix[i];
+        const previous = matrix[i - 1];
+        if (!current || !previous) continue;
+        current[j] = Math.min(
+          previous[j]! + 1,
+          current[j - 1]! + 1,
+          previous[j - 1]! + cost
+        );
+      }
+    }
+
+    return matrix[rows - 1]?.[cols - 1] ?? Math.max(a.length, b.length);
+  }
+
+  /**
+   * Best-effort JSON extraction from an LLM response: handles raw JSON, JSON wrapped in
+   * markdown code fences, and JSON embedded with surrounding prose.
+   */
+  private extractJsonObject(text: string): Record<string, unknown> | undefined {
+    const trimmed = text.trim();
+    const tryParse = (raw: string): Record<string, unknown> | undefined => {
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = fenced?.[1]?.trim() ?? trimmed;
+
+    const direct = tryParse(candidate);
+    if (direct) return direct;
+
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      return tryParse(candidate.slice(start, end + 1));
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Attempts to produce a corrected {toolName, input} for a failed tool call: first via
+   * deterministic schema-based fixes, then (if none apply) by asking the LLM for a
+   * targeted correction. Returns undefined if no repair could be derived.
+   */
+  private async attemptSelfRepair(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    error: string,
+    mechanicalHint: string | undefined
+  ): Promise<{ toolName: string; input: Record<string, unknown> } | undefined> {
+    const mechanicalFix = this.deriveMechanicalRepair(toolName, toolInput);
+    if (mechanicalFix) return mechanicalFix;
+
+    const definition = this.executor.getToolDefinitions().find((d) => d.name === toolName);
+    if (!definition) return undefined;
+
+    try {
+      const messages: LLMMessage[] = [
+        {
+          role: "system",
+          content:
+            'You repair a single failed tool call. Given the tool\'s JSON schema, the input that failed, and the error, ' +
+            'return ONLY a JSON object of the form {"input": {...corrected parameters...}} using the same tool. ' +
+            "Keep every parameter that isn't implicated by the error unchanged. " +
+            'If you cannot determine a fix, return {"input": null}.',
+        },
+        {
+          role: "user",
+          content: [
+            `Tool: ${toolName}`,
+            `Schema: ${JSON.stringify(definition.parameters)}`,
+            `Failed input: ${JSON.stringify(toolInput)}`,
+            `Error: ${error}`,
+            mechanicalHint ? `Hint: ${mechanicalHint}` : undefined,
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n"),
+        },
+      ];
+
+      const response = await this.provider.generate(messages, { temperature: 0, maxTokens: 500 });
+      const parsed = this.extractJsonObject(response.content);
+      const correctedInput = parsed?.["input"];
+      if (!correctedInput || typeof correctedInput !== "object" || Array.isArray(correctedInput)) return undefined;
+      if (JSON.stringify(correctedInput) === JSON.stringify(toolInput)) return undefined;
+
+      return { toolName, input: correctedInput as Record<string, unknown> };
+    } catch (repairError) {
+      this.logger.warn("Self-repair LLM correction failed", {
+        toolName,
+        error: repairError instanceof Error ? repairError.message : String(repairError),
+      });
+      return undefined;
+    }
+  }
+
   private parseBooleanSetting(raw: string | undefined, fallback: boolean): boolean {
     if (raw === undefined) return fallback;
     const normalized = raw.trim().toLowerCase();
@@ -1600,6 +1796,8 @@ export class Agent {
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
+      selfRepairEnabled: true,
+      selfRepairMaxAttempts: 1,
       enableAutoSkillSelection: this.enableAutoSkillSelection,
       autoSkillScoreThreshold: this.autoSkillScoreThreshold,
       autoSkillMarginThreshold: this.autoSkillMarginThreshold,
@@ -1633,6 +1831,8 @@ export class Agent {
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
+        selfRepairEnabled: this.parseBooleanSetting(get("AGENT_SELF_REPAIR"), defaults.selfRepairEnabled),
+        selfRepairMaxAttempts: this.parseNumberSetting(get("AGENT_SELF_REPAIR_MAX_ATTEMPTS"), defaults.selfRepairMaxAttempts, 0, 3),
         enableAutoSkillSelection: this.parseBooleanSetting(get("AGENT_AUTO_SKILL_SELECTION"), defaults.enableAutoSkillSelection),
         autoSkillScoreThreshold: this.parseFloatSetting(get("AGENT_AUTO_SKILL_THRESHOLD"), defaults.autoSkillScoreThreshold, 0, 1),
         autoSkillMarginThreshold: this.parseFloatSetting(get("AGENT_AUTO_SKILL_MARGIN"), defaults.autoSkillMarginThreshold, 0, 1),
@@ -2500,7 +2700,7 @@ Emit the corrected tool call with valid JSON only, no other text.`,
       try {
         const preflight = await this.preflightToolInput(parsedToolCall.toolName, parsedToolCall.input, controls);
         const startTime = Date.now();
-        const toolResult = preflight.ok
+        let toolResult: ToolResult = preflight.ok
           ? await this.executor.execute(parsedToolCall.toolName, preflight.input)
           : { success: false, data: null, error: preflight.error };
         const executionTime = Date.now() - startTime;
@@ -2536,12 +2736,81 @@ Emit the corrected tool call with valid JSON only, no other text.`,
         if (toolResult.success) {
           consecutiveToolFailures = 0;
         } else {
-          consecutiveToolFailures++;
           const recoveryHint = this.deriveToolRecoveryHint(
             parsedToolCall.toolName,
             parsedToolCall.input,
             String(toolResult.error ?? "")
           );
+
+          let repaired: { call: { toolName: string; input: Record<string, unknown> }; result: ToolResult } | undefined;
+          if (adjustedControls.selfRepairEnabled && adjustedControls.selfRepairMaxAttempts > 0) {
+            let attemptError = String(toolResult.error ?? "");
+            for (let attempt = 1; attempt <= adjustedControls.selfRepairMaxAttempts; attempt++) {
+              const repairedCall = await this.attemptSelfRepair(
+                parsedToolCall.toolName,
+                parsedToolCall.input,
+                attemptError,
+                recoveryHint
+              );
+              if (!repairedCall) break;
+
+              emit("decision", "Attempting self-repair", {
+                toolName: parsedToolCall.toolName,
+                attempt,
+                maxAttempts: adjustedControls.selfRepairMaxAttempts,
+                repairedInput: repairedCall.input,
+              });
+
+              const retryResult = await this.executor.execute(repairedCall.toolName, repairedCall.input);
+              toolTraceCollector.recordTrace({
+                toolName: repairedCall.toolName,
+                inputSize: JSON.stringify(repairedCall.input).length,
+                resultSize: JSON.stringify(retryResult).length,
+                durationMs: 0,
+                success: retryResult.success,
+                error: retryResult.error,
+                parallelized: false,
+                timestamp: new Date().toISOString(),
+                executionIndex: iterations,
+              });
+
+              emit("tool_result", `Selbstreparatur-Ergebnis: ${repairedCall.toolName}`, {
+                toolName: repairedCall.toolName,
+                success: retryResult.success,
+                error: retryResult.error,
+                attempt,
+              });
+
+              const repairResultMessage: LLMMessage = {
+                role: "tool",
+                content: JSON.stringify(retryResult),
+                toolCallId: `call_${iterations}_repair_${attempt}`,
+              };
+              await this.conversation.addMessage(repairResultMessage);
+              this.history.add(repairResultMessage, repairedCall.toolName);
+              await rememberSuccessfulTool(repairedCall.toolName, repairedCall.input, retryResult);
+
+              if (retryResult.success) {
+                repaired = { call: repairedCall, result: retryResult };
+                toolsUsed.push(repairedCall.toolName);
+                break;
+              }
+
+              attemptError = String(retryResult.error ?? attemptError);
+            }
+          }
+
+          if (repaired) {
+            toolResult = repaired.result;
+            consecutiveToolFailures = 0;
+            emit("decision", "Self-repair succeeded", {
+              originalTool: parsedToolCall.toolName,
+              repairedInput: repaired.call.input,
+            });
+            continue;
+          }
+
+          consecutiveToolFailures++;
           if (recoveryHint) {
             const hintMessage: LLMMessage = {
               role: "system",
@@ -2589,7 +2858,7 @@ Emit the corrected tool call with valid JSON only, no other text.`,
               maxConsecutiveToolFailures: adjustedControls.maxConsecutiveToolFailures,
             });
             finalResponse =
-              "Ich habe die Ausfuehrung gestoppt, weil mehrere Tool-Fehler hintereinander aufgetreten sind. Ich kann als naechstes eine gezielte Fehlerbehebung starten.";
+              "Ich habe die Ausfuehrung gestoppt, weil mehrere Tool-Fehler hintereinander aufgetreten sind, auch nach automatischen Reparaturversuchen. Bitte pruefe die Fehlermeldung oder gib zusaetzliche Hinweise, damit ich es gezielt erneut versuchen kann.";
             break;
           }
         }

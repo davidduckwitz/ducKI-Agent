@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Current Time One-Pager</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #282c34;
+            color: #61dafb;
+            font-family: 'Courier New', Courier, monospace;
+        </div>
+        container {
+            text-align: center;
+            border: 2px solid #61dafb;
+            padding: 2rem;
+            border-radius: 15px;
+            box-shadow: 0 0 20px rgba(97, 218, 251, 0.5);
+        }
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+        }
+        p {
+            font-size: 1.5rem;
+            color: #abb2bf;
+        }
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <h1>Current Time</h1>
+        <p id='clock'></p>
+    </div>
+
+    <script>
+        function updateClock() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString();
+            document.getElementById('clock').textContent = timeString;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+    </script>
+</body>
+</html>

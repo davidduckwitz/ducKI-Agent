@@ -390,16 +390,8 @@ export class DatabaseService {
       .run();
   }
 
-  async deleteLlmWikiEntriesBySourcePrefix(prefix: string): Promise<number> {
-    const all = await this.listLlmWikiEntries(5000);
-    const matches = all.filter((entry) => entry.sourcePath.startsWith(prefix));
-    for (const entry of matches) {
-      await this.db
-        .delete(schema.llmWikiEntries)
-        .where(eq(schema.llmWikiEntries.id, entry.id))
-        .run();
-    }
-    return matches.length;
+  async clearLogs(): Promise<void> {
+    await this.db.delete(schema.logs).run();
   }
 
   async updateLlmWikiEntryStatus(id: number, status: "candidate" | "approved" | "rejected" | "error"): Promise<LlmWikiEntrySelect | undefined> {

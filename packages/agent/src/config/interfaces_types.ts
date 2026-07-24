@@ -78,6 +78,8 @@ export interface AgentRuntimeControls {
   reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;
   maxRepeatedToolCall: number;
+  selfRepairEnabled: boolean;
+  selfRepairMaxAttempts: number;
   enableAutoSkillSelection: boolean;
   autoSkillScoreThreshold: number;
   autoSkillMarginThreshold: number;
