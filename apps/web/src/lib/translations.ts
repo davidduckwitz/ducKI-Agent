@@ -227,6 +227,13 @@ export const translations: Record<Language, TranslationTree> = {
     },
     toolsPage: {
       noTools: "Keine Tools geladen",
+      titleHint: "Kern-Tools sind immer aktiv. Optionale Tools kannst du gezielt aktivieren, wenn du sie brauchst.",
+      core: "Kern",
+      optional: "Optional",
+      on: "An",
+      off: "Aus",
+      alwaysOn: "Immer aktiv",
+      usesSubagent: "Nutzt zusaetzlichen LLM-Call",
     },
     skillsPage: {
       titleHint: "Aktiviere nur Skills, die du gerade brauchst. Deaktivierte Skills verbrauchen keinen Chat-Kontext.",
@@ -681,6 +688,13 @@ export const translations: Record<Language, TranslationTree> = {
     },
     toolsPage: {
       noTools: "No tools loaded",
+      titleHint: "Core tools are always active. Enable optional tools when you need them.",
+      core: "Core",
+      optional: "Optional",
+      on: "On",
+      off: "Off",
+      alwaysOn: "Always on",
+      usesSubagent: "Uses an extra LLM call",
     },
     skillsPage: {
       titleHint: "Enable only the skills you currently need. Disabled skills do not consume chat context.",

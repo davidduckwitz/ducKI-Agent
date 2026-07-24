@@ -88,6 +88,7 @@ export interface AgentRuntimeControls {
   skillBehavior: "automatic" | "active";
   autoSkillFallbackNone: boolean;
   enabledSkillAllowlist: string[];
+  enabledOptionalTools: string[];
 }
 
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)

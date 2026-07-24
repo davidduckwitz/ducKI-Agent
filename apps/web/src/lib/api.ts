@@ -134,7 +134,16 @@ export const api = {
 
   tools: {
     list: () =>
-      request<Array<{ name: string; description: string; parameters?: Record<string, unknown> }>>("/tools"),
+      request<
+        Array<{
+          name: string;
+          description: string;
+          parameters?: Record<string, unknown>;
+          core: boolean;
+          enabled: boolean;
+          subagent: boolean;
+        }>
+      >("/tools"),
   },
 
   memory: {

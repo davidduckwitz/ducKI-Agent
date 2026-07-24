@@ -148,6 +148,64 @@ Skill behavior notes:
 - `AGENT_SKILL_BEHAVIOR=active`: Agent loads all skills listed in `ENABLED_SKILLS`.
 - `AGENT_AUTO_SKILL_FALLBACK_NONE=true`: In `automatic` mode, if no skill matches, no skill is loaded.
 
+Tool modularity notes:
+
+Every built-in tool has a `tools/<name>/TOOL.md` manifest (frontmatter: `name`,
+`description`, `core`) alongside its TypeScript implementation. All built-in
+tools are always registered (so they're always listed on the Tools settings
+page, including ones nobody has enabled yet), but whether a tool can actually
+*run* depends on its `core` flag: tools marked `core: true` always run; all
+others are optional and disabled by default until enabled via
+`ENABLED_OPTIONAL_TOOLS` (same JSON-array-of-names shape as `ENABLED_SKILLS`),
+settable from the Tools page in the web UI.
+
+- Core (always usable): `project`, `task`, `memory`, `skill_manage`, `tool_factory`, `filesystem`.
+- Optional (off by default): `http`, `git`, `browser`, `shell`, `mcp`, `workflow`, `cronjob`, `history`, `gateway`.
+- `ENABLED_OPTIONAL_TOOLS=["shell", "http"]`: enables those two optional tools; all other optional tools stay disabled.
+- Disabling a tool hides it from the agent's system prompt and rejects any call to it with a clear "disabled" error - enforced fresh on every call, both for the interactive chat agent and for workflow/cronjob `tool_call` dispatch, so a setting change takes effect immediately without a restart.
+- Tools loaded from an external URL (tool packages) are not yet supported - only skills currently support `POST /api/skills/import`. This is a deliberate follow-up, not an oversight.
+
+Script-backed tools (no TypeScript required):
+
+A `tools/<name>/TOOL.md` can also declare an executable script - the same
+convention skills already use (frontmatter `script:` pointing to a file, a
+sibling `script.js`, or an inline `<script>...</script>` block), plus a
+required sibling `parameters.json` (the tool's JSON-schema parameters, since
+there's no TypeScript file to declare them in). This turns the manifest into
+a real, independently callable tool with no hand-written code at all:
+
+```
+tools/weather_summary/TOOL.md      # frontmatter: script, optional subagent: true
+tools/weather_summary/script.js    # sees toolInput/toolContext only - no fetch/require/fs
+tools/weather_summary/parameters.json
+```
+
+- The script runs in the exact same sandbox as skill scripts
+  (`runScriptInSandbox`, 1500ms timeout, no network/filesystem access) - it
+  can only transform data the calling agent already gathered (e.g. via
+  `http`/`filesystem`), not fetch new data itself.
+- Set `subagent: true` in the frontmatter to have a **second, lightweight LLM
+  call** interpret the script's raw result (+ console logs) before it's
+  returned to the calling agent - useful when the raw output needs
+  summarizing/formatting rather than being returned as-is. The frontmatter
+  body (everything after the closing `---`) becomes that subagent's
+  directive. This is a genuinely separate, billed LLM call per tool
+  invocation - the Tools settings page badges any tool with `subagent: true`
+  for this reason, since an unattended cronjob could trigger it repeatedly.
+- If the script throws, the tool call fails immediately with no subagent call
+  (no extra cost on a hard failure). If the subagent call itself fails or
+  times out, the tool call still succeeds with the raw script result plus a
+  `subagentFailed: true` marker - a bad interpretation step never discards a
+  script that ran successfully.
+- `AGENT_SCRIPT_SUBAGENT_TIMEOUT_MS` (default `20000`): timeout for the
+  subagent's LLM call.
+- A tool name reserved by a built-in (`filesystem`, `shell`, `task`, ...) or
+  missing/invalid `parameters.json` is skipped with a `warn` log rather than
+  registered - check server logs if a script tool doesn't show up.
+- New/changed script tools reach the interactive chat agent on the next
+  request (no restart). They only reach workflow/cronjob `tool_call`
+  dispatch after a server restart, same as `MCP_SERVERS`.
+
 Provider controls:
 
 - `DEFAULT_PROVIDER`

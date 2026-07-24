@@ -2,25 +2,7 @@ import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Executor } from "../executor/executor.js";
 import { buildToolExecutorFromRow, dynamicToolRowToDefinition } from "./dynamic-tool-resolver.js";
-
-// Built-in tool names a dynamically registered tool must never shadow.
-const RESERVED_TOOL_NAMES = new Set([
-  "browser",
-  "memory",
-  "project",
-  "task",
-  "history",
-  "gateway",
-  "filesystem",
-  "http",
-  "git",
-  "shell",
-  "skill_manage",
-  "mcp",
-  "workflow",
-  "cronjob",
-  "tool_factory",
-]);
+import { RESERVED_TOOL_NAMES } from "../tools/reserved-tool-names.js";
 
 function ok(data: unknown): ToolResult {
   return { success: true, data };

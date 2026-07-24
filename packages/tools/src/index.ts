@@ -9,6 +9,8 @@ import { skillsTool } from "./skills.js";
 export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool };
 export { runScriptInSandbox, sanitizeRuntimeValue } from "./sandbox.js";
 export type { SandboxRuntime, SandboxVarNames, SandboxExecutionResult } from "./sandbox.js";
+export { safeRelativePath, frontmatterScript, extractInlineScript, resolveScriptSource } from "./script-source.js";
+export type { ResolveScriptSourceOptions, ResolveScriptSourceResult } from "./script-source.js";
 
 export const allTools: ToolExecutor[] = [filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool];
 

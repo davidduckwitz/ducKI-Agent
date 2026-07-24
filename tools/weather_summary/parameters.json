@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "station_id": { "type": "string", "description": "Weather station identifier" },
+    "readings": {
+      "type": "array",
+      "description": "Hourly readings, each {tempC, precipMm, timestamp}",
+      "items": { "type": "object" }
+    }
+  },
+  "required": ["station_id", "readings"]
+}

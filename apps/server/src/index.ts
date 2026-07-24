@@ -16,6 +16,7 @@ import {
 	createToolFactoryTool,
 	createCodingAgent,
 	type CodingAgent,
+	createScriptTools,
 } from "@ducki/agent";
 import { getDatabase } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
@@ -292,6 +293,17 @@ function parseMcpServerConfigs(raw: string | undefined): MCPServerConfig[] {
 	}
 }
 
+/**
+ * Every built-in tool is always registered here, regardless of
+ * ENABLED_OPTIONAL_TOOLS - registration only decides what a tool *is*, not
+ * whether it's usable. Whether a disabled tool can actually run is enforced
+ * at the point of execution instead (Agent.preflightToolInput for the chat
+ * path, WorkflowEngine.executeToolCallNode for workflow/cronjob dispatch),
+ * both re-checking the setting fresh every time. Keeping registration
+ * unconditional is what lets `GET /api/tools` (and the Tools settings page)
+ * list every tool - including ones nobody has enabled yet - so a disabled
+ * tool can actually be discovered and turned on.
+ */
 function buildAgentFactory(
 	providerRef: { current: ReturnType<typeof createProvider> },
 	db: Awaited<ReturnType<typeof getDatabase>>,
@@ -478,6 +490,11 @@ async function bootstrap(): Promise<void> {
 	}
 	workflowExecutor.registerTool(createCronjobManagementTool(db));
 	workflowExecutor.registerTool(createToolFactoryTool(db, workflowExecutor));
+	// Boot-time only: a script-backed tools/<name>/TOOL.md added later reaches workflow/cronjob
+	// dispatch after a restart, same trade-off already accepted for MCP_SERVERS in this bootstrap.
+	for (const tool of createScriptTools(() => providerRef.current, logger.child("ScriptTools"))) {
+		workflowExecutor.registerTool(tool);
+	}
 
 	const createCodingAgentFactory = (options?: { sandboxRoot?: string }): CodingAgent =>
 		createCodingAgent(providerRef.current, db, { sandboxRoot: options?.sandboxRoot ?? CODING_ROOT });

@@ -14,6 +14,8 @@ import { Reflection } from "./reflection/reflection.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
 import { resolveToolAlias, resolveToolAction } from "./tools/tool-aliases.js";
+import { loadToolManifests, isToolActive, type ToolManifestEntry } from "./tools/tool-registry.js";
+import { createScriptTools } from "./tools/script-tools.js";
 import { ToolExecutionGraph } from "./executor/tool-graph.js";
 import { skillSelector } from "./skill-selector/selector.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
@@ -118,6 +120,9 @@ export class Agent {
     this.planner = new Planner(provider, this.logger);
     this.executor = new Executor(this.logger, createDynamicToolResolver(db));
     for (const tool of createWorkflowTools(db)) {
+      this.executor.registerTool(tool);
+    }
+    for (const tool of createScriptTools(() => this.provider, this.logger)) {
       this.executor.registerTool(tool);
     }
     this.reasoner = new Reasoner(provider, this.logger);
@@ -449,6 +454,11 @@ export class Agent {
     }
 
     return result;
+  }
+
+  /** Re-read on every call (like loadSkillManifests) so editing a TOOL.md's `core` flag takes effect without a restart. */
+  private getToolManifests(): ToolManifestEntry[] {
+    return loadToolManifests();
   }
 
   private loadSkillContent(manifest: SkillManifest): SkillSummary {
@@ -829,6 +839,10 @@ export class Agent {
 
     if (!(await this.executor.hasTool(normalizedName))) {
       return { ok: false, error: `Unknown tool '${normalizedName}'` };
+    }
+
+    if (!isToolActive(normalizedName, this.getToolManifests(), new Set(controls.enabledOptionalTools))) {
+      return { ok: false, error: `Tool '${normalizedName}' is disabled. Enable it in Settings -> Tools.` };
     }
 
     if (normalizedName === "http" && normalizedInput["action"] === undefined && normalizedInput["url"] !== undefined) {
@@ -1758,7 +1772,8 @@ export class Agent {
     return Math.max(min, max !== undefined ? Math.min(max, parsed) : parsed);
   }
 
-  private parseEnabledSkillSlugs(rawValue: string | undefined): string[] {
+  /** Parses a JSON array setting of lowercase slug/name strings - shared by ENABLED_SKILLS and ENABLED_OPTIONAL_TOOLS. */
+  private parseSlugListSetting(rawValue: string | undefined): string[] {
     if (!rawValue || rawValue.trim().length === 0) return [];
     try {
       const parsed = JSON.parse(rawValue) as unknown;
@@ -1806,6 +1821,7 @@ export class Agent {
       skillBehavior: "automatic",
       autoSkillFallbackNone: true,
       enabledSkillAllowlist: [],
+      enabledOptionalTools: [],
     };
 
     try {
@@ -1840,7 +1856,8 @@ export class Agent {
         autoSkillMinOverlap: this.parseNumberSetting(get("AGENT_AUTO_SKILL_MIN_OVERLAP"), defaults.autoSkillMinOverlap, 0, 20),
         skillBehavior: this.parseSkillBehavior(get("AGENT_SKILL_BEHAVIOR"), defaults.skillBehavior),
         autoSkillFallbackNone: this.parseBooleanSetting(get("AGENT_AUTO_SKILL_FALLBACK_NONE"), defaults.autoSkillFallbackNone),
-        enabledSkillAllowlist: this.parseEnabledSkillSlugs(get("ENABLED_SKILLS")),
+        enabledSkillAllowlist: this.parseSlugListSetting(get("ENABLED_SKILLS")),
+        enabledOptionalTools: this.parseSlugListSetting(get("ENABLED_OPTIONAL_TOOLS")),
       };
     } catch {
       return defaults;
@@ -2137,7 +2154,11 @@ export class Agent {
       }
     }
 
-    const availableTools = this.executor.listTools();
+    const toolManifests = this.getToolManifests();
+    const enabledOptionalToolsSet = new Set(controls.enabledOptionalTools);
+    const availableTools = this.executor
+      .listTools()
+      .filter((tool) => isToolActive(tool.name, toolManifests, enabledOptionalToolsSet));
     const toolContext = availableTools.length > 0
       ? `\n\n## Available Tools\n${availableTools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n")}`
       : "";

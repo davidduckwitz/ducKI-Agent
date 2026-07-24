@@ -4,6 +4,7 @@ import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import type { Executor } from "../executor/executor.js";
 import type { CodingAgent } from "../coding/coding-agent.js";
+import { loadToolManifests, isToolActive, parseEnabledToolNamesSetting } from "../tools/tool-registry.js";
 
 export type MultiAgentRole = "manager" | "research" | "coding" | "review" | "browser";
 export type WorkflowNodeStatus = "pending" | "running" | "completed" | "failed";
@@ -266,6 +267,11 @@ export class WorkflowEngine {
     }
     if (!node.toolName) {
       return { resultText: "tool_call node is missing 'toolName'", success: false };
+    }
+
+    const enabledOptionalTools = new Set(parseEnabledToolNamesSetting(await this.db.getSetting("ENABLED_OPTIONAL_TOOLS")));
+    if (!isToolActive(node.toolName, loadToolManifests(), enabledOptionalTools)) {
+      return { resultText: `Tool '${node.toolName}' is disabled. Enable it in Settings -> Tools.`, success: false };
     }
 
     const resolvedInput = this.resolveTemplateTokens(node.toolInput ?? {}, workflow) as Record<string, unknown>;

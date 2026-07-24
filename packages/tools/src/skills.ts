@@ -10,8 +10,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, normalize, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { runScriptInSandbox } from "./sandbox.js";
+import { safeRelativePath, resolveScriptSource } from "./script-source.js";
 
 function resolveSkillsRoot(): string {
   const configured = process.env["SKILLS_PATH"]?.trim();
@@ -51,14 +52,6 @@ function skillFile(name: string): string {
   return join(skillDir(name), SKILL_FILE);
 }
 
-function safeRelativePath(filePath: string): string {
-  const normalized = normalize(filePath).replace(/^([/\\])+/, "");
-  if (normalized.includes("..")) {
-    throw new Error("Path traversal is not allowed");
-  }
-  return normalized;
-}
-
 function parseFrontmatter(content: string): { name?: string; description?: string } {
   if (!content.startsWith("---")) return {};
   const end = content.indexOf("\n---", 3);
@@ -75,30 +68,6 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
     if (key === "description") result.description = value;
   }
   return result;
-}
-
-function frontmatterScript(content: string): string | undefined {
-  if (!content.startsWith("---")) return undefined;
-  const end = content.indexOf("\n---", 3);
-  if (end < 0) return undefined;
-  const block = content.slice(3, end).trim();
-  for (const line of block.split(/\r?\n/)) {
-    const idx = line.indexOf(":");
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim().replace(/^['"]|['"]$/g, "");
-    if (key === "script") return value;
-  }
-  return undefined;
-}
-
-function extractInlineScript(content: string): string | undefined {
-  const closedMatch = content.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i);
-  if (closedMatch?.[1]?.trim()) return closedMatch[1].trim();
-
-  const openMatch = content.match(/<script\b[^>]*>([\s\S]*)$/i);
-  if (openMatch?.[1]?.trim()) return openMatch[1].trim();
-  return undefined;
 }
 
 function skillNameFromPath(filePath: string): string | undefined {
@@ -306,46 +275,14 @@ export const skillsTool: ToolExecutor = {
           const runtimeInput = input["input"];
           const runtimeContext = input["context"];
 
-          let source = "";
-          let script = "";
+          const resolved = resolveScriptSource(dir, content, { explicitRelativePath: directScriptFile });
+          if (!resolved.ok) return fail(resolved.error);
 
-          if (directScriptFile) {
-            const rel = safeRelativePath(directScriptFile);
-            const absolute = resolve(dir, rel);
-            if (!absolute.startsWith(dir)) return fail("script_file escapes the skill directory");
-            if (!existsSync(absolute)) return fail(`Script file not found: ${rel}`);
-            source = rel;
-            script = readFileSync(absolute, "utf8");
-          } else {
-            const configuredScript = frontmatterScript(content)?.trim();
-            if (configuredScript) {
-              const rel = safeRelativePath(configuredScript);
-              const absolute = resolve(dir, rel);
-              if (!absolute.startsWith(dir)) return fail("Configured script escapes the skill directory");
-              if (!existsSync(absolute)) return fail(`Configured script not found: ${rel}`);
-              source = rel;
-              script = readFileSync(absolute, "utf8");
-            } else {
-              const defaultScript = resolve(dir, "script.js");
-              if (existsSync(defaultScript)) {
-                source = "script.js";
-                script = readFileSync(defaultScript, "utf8");
-              } else {
-                const inlineScript = extractInlineScript(content);
-                if (!inlineScript) {
-                  return fail("No executable script found. Add <script>...</script>, set frontmatter script, or create script.js");
-                }
-                source = "inline:<script>";
-                script = inlineScript;
-              }
-            }
-          }
-
-          const executed = runScriptInSandbox(script, { input: runtimeInput, context: runtimeContext });
+          const executed = runScriptInSandbox(resolved.script, { input: runtimeInput, context: runtimeContext });
           return ok({
             name: slugify(name),
             executed: true,
-            source,
+            source: resolved.source,
             logs: executed.logs,
             result: executed.result ?? null,
           });
