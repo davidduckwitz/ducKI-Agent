@@ -829,9 +829,9 @@ export class Agent {
     if (normalizedName === "filesystem") {
       const action = String(normalizedInput["action"] ?? "").toLowerCase();
       const path = normalizedInput["path"];
-      if (!action) return { ok: false, error: "filesystem: action is required" };
+      if (!action) return { ok: false, error: "filesystem: 'action' parameter required. Valid actions: read, write, append, delete, list, mkdir, exists, stat, move, copy" };
       if (!path || String(path).trim().length === 0) {
-        return { ok: false, error: "filesystem: path is required" };
+        return { ok: false, error: "filesystem: 'path' parameter is REQUIRED and must not be empty. Provide the file or directory path you want to operate on. Example: filesystem({action:'read', path:'data/file.txt'})" };
       }
       if ((action === "write" || action === "append") && typeof normalizedInput["content"] !== "string") {
         return { ok: false, error: `filesystem:${action} requires string field 'content'` };

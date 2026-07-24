@@ -54,18 +54,22 @@ function resolvePath(inputPath: string, options: PathOptions): string {
 
 export const filesystemTool: ToolExecutor = {
   name: "filesystem",
-  description: "Read, write, delete, list files and directories",
+  description: "Read, write, delete, list files and directories. REQUIRED: Always provide 'action' and 'path' parameters.",
   definition: {
     name: "filesystem",
-    description: "File system operations",
+    description: "File system operations. Required parameters: action (the operation), path (file/directory path). All paths are scoped to shared-workspace for safety.",
     parameters: {
       type: "object",
       properties: {
         action: {
           type: "string",
           enum: ["read", "write", "append", "delete", "list", "mkdir", "exists", "stat", "move", "copy"],
+          description: "Operation to perform: read (file content), write (create/overwrite file), append (add to file), delete (remove), list (directory contents), mkdir (create directory), exists (check if exists), stat (file info), move (rename/move), copy (duplicate)",
         },
-        path: { type: "string", description: "File or directory path" },
+        path: {
+          type: "string",
+          description: "REQUIRED: Full file or directory path. Examples: /shared-workspace/config.json, ./data/file.txt, data/subfolder/. Must be provided.",
+        },
         content: { type: "string", description: "Content to write (for write/append)" },
         encoding: { type: "string", default: "utf8" },
         recursive: { type: "boolean", default: false },
