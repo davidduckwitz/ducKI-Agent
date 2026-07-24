@@ -1315,12 +1315,24 @@ export class Agent {
 
   private extractToolCall(response: string): { toolName: string; input: Record<string, unknown> } | undefined {
     // Try new format first: <|tool_call>call:name({...})<tool_call|>
-    const newFormatMatch = response.match(/<\|tool_call>call:([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^)]*(?:\{[^}]*\}[^)]*)?)\)<tool_call\|>/);
-    if (newFormatMatch?.[1]) {
-      const toolName = newFormatMatch[1];
-      const args = this.parseLooseObject(`{${newFormatMatch[2]}}`);
-      if (args) {
-        return this.resolveToolNameAndInput(toolName, args);
+    // Extract by finding the opening <|tool_call>call: and looking for matching closing markers
+    const newFormatStart = response.indexOf("<|tool_call>call:");
+    if (newFormatStart >= 0) {
+      const afterPrefix = response.slice(newFormatStart + "<|tool_call>call:".length);
+      const toolNameMatch = afterPrefix.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(/);
+      if (toolNameMatch?.[1]) {
+        const toolName = toolNameMatch[1];
+        const openParenPos = afterPrefix.indexOf("(");
+        const closingMarker = ")<tool_call|>";
+        const closingPos = afterPrefix.indexOf(closingMarker);
+
+        if (openParenPos >= 0 && closingPos > openParenPos) {
+          const jsonStr = afterPrefix.slice(openParenPos + 1, closingPos);
+          const args = this.parseLooseObject(jsonStr);
+          if (args) {
+            return this.resolveToolNameAndInput(toolName, args);
+          }
+        }
       }
     }
 
