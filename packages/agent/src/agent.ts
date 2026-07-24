@@ -1314,7 +1314,7 @@ export class Agent {
     const callBody = afterStart.slice(0, end).trim();
 
     // Match: toolName({"json": "value"}) or toolName{...}
-    const parenMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
+    const parenMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([\s\S]*?)\)\s*$/);
     if (parenMatch?.[1]) {
       const toolName = parenMatch[1].trim();
       const rawArgs = (parenMatch[2] ?? "").trim();
@@ -1325,7 +1325,7 @@ export class Agent {
     }
 
     // Match: toolName{"json": "value"}
-    const braceMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
+    const braceMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[\s\S]*\})\s*$/);
     if (braceMatch?.[1]) {
       const toolName = braceMatch[1].trim();
       const rawJson = braceMatch[2] ?? "{}";

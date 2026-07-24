@@ -12,9 +12,18 @@ import {
   unlinkSync,
 } from "node:fs";
 import { resolve, dirname, join, extname } from "node:path";
+import { globFiles, grepFiles } from "./filesystem-search.js";
 import { randomBytes } from "node:crypto";
 
 const SHARED_BASE_PATH = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
+
+export const FILESYSTEM_ACTIONS = [
+  "read", "write", "append", "edit", "delete",
+  "list", "mkdir", "exists", "stat", "move", "copy",
+  "glob", "grep",
+] as const;
+
+export type FilesystemAction = typeof FILESYSTEM_ACTIONS[number];
 
 interface PathOptions {
   basePath?: string;
@@ -102,14 +111,21 @@ export const filesystemTool: ToolExecutor = {
       properties: {
         action: {
           type: "string",
-          enum: ["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy"],
-          description: "Operation to perform: read (file content), write (create/overwrite file), append (add to file), edit (replace an exact substring in an existing file - PREFER this over write for changes to existing files), delete (remove), list (directory contents), mkdir (create directory), exists (check if exists), stat (file info), move (rename/move), copy (duplicate)",
+          enum: ["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy", "glob", "grep"],
+          description: "Operation to perform: read (file content), write (create/overwrite file), append (add to file), edit (replace an exact substring in an existing file - PREFER this over write for changes to existing files), delete (remove), list (directory contents), mkdir (create directory), exists (check if exists), stat (file info), move (rename/move), copy (duplicate), glob (find files by pattern under path), grep (search file contents by regex under path)",
         },
         path: {
           type: "string",
           description: "REQUIRED: Full file or directory path. Examples: /shared-workspace/config.json, ./data/file.txt, data/subfolder/. Must be provided.",
         },
         content: { type: "string", description: "Content to write (for write/append)" },
+        offset: { type: "number", description: "For read: first line to return (0-indexed, default 0)" },
+        limit: { type: "number", description: "For read: maximum number of lines to return" },
+        maxBytes: { type: "number", description: "For read: byte cap before truncation (default 262144 = 256KB)" },
+        pattern: { type: "string", description: "For glob: file path pattern (e.g. **/*.ts). For grep: regex to search." },
+        filePattern: { type: "string", description: "For grep: optional glob pattern to restrict which files to search" },
+        caseSensitive: { type: "boolean", default: false, description: "For grep: case-sensitive match (default false)" },
+        maxResults: { type: "number", description: "For glob/grep: maximum results to return (default: 1000 for glob, 500 for grep)" },
         oldString: { type: "string", description: "For edit: exact existing text to replace. Must match exactly once unless replaceAll is set." },
         newString: { type: "string", description: "For edit: text to replace oldString with." },
         replaceAll: { type: "boolean", default: false, description: "For edit: replace every occurrence of oldString instead of requiring a unique match." },
@@ -145,8 +161,39 @@ export const filesystemTool: ToolExecutor = {
           if (!existsSync(filePath)) {
             return { success: false, data: null, error: `File not found: ${filePath}` };
           }
-          const data = readFileSync(filePath, "utf8");
-          return { success: true, data };
+          const offset = (input["offset"] as number | undefined) ?? 0;
+          const limit = input["limit"] as number | undefined;
+          const maxBytes = (input["maxBytes"] as number | undefined) ?? 262144;
+
+          const raw = readFileSync(filePath, "utf8");
+
+          if (offset > 0 || limit !== undefined) {
+            const lines = raw.split("\n");
+            const totalLines = lines.length;
+            const sliced = lines.slice(offset, limit !== undefined ? offset + limit : undefined);
+            const text = sliced.join("\n");
+            const remaining = totalLines - (offset + sliced.length);
+            if (text.length > maxBytes) {
+              return {
+                success: true,
+                data: text.slice(0, maxBytes) + `\n[... truncated at ${maxBytes} bytes]`,
+              };
+            }
+            const suffix = remaining > 0 ? `\n[lines ${offset + 1}–${offset + sliced.length} of ${totalLines}]` : "";
+            return { success: true, data: text + suffix };
+          }
+
+          if (raw.length > maxBytes) {
+            const lineCount = raw.split("\n").length;
+            return {
+              success: true,
+              data:
+                raw.slice(0, maxBytes) +
+                `\n[... truncated: file is ${raw.length} bytes (${lineCount} lines), showing first ${maxBytes}. Use offset/limit to read specific sections.]`,
+            };
+          }
+
+          return { success: true, data: raw };
         }
 
         case "write": {
@@ -317,8 +364,30 @@ export const filesystemTool: ToolExecutor = {
           return { success: true, data: { from: filePath, to: destPath } };
         }
 
+        case "glob": {
+          const pattern = input["pattern"] as string | undefined;
+          if (!pattern) return { success: false, data: null, error: "pattern required for glob" };
+          const maxResults = (input["maxResults"] as number | undefined) ?? 1000;
+          const matches = globFiles(filePath, pattern, { maxResults });
+          return { success: true, data: { matches, count: matches.length } };
+        }
+
+        case "grep": {
+          const pattern = input["pattern"] as string | undefined;
+          if (!pattern) return { success: false, data: null, error: "pattern required for grep" };
+          const filePattern = input["filePattern"] as string | undefined;
+          const maxResults = (input["maxResults"] as number | undefined) ?? 500;
+          const caseSensitive = (input["caseSensitive"] as boolean | undefined) ?? false;
+          const matches = grepFiles(filePath, pattern, { filePattern, maxResults, caseSensitive });
+          return { success: true, data: { matches, count: matches.length } };
+        }
+
         default:
-          return { success: false, data: null, error: `Unknown action: ${action}` };
+          return {
+            success: false,
+            data: null,
+            error: `Unknown action: ${action}. Valid actions: ${FILESYSTEM_ACTIONS.join(", ")}`,
+          };
       }
     } catch (error) {
       return {

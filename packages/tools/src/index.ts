@@ -7,6 +7,10 @@ import { shellTool } from "./shell.js";
 import { skillsTool } from "./skills.js";
 
 export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool };
+export { FILESYSTEM_ACTIONS } from "./filesystem.js";
+export type { FilesystemAction } from "./filesystem.js";
+export { globFiles, grepFiles } from "./filesystem-search.js";
+export type { GrepMatch, GlobOptions, GrepOptions } from "./filesystem-search.js";
 export { runScriptInSandbox, sanitizeRuntimeValue } from "./sandbox.js";
 export type { SandboxRuntime, SandboxVarNames, SandboxExecutionResult } from "./sandbox.js";
 export { safeRelativePath, frontmatterScript, extractInlineScript, resolveScriptSource } from "./script-source.js";
