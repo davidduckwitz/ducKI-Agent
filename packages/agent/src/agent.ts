@@ -630,20 +630,32 @@ export class Agent {
       ...input,
     };
 
-    if (normalizedInput["project_id"] !== undefined && normalizedInput["projectId"] === undefined) {
-      normalizedInput["projectId"] = normalizedInput["project_id"];
-    }
+    // Unified parameter aliasing: map old names to canonical names
+    const PARAM_ALIASES: ReadonlyArray<readonly [from: string, to: string]> = [
+      ["project_id", "projectId"],
+      ["workflow_id", "id"],
+      ["file_path", "path"],
+      ["filepath", "path"],
+      ["filename", "path"],
+      ["old_string", "oldString"],
+      ["old_str", "oldString"],
+      ["oldStr", "oldString"],
+      ["old_text", "oldString"],
+      ["oldText", "oldString"],
+      ["new_string", "newString"],
+      ["new_str", "newString"],
+      ["newStr", "newString"],
+      ["new_text", "newString"],
+      ["newText", "newString"],
+      ["replace_all", "replaceAll"],
+      ["base_path", "basePath"],
+      ["dry_run", "dryRun"],
+    ];
 
-    if (normalizedInput["file_path"] !== undefined && normalizedInput["path"] === undefined) {
-      normalizedInput["path"] = normalizedInput["file_path"];
-    }
-
-    if (normalizedInput["old_text"] !== undefined && normalizedInput["oldText"] === undefined) {
-      normalizedInput["oldText"] = normalizedInput["old_text"];
-    }
-
-    if (normalizedInput["workflow_id"] !== undefined && normalizedInput["id"] === undefined) {
-      normalizedInput["id"] = normalizedInput["workflow_id"];
+    for (const [from, to] of PARAM_ALIASES) {
+      if (normalizedInput[from] !== undefined && normalizedInput[to] === undefined) {
+        normalizedInput[to] = normalizedInput[from];
+      }
     }
 
     const aliasToolName = resolveToolAlias(normalized);
@@ -664,7 +676,7 @@ export class Agent {
       normalizedInput["action"] = normalizedInput["command"];
     }
 
-    const filesystemAliases = new Set(["write", "read", "append", "delete", "list", "mkdir", "exists", "stat", "move", "copy"]);
+    const filesystemAliases = new Set(["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy"]);
 
     if (filesystemAliases.has(normalized)) {
       const path = normalizedInput["path"] ?? normalizedInput["file_path"];
@@ -867,12 +879,20 @@ export class Agent {
     if (normalizedName === "filesystem") {
       const action = String(normalizedInput["action"] ?? "").toLowerCase();
       const path = normalizedInput["path"];
-      if (!action) return { ok: false, error: "filesystem: 'action' parameter required. Valid actions: read, write, append, delete, list, mkdir, exists, stat, move, copy" };
+      if (!action) return { ok: false, error: "filesystem: 'action' parameter required. Valid actions: read, write, append, edit, delete, list, mkdir, exists, stat, move, copy" };
       if (!path || String(path).trim().length === 0) {
         return { ok: false, error: "filesystem: 'path' parameter is REQUIRED and must not be empty. Provide the file or directory path you want to operate on. Example: filesystem({action:'read', path:'data/file.txt'})" };
       }
       if ((action === "write" || action === "append") && typeof normalizedInput["content"] !== "string") {
         return { ok: false, error: `filesystem:${action} requires string field 'content'` };
+      }
+      if (action === "edit") {
+        if (typeof normalizedInput["oldString"] !== "string" || String(normalizedInput["oldString"]).trim().length === 0) {
+          return { ok: false, error: "filesystem:edit requires non-empty string field 'oldString' (the exact existing text to replace). Also provide 'newString'." };
+        }
+        if (typeof normalizedInput["newString"] !== "string") {
+          return { ok: false, error: "filesystem:edit requires string field 'newString' (use \"\" to delete the matched text)." };
+        }
       }
       if (action === "move" && String(normalizedInput["destination"] ?? "").trim().length === 0) {
         return { ok: false, error: "filesystem:move requires field 'destination'" };
@@ -1630,6 +1650,31 @@ export class Agent {
       }
       if (/(\/home\/|\/dev\/null)/.test(String(toolInput["command"] ?? ""))) {
         return "Shell-Hinweis: Linux-Pfade erkannt. Passe Pfade auf Windows an (z. B. C:/... oder relative Workspace-Pfade).";
+      }
+    }
+
+    // Filesystem recovery hints in English: recovery steps are LLM/agent-specific, not user-facing.
+    if (normalizedTool === "filesystem") {
+      if (/oldstring is not unique/.test(normalizedError)) {
+        return "Expand oldString with more surrounding context to make it unique, or set replaceAll:true to replace all occurrences.";
+      }
+      if (/oldstring not found/.test(normalizedError)) {
+        return "Re-read the file with action:'read' to see the exact text, then copy it exactly including indentation; do not retype from memory.";
+      }
+      if (/path is outside|outside shared workspace|outside basepath scope/.test(normalizedError)) {
+        return "Use a path relative to the project root: no leading /, no drive letter, no .. traversal. Example: 'src/app.ts' instead of 'C:/...'.";
+      }
+      if (/(file not found|path not found)/.test(normalizedError)) {
+        return "Call action:'list' on the parent directory first to confirm the path exists. Example: list the directory before trying to read.";
+      }
+      if (/refusing to write invalid json/.test(normalizedError)) {
+        return "Make a targeted edit instead of rewriting the whole file: use action:'edit' with oldString and newString to surgically fix the JSON.";
+      }
+      if (/read-before-write/.test(normalizedError)) {
+        return "You must call action:'read' on this path first before modifying it. Read the file, then use edit or write.";
+      }
+      if (/requires string field.*content/.test(normalizedError)) {
+        return "For write/append, pass the full content as a string in the 'content' field. Use \\n for newlines and \\\\ for backslashes.";
       }
     }
 
