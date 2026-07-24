@@ -1862,7 +1862,14 @@ export class Agent {
     await this.conversation.addMessage(userMessage);
     this.history.add(userMessage);
 
-    const memoryContext = await this.memory.buildSystemContext(this.conversation.id);
+    let memoryContext = "";
+    try {
+      memoryContext = await this.memory.buildSystemContext(this.conversation.id);
+    } catch (memoryError) {
+      this.logger.warn("Failed to build system memory context", {
+        error: memoryError instanceof Error ? memoryError.message : String(memoryError),
+      });
+    }
 
     // Conversation compression (P3.1): summarize older history once per run so long
     // conversations don't keep growing the LLM context unbounded. Only kicks in past the
@@ -2030,10 +2037,20 @@ export class Agent {
         ...activeSkillSlugs,
         ...toolsUsed.slice(-3),
       ];
-      const dynamicMemoryContext = await this.memory.buildDynamicContext(dynamicMemorySignals, this.conversation.id, 5);
-      if (dynamicMemoryContext) {
-        emit("reasoning", "Memory-Kontext abgerufen.", {
-          signals: dynamicMemorySignals.slice(0, 5),
+      let dynamicMemoryContext = "";
+      try {
+        dynamicMemoryContext = await this.memory.buildDynamicContext(dynamicMemorySignals, this.conversation.id, 5);
+        if (dynamicMemoryContext) {
+          emit("reasoning", "Memory-Kontext abgerufen.", {
+            signals: dynamicMemorySignals.slice(0, 5),
+          });
+        }
+      } catch (memoryError) {
+        this.logger.warn("Failed to build dynamic memory context", {
+          error: memoryError instanceof Error ? memoryError.message : String(memoryError),
+        });
+        emit("guardrail", "Memory context build failed, continuing without dynamic memory", {
+          error: memoryError instanceof Error ? memoryError.message : "unknown error",
         });
       }
 
