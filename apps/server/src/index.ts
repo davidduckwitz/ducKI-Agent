@@ -9,6 +9,7 @@ import {
 	Agent,
 	WorkflowEngine,
 	createWorkflowManagementTool,
+	createWorkflowTools,
 	createCronjobManagementTool,
 	Executor,
 	createDynamicToolResolver,
@@ -485,6 +486,9 @@ async function bootstrap(): Promise<void> {
 		}),
 	};
 	workflowExecutor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
+	for (const tool of createWorkflowTools(db)) {
+		workflowExecutor.registerTool(tool);
+	}
 	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools);
 	const defaultAgent = createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
