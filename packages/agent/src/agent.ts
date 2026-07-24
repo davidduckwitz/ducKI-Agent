@@ -1338,48 +1338,75 @@ export class Agent {
 
     const markerIndex = response.indexOf("[TOOL:");
     const bracketBody = (() => {
-      const bracketBodyMatch = response.match(/\[TOOL:([^\]]+)\]/);
-      if (bracketBodyMatch?.[1]) return bracketBodyMatch[1].trim();
+      if (markerIndex < 0) return undefined;
 
-      // Fallback for unterminated variants like: [TOOL:name({...})
-      if (markerIndex >= 0) {
-        return response.slice(markerIndex + "[TOOL:".length).trim();
+      // Find the closing ] by counting bracket depth for nested JSON
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      const startPos = markerIndex + "[TOOL:".length;
+
+      for (let i = startPos; i < response.length; i++) {
+        const char = response[i];
+        const prevChar = i > 0 ? response[i - 1] : "";
+
+        // Handle string escaping
+        if (char === '"' && prevChar !== "\\") {
+          inString = !inString;
+        }
+
+        if (!inString) {
+          if (char === "{" || char === "[" || char === "(") depth++;
+          if (char === "}" || char === "]" || char === ")") {
+            depth--;
+            // If we found the closing bracket at depth 0, capture the body
+            if (depth < 0 || (depth === 0 && char === "]")) {
+              return response.slice(startPos, i).trim();
+            }
+          }
+        }
       }
 
-      return undefined;
+      // Fallback: if no closing ] found, take rest of string
+      return response.slice(startPos).trim();
     })();
 
     if (bracketBody) {
       const body = bracketBody;
 
-      // Variant A: [TOOL:name({...})]
-      const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
-      if (callMatch?.[1]) {
-        const toolName = callMatch[1];
-        const args = this.parseLooseObject(callMatch[2] ?? "{}");
-        if (args) {
-          return this.resolveToolNameAndInput(toolName, args);
-        }
-      }
+      // Parse tool name and arguments using string-based extraction (handles large payloads)
+      const toolNameMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(.*)$/);
+      if (toolNameMatch?.[1]) {
+        const toolName = toolNameMatch[1];
+        const argsPart = toolNameMatch[2]?.trim() ?? "";
 
-      // Variant B: [TOOL:name={...}] or [TOOL:name = {...}]
-      const equalsMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(\{[^]*\})\s*$/);
-      if (equalsMatch?.[1]) {
-        const toolName = equalsMatch[1];
-        const args = this.parseLooseObject(equalsMatch[2] ?? "{}");
-        if (args) {
-          return this.resolveToolNameAndInput(toolName, args);
+        // Variant A: name({...}) or name({...}) with whitespace
+        if (argsPart.startsWith("(") && argsPart.endsWith(")")) {
+          const jsonStr = argsPart.slice(1, -1);
+          const args = this.parseLooseObject(jsonStr);
+          if (args) {
+            return this.resolveToolNameAndInput(toolName, args);
+          }
         }
-      }
 
-      // Variant C: [TOOL:name({...})] but model emitted the JSON object without parens
-      // e.g. [TOOL:name{...}]
-      const compactObjectMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
-      if (compactObjectMatch?.[1]) {
-        const toolName = compactObjectMatch[1];
-        const args = this.parseLooseObject(compactObjectMatch[2] ?? "{}");
-        if (args) {
-          return this.resolveToolNameAndInput(toolName, args);
+        // Variant B: name={...} or name = {...}
+        if (argsPart.includes("=")) {
+          const eqIdx = argsPart.indexOf("=");
+          const jsonStr = argsPart.slice(eqIdx + 1).trim();
+          if (jsonStr.startsWith("{") && jsonStr.endsWith("}")) {
+            const args = this.parseLooseObject(jsonStr);
+            if (args) {
+              return this.resolveToolNameAndInput(toolName, args);
+            }
+          }
+        }
+
+        // Variant C: name{...} (compact without parens)
+        if (argsPart.startsWith("{") && argsPart.endsWith("}")) {
+          const args = this.parseLooseObject(argsPart);
+          if (args) {
+            return this.resolveToolNameAndInput(toolName, args);
+          }
         }
       }
 
