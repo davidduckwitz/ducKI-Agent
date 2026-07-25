@@ -35,10 +35,10 @@ export function DuckyMascot({ working, connected = true, size = 32, className, t
     // If reconnected, recover to working or idle state
     if (working) {
       setState("flying");
-    } else if (state === "fallen") {
+    } else {
       setState("idle");
     }
-  }, [connected, working, state]);
+  }, [connected, working]);
 
   // Handle working state
   useEffect(() => {
