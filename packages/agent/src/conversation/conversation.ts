@@ -1,4 +1,4 @@
-import type { LLMMessage } from "@ducki/shared";
+import type { LLMMessage, LLMContent } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 
@@ -39,11 +39,25 @@ export class ConversationManager {
 
     this.messages = dbMessages
       .filter((m) => allowedRoles.has(m.role as LLMMessage["role"]))
-      .map((m) => ({
-        role: m.role as LLMMessage["role"],
-        content: m.content,
-        toolCallId: m.toolCallId ?? undefined,
-      }));
+      .map((m) => {
+        let content: string | LLMContent[] = m.content;
+        // Parse JSON arrays that were stringified when stored
+        if (m.content.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(m.content);
+            if (Array.isArray(parsed)) {
+              content = parsed;
+            }
+          } catch {
+            // Keep as string if parsing fails
+          }
+        }
+        return {
+          role: m.role as LLMMessage["role"],
+          content,
+          toolCallId: m.toolCallId ?? undefined,
+        };
+      });
 
     this.logger.info("Conversation loaded", { id: conversationId, messages: this.messages.length });
   }
