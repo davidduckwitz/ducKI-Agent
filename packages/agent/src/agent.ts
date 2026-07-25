@@ -2103,6 +2103,41 @@ export class Agent {
     return buffer;
   }
 
+  async createImageMessage(imageBuffer: Buffer, mimeType: string = "image/png", description: string = ""): Promise<LLMMessage> {
+    const buffer = this.compressImageBuffer(imageBuffer);
+    const base64Url = `data:${mimeType};base64,${buffer.toString("base64")}`;
+
+    const imageContent: LLMContent[] = [
+      { type: "image_data", image_data: { url: base64Url, mime_type: mimeType } },
+    ];
+
+    if (description) {
+      imageContent.push({ type: "text", text: description });
+    }
+
+    return {
+      role: "user",
+      content: imageContent,
+      metadata: { source: "image_attachment" },
+    };
+  }
+
+  async createImageUrlMessage(imageUrl: string, description: string = ""): Promise<LLMMessage> {
+    const imageContent: LLMContent[] = [
+      { type: "image_url", image_url: { url: imageUrl, detail: "auto" } },
+    ];
+
+    if (description) {
+      imageContent.push({ type: "text", text: description });
+    }
+
+    return {
+      role: "user",
+      content: imageContent,
+      metadata: { source: "image_url" },
+    };
+  }
+
   private async handleScreenshotCapture(
     toolName: string,
     toolInput: Record<string, unknown>,
