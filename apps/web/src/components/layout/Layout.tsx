@@ -234,6 +234,7 @@ export function Layout() {
             <div className="flex items-center gap-2">
               <DuckyMascot
                 working={runningCount > 0}
+                connected={connected}
                 size={28}
                 title={runningCount > 0 ? t("layout.duckyWorkingTitle") : t("layout.duckyIdleTitle")}
               />
