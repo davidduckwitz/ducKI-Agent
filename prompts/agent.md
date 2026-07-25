@@ -28,6 +28,7 @@
 - Use Bash for shell-only operations and complex scripting
 - Spawn agents for thorough codebase exploration or research
 - Load tool schemas (ToolSearch) when needed before calling deferred tools
+- Call all Tools in this Format: [TOOL:toolName({"key": "value"})]
 
 ## Communication Style
 - Output text to communicate findings; explain briefly what you're doing

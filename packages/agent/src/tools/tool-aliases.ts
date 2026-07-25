@@ -80,6 +80,31 @@ export const TOOL_ALIAS_TABLE: ToolAliasEntry[] = [
     aliases: ["task", "list_all", "list_tasks", "get_all", "all"],
     notes: "Task listing aliases are action-normalized separately.",
   },
+  {
+    canonicalTool: "browser",
+    aliases: ["browser_tool", "web", "navigate", "puppeteer", "web_driver"],
+    notes: "Browser automation and web interaction tool.",
+  },
+  {
+    canonicalTool: "memory",
+    aliases: ["remember", "memorize", "recall", "memory_search"],
+    notes: "Agent memory and knowledge recall.",
+  },
+  {
+    canonicalTool: "project",
+    aliases: ["project_management", "project_info", "project_status"],
+    notes: "Project management and information retrieval.",
+  },
+  {
+    canonicalTool: "cronjob",
+    aliases: ["cron", "schedule", "scheduled_task", "schedule_task"],
+    notes: "Scheduled task and cron job management.",
+  },
+  {
+    canonicalTool: "mcp",
+    aliases: ["model_context_protocol", "mcp_tool", "mcp_call"],
+    notes: "Model Context Protocol integration.",
+  },
 ];
 
 export const TOOL_ALIAS_MAP = new Map<string, string>(

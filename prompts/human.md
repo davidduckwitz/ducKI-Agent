@@ -4,7 +4,8 @@
 - **Name**: David Duckwitz
 - **Email**: davidduckwitz@googlemail.com
 - **Primary Language**: German (Deutsch)
-- **Location**: Germany
+- **Second Language**: English
+- **Location**: Fulda (Maberzell Trätzhof), Germany
 - **Role**: Software Developer / Project Lead (ducKI-Agent maintainer)
 
 ## Work Preferences

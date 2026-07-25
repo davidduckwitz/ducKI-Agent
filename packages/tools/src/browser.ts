@@ -44,7 +44,12 @@ interface BrowserWorkerResponse {
 const sessions = new Map<string, BrowserSession>();
 const pending = new Map<
   string,
-  { resolve: (result: ToolResult) => void; reject: (error: Error) => void; timeout: NodeJS.Timeout }
+  {
+    resolve: (result: ToolResult) => void;
+    reject: (error: Error) => void;
+    timeout: NodeJS.Timeout;
+    settled: boolean;
+  }
 >();
 
 let workerProcess: ChildProcess | null = null;
@@ -86,7 +91,8 @@ function ensureWorker(): ChildProcess {
     const message = payload as BrowserWorkerResponse;
     if (!message?.id) return;
     const entry = pending.get(message.id);
-    if (!entry) return;
+    if (!entry || entry.settled) return;
+    entry.settled = true;
     clearTimeout(entry.timeout);
     pending.delete(message.id);
     entry.resolve(message.result ?? fail("Worker returned no result"));
@@ -121,17 +127,22 @@ async function callWorker(input: Record<string, unknown>): Promise<ToolResult> {
 
   return await new Promise<ToolResult>((resolve, reject) => {
     const timeout = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error("Browser worker timed out"));
+      const entry = pending.get(id);
+      if (entry && !entry.settled) {
+        entry.settled = true;
+        pending.delete(id);
+        reject(new Error("Browser worker timed out"));
+      }
     }, Number(input["timeout"] ?? 30000) + 3000);
 
-    pending.set(id, { resolve, reject, timeout });
+    pending.set(id, { resolve, reject, timeout, settled: false });
 
     const request: BrowserWorkerRequest = { id, input };
     worker.send(request, (error) => {
       if (!error) return;
       const entry = pending.get(id);
-      if (!entry) return;
+      if (!entry || entry.settled) return;
+      entry.settled = true;
       clearTimeout(entry.timeout);
       pending.delete(id);
       reject(new Error(`Failed to send request to browser worker: ${error.message}`));
@@ -384,7 +395,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         });
       }
       case "list_pages": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const pages = await session.browser.pages();
         const count = Math.max(1, Number(input["count"] ?? 20));
         const result = await Promise.all(
@@ -394,29 +405,29 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
             title: await page.title().catch(() => ""),
           }))
         );
-        return ok({ pages: result });
+        return ok({ sessionId, pages: result });
       }
       case "goto": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const url = String(input["url"] ?? "").trim();
         if (!url) return fail("url is required");
         const timeout = Number(input["timeout"] ?? 10000);
         const waitUntil = String(input["waitUntil"] ?? "domcontentloaded") as "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
         await session.page.goto(url, { waitUntil, timeout });
         session.targetUrl = session.page.url();
-        return ok({ url: session.page.url(), title: await session.page.title(), sessionId: String(input["sessionId"] ?? "") });
+        return ok({ sessionId, url: session.page.url(), title: await session.page.title() });
       }
       case "click": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const selector = String(input["selector"] ?? "").trim();
         if (!selector) return fail("selector is required");
         const timeout = Number(input["timeout"] ?? 10000);
         await session.page.waitForSelector(selector, { timeout, visible: true });
         await session.page.click(selector);
-        return ok({ clicked: selector, url: session.page.url() });
+        return ok({ sessionId, clicked: selector, url: session.page.url() });
       }
       case "type": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const selector = String(input["selector"] ?? "").trim();
         const text = String(input["text"] ?? "");
         if (!selector) return fail("selector is required");
@@ -424,54 +435,55 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         await session.page.waitForSelector(selector, { visible: true, timeout });
         await session.page.click(selector);
         await session.page.type(selector, text);
-        return ok({ typed: text.length, selector });
+        return ok({ sessionId, typed: text.length, selector });
       }
       case "press": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const key = String(input["key"] ?? "").trim();
         if (!key) return fail("key is required");
         await session.page.keyboard.press(key as import("puppeteer-core").KeyInput);
-        return ok({ pressed: key });
+        return ok({ sessionId, pressed: key });
       }
       case "wait": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const selector = String(input["selector"] ?? "").trim();
         const timeout = Number(input["timeout"] ?? 10000);
         if (selector) {
           await session.page.waitForSelector(selector, { timeout, visible: true });
-          return ok({ waitedFor: selector });
+          return ok({ sessionId, waitedFor: selector });
         }
         await new Promise((resolve) => setTimeout(resolve, timeout));
-        return ok({ waitedMs: timeout });
+        return ok({ sessionId, waitedMs: timeout });
       }
       case "screenshot": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const filePath = String(input["filePath"] ?? "").trim();
         const path = filePath || undefined;
         const buffer = await session.page.screenshot({ path: path as string | undefined, fullPage: true });
         return ok({
+          sessionId,
           savedTo: path ?? null,
           bytes: buffer.byteLength,
           url: session.page.url(),
         });
       }
       case "evaluate": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const script = String(input["script"] ?? "").trim();
         if (!script) return fail("script is required");
         const result = await session.page.evaluate(script);
-        return ok({ result });
+        return ok({ sessionId, result });
       }
       case "cookies_get": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const url = String(input["url"] ?? "").trim() || session.page.url();
         const client = await session.page.target().createCDPSession();
         const result = await client.send("Network.getCookies", url ? { urls: [url] } : {});
         const cookies = result?.cookies ?? [];
-        return ok({ cookies, count: cookies.length, url: url || null });
+        return ok({ sessionId, cookies, count: cookies.length, url: url || null });
       }
       case "cookies_set": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const raw = input["cookies"];
         if (!Array.isArray(raw) || raw.length === 0) return fail("cookies must be a non-empty array");
 
@@ -510,10 +522,10 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         }
 
         if (setCount === 0) return fail("No valid cookies to set");
-        return ok({ set: setCount, url: url || null });
+        return ok({ sessionId, set: setCount, url: url || null });
       }
       case "cookies_clear": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const url = String(input["url"] ?? "").trim() || session.page.url();
         const names = Array.isArray(input["cookieNames"])
           ? input["cookieNames"].map((v) => String(v ?? "").trim()).filter(Boolean)
@@ -523,7 +535,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         const result = await client.send("Network.getCookies", url ? { urls: [url] } : {});
         const current = result?.cookies ?? [];
         const toDelete = names.length > 0 ? current.filter((cookie) => names.includes(cookie.name)) : current;
-        if (toDelete.length === 0) return ok({ cleared: 0, url: url || null });
+        if (toDelete.length === 0) return ok({ sessionId, cleared: 0, url: url || null });
 
         for (const cookie of toDelete) {
           await client.send("Network.deleteCookies", {
@@ -533,10 +545,10 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
             url,
           });
         }
-        return ok({ cleared: toDelete.length, url: url || null });
+        return ok({ sessionId, cleared: toDelete.length, url: url || null });
       }
       case "form_fill": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const fields = input["fields"] as Record<string, unknown> | undefined;
         if (!fields || typeof fields !== "object") return fail("fields object is required");
         const clearFirst = input["clearFirst"] !== false;
@@ -556,10 +568,10 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           await session.page.type(selector, value);
         }
 
-        return ok({ filled: selectors.length, selectors });
+        return ok({ sessionId, filled: selectors.length, selectors });
       }
       case "login": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const username = String(input["username"] ?? "");
         const password = String(input["password"] ?? "");
         const usernameSelector = String(input["usernameSelector"] ?? "").trim();
@@ -607,13 +619,14 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
 
         session.targetUrl = session.page.url();
         return ok({
+          sessionId,
           loggedIn: true,
           currentUrl: session.page.url(),
           title: await session.page.title().catch(() => ""),
         });
       }
       case "pdf": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const filePath = String(input["filePath"] ?? "").trim();
         if (!filePath) return fail("filePath is required");
         const format = String(input["format"] ?? "A4");
@@ -625,10 +638,10 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           landscape,
           printBackground,
         });
-        return ok({ savedTo: filePath, bytes: buffer.byteLength, format, landscape });
+        return ok({ sessionId, savedTo: filePath, bytes: buffer.byteLength, format, landscape });
       }
       case "download": {
-        const { session } = await ensureSession(input);
+        const { sessionId, session } = await ensureSession(input);
         const selector = String(input["selector"] ?? "").trim();
         if (!selector) return fail("selector is required");
         const timeout = Number(input["timeout"] ?? input["timeoutMs"] ?? 20000);
@@ -643,6 +656,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         await session.page.click(selector);
         await new Promise((resolve) => setTimeout(resolve, Math.min(timeout, 1500)));
         return ok({
+          sessionId,
           downloaded: true,
           saveDir: saveDir || null,
           note: "Click executed; verify saved file in saveDir.",

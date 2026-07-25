@@ -1,6 +1,10 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveScriptSource } from "@ducki/tools";
+import type { ToolExecutor } from "@ducki/shared";
+import type { Logger } from "@ducki/logger";
+import type { DynamicToolResolver } from "../executor/executor";
+import { resolveToolAlias, TOOL_ALIAS_TABLE } from "./tool-aliases";
 
 export interface ToolManifestEntry {
   name: string;
@@ -147,4 +151,122 @@ export function isToolActive(
 
   const enabledSet = enabledOptionalTools instanceof Set ? enabledOptionalTools : new Set(enabledOptionalTools);
   return enabledSet.has(name);
+}
+
+/**
+ * Unified tool executor registry with caching.
+ * Reduces N+1 database queries and provides consistent tool lookup.
+ */
+export class ToolExecutorRegistry {
+  private toolCache = new Map<string, ToolExecutor | null>();
+  private manifestCache: ToolManifestEntry[] | null = null;
+  private lastManifestCheck = 0;
+  private readonly manifestCheckInterval: number;
+
+  constructor(
+    private readonly getToolFromExecutor: (name: string) => ToolExecutor | undefined,
+    private readonly dynamicResolver: DynamicToolResolver | undefined,
+    private readonly logger: Logger,
+    private readonly toolsRoot: string = resolveToolsRoot(),
+    manifestCheckIntervalMs = 1000
+  ) {
+    this.manifestCheckInterval = manifestCheckIntervalMs;
+  }
+
+  /**
+   * Resolve a tool alias to its canonical name.
+   */
+  resolveAlias(name: string): string {
+    return resolveToolAlias(name.trim().toLowerCase());
+  }
+
+  /**
+   * Get a tool by name (with alias resolution and caching).
+   */
+  async getByName(name: string): Promise<ToolExecutor | undefined> {
+    const canonical = this.resolveAlias(name);
+
+    // Check cache
+    if (this.toolCache.has(canonical)) {
+      const cached = this.toolCache.get(canonical);
+      return cached || undefined;
+    }
+
+    // Try in-memory first
+    let tool = this.getToolFromExecutor(canonical);
+    if (tool) {
+      this.toolCache.set(canonical, tool);
+      return tool;
+    }
+
+    // Try dynamic resolver (DB)
+    if (this.dynamicResolver) {
+      try {
+        tool = await this.dynamicResolver(canonical);
+        if (tool) {
+          this.toolCache.set(canonical, tool);
+          return tool;
+        }
+      } catch (error) {
+        this.logger.warn("Dynamic tool resolver error", {
+          toolName: canonical,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // Cache negative result to avoid repeated lookups
+    this.toolCache.set(canonical, null);
+    return undefined;
+  }
+
+  /**
+   * Get cached tool manifests (with time-based invalidation).
+   */
+  getManifests(): ToolManifestEntry[] {
+    const now = Date.now();
+    if (this.manifestCache && now - this.lastManifestCheck < this.manifestCheckInterval) {
+      return this.manifestCache;
+    }
+    this.manifestCache = loadToolManifests(this.toolsRoot);
+    this.lastManifestCheck = now;
+    return this.manifestCache;
+  }
+
+  /**
+   * Check if a tool is active/enabled (core tools are always active).
+   */
+  isToolActive(name: string, enabledOptionalTools: ReadonlySet<string> | readonly string[]): boolean {
+    const canonical = this.resolveAlias(name);
+    const manifests = this.getManifests();
+    return isToolActive(canonical, manifests, enabledOptionalTools);
+  }
+
+  /**
+   * Clear caches (useful for testing).
+   */
+  clearCache(): void {
+    this.toolCache.clear();
+    this.manifestCache = null;
+    this.lastManifestCheck = 0;
+  }
+
+  /**
+   * Get current cache size (for monitoring).
+   */
+  getCacheSize(): number {
+    return this.toolCache.size;
+  }
+}
+
+/**
+ * Factory function to create a ToolExecutorRegistry.
+ */
+export function createToolExecutorRegistry(
+  getToolFromExecutor: (name: string) => ToolExecutor | undefined,
+  dynamicResolver: DynamicToolResolver | undefined,
+  logger: Logger,
+  toolsRoot?: string
+): ToolExecutorRegistry {
+  return new ToolExecutorRegistry(getToolFromExecutor, dynamicResolver, logger, toolsRoot);
 }

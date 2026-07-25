@@ -14,7 +14,7 @@ import { Reflection } from "./reflection/reflection.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
 import { resolveToolAlias, resolveToolAction } from "./tools/tool-aliases.js";
-import { loadToolManifests, isToolActive, type ToolManifestEntry } from "./tools/tool-registry.js";
+import { loadToolManifests, isToolActive, createToolExecutorRegistry, type ToolManifestEntry, type ToolExecutorRegistry } from "./tools/tool-registry.js";
 import { createScriptTools } from "./tools/script-tools.js";
 import { ToolExecutionGraph } from "./executor/tool-graph.js";
 import { skillSelector } from "./skill-selector/selector.js";
@@ -72,6 +72,7 @@ export class Agent {
   private memory: MemorySystem;
   private planner: Planner;
   readonly executor: Executor;
+  private toolRegistry: ToolExecutorRegistry;
   private reasoner: Reasoner;
   private reflection: Reflection;
   private history: History;
@@ -125,6 +126,11 @@ export class Agent {
     for (const tool of createScriptTools(() => this.provider, this.logger)) {
       this.executor.registerTool(tool);
     }
+    this.toolRegistry = createToolExecutorRegistry(
+      (name) => this.executor.getTool(name),
+      createDynamicToolResolver(db),
+      this.logger
+    );
     this.reasoner = new Reasoner(provider, this.logger);
     this.reflection = new Reflection(provider, this.logger);
     this.history = new History();
@@ -658,7 +664,7 @@ export class Agent {
       }
     }
 
-    const aliasToolName = resolveToolAlias(normalized);
+    const aliasToolName = this.toolRegistry.resolveAlias(normalized);
     const aliasAction = resolveToolAction(aliasToolName, normalized);
 
     if (aliasToolName === "filesystem" && aliasAction) {
