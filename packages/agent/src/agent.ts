@@ -2093,6 +2093,16 @@ export class Agent {
    * whole-turn version of the standalone "plan" tool (plan-tool.ts); both share
    * formatPlanAsMarkdown so a plan reads the same regardless of which path produced it.
    */
+  private compressImageBuffer(buffer: Buffer, maxSizeBytes: number = 100000): Buffer {
+    // Simple compression: if buffer is larger than maxSize, indicate it should be compressed
+    // In production, use 'sharp' library for actual image resizing
+    // For now, return as-is and rely on LLM provider's vision API to handle compression
+    if (buffer.length > maxSizeBytes) {
+      this.logger.warn("Large image buffer", { size: buffer.length, max: maxSizeBytes, recommendation: "Consider using sharp library for resize" });
+    }
+    return buffer;
+  }
+
   private async handleScreenshotCapture(
     toolName: string,
     toolInput: Record<string, unknown>,
@@ -2102,8 +2112,11 @@ export class Agent {
     const action = toolInput.action as string;
     if (action !== "screenshot") return;
 
-    const buffer = toolResult.data as Buffer | undefined;
+    let buffer = toolResult.data as Buffer | undefined;
     if (!buffer || !Buffer.isBuffer(buffer)) return;
+
+    // Optional: Compress image if too large
+    buffer = this.compressImageBuffer(buffer);
 
     const base64Url = `data:image/png;base64,${buffer.toString("base64")}`;
     const imageContent: LLMContent[] = [
