@@ -15,6 +15,7 @@
     "@ducki/database": "workspace:*",
     "@ducki/logger": "workspace:*",
     "@ducki/mcp": "workspace:*",
+    "@ducki/planer": "workspace:*",
     "@ducki/providers": "workspace:*",
     "@ducki/shared": "workspace:*",
     "@ducki/tools": "workspace:*",

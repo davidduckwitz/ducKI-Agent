@@ -165,14 +165,17 @@ export class CronjobManager {
           prompt,
         ].join("\n"),
         async (runAgent) => {
-          let conversationId = job.conversationId;
+          let conversationId = (job.conversationId ?? null) as number | null | undefined;
 
           if (!conversationId) {
-            conversationId = await runAgent.startConversation({
+            const newConversationId = await runAgent.startConversation({
               name: `Cron Task #${taskId}`,
-              projectId: task.projectId,
+              projectId: task.projectId || undefined,
             });
-            await this.db.updateCronJob(job.id, { conversationId });
+            if (newConversationId) {
+              conversationId = newConversationId;
+              await this.db.updateCronJob(job.id, { conversationId });
+            }
           } else {
             await runAgent.loadConversation(conversationId);
           }

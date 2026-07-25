@@ -8,12 +8,13 @@ import { join, resolve } from "node:path";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
 import { Planner } from "./planner/planner.js";
+import { createPlanTool, formatPlanAsMarkdown } from "./planner/plan-tool.js";
 import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
 import { Reflection } from "./reflection/reflection.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
-import { resolveToolAlias, resolveToolAction } from "./tools/tool-aliases.js";
+import { resolveToolAlias, resolveToolAction, resolveCanonicalAction } from "./tools/tool-aliases.js";
 import { loadToolManifests, isToolActive, createToolExecutorRegistry, type ToolManifestEntry, type ToolExecutorRegistry } from "./tools/tool-registry.js";
 import { createScriptTools } from "./tools/script-tools.js";
 import { ToolExecutionGraph } from "./executor/tool-graph.js";
@@ -126,6 +127,7 @@ export class Agent {
     for (const tool of createScriptTools(() => this.provider, this.logger)) {
       this.executor.registerTool(tool);
     }
+    this.executor.registerTool(createPlanTool(() => this.provider, this.logger));
     this.toolRegistry = createToolExecutorRegistry(
       (name) => this.executor.getTool(name),
       createDynamicToolResolver(db),
@@ -144,6 +146,50 @@ export class Agent {
 
   async loadConversation(id: number): Promise<void> {
     return this.conversation.load(id);
+  }
+
+  /**
+   * Executes a single tool directly, bypassing the LLM entirely - the surface behind the
+   * chat UI's "/" tool selector's "run now" action. Reuses resolveToolNameAndInput and
+   * preflightToolInput (the same alias-resolution and validation used for LLM-issued tool
+   * calls) so a directly-run tool gets identical projectId->id mapping, action-alias
+   * resolution, and required-field checks - the UI shouldn't have a laxer path than the
+   * agent's own tool-call loop. If a conversation is loaded, the call is persisted as an
+   * "event" message so it renders in chat history the same way an agent-issued tool call
+   * would (and survives a reload).
+   */
+  async executeToolDirect(
+    toolName: string,
+    input: Record<string, unknown>
+  ): Promise<ToolResult & { toolName: string }> {
+    const controls = await this.loadRuntimeControls();
+    const resolved = this.resolveToolNameAndInput(toolName, input);
+    const preflight = await this.preflightToolInput(resolved.toolName, resolved.input, controls);
+
+    if (!preflight.ok) {
+      return { success: false, data: null, error: preflight.error, toolName: resolved.toolName };
+    }
+
+    const result = await this.executor.execute(resolved.toolName, preflight.input);
+
+    if (this.conversation.id !== undefined) {
+      try {
+        await this.db.addMessage({
+          conversationId: this.conversation.id,
+          role: "event",
+          content: `Tool "${resolved.toolName}" direkt ausgefuehrt`,
+          toolResult: JSON.stringify({
+            eventType: "tool_result",
+            data: { toolName: resolved.toolName, input: preflight.input, ...result },
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      } catch {
+        // Persistence failures should not block returning the tool result to the caller.
+      }
+    }
+
+    return { ...result, toolName: resolved.toolName };
   }
 
   async run(
@@ -754,13 +800,29 @@ export class Agent {
         }
       }
 
-      if (normalizedInput["action"] === undefined) {
-        if (normalizedInput["id"] !== undefined) {
+      // The project tool's own id field is "id", not "projectId" - but "projectId" is the
+      // name an LLM naturally reaches for (it's what the "task" tool uses to reference a
+      // parent project), so without this fallback project({action:"get", projectId:5})
+      // silently fails with "id is required".
+      if (normalizedInput["id"] === undefined && normalizedInput["projectId"] !== undefined) {
+        normalizedInput["id"] = normalizedInput["projectId"];
+      }
+
+      if (normalizedInput["action"] !== undefined) {
+        normalizedInput["action"] = resolveCanonicalAction("project", normalizedInput["action"]);
+      } else {
+        const hasUpdateFields = normalizedInput["name"] !== undefined
+          || normalizedInput["description"] !== undefined
+          || normalizedInput["folder"] !== undefined;
+        if (normalizedInput["id"] !== undefined && hasUpdateFields) {
+          // id + a mutable field with no explicit action reads as "update" - checking id
+          // presence first (as this used to) silently dropped the update and just
+          // returned the unchanged project instead.
+          normalizedInput["action"] = "update";
+        } else if (normalizedInput["id"] !== undefined) {
           normalizedInput["action"] = "get";
         } else if (normalizedInput["name"] !== undefined) {
           normalizedInput["action"] = "create";
-        } else if (normalizedInput["description"] !== undefined || normalizedInput["folder"] !== undefined) {
-          normalizedInput["action"] = "update";
         } else {
           normalizedInput["action"] = "list";
         }
@@ -768,18 +830,26 @@ export class Agent {
     }
 
     if (normalized === "task" && normalizedInput["action"] === undefined) {
-      if (normalizedInput["id"] !== undefined) {
-        normalizedInput["action"] = "get";
-      } else if (normalizedInput["title"] !== undefined || normalizedInput["description"] !== undefined) {
-        normalizedInput["action"] = "create";
-      } else if (
-        normalizedInput["status"] !== undefined ||
+      const hasUpdateSignalFields = normalizedInput["status"] !== undefined ||
         normalizedInput["priority"] !== undefined ||
         normalizedInput["result"] !== undefined ||
         normalizedInput["projectId"] !== undefined ||
         normalizedInput["project_id"] !== undefined ||
-        normalizedInput["subtasks"] !== undefined
-      ) {
+        normalizedInput["subtasks"] !== undefined;
+      const hasMutableFields = hasUpdateSignalFields
+        || normalizedInput["title"] !== undefined
+        || normalizedInput["description"] !== undefined;
+
+      if (normalizedInput["id"] !== undefined && hasMutableFields) {
+        // id + any mutable field with no explicit action reads as "update" - checking id
+        // presence first (as this used to) silently dropped the change and just
+        // returned the task unchanged instead.
+        normalizedInput["action"] = "update";
+      } else if (normalizedInput["id"] !== undefined) {
+        normalizedInput["action"] = "get";
+      } else if (normalizedInput["title"] !== undefined || normalizedInput["description"] !== undefined) {
+        normalizedInput["action"] = "create";
+      } else if (hasUpdateSignalFields) {
         normalizedInput["action"] = "update";
       } else {
         normalizedInput["action"] = "list";
@@ -787,16 +857,7 @@ export class Agent {
     }
 
     if (normalized === "task" && normalizedInput["action"] !== undefined) {
-      const rawAction = String(normalizedInput["action"] ?? "").toLowerCase();
-      const actionAliases: Record<string, string> = {
-        list_all: "list",
-        list_tasks: "list",
-        get_all: "list",
-        all: "list",
-      };
-      if (actionAliases[rawAction]) {
-        normalizedInput["action"] = actionAliases[rawAction];
-      }
+      normalizedInput["action"] = resolveCanonicalAction("task", normalizedInput["action"]);
 
       const normalizedAction = String(normalizedInput["action"] ?? "").toLowerCase();
       if (normalizedAction === "get") {
@@ -839,6 +900,10 @@ export class Agent {
       } else {
         normalizedInput["action"] = "list_configs";
       }
+    }
+
+    if (normalized === "plan" && normalizedInput["action"] === undefined) {
+      normalizedInput["action"] = normalizedInput["feedback"] !== undefined ? "refine" : "create";
     }
 
     return { toolName: normalized, input: normalizedInput };
@@ -1053,6 +1118,23 @@ export class Agent {
       }
       if (action === "create" && String(normalizedInput["name"] ?? "").trim().length === 0) {
         return { ok: false, error: "workflow:create requires field 'name'" };
+      }
+      return { ok: true, input: normalizedInput };
+    }
+
+    if (normalizedName === "plan") {
+      const action = String(normalizedInput["action"] ?? "create").toLowerCase() === "refine" ? "refine" : "create";
+      normalizedInput["action"] = action;
+      if (action === "create" && String(normalizedInput["goal"] ?? "").trim().length === 0) {
+        return { ok: false, error: "plan:create requires field 'goal'" };
+      }
+      if (action === "refine") {
+        if (!normalizedInput["plan"] || typeof normalizedInput["plan"] !== "object") {
+          return { ok: false, error: "plan:refine requires field 'plan' (the existing plan object returned by plan:create)" };
+        }
+        if (String(normalizedInput["feedback"] ?? "").trim().length === 0) {
+          return { ok: false, error: "plan:refine requires field 'feedback'" };
+        }
       }
       return { ok: true, input: normalizedInput };
     }
@@ -1990,6 +2072,54 @@ export class Agent {
     }
   }
 
+  /**
+   * agentMode:"plan" implementation - creates a structured plan via the Planner and
+   * returns it as the full response, persisting both turns to conversation history like
+   * a normal run would, but never entering the tool-execution loop. This is the
+   * whole-turn version of the standalone "plan" tool (plan-tool.ts); both share
+   * formatPlanAsMarkdown so a plan reads the same regardless of which path produced it.
+   */
+  private async runPlanMode(
+    userInput: string,
+    options: AgentRunOptions,
+    emit: (type: AgentRunEventType, message: string, data?: Record<string, unknown>) => void
+  ): Promise<AgentRunResult> {
+    const userMessage: LLMMessage = {
+      role: "user",
+      content: userInput,
+      metadata: options.attachments?.length ? { attachments: options.attachments } : undefined,
+    };
+    await this.conversation.addMessage(userMessage);
+    this.history.add(userMessage);
+
+    emit("plan", "Erstelle Plan...", { goal: userInput });
+
+    const availableToolNames = this.executor.listTools().map((tool) => tool.name);
+    const plan = await this.planner.createPlan(userInput, availableToolNames);
+    const response = formatPlanAsMarkdown(plan);
+
+    if (options.stream && options.onChunk) {
+      options.onChunk(response);
+    }
+
+    const assistantMessage: LLMMessage = { role: "assistant", content: response };
+    await this.conversation.addMessage(assistantMessage);
+    this.history.add(assistantMessage);
+
+    emit("plan", "Plan erstellt", {
+      goal: plan.goal,
+      steps: plan.steps.length,
+      complexity: plan.estimatedComplexity,
+    });
+
+    return {
+      response,
+      iterations: 1,
+      toolsUsed: [],
+      conversationId: this.conversation.id,
+    };
+  }
+
   private async runLoop(
     userInput: string,
     toolsUsed: string[],
@@ -2061,6 +2191,14 @@ export class Agent {
         });
       }
     };
+
+    // Plan mode short-circuits the whole run loop: produce a structured plan and return
+    // immediately, without selecting skills, building tool context, or entering the
+    // iteration loop below. Checked before any of that setup runs since none of it is
+    // needed - and skipping it keeps plan mode fast and side-effect-free.
+    if (options.agentMode === "plan") {
+      return await this.runPlanMode(userInput, options, emit);
+    }
 
     // Determine agent mode (full, lightweight, or chatbot) - P3.2
     const explicitMode = options.agentMode ?? "full";

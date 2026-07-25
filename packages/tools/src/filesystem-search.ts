@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, type Dirent } from "node:fs";
 import { join, relative, basename } from "node:path";
 
 export interface GrepMatch {
@@ -69,9 +69,9 @@ export function globToRegex(pattern: string): RegExp {
 
 function walkDir(dir: string, results: string[], limit: number): void {
   if (results.length >= limit) return;
-  let entries: ReturnType<typeof readdirSync>;
+  let entries: Dirent[];
   try {
-    entries = readdirSync(dir, { withFileTypes: true });
+    entries = readdirSync(dir, { withFileTypes: true }) as Dirent[];
   } catch {
     return;
   }

@@ -48,6 +48,7 @@ export function setupWebSocket(
       message: string;
       conversationId?: number;
       attachments?: Array<{ name: string; path?: string; url?: string; mimeType?: string }>;
+      agentMode?: "full" | "plan";
     }) => {
       let registryRunId: string | undefined;
       const runAgents: Agent[] = [];
@@ -97,6 +98,7 @@ export function setupWebSocket(
           {
             stream: true,
             attachments: data.attachments,
+            agentMode: data.agentMode,
             onChunk: (chunk) => {
               socket.emit("chat:chunk", { content: chunk, conversationId: resolvedConversationId });
             },

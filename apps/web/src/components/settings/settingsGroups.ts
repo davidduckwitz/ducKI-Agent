@@ -186,6 +186,27 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_AUTO_SKILL_MIN_OVERLAP",
       ],
     },
+    {
+      name: "Plan-Modus",
+      icon: Target,
+      keys: [
+        "PLAN_MODE_ENABLED",
+        "PLAN_MODE_AUTO_SAVE",
+        "PLAN_MODE_AUTO_EXECUTE",
+        "PLAN_MODE_MARKDOWN_PATH",
+      ],
+    },
+    {
+      name: "Umsetzungs-Modus",
+      icon: Target,
+      keys: [
+        "EXECUTION_MODE_AUTO_CREATE_PROJECT",
+        "EXECUTION_MODE_VALIDATION_INTERVAL",
+        "EXECUTION_MODE_MAX_RETRIES",
+        "EXECUTION_MODE_TIMEOUT_MINUTES",
+        "EXECUTION_MODE_UPDATE_PLAN_FILE",
+      ],
+    },
   ],
   Memory: [
     {

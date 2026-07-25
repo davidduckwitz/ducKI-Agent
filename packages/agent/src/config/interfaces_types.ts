@@ -38,7 +38,9 @@ export interface AgentRunOptions {
   onChunk?: (chunk: string) => void;
   onEvent?: (event: AgentRunEvent) => void;
   contextCaps?: AgentRunContextCaps;
-  agentMode?: "full" | "lightweight" | "chatbot";
+  /** "plan" short-circuits the run loop entirely: it only produces a structured plan
+   *  via the Planner and returns it as the response, without executing any tools. */
+  agentMode?: "full" | "lightweight" | "chatbot" | "plan";
   attachments?: AgentRunAttachment[];
 }
 

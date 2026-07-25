@@ -7,6 +7,8 @@ import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { DuckyMascot } from "./DuckyMascot";
 import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
+import { ToolSkillSelector } from "./ToolSkillSelector";
+import { PlanExecutionPanel, type Plan } from "./PlanExecutionPanel";
 import type { AgentEventType, RenderedChatMessage } from "./chatTypes";
 
 interface ConversationItem {
@@ -71,7 +73,15 @@ export function ChatContainer() {
   const [uploading, setUploading] = useState(false);
   const [showConversationList, setShowConversationList] = useState(false);
   const [compactMode, setCompactMode] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
+  const [showSelector, setShowSelector] = useState(false);
+  const [selectorQuery, setSelectorQuery] = useState("");
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+  const [showPlanPanel, setShowPlanPanel] = useState(false);
+  const [currentPlan, setCurrentPlan] = useState<Plan | null | undefined>(null);
+  const [lastProcessedPlanId, setLastProcessedPlanId] = useState<string>("");
+  const [planExecuting, setPlanExecuting] = useState(false);
+  const [planProgress, setPlanProgress] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -323,18 +333,136 @@ export function ChatContainer() {
     const finalInput = `${input.trim()}${uploadSummary}`.trim();
     if (!finalInput) return;
 
-    sendMessage(finalInput, attachments.length > 0 ? attachments : undefined);
+    sendMessage(finalInput, attachments.length > 0 ? attachments : undefined, planMode ? "plan" : undefined);
     setInput("");
     setAttachedFiles([]);
     setAnalyzeImages(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape" && showSelector) {
+      setShowSelector(false);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
+
+  // "/" triggers the tool/skill selector dropdown while the leading token (before the
+  // first whitespace) is still being typed - mirrors how the agent itself only treats a
+  // leading "/slug" as a skill request (extractRequestedSkillSlugs in agent.ts).
+  const handleInputChange = (value: string) => {
+    setInput(value);
+    const trimmedStart = value.trimStart();
+    if (trimmedStart.startsWith("/")) {
+      const afterSlash = trimmedStart.slice(1);
+      if (!/\s/.test(afterSlash)) {
+        setSelectorQuery(afterSlash);
+        setShowSelector(true);
+        return;
+      }
+    }
+    setShowSelector(false);
+  };
+
+  const handleInsertSkill = (slug: string) => {
+    setInput(`/${slug} `);
+    setShowSelector(false);
+  };
+
+  const handleToolExecuted = (result: { toolName: string; success: boolean; data: unknown; error?: string }) => {
+    const summary = result.success
+      ? `Tool "${result.toolName}" erfolgreich ausgefuehrt`
+      : `Tool "${result.toolName}" fehlgeschlagen${result.error ? `: ${result.error}` : ""}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "event",
+        content: summary,
+        timestamp: new Date().toISOString(),
+        eventType: "tool_result",
+        eventData: { toolName: result.toolName, success: result.success, data: result.data, error: result.error },
+      },
+    ]);
+    setInput("");
+    setShowSelector(false);
+  };
+
+  const handlePlanRefinement = async () => {
+    if (!currentPlan) return;
+    setShowPlanPanel(false);
+    setInput(`Verbessere diesen Plan: ${currentPlan.goal}\n\nBisheriger Plan: ${currentPlan.markdown || JSON.stringify(currentPlan)}`);
+  };
+
+  const handlePlanExecution = async () => {
+    if (!currentPlan) return;
+    setPlanExecuting(true);
+    setPlanProgress(0);
+
+    try {
+      const interval = setInterval(() => {
+        setPlanProgress((p) => Math.min(p + 5, 95));
+      }, 1000);
+
+      const result = await api.plans.execute(currentPlan.id ?? 1);
+
+      clearInterval(interval);
+      setPlanProgress(100);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "event",
+          content: "Plan-Umsetzung gestartet",
+          timestamp: new Date().toISOString(),
+          eventType: "tool_result",
+          eventData: { message: "Execution started", planId: currentPlan.id },
+        },
+      ]);
+
+      setTimeout(() => {
+        setShowPlanPanel(false);
+        setPlanExecuting(false);
+        setPlanProgress(0);
+      }, 1500);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "event",
+          content: `Umsetzung fehlgeschlagen: ${error instanceof Error ? error.message : "Unbekannter Fehler"}`,
+          timestamp: new Date().toISOString(),
+          eventType: "tool_result",
+          eventData: { error: true },
+        },
+      ]);
+      setPlanExecuting(false);
+      setPlanProgress(0);
+    }
+  };
+
+  const detectPlanFromMessages = (previousProcessedId: string) => {
+    const lastPlanMessage = [...messages].reverse().find((msg) => msg.eventType === "plan");
+
+    if (lastPlanMessage?.id === previousProcessedId) return;
+    if (!lastPlanMessage?.eventData) return;
+
+    const planData = lastPlanMessage.eventData as unknown as Plan;
+    if (planData.goal && planData.steps) {
+      setCurrentPlan(planData);
+      setShowPlanPanel(true);
+      setLastProcessedPlanId(lastPlanMessage.id);
+    }
+  };
+
+  useEffect(() => {
+    detectPlanFromMessages(lastProcessedPlanId);
+  }, [messages, lastProcessedPlanId]);
 
   const deleteConversation = useMutation({
     mutationFn: (conversationIdToDelete: number) => api.chat.deleteConversation(conversationIdToDelete),
@@ -431,6 +559,17 @@ export function ChatContainer() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setPlanMode((prev) => !prev)}
+            className={`text-sm px-3 py-1.5 rounded-lg border transition ${
+              planMode
+                ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-200"
+                : "bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600"
+            }`}
+            title="Plan-Modus: nur einen Plan erstellen, nichts ausfuehren"
+          >
+            {planMode ? "Plan (aktiv)" : "Plan"}
+          </button>
+          <button
             onClick={() => setCompactMode((prev) => !prev)}
             className="btn-secondary text-sm"
           >
@@ -513,7 +652,16 @@ export function ChatContainer() {
           </div>
         )}
 
-        <div className="flex gap-2">
+        <div className="relative flex gap-2">
+          {showSelector && (
+            <ToolSkillSelector
+              query={selectorQuery}
+              conversationId={conversationId}
+              onInsertSkill={handleInsertSkill}
+              onToolExecuted={handleToolExecuted}
+              onClose={() => setShowSelector(false)}
+            />
+          )}
           <input
             ref={fileInputRef}
             type="file"
@@ -535,7 +683,7 @@ export function ChatContainer() {
 
           <textarea
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => handleInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={t("chat.inputPlaceholder")}
             rows={1}
@@ -553,6 +701,18 @@ export function ChatContainer() {
         </div>
       </div>
       </div>
+
+      {/* Plan Execution Panel */}
+      {showPlanPanel && currentPlan && currentPlan.goal && currentPlan.steps && (
+        <PlanExecutionPanel
+          plan={currentPlan as Plan}
+          onRefine={handlePlanRefinement}
+          onExecute={handlePlanExecution}
+          onClose={() => setShowPlanPanel(false)}
+          isExecuting={planExecuting}
+          executionProgress={planProgress}
+        />
+      )}
     </div>
   );
 }

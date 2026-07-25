@@ -81,6 +81,9 @@ importers:
       '@ducki/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
+      '@ducki/planer':
+        specifier: workspace:*
+        version: link:../../packages/planer
       '@ducki/providers':
         specifier: workspace:*
         version: link:../../packages/providers

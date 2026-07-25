@@ -90,7 +90,7 @@ interface AppState {
   // Actions
   initSocket: () => void;
   disconnectSocket: () => void;
-  sendMessage: (content: string, attachments?: ChatAttachment[]) => void;
+  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode) => void;
   stopMessage: () => void;
   clearChat: () => void;
   setConversationId: (id: number | undefined) => void;
@@ -99,6 +99,8 @@ interface AppState {
   setGlobalRunningAgents: (count: number) => void;
   setSetupModalOpen: (open: boolean) => void;
 }
+
+export type AgentMode = "full" | "plan";
 
 export const useAppStore = create<AppState>((set, get) => ({
   agentStatus: "idle",
@@ -260,7 +262,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ socket: null, connected: false });
   },
 
-  sendMessage: (content: string, attachments?: ChatAttachment[]) => {
+  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode) => {
     const { socket, conversationId, isLoading } = get();
     if (!socket || !content.trim() || isLoading) return;
 
@@ -285,7 +287,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // chat:conversation handler recognize the id is stale and ignore it.
       awaitingNewConversation: conversationId === undefined,
     }));
-    socket.emit("chat:message", { message: content, conversationId, attachments });
+    socket.emit("chat:message", { message: content, conversationId, attachments, agentMode });
   },
 
   stopMessage: () => {

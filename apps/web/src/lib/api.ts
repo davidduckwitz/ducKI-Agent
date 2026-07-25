@@ -144,6 +144,38 @@ export const api = {
           subagent: boolean;
         }>
       >("/tools"),
+    execute: (toolName: string, input: Record<string, unknown>, conversationId?: number) =>
+      request<{ success: boolean; data: unknown; error?: string; toolName: string }>("/tools/execute", {
+        method: "POST",
+        body: JSON.stringify({ toolName, input, conversationId }),
+      }),
+  },
+
+  plans: {
+    list: (conversationId?: number, projectId?: number) => {
+      const params = new URLSearchParams();
+      if (conversationId) params.set("conversationId", String(conversationId));
+      if (projectId) params.set("projectId", String(projectId));
+      const query = params.toString();
+      return request<unknown[]>(`/plans${query ? `?${query}` : ""}`);
+    },
+    get: (id: number) => request<unknown>(`/plans/${id}`),
+    create: (data: {
+      conversationId?: number;
+      projectId?: number;
+      goal: string;
+      title?: string;
+      complexity?: number;
+      steps: Array<{ title: string; description: string; tools?: string[] }>;
+      tools?: string[];
+      markdown?: string;
+    }) => request<unknown>("/plans", { method: "POST", body: JSON.stringify(data) }),
+    update: (id: number, data: Record<string, unknown>) =>
+      request<unknown>(`/plans/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    delete: (id: number) => request<{ deleted: boolean; id: number }>(`/plans/${id}`, { method: "DELETE" }),
+    execute: (id: number) => request<{ message: string; planId: number }>(`/plans/${id}/execute`, { method: "POST" }),
+    importMarkdown: (markdown: string) =>
+      request<unknown>("/plans/import/markdown", { method: "POST", body: JSON.stringify({ markdown }) }),
   },
 
   memory: {

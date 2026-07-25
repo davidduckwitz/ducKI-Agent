@@ -179,6 +179,24 @@ export const archivedConversations = sqliteTable("archived_conversations", {
 });
 
 // ============================================================
+// Plans (for plan mode: saved structured plans for projects)
+// ============================================================
+export const plans = sqliteTable("plans", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  conversationId: integer("conversation_id").references(() => conversations.id),
+  projectId: integer("project_id").references(() => projects.id),
+  goal: text("goal").notNull(),
+  title: text("title"),
+  complexity: integer("complexity"), // 1-5
+  steps: text("steps").notNull(), // JSON array of step objects
+  tools: text("tools"), // JSON array of tool names needed
+  markdown: text("markdown"), // Rendered markdown version
+  status: text("status").notNull().default("draft"), // draft, active, completed, archived
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// ============================================================
 // LLM Wiki Entries
 // ============================================================
 export const llmWikiEntries = sqliteTable("llm_wiki_entries", {
@@ -219,3 +237,5 @@ export type LlmWikiEntryInsert = typeof llmWikiEntries.$inferInsert;
 export type LlmWikiEntrySelect = typeof llmWikiEntries.$inferSelect;
 export type DynamicToolInsert = typeof dynamicTools.$inferInsert;
 export type DynamicToolSelect = typeof dynamicTools.$inferSelect;
+export type PlanInsert = typeof plans.$inferInsert;
+export type PlanSelect = typeof plans.$inferSelect;

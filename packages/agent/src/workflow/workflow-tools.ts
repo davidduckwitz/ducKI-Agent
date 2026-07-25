@@ -3,6 +3,7 @@ import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import { resolveWithinRoot } from "@ducki/shared";
 import { browserTool } from "@ducki/tools";
 import { previewSplit, commitSplit } from "../tasks/task-split-service.js";
+import { resolveCanonicalAction } from "../tools/tool-aliases.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 
@@ -661,12 +662,11 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
       },
     },
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const rawAction = String(input["action"] ?? "").toLowerCase();
-      const actionAliases: Record<string, string> = {
-        list_tasks: "list",
-        list_projects: "list",
-      };
-      const action = actionAliases[rawAction] ?? rawAction;
+      // Defense-in-depth: agent.ts's resolveToolNameAndInput already normalizes the action
+      // and maps projectId->id before this runs, but this tool can also be invoked directly
+      // (subagents, scripts, tests), so re-apply both here rather than assume upstream ran.
+      const action = resolveCanonicalAction("project", input["action"]);
+      const id = Number(input["id"] ?? input["projectId"]);
 
       try {
         switch (action) {
@@ -683,13 +683,11 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           case "list":
             return ok(await db.listProjects());
           case "get": {
-            const id = Number(input["id"]);
             if (!Number.isFinite(id)) return fail("Valid project id is required");
             const project = await db.getProject(id);
             return project ? ok(project) : fail(`Project ${id} not found`);
           }
           case "update": {
-            const id = Number(input["id"]);
             if (!Number.isFinite(id)) return fail("Valid project id is required");
             const project = await db.updateProject(id, {
               name: input["name"] ? String(input["name"]) : undefined,
@@ -699,13 +697,12 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
             return project ? ok(project) : fail(`Project ${id} not found`);
           }
           case "delete": {
-            const id = Number(input["id"]);
             if (!Number.isFinite(id)) return fail("Valid project id is required");
             await db.deleteProject(id);
             return ok({ deleted: true, id });
           }
           default:
-            return fail(`Unknown project action: ${action}`);
+            return fail(`Unknown project action: '${action}'. Valid actions: create, list, get, update, delete`);
         }
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));
@@ -741,7 +738,12 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
       },
     },
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const action = String(input["action"] ?? "");
+      // Defense-in-depth: agent.ts's resolveToolNameAndInput already normalizes the action
+      // (casing + aliases like "create_task"), but this tool can also be invoked directly
+      // (subagents, scripts, tests). Previously this read input["action"] verbatim with no
+      // lowercasing at all, so any non-lowercase action (e.g. "Create") fell straight to the
+      // "Unknown task action" default case.
+      const action = resolveCanonicalAction("task", input["action"]);
 
       try {
         switch (action) {
@@ -833,7 +835,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
             return ok({ deleted: true, id });
           }
           default:
-            return fail(`Unknown task action: ${action}`);
+            return fail(`Unknown task action: '${action}'. Valid actions: create, list, get, update, start, complete, fail, delete, split`);
         }
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));

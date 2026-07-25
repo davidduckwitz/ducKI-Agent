@@ -42,6 +42,7 @@ import { gatewayRouter } from "./routes/gateway.js";
 import { logsRouter } from "./routes/logs.js";
 import { mcpRouter } from "./routes/mcp.js";
 import { memoryRouter } from "./routes/memory.js";
+import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
 import { sharedRouter } from "./routes/shared.js";
@@ -355,6 +356,7 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/chat", chatRouter);
 	app.use("/api/tasks", tasksRouter);
 	app.use("/api/projects", projectsRouter);
+	app.use("/api/plans", plansRouter);
 	app.use("/api/tools", toolsRouter);
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);

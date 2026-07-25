@@ -8,6 +8,7 @@ import { useAppStore } from "../../lib/store";
 import { useCodingSession } from "../../lib/codingSessionStore";
 import { DuckyMascot } from "../chat/DuckyMascot";
 import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
+import { ToolSkillSelector } from "../chat/ToolSkillSelector";
 import type { AgentEventType, RenderedChatMessage } from "../chat/chatTypes";
 
 interface CodingFileItem {
@@ -93,6 +94,9 @@ export function CodingWorkspace() {
   const [chatInput, setChatInput] = useState("");
   const [isEnsuringConversation, setIsEnsuringConversation] = useState(false);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [planMode, setPlanMode] = useState(false);
+  const [showSelector, setShowSelector] = useState(false);
+  const [selectorQuery, setSelectorQuery] = useState("");
   const [projectConversationMap, setProjectConversationMap] = useState<Record<string, number>>(() => {
     try {
       const raw = localStorage.getItem(PROJECT_CONVERSATION_MAP_KEY);
@@ -382,6 +386,44 @@ export function CodingWorkspace() {
     return `data:image/${mime};base64,${readFileQuery.data.contentBase64}`;
   }, [previewType, readFileQuery.data?.contentBase64, selectedPath]);
 
+  const handleInputChange = (value: string) => {
+    setChatInput(value);
+    const trimmedStart = value.trimStart();
+    if (trimmedStart.startsWith("/")) {
+      const afterSlash = trimmedStart.slice(1);
+      if (!/\s/.test(afterSlash)) {
+        setSelectorQuery(afterSlash);
+        setShowSelector(true);
+        return;
+      }
+    }
+    setShowSelector(false);
+  };
+
+  const handleInsertSkill = (slug: string) => {
+    setChatInput(`/${slug} `);
+    setShowSelector(false);
+  };
+
+  const handleToolExecuted = (result: { toolName: string; success: boolean; data: unknown; error?: string }) => {
+    const summary = result.success
+      ? `Tool "${result.toolName}" erfolgreich ausgefuehrt`
+      : `Tool "${result.toolName}" fehlgeschlagen${result.error ? `: ${result.error}` : ""}`;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        role: "event",
+        content: summary,
+        timestamp: new Date().toISOString(),
+        eventType: "tool_result",
+        eventData: { toolName: result.toolName, success: result.success, data: result.data, error: result.error },
+      },
+    ]);
+    setChatInput("");
+    setShowSelector(false);
+  };
+
   const sendCodingPrompt = async () => {
     const text = chatInput.trim();
     if (!text || !selectedProject) return;
@@ -432,8 +474,9 @@ export function CodingWorkspace() {
       text,
     ].join("\n");
 
-    sendMessage(contextPrefix);
+    sendMessage(contextPrefix, undefined, planMode ? "plan" : undefined);
     setChatInput("");
+    setShowSelector(false);
     setIsEnsuringConversation(false);
   };
 
@@ -518,12 +561,33 @@ export function CodingWorkspace() {
                 <div ref={chatBottomRef} />
               </div>
 
-              <textarea
-                className="input w-full min-h-20"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder={t("codingPage.chatPlaceholder")}
-              />
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs text-gray-400">Plan</div>
+                <button
+                  className={`text-xs px-2 py-1 rounded transition ${planMode ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-300 hover:text-white"}`}
+                  onClick={() => setPlanMode(!planMode)}
+                  title="Plan-Modus: nur einen Plan erstellen, nichts ausfuehren"
+                >
+                  {planMode ? "Plan (aktiv)" : "Plan"}
+                </button>
+              </div>
+              <div className="relative">
+                <textarea
+                  className="input w-full min-h-20"
+                  value={chatInput}
+                  onChange={(e) => handleInputChange(e.target.value)}
+                  placeholder={t("codingPage.chatPlaceholder")}
+                />
+                {showSelector && (
+                  <ToolSkillSelector
+                    query={selectorQuery}
+                    conversationId={activeConversationId}
+                    onInsertSkill={handleInsertSkill}
+                    onToolExecuted={handleToolExecuted}
+                    onClose={() => setShowSelector(false)}
+                  />
+                )}
+              </div>
               <button
                 className="btn-primary w-full"
                 onClick={() => {
