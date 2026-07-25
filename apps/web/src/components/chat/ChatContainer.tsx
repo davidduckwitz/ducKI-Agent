@@ -66,6 +66,7 @@ export function ChatContainer() {
     conversationId,
     setConversationId,
     setMessages,
+    connected,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -553,6 +554,7 @@ export function ChatContainer() {
           <h1 className="font-semibold truncate">Chat</h1>
           <DuckyMascot
             working={isLoading}
+            connected={connected}
             size={28}
             title={isLoading ? t("chat.duckyWorkingTitle") : t("chat.duckyIdleTitle")}
           />
@@ -600,7 +602,7 @@ export function ChatContainer() {
         )}
         {messages.length === 0 && (
           <div className="text-center text-gray-500 mt-20">
-            <DuckyMascot working={false} size={56} className="mx-auto mb-4 opacity-80" />
+            <DuckyMascot working={false} connected={connected} size={56} className="mx-auto mb-4 opacity-80" />
             <p>{t("chat.startConversation")}</p>
           </div>
         )}

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
-export type DuckyState = "idle" | "flying" | "landing";
+export type DuckyState = "idle" | "flying" | "landing" | "fallen";
 
 interface DuckyMascotProps {
   /** true while the agent is actively working - the duck takes flight. */
   working: boolean;
+  /** true when connected to server; false when connection is lost - duck falls. */
+  connected?: boolean;
   /** pixel size of the (square) mascot. */
   size?: number;
   className?: string;
@@ -19,11 +21,29 @@ const LANDING_DURATION_MS = 620;
  * surface (chat header, sidebar, ...) so the land transition is visible -
  * it never unmounts on its own between working/idle.
  */
-export function DuckyMascot({ working, size = 32, className, title }: DuckyMascotProps) {
+export function DuckyMascot({ working, connected = true, size = 32, className, title }: DuckyMascotProps) {
   const [state, setState] = useState<DuckyState>(working ? "flying" : "idle");
   const wasWorking = useRef(working);
 
+  // Handle connection state
   useEffect(() => {
+    if (!connected) {
+      setState("fallen");
+      return;
+    }
+
+    // If reconnected, recover to working or idle state
+    if (working) {
+      setState("flying");
+    } else if (state === "fallen") {
+      setState("idle");
+    }
+  }, [connected, working, state]);
+
+  // Handle working state
+  useEffect(() => {
+    if (!connected) return; // Don't animate when disconnected
+
     if (working) {
       wasWorking.current = true;
       setState("flying");
@@ -39,15 +59,15 @@ export function DuckyMascot({ working, size = 32, className, title }: DuckyMasco
     setState("landing");
     const timer = setTimeout(() => setState("idle"), LANDING_DURATION_MS);
     return () => clearTimeout(timer);
-  }, [working]);
+  }, [working, connected]);
 
   return (
     <div
       className={`ducky-mascot inline-flex items-center justify-center shrink-0 ${className ?? ""}`}
       style={{ width: size, height: size }}
       role="img"
-      aria-label={title ?? (working ? "DucKI arbeitet" : "DucKI")}
-      title={title}
+      aria-label={title ?? (state === "fallen" ? "Verbindung verloren" : working ? "DucKI arbeitet" : "DucKI")}
+      title={title ?? (state === "fallen" ? "Verbindung zum Server verloren" : undefined)}
       data-ducky-state={state}
     >
       <svg viewBox="0 0 64 64" width="100%" height="100%" className="ducky-body" data-ducky-state={state}>
