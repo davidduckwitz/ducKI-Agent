@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{TOOL_NAME}} - DucKI Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="../assets/css/style.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <!-- Navigation -->
+    <nav class="sticky top-0 z-50 bg-white dark:bg-slate-900 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">🦆</div>
+                <a href="/" class="text-xl font-bold text-slate-900 dark:text-white">DucKI Agent</a>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="../tools.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Tools</a>
+                <a href="../skills.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Skills</a>
+                <a href="../documentation.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Docs</a>
+                <a href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" class="text-sm font-medium text-blue-600">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Breadcrumb -->
+    <nav class="bg-white dark:bg-slate-900 px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+        <div class="max-w-6xl mx-auto text-sm text-slate-600 dark:text-slate-400">
+            <a href="/" class="hover:text-blue-600">Startseite</a>
+            <span> / </span>
+            <a href="../tools.html" class="hover:text-blue-600">Tools</a>
+            <span> / </span>
+            <span class="text-slate-900 dark:text-white font-medium">{{TOOL_NAME}}</span>
+        </div>
+    </nav>
+
+    <!-- Header -->
+    <section class="bg-gradient-to-br from-blue-50 dark:from-slate-900 to-slate-50 dark:to-slate-800 py-12 px-4 border-b border-slate-200 dark:border-slate-800">
+        <div class="max-w-4xl mx-auto">
+            <div class="flex items-start gap-4 mb-6">
+                <div class="text-5xl">{{TOOL_ICON}}</div>
+                <div>
+                    <h1 class="text-4xl font-bold mb-2">{{TOOL_NAME}}</h1>
+                    <div class="flex gap-2 flex-wrap">
+                        <span class="px-3 py-1 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium">{{TOOL_CATEGORY}}</span>
+                        <span class="px-3 py-1 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 text-sm font-medium">{{TOOL_STATUS}}</span>
+                        {{#if TOOL_CORE}}<span class="px-3 py-1 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-sm font-medium">Core Tool</span>{{/if}}
+                    </div>
+                </div>
+            </div>
+            <p class="text-lg text-slate-600 dark:text-slate-300">{{TOOL_DESCRIPTION}}</p>
+        </div>
+    </section>
+
+    <!-- Main Content -->
+    <section class="py-12 px-4">
+        <div class="max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Main Content -->
+            <div class="lg:col-span-2 space-y-8">
+                <!-- Overview -->
+                <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h2 class="text-2xl font-bold mb-4">Übersicht</h2>
+                    <p class="text-slate-600 dark:text-slate-400">{{TOOL_LONG_DESCRIPTION}}</p>
+                </div>
+
+                <!-- Funktionalität -->
+                <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h2 class="text-2xl font-bold mb-4">Funktionalität</h2>
+                    <ul class="space-y-2 text-slate-600 dark:text-slate-400">
+                        {{#each TOOL_FEATURES}}
+                        <li class="flex gap-2">
+                            <span class="text-green-500 flex-shrink-0">✓</span>
+                            <span>{{this}}</span>
+                        </li>
+                        {{/each}}
+                    </ul>
+                </div>
+
+                <!-- Use Cases -->
+                <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h2 class="text-2xl font-bold mb-4">Anwendungsfälle</h2>
+                    <ul class="space-y-2">
+                        {{#each TOOL_USE_CASES}}
+                        <li class="flex gap-2 text-slate-600 dark:text-slate-400">
+                            <span class="flex-shrink-0">•</span>
+                            <span>{{this}}</span>
+                        </li>
+                        {{/each}}
+                    </ul>
+                </div>
+
+                <!-- Examples -->
+                <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h2 class="text-2xl font-bold mb-4">Beispiele</h2>
+                    <div class="space-y-4">
+                        {{#each TOOL_EXAMPLES}}
+                        <div class="bg-slate-900 text-slate-100 p-4 rounded-lg text-sm overflow-x-auto">
+                            <pre>{{this}}</pre>
+                        </div>
+                        {{/each}}
+                    </div>
+                </div>
+
+                <!-- Dependencies -->
+                {{#if TOOL_DEPENDENCIES}}
+                <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h2 class="text-2xl font-bold mb-4">Abhängigkeiten</h2>
+                    <div class="space-y-2 text-slate-600 dark:text-slate-400">
+                        {{#each TOOL_DEPENDENCIES}}
+                        <div class="flex gap-2">
+                            <span class="flex-shrink-0">→</span>
+                            <span>{{this}}</span>
+                        </div>
+                        {{/each}}
+                    </div>
+                </div>
+                {{/if}}
+
+                <!-- Settings -->
+                <div class="bg-blue-50 dark:bg-blue-900/20 p-8 rounded-lg border border-blue-200 dark:border-blue-800">
+                    <h2 class="text-2xl font-bold mb-4">⚙️ Setup & Konfiguration</h2>
+                    <div class="space-y-4 text-slate-600 dark:text-slate-400">
+                        {{#each TOOL_SETUP_STEPS}}
+                        <div class="flex gap-3">
+                            <span class="text-blue-600 font-bold flex-shrink-0">{{@index+1}}.</span>
+                            <span>{{this}}</span>
+                        </div>
+                        {{/each}}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sidebar -->
+            <div class="space-y-6">
+                <!-- Info Card -->
+                <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800 sticky top-20">
+                    <h3 class="font-semibold mb-4">Tool Information</h3>
+                    <dl class="space-y-3 text-sm">
+                        <div>
+                            <dt class="font-medium text-slate-500 dark:text-slate-400">Version</dt>
+                            <dd class="text-slate-900 dark:text-white">{{TOOL_VERSION}}</dd>
+                        </div>
+                        <div>
+                            <dt class="font-medium text-slate-500 dark:text-slate-400">Status</dt>
+                            <dd class="text-slate-900 dark:text-white">{{TOOL_STATUS}}</dd>
+                        </div>
+                        <div>
+                            <dt class="font-medium text-slate-500 dark:text-slate-400">Kategorie</dt>
+                            <dd class="text-slate-900 dark:text-white">{{TOOL_CATEGORY}}</dd>
+                        </div>
+                    </dl>
+                    <div class="mt-6 space-y-2">
+                        <a href="{{TOOL_GITHUB_LINK}}" target="_blank" class="block w-full px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-center font-medium transition-colors">
+                            GitHub Repository
+                        </a>
+                        <button onclick="installTool('{{TOOL_ID}}')" class="w-full px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium transition-colors">
+                            Installieren
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Related Tools -->
+                {{#if RELATED_TOOLS}}
+                <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h3 class="font-semibold mb-4">Ähnliche Tools</h3>
+                    <div class="space-y-2">
+                        {{#each RELATED_TOOLS}}
+                        <a href="./tool-{{this.id}}.html" class="block p-2 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                            <div class="font-medium text-sm">{{this.name}}</div>
+                            <div class="text-xs text-slate-500 dark:text-slate-400">{{this.category}}</div>
+                        </a>
+                        {{/each}}
+                    </div>
+                </div>
+                {{/if}}
+
+                <!-- Dokumentation -->
+                <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h3 class="font-semibold mb-4">Dokumentation</h3>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="{{TOOL_DOCS_LINK}}" target="_blank" class="text-blue-600 hover:text-blue-700">→ Offizielle Dokumentation</a></li>
+                        <li><a href="../documentation.html" class="text-blue-600 hover:text-blue-700">→ Setup Guide</a></li>
+                        <li><a href="../api-docs.html" class="text-blue-600 hover:text-blue-700">→ API Referenz</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 dark:bg-slate-950 text-slate-400 py-12 px-4 mt-12">
+        <div class="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-3 gap-8 mb-8">
+            <div>
+                <h3 class="font-semibold text-white mb-4">DucKI Agent</h3>
+                <p class="text-sm">Self-hosted AI-Agent für produktive Arbeit.</p>
+            </div>
+            <div>
+                <h3 class="font-semibold text-white mb-4">Navigation</h3>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="/" class="hover:text-white transition-colors">Startseite</a></li>
+                    <li><a href="../tools.html" class="hover:text-white transition-colors">Tools</a></li>
+                    <li><a href="../skills.html" class="hover:text-white transition-colors">Skills</a></li>
+                </ul>
+            </div>
+            <div>
+                <h3 class="font-semibold text-white mb-4">Gemeinschaft</h3>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" class="hover:text-white transition-colors">GitHub</a></li>
+                    <li><a href="../about.html" class="hover:text-white transition-colors">Über uns</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="border-t border-slate-800 pt-8 text-center text-sm">
+            <p>© 2024 DucKI Agent. MIT Lizenz.</p>
+        </div>
+    </footer>
+
+    <script src="../assets/js/main.js"></script>
+    <script>
+        async function installTool(toolId) {
+            try {
+                const response = await fetch(`../api/index.php/install/tool/${toolId}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                if (data.success) {
+                    alert('Tool erfolgreich installiert! Der Agent wird neu gestartet.');
+                    // Redirect to agent
+                    // window.location.href = 'http://localhost:3000';
+                } else {
+                    alert('Installation fehlgeschlagen: ' + data.message);
+                }
+            } catch (error) {
+                alert('Fehler: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

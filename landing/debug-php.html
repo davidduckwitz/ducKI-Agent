@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DucKI Agent - PHP Debug</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <nav class="sticky top-0 z-50 bg-white dark:bg-slate-900 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <h1 class="text-xl font-bold">🦆 DucKI Agent - PHP Debug</h1>
+        </div>
+    </nav>
+
+    <section class="py-12 px-4">
+        <div class="max-w-4xl mx-auto space-y-8">
+            <!-- Test 1: API v1.php -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Test 1: API v1.php</h2>
+                <p class="mb-4 text-slate-600 dark:text-slate-400">Testen ob die API funktioniert...</p>
+                <div id="test1" class="bg-slate-100 dark:bg-slate-800 p-4 rounded text-sm overflow-auto max-h-48">
+                    Loading...
+                </div>
+            </div>
+
+            <!-- Test 2: Tool Details laden via API -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Test 2: Tool Details (Browser) via API</h2>
+                <p class="mb-4 text-slate-600 dark:text-slate-400">Versuchen Tool Details zu laden...</p>
+                <div id="test2" class="bg-slate-100 dark:bg-slate-800 p-4 rounded text-sm overflow-auto max-h-48">
+                    Loading...
+                </div>
+            </div>
+
+            <!-- Test 3: PHP Direct Access -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Test 3: tool.php direkter Zugriff</h2>
+                <p class="mb-4 text-slate-600 dark:text-slate-400">tool.php Quellcode auslesen...</p>
+                <div id="test3" class="bg-slate-100 dark:bg-slate-800 p-4 rounded text-sm overflow-auto max-h-48">
+                    Loading...
+                </div>
+            </div>
+
+            <!-- Lösung -->
+            <div class="bg-blue-50 dark:bg-blue-900/20 p-8 rounded-lg border border-blue-200 dark:border-blue-800">
+                <h2 class="text-2xl font-bold mb-4">💡 Mögliche Lösungen</h2>
+                <ul class="space-y-2 text-slate-600 dark:text-slate-400">
+                    <li>✅ <strong>Wenn Test 1 OK:</strong> API funktioniert - nutze API statt PHP für Details</li>
+                    <li>✅ <strong>Wenn Test 2 OK:</strong> Details via API laden - nicht via PHP direkt</li>
+                    <li>⚠️ <strong>Wenn Test 3 Quellcode:</strong> PHP wird nicht ausgeführt - .htaccess Problem</li>
+                </ul>
+            </div>
+
+            <!-- Results -->
+            <div class="bg-green-50 dark:bg-green-900/20 p-8 rounded-lg border border-green-200 dark:border-green-800">
+                <h2 class="text-2xl font-bold mb-4">📋 Ergebnisse & Aktion</h2>
+                <div id="results" class="space-y-3 text-slate-600 dark:text-slate-400">
+                    <p>Tests werden ausgeführt...</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <script>
+        const results = [];
+
+        // Test 1: API v1.php
+        fetch('api/v1.php?action=health')
+            .then(r => r.text())
+            .then(text => {
+                document.getElementById('test1').textContent = text;
+                try {
+                    JSON.parse(text);
+                    results.push('✅ Test 1 OK: API funktioniert');
+                } catch (e) {
+                    results.push('❌ Test 1 FAIL: API gibt invalid JSON zurück');
+                }
+                updateResults();
+            })
+            .catch(e => {
+                document.getElementById('test1').textContent = 'ERROR: ' + e.message;
+                results.push('❌ Test 1 FAIL: ' + e.message);
+                updateResults();
+            });
+
+        // Test 2: Tool Details via API
+        fetch('api/v1.php?action=tool&id=browser')
+            .then(r => r.text())
+            .then(text => {
+                document.getElementById('test2').textContent = text;
+                try {
+                    const data = JSON.parse(text);
+                    if (data.success) {
+                        results.push('✅ Test 2 OK: Tool Details via API funktionieren');
+                    } else {
+                        results.push('❌ Test 2 FAIL: API Error - ' + data.message);
+                    }
+                } catch (e) {
+                    results.push('❌ Test 2 FAIL: Invalid JSON');
+                }
+                updateResults();
+            })
+            .catch(e => {
+                document.getElementById('test2').textContent = 'ERROR: ' + e.message;
+                results.push('❌ Test 2 FAIL: ' + e.message);
+                updateResults();
+            });
+
+        // Test 3: Check if tool.php returns PHP code or HTML
+        fetch('tool.php?id=browser')
+            .then(r => r.text())
+            .then(text => {
+                // Check if response is PHP code or HTML
+                if (text.includes('<?php') || text.includes('<?')) {
+                    document.getElementById('test3').textContent = 'PHP QUELLCODE ERKANNT (Problem!):\n\n' + text.substring(0, 500) + '...';
+                    results.push('❌ Test 3 FAIL: PHP wird als Quellcode ausgegeben (nicht ausgeführt)');
+                } else if (text.includes('<!DOCTYPE') || text.includes('<html')) {
+                    document.getElementById('test3').textContent = 'HTML zurückgegeben (OK)';
+                    results.push('✅ Test 3 OK: tool.php wird als HTML ausgeführt');
+                } else {
+                    document.getElementById('test3').textContent = text.substring(0, 500) + '...';
+                    results.push('⚠️ Test 3 WARNUNG: Unerwarteter Inhalt');
+                }
+                updateResults();
+            })
+            .catch(e => {
+                document.getElementById('test3').textContent = 'ERROR: ' + e.message;
+                results.push('❌ Test 3 ERROR: ' + e.message);
+                updateResults();
+            });
+
+        // Update results
+        function updateResults() {
+            const html = `
+                <h3 class="font-bold mb-2">Test-Ergebnisse:</h3>
+                ${results.map(r => `<p>${r}</p>`).join('')}
+
+                <h3 class="font-bold mt-4 mb-2">Empfehlung:</h3>
+                ${results.some(r => r.includes('Test 2 OK')) ?
+                    `<p>✅ <strong>API funktioniert!</strong> Nutze die API für Tool/Skill Details statt PHP direkt.</p>
+                     <p>Lade Details dynamisch über: <code>api/v1.php?action=tool&id=browser</code></p>` :
+                    `<p>⚠️ API funktioniert nicht - bitte Server-Admin kontaktieren wegen PHP-Konfiguration.</p>`
+                }
+            `;
+            document.getElementById('results').innerHTML = html;
+        }
+    </script>
+</body>
+</html>

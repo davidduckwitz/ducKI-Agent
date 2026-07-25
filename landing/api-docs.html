@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Dokumentation - DucKI Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <!-- Navigation -->
+    <nav class="sticky top-0 z-50 bg-white dark:bg-slate-900 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">🦆</div>
+                <a href="/" class="text-xl font-bold text-slate-900 dark:text-white">DucKI Agent</a>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="tools.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Tools</a>
+                <a href="skills.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Skills</a>
+                <a href="documentation.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Docs</a>
+                <a href="about.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">About</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Header -->
+    <section class="bg-gradient-to-br from-slate-900 to-slate-800 text-white py-12 px-4">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-4xl font-bold mb-4">API Dokumentation</h1>
+            <p class="text-lg opacity-90">REST API für Tools, Skills und Dokumentation</p>
+        </div>
+    </section>
+
+    <!-- Content -->
+    <section class="py-12 px-4">
+        <div class="max-w-4xl mx-auto space-y-8">
+            <!-- Base URL -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Base URL</h2>
+                <div class="bg-slate-100 dark:bg-slate-800 p-4 rounded-lg font-mono text-sm">
+                    https://api.ducki-agent.davidduckwitz.de/api
+                </div>
+            </div>
+
+            <!-- Authentication -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Authentifizierung</h2>
+                <p class="text-slate-600 dark:text-slate-400">
+                    Die API ist öffentlich zugänglich. Es ist keine Authentifizierung erforderlich.
+                </p>
+            </div>
+
+            <!-- Endpoints -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-6">Endpunkte</h2>
+
+                <!-- Health Check -->
+                <div class="mb-8 pb-8 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-lg font-semibold mb-4">Health Check</h3>
+                    <div class="bg-slate-100 dark:bg-slate-800 p-3 rounded mb-3 font-mono text-sm">GET /api/health</div>
+                    <p class="text-slate-600 dark:text-slate-400 mb-3">Prüft den Status der API und Datendateien.</p>
+                    <details class="cursor-pointer">
+                        <summary class="font-semibold text-blue-600 hover:text-blue-700">Response Beispiel</summary>
+                        <div class="mt-3 bg-slate-900 text-slate-100 p-4 rounded text-sm overflow-x-auto">
+<pre>{
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "api": "DucKI Agent API",
+    "version": "1.0.0",
+    "timestamp": "2024-07-25T10:00:00+02:00",
+    "data_files": {
+      "tools": "ready",
+      "skills": "ready"
+    }
+  }
+}</pre>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- Get All Tools -->
+                <div class="mb-8 pb-8 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-lg font-semibold mb-4">Alle Tools abrufen</h3>
+                    <div class="bg-slate-100 dark:bg-slate-800 p-3 rounded mb-3 font-mono text-sm">GET /api/tools</div>
+                    <p class="text-slate-600 dark:text-slate-400 mb-3">Gibt alle verfügbaren Tools zurück.</p>
+                    <div class="mb-3">
+                        <p class="font-semibold text-sm mb-2">Query Parameter:</p>
+                        <ul class="text-sm text-slate-600 dark:text-slate-400 space-y-1">
+                            <li><code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">?category=Core</code> - Nach Kategorie filtern</li>
+                            <li><code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">?search=filesystem</code> - Suchen</li>
+                        </ul>
+                    </div>
+                    <details class="cursor-pointer">
+                        <summary class="font-semibold text-blue-600 hover:text-blue-700">Response Beispiel</summary>
+                        <div class="mt-3 bg-slate-900 text-slate-100 p-4 rounded text-sm overflow-x-auto">
+<pre>{
+  "success": true,
+  "data": {
+    "tools": [
+      {
+        "id": "filesystem",
+        "name": "Filesystem",
+        "category": "Core",
+        "description": "...",
+        "version": "1.0.0",
+        "status": "stable",
+        "core": true,
+        "dependencies": [],
+        "useCase": [...],
+        "docs_url": "..."
+      }
+    ],
+    "count": 17
+  }
+}</pre>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- Get Tool Details -->
+                <div class="mb-8 pb-8 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-lg font-semibold mb-4">Tool Details</h3>
+                    <div class="bg-slate-100 dark:bg-slate-800 p-3 rounded mb-3 font-mono text-sm">GET /api/tools/:id</div>
+                    <p class="text-slate-600 dark:text-slate-400 mb-3">Gibt Details für ein spezifisches Tool zurück.</p>
+                    <div class="text-sm">
+                        <p class="font-semibold mb-2">Beispiel:</p>
+                        <code class="bg-slate-100 dark:bg-slate-800 px-3 py-2 rounded block">GET /api/tools/browser</code>
+                    </div>
+                </div>
+
+                <!-- Get All Skills -->
+                <div class="mb-8 pb-8 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-lg font-semibold mb-4">Alle Skills abrufen</h3>
+                    <div class="bg-slate-100 dark:bg-slate-800 p-3 rounded mb-3 font-mono text-sm">GET /api/skills</div>
+                    <p class="text-slate-600 dark:text-slate-400 mb-3">Gibt alle verfügbaren Skills zurück.</p>
+                    <div class="mb-3">
+                        <p class="font-semibold text-sm mb-2">Query Parameter:</p>
+                        <ul class="text-sm text-slate-600 dark:text-slate-400 space-y-1">
+                            <li><code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">?category=Code & Development</code> - Nach Kategorie filtern</li>
+                            <li><code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">?search=review</code> - Suchen</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Get Skill Details -->
+                <div class="mb-8 pb-8 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-lg font-semibold mb-4">Skill Details</h3>
+                    <div class="bg-slate-100 dark:bg-slate-800 p-3 rounded mb-3 font-mono text-sm">GET /api/skills/:id</div>
+                    <p class="text-slate-600 dark:text-slate-400 mb-3">Gibt Details für ein spezifisches Skill zurück.</p>
+                    <div class="text-sm">
+                        <p class="font-semibold mb-2">Beispiel:</p>
+                        <code class="bg-slate-100 dark:bg-slate-800 px-3 py-2 rounded block">GET /api/skills/code-review</code>
+                    </div>
+                </div>
+
+                <!-- Documentation -->
+                <div class="mb-8 pb-8 border-b border-slate-200 dark:border-slate-700">
+                    <h3 class="text-lg font-semibold mb-4">Dokumentation</h3>
+                    <div class="bg-slate-100 dark:bg-slate-800 p-3 rounded mb-3 font-mono text-sm">GET /api/docs/:id</div>
+                    <p class="text-slate-600 dark:text-slate-400 mb-3">Gibt detaillierte Dokumentation für ein Tool oder Skill zurück.</p>
+                    <div class="text-sm">
+                        <p class="font-semibold mb-2">Beispiele:</p>
+                        <div class="space-y-1 text-slate-600 dark:text-slate-400">
+                            <code class="bg-slate-100 dark:bg-slate-800 px-3 py-1 block">GET /api/docs/browser</code>
+                            <code class="bg-slate-100 dark:bg-slate-800 px-3 py-1 block">GET /api/docs/code-review</code>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Categories -->
+                <div>
+                    <h3 class="text-lg font-semibold mb-4">Kategorien</h3>
+                    <div class="bg-slate-100 dark:bg-slate-800 p-3 rounded mb-3 font-mono text-sm">GET /api/categories</div>
+                    <p class="text-slate-600 dark:text-slate-400">Gibt alle verfügbaren Kategorien für Tools und Skills zurück.</p>
+                </div>
+            </div>
+
+            <!-- Response Format -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Response Format</h2>
+                <p class="text-slate-600 dark:text-slate-400 mb-4">Alle Responses sind JSON mit folgender Struktur:</p>
+                <div class="bg-slate-900 text-slate-100 p-4 rounded text-sm overflow-x-auto">
+<pre>{
+  "success": true,
+  "data": { /* Actual data */ },
+  "timestamp": "2024-07-25T10:00:00+02:00"
+}</pre>
+                </div>
+            </div>
+
+            <!-- Error Handling -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Fehlerbehandlung</h2>
+                <p class="text-slate-600 dark:text-slate-400 mb-4">Bei Fehlern wird folgende Response zurückgegeben:</p>
+                <div class="bg-slate-900 text-slate-100 p-4 rounded text-sm overflow-x-auto mb-4">
+<pre>{
+  "error": true,
+  "code": "NOT_FOUND",
+  "message": "Tool not found: unknown-tool",
+  "timestamp": "2024-07-25T10:00:00+02:00"
+}</pre>
+                </div>
+                <div class="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+                    <p><strong>HTTP Status Codes:</strong></p>
+                    <ul class="list-disc list-inside space-y-1">
+                        <li>200 - Success</li>
+                        <li>400 - Bad Request</li>
+                        <li>404 - Not Found</li>
+                        <li>500 - Server Error</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Integration Example -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Integration Beispiel</h2>
+                <div class="bg-slate-900 text-slate-100 p-4 rounded text-sm overflow-x-auto">
+<pre>// JavaScript Beispiel
+async function loadTools() {
+  const response = await fetch('https://api.ducki-agent.davidduckwitz.de/api/tools');
+  const data = await response.json();
+
+  if (data.success) {
+    console.log('Tools:', data.data.tools);
+  }
+}
+
+// Python Beispiel
+import requests
+
+response = requests.get('https://api.ducki-agent.davidduckwitz.de/api/tools')
+data = response.json()
+print(data['data']['tools'])</pre>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 dark:bg-slate-950 text-slate-400 py-12 px-4 mt-12">
+        <div class="max-w-6xl mx-auto text-center">
+            <p>© 2024 DucKI Agent. API Dokumentation v1.0.0</p>
+        </div>
+    </footer>
+</body>
+</html>

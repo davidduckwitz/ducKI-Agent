@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DucKI Agent - Details</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <!-- Navigation -->
+    <nav class="sticky top-0 z-50 bg-white dark:bg-slate-900 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">🦆</div>
+                <a href="/" class="text-xl font-bold text-slate-900 dark:text-white">DucKI Agent</a>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="tools.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Tools</a>
+                <a href="skills.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Skills</a>
+                <a href="documentation.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Docs</a>
+                <a href="about.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">About</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Breadcrumb -->
+    <section class="bg-white dark:bg-slate-900 py-4 px-4 border-b border-slate-200 dark:border-slate-800">
+        <div class="max-w-6xl mx-auto">
+            <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                <a href="tools.html" id="breadcrumbLink1" class="hover:text-blue-600 dark:hover:text-blue-400">Tools</a>
+                <span>/</span>
+                <span id="breadcrumbCurrent">Details</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Loading State -->
+    <section class="py-12 px-4" id="loadingState">
+        <div class="max-w-6xl mx-auto text-center">
+            <div class="inline-flex items-center gap-3">
+                <div class="animate-spin h-8 w-8 border-4 border-blue-600 border-t-transparent rounded-full"></div>
+                <p class="text-lg text-slate-600 dark:text-slate-400">Lädt Details...</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Content -->
+    <section class="py-12 px-4 hidden" id="contentState">
+        <div class="max-w-4xl mx-auto">
+            <!-- Header -->
+            <div class="mb-8">
+                <div class="flex items-start justify-between mb-4">
+                    <div>
+                        <h1 id="detailName" class="text-4xl font-bold mb-2">Tool Name</h1>
+                        <div id="detailBadges" class="flex gap-2">
+                            <!-- Badges werden eingefügt -->
+                        </div>
+                    </div>
+                </div>
+                <p id="detailDescription" class="text-lg text-slate-600 dark:text-slate-400 mb-4">Description</p>
+                <div class="bg-slate-100 dark:bg-slate-800 p-4 rounded-lg mb-4">
+                    <p class="text-sm text-slate-600 dark:text-slate-400 mb-2"><strong>Version:</strong> <span id="detailVersion">1.0.0</span></p>
+                    <p class="text-sm text-slate-600 dark:text-slate-400 mb-2"><strong>Status:</strong> <span id="detailStatus">stable</span></p>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Left Column -->
+                <div class="lg:col-span-2 space-y-8">
+                    <!-- Overview -->
+                    <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                        <h2 class="text-2xl font-bold mb-4">Übersicht</h2>
+                        <p id="detailOverview" class="text-slate-600 dark:text-slate-400 leading-relaxed mb-4">
+                            Full description here
+                        </p>
+                    </div>
+
+                    <!-- Use Cases -->
+                    <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                        <h2 class="text-2xl font-bold mb-4">Anwendungsfälle</h2>
+                        <ul id="detailUseCases" class="space-y-2 text-slate-600 dark:text-slate-400">
+                            <!-- Use cases inserted here -->
+                        </ul>
+                    </div>
+
+                    <!-- Examples -->
+                    <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800" id="examplesSection">
+                        <h2 class="text-2xl font-bold mb-4">Beispiele</h2>
+                        <div id="detailExamples" class="space-y-4">
+                            <!-- Examples inserted here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column (Sidebar) -->
+                <div class="space-y-6">
+                    <!-- Dependencies -->
+                    <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800" id="dependenciesBox">
+                        <h3 class="font-bold text-lg mb-4">Abhängigkeiten</h3>
+                        <ul id="detailDependencies" class="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+                            <li class="text-slate-400 italic">Keine Abhängigkeiten</li>
+                        </ul>
+                    </div>
+
+                    <!-- Links -->
+                    <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                        <h3 class="font-bold text-lg mb-4">Links</h3>
+                        <div class="space-y-3">
+                            <a id="repositoryLink" href="#" target="_blank" rel="noopener noreferrer" class="block px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium text-center transition-colors">
+                                GitHub Repository →
+                            </a>
+                            <a id="docsLink" href="documentation.html" class="block px-4 py-2 rounded bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-900 dark:text-white text-sm font-medium text-center transition-colors">
+                                Dokumentation
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Category -->
+                    <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                        <h3 class="font-bold text-lg mb-4">Kategorie</h3>
+                        <p id="detailCategory" class="text-slate-600 dark:text-slate-400 text-sm">Category</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Back Button -->
+            <div class="mt-12 text-center">
+                <button onclick="goBack()" class="px-6 py-2 rounded bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-medium transition-colors">
+                    ← Zurück
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Error State -->
+    <section class="py-12 px-4 hidden" id="errorState">
+        <div class="max-w-4xl mx-auto">
+            <div class="bg-red-50 dark:bg-red-900/20 p-8 rounded-lg border border-red-200 dark:border-red-800">
+                <h2 class="text-2xl font-bold text-red-600 dark:text-red-400 mb-2">Details nicht gefunden</h2>
+                <p id="errorMessage" class="text-slate-600 dark:text-slate-400 mb-4">
+                    Das angeforderte Element konnte nicht gefunden werden.
+                </p>
+                <a href="tools.html" class="inline-block px-4 py-2 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors">
+                    Zurück zu Tools
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 dark:bg-slate-950 text-slate-400 py-12 px-4 mt-12">
+        <div class="max-w-6xl mx-auto">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-8 mb-8">
+                <div>
+                    <h3 class="font-semibold text-white mb-4">DucKI Agent</h3>
+                    <p class="text-sm mb-4">Ein selbstverwalteter AI-Agent für produktive Arbeit.</p>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-white mb-4">Navigation</h3>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="/" class="hover:text-white transition-colors">Startseite</a></li>
+                        <li><a href="tools.html" class="hover:text-white transition-colors">Tools</a></li>
+                        <li><a href="documentation.html" class="hover:text-white transition-colors">Dokumentation</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-white mb-4">Gemeinschaft</h3>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a></li>
+                        <li><a href="https://github.com/davidduckwitz/ducKI-Agent/issues" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">Issues</a></li>
+                        <li><a href="about.html" class="hover:text-white transition-colors">Über uns</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="border-t border-slate-800 pt-8 text-center text-sm">
+                <p>© 2024 DucKI Agent. MIT Lizenz. Entwickelt mit 💛 von David Duckwitz.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        const API_URL = 'api/v1.php';
+        let currentItem = null;
+        let currentType = null;
+
+        // Parse URL parameters
+        function getUrlParams() {
+            const params = new URLSearchParams(window.location.search);
+            return {
+                type: params.get('type') || 'tool', // 'tool' or 'skill'
+                id: params.get('id')
+            };
+        }
+
+        // Load detail from API
+        async function loadDetail() {
+            const { type, id } = getUrlParams();
+
+            if (!id) {
+                showError('ID nicht angegeben');
+                return;
+            }
+
+            currentType = type;
+
+            try {
+                // Show loading state
+                document.getElementById('loadingState').classList.remove('hidden');
+                document.getElementById('contentState').classList.add('hidden');
+                document.getElementById('errorState').classList.add('hidden');
+
+                // Fetch data
+                const endpoint = type === 'skill' ? 'skill' : 'tool';
+                const url = `${API_URL}?action=${endpoint}&id=${encodeURIComponent(id)}`;
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const text = await response.text();
+                const data = JSON.parse(text);
+
+                if (!data.success) {
+                    throw new Error(data.message || 'API error');
+                }
+
+                currentItem = data.data;
+                renderDetail();
+            } catch (error) {
+                console.error('Error loading detail:', error);
+                showError(error.message || 'Fehler beim Laden der Details');
+            }
+        }
+
+        // Render detail page
+        function renderDetail() {
+            const item = currentItem;
+            const type = currentType;
+
+            // Update breadcrumb
+            const linkText = type === 'skill' ? 'Skills' : 'Tools';
+            document.getElementById('breadcrumbLink1').href = type === 'skill' ? 'skills.html' : 'tools.html';
+            document.getElementById('breadcrumbLink1').textContent = linkText;
+
+            // Header
+            document.getElementById('detailName').textContent = item.name || 'Unknown';
+            document.getElementById('detailDescription').textContent = item.description || '';
+            document.getElementById('detailVersion').textContent = item.version || '1.0.0';
+            document.getElementById('detailStatus').textContent = item.status || 'unknown';
+            document.getElementById('detailCategory').textContent = item.category || 'N/A';
+
+            // Badges
+            const badges = document.getElementById('detailBadges');
+            badges.innerHTML = '';
+
+            if (item.category) {
+                const categoryBg = type === 'skill' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300';
+                badges.innerHTML += `<span class="inline-block px-3 py-1 text-xs rounded ${categoryBg}">${item.category}</span>`;
+            }
+
+            if (item.status === 'beta') {
+                badges.innerHTML += `<span class="inline-block px-3 py-1 text-xs rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">Beta</span>`;
+            }
+
+            if (item.core) {
+                badges.innerHTML += `<span class="inline-block px-3 py-1 text-xs rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">Core</span>`;
+            }
+
+            // Overview
+            const overview = item.docs?.long || item.description || 'Keine weiteren Details verfügbar';
+            document.getElementById('detailOverview').textContent = overview;
+
+            // Use Cases
+            const useCasesEl = document.getElementById('detailUseCases');
+            if (item.useCase && item.useCase.length > 0) {
+                useCasesEl.innerHTML = item.useCase.map(uc => `<li class="list-disc list-inside">${uc}</li>`).join('');
+            } else {
+                useCasesEl.innerHTML = '<li class="text-slate-400">Keine Use Cases angegeben</li>';
+            }
+
+            // Examples
+            const examplesEl = document.getElementById('detailExamples');
+            if (item.examples && item.examples.length > 0) {
+                examplesEl.innerHTML = item.examples.map(ex => `
+                    <div class="bg-slate-100 dark:bg-slate-800 p-4 rounded border border-slate-200 dark:border-slate-700">
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mb-2"><strong>Beispiel:</strong></p>
+                        <code class="text-xs text-slate-600 dark:text-slate-300 block overflow-auto">${escapeHtml(ex)}</code>
+                    </div>
+                `).join('');
+            } else {
+                document.getElementById('examplesSection').classList.add('hidden');
+            }
+
+            // Dependencies
+            const depsEl = document.getElementById('detailDependencies');
+            if (item.dependencies && item.dependencies.length > 0) {
+                depsEl.innerHTML = item.dependencies.map(dep => `
+                    <li class="px-3 py-2 bg-slate-100 dark:bg-slate-800 rounded text-slate-700 dark:text-slate-300">
+                        • ${dep}
+                    </li>
+                `).join('');
+                document.getElementById('dependenciesBox').classList.remove('hidden');
+            } else {
+                document.getElementById('dependenciesBox').classList.add('hidden');
+            }
+
+            // Links
+            if (item.repository) {
+                document.getElementById('repositoryLink').href = item.repository;
+            }
+
+            // Show content
+            document.getElementById('loadingState').classList.add('hidden');
+            document.getElementById('contentState').classList.remove('hidden');
+            document.getElementById('errorState').classList.add('hidden');
+        }
+
+        // Show error
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('loadingState').classList.add('hidden');
+            document.getElementById('contentState').classList.add('hidden');
+            document.getElementById('errorState').classList.remove('hidden');
+        }
+
+        // Go back
+        function goBack() {
+            const type = currentType || 'tool';
+            window.location.href = type === 'skill' ? 'skills.html' : 'tools.html';
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Load on page load
+        loadDetail();
+    </script>
+</body>
+</html>

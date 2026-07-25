@@ -1,0 +1,556 @@
+{
+  "skills": [
+    {
+      "id": "plan",
+      "name": "Plan Mode",
+      "category": "Workflow & Planning",
+      "description": "Planning mode: create actionable plans without direct implementation in the current turn",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["memory", "history-search", "llm-wiki"],
+      "useCase": [
+        "Create detailed implementation plans",
+        "Break down complex projects",
+        "Plan multi-phase implementations",
+        "Validate approach before coding",
+        "Document planning decisions"
+      ],
+      "docs_url": "/landing/docs/skill-plan.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/plan",
+      "examples": [
+        "Use when task requires actionable plan first",
+        "Helps validate approach with stakeholders",
+        "Identifies blockers and dependencies early",
+        "Supports step-by-step implementation"
+      ]
+    },
+    {
+      "id": "auto-plan",
+      "name": "Auto Plan",
+      "category": "Workflow & Planning",
+      "description": "Automatically create detailed plans with structured phases and deliverables",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["plan"],
+      "useCase": [
+        "Generate automatic implementation plans",
+        "Quick project structuring",
+        "Phase-based planning",
+        "Team collaboration setup",
+        "Deliverable tracking"
+      ],
+      "docs_url": "/landing/docs/skill-auto-plan.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/auto-plan",
+      "examples": [
+        "Automatically structures complex tasks",
+        "Assigns phases with timelines",
+        "Generates checklist templates",
+        "Creates team roles and responsibilities"
+      ]
+    },
+    {
+      "id": "workflow-orchestrator",
+      "name": "Workflow Orchestrator",
+      "category": "Workflow & Planning",
+      "description": "Create and control workflow graphs via the workflow tool with a strict plan-build-run-resume loop",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["memory", "plan", "history-search"],
+      "useCase": [
+        "Build reusable workflow graphs",
+        "Orchestrate multi-agent pipelines",
+        "Resume interrupted workflows",
+        "Manage complex automation",
+        "Track workflow execution"
+      ],
+      "docs_url": "/landing/docs/skill-workflow-orchestrator.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/workflow-orchestrator",
+      "examples": [
+        "Create workflow nodes (manager, research, coding, review)",
+        "Build workflow graphs with dependencies",
+        "Run and resume workflow execution",
+        "Persist workflow changes"
+      ]
+    },
+    {
+      "id": "plan-import",
+      "name": "Plan Import",
+      "category": "Workflow & Planning",
+      "description": "Import and execute markdown-formatted plans as structured workflows",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["workflow", "plan"],
+      "useCase": [
+        "Import external plans",
+        "Convert markdown to workflows",
+        "Batch process plans",
+        "Reuse plan templates",
+        "Migrate legacy plans"
+      ],
+      "docs_url": "/landing/docs/skill-plan-import.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/plan-import",
+      "examples": [
+        "Import markdown plans as workflows",
+        "Parse structured plan formats",
+        "Auto-generate workflow nodes",
+        "Execute imported plans"
+      ]
+    },
+    {
+      "id": "coding-system",
+      "name": "Coding System",
+      "category": "Code & Development",
+      "description": "Integrated coding environment with project chat, editor, and code execution",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["code-review", "test-driven-development"],
+      "useCase": [
+        "Write and edit code interactively",
+        "Collaborate on coding tasks",
+        "Execute code in real-time",
+        "Debug issues",
+        "Manage project development"
+      ],
+      "docs_url": "/landing/docs/skill-coding-system.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/coding-system",
+      "examples": [
+        "Use Monaco Editor for coding",
+        "Run tests on code changes",
+        "Get instant code feedback",
+        "Collaborate with team"
+      ]
+    },
+    {
+      "id": "code-review",
+      "name": "Code Review",
+      "category": "Code & Development",
+      "description": "Structured review mode: findings-first, ordered by severity, with concrete file references",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["test-driven-development", "plan", "history-search"],
+      "useCase": [
+        "Review code for correctness",
+        "Identify security issues",
+        "Check API compatibility",
+        "Ensure code quality",
+        "Provide actionable feedback"
+      ],
+      "docs_url": "/landing/docs/skill-code-review.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/code-review",
+      "examples": [
+        "Severity-based findings (Critical, High, Medium, Low)",
+        "Concrete file references and line numbers",
+        "Test coverage validation",
+        "Backward compatibility checks"
+      ]
+    },
+    {
+      "id": "test-driven-development",
+      "name": "Test Driven Development",
+      "category": "Code & Development",
+      "description": "TDD mode with Red-Green-Refactor cycle for test-first development",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["code-review"],
+      "useCase": [
+        "Write tests first",
+        "Follow TDD methodology",
+        "Ensure code quality",
+        "Manage test coverage",
+        "Refactor safely"
+      ],
+      "docs_url": "/landing/docs/skill-test-driven-development.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/test-driven-development",
+      "examples": [
+        "Red: Write failing tests",
+        "Green: Write minimal code to pass",
+        "Refactor: Improve code while maintaining tests",
+        "Repeat cycle"
+      ]
+    },
+    {
+      "id": "security-skill",
+      "name": "Security Skill",
+      "category": "Code & Development",
+      "description": "Defensive security guidelines and secure coding practices",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["code-review"],
+      "useCase": [
+        "Implement security best practices",
+        "Identify vulnerabilities",
+        "Secure configuration",
+        "Protect sensitive data",
+        "Compliance checking"
+      ],
+      "docs_url": "/landing/docs/skill-security-skill.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/security-skill",
+      "examples": [
+        "Validate user inputs",
+        "Secure authentication",
+        "Encrypt sensitive data",
+        "Prevent injection attacks"
+      ]
+    },
+    {
+      "id": "llm-wiki",
+      "name": "LLM Wiki",
+      "category": "Knowledge & Data",
+      "description": "Use the LLM-Wiki as primary knowledge source with search, moderation, and response building",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["shared-workspace-ops"],
+      "useCase": [
+        "Search knowledge base",
+        "Retrieve project knowledge",
+        "Moderate wiki entries",
+        "Build responses from sources",
+        "Manage internal documentation"
+      ],
+      "docs_url": "/landing/docs/skill-llm-wiki.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/llm-wiki",
+      "examples": [
+        "Search: GET /api/wiki/search?query=...",
+        "Approve entries: POST /api/wiki/entries/:id/approve",
+        "Prioritize approved over candidate entries",
+        "Cite sources in responses"
+      ]
+    },
+    {
+      "id": "history-search",
+      "name": "History Search",
+      "category": "Knowledge & Data",
+      "description": "Search and retrieve previous conversations and decisions from chat history",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["history"],
+      "useCase": [
+        "Find previous solutions",
+        "Review past decisions",
+        "Identify patterns",
+        "Audit agent actions",
+        "Learn from history"
+      ],
+      "docs_url": "/landing/docs/skill-history-search.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/history-search",
+      "examples": [
+        "Search queries from history",
+        "Find similar past issues",
+        "Review decision context",
+        "Validate against past solutions"
+      ]
+    },
+    {
+      "id": "shared-workspace-ops",
+      "name": "Shared Workspace Ops",
+      "category": "Knowledge & Data",
+      "description": "Shared workspace file operations for collaborative document management",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["filesystem"],
+      "useCase": [
+        "Collaborate on shared files",
+        "Manage shared documents",
+        "Version control documents",
+        "Share results",
+        "Organize collaborative work"
+      ],
+      "docs_url": "/landing/docs/skill-shared-workspace-ops.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/shared-workspace-ops",
+      "examples": [
+        "Upload files to workspace",
+        "Share documents with team",
+        "Manage shared folders",
+        "Track changes"
+      ]
+    },
+    {
+      "id": "shared-workspace-api-first",
+      "name": "Shared Workspace API-First",
+      "category": "Knowledge & Data",
+      "description": "API-first approach to shared workspace operations with REST endpoints",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["http", "shared-workspace-ops"],
+      "useCase": [
+        "API-based workspace operations",
+        "Programmatic file handling",
+        "Integrate external systems",
+        "Automate workspace tasks",
+        "REST-based collaboration"
+      ],
+      "docs_url": "/landing/docs/skill-shared-workspace-api-first.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/shared-workspace-api-first",
+      "examples": [
+        "POST /api/workspace/upload",
+        "GET /api/workspace/files",
+        "DELETE /api/workspace/file/:id",
+        "PUT /api/workspace/file/:id"
+      ]
+    },
+    {
+      "id": "cronjobs",
+      "name": "CronJobs",
+      "category": "System & Utility",
+      "description": "Schedule and manage automated tasks with cron expressions",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["cronjob"],
+      "useCase": [
+        "Schedule periodic tasks",
+        "Automate workflows",
+        "Run jobs at specific times",
+        "Monitor scheduled tasks",
+        "Manage automation"
+      ],
+      "docs_url": "/landing/docs/skill-cronjobs.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/cronjobs",
+      "examples": [
+        "Schedule daily task: '0 9 * * *'",
+        "Schedule weekly: '0 0 * * 0'",
+        "Run every 30 mins: '*/30 * * * *'",
+        "Manage job lifecycle"
+      ]
+    },
+    {
+      "id": "discord",
+      "name": "Discord Integration",
+      "category": "System & Utility",
+      "description": "Discord integration for messaging and voice interaction",
+      "version": "1.0.0",
+      "status": "beta",
+      "dependencies": ["gateway"],
+      "useCase": [
+        "Send Discord messages",
+        "Receive voice input",
+        "Transcribe audio",
+        "Notify via Discord",
+        "Discord workflow automation"
+      ],
+      "docs_url": "/landing/docs/skill-discord.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/discord",
+      "examples": [
+        "Send message to channel",
+        "Handle voice commands",
+        "Transcribe and process audio",
+        "Create Discord webhooks"
+      ]
+    },
+    {
+      "id": "mcp-integration",
+      "name": "MCP Integration",
+      "category": "System & Utility",
+      "description": "Integrate with MCP (Model Context Protocol) servers for extended capabilities",
+      "version": "1.0.0",
+      "status": "beta",
+      "dependencies": ["mcp"],
+      "useCase": [
+        "Connect to MCP servers",
+        "Access extended tools",
+        "Use remote capabilities",
+        "Integrate external systems",
+        "Extend functionality"
+      ],
+      "docs_url": "/landing/docs/skill-mcp-integration.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/mcp-integration",
+      "examples": [
+        "Connect MCP server",
+        "List available resources",
+        "Call MCP tools",
+        "Handle MCP responses"
+      ]
+    },
+    {
+      "id": "browser-control",
+      "name": "Browser Control",
+      "category": "System & Utility",
+      "description": "Secure browser automation control with advanced interactions",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["browser"],
+      "useCase": [
+        "Automate browser tasks",
+        "Extract web data",
+        "Test web applications",
+        "Fill forms automatically",
+        "Capture screenshots"
+      ],
+      "docs_url": "/landing/docs/skill-browser-control.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/browser-control",
+      "examples": [
+        "Navigate and click",
+        "Extract structured data",
+        "Fill and submit forms",
+        "Take PDF screenshots"
+      ]
+    },
+    {
+      "id": "datum-uhrzeit-tag",
+      "name": "Date & Time",
+      "category": "System & Utility",
+      "description": "Date and time utilities for current date, time, and day information",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": [],
+      "useCase": [
+        "Get current date/time",
+        "Format dates",
+        "Calculate durations",
+        "Schedule based on time",
+        "Timezone handling"
+      ],
+      "docs_url": "/landing/docs/skill-datum-uhrzeit-tag.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/datum-uhrzeit-tag",
+      "examples": [
+        "Get current date",
+        "Get current day",
+        "Format timestamps",
+        "Calculate time differences"
+      ]
+    },
+    {
+      "id": "tool-orchestration",
+      "name": "Tool Orchestration",
+      "category": "System & Utility",
+      "description": "Coordinate and orchestrate tool execution for complex operations",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["workflow", "memory"],
+      "useCase": [
+        "Coordinate tool calls",
+        "Build tool chains",
+        "Handle tool dependencies",
+        "Manage tool states",
+        "Optimize tool usage"
+      ],
+      "docs_url": "/landing/docs/skill-tool-orchestration.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/tool-orchestration",
+      "examples": [
+        "Chain tool calls",
+        "Manage state between tools",
+        "Handle tool errors",
+        "Optimize execution"
+      ]
+    },
+    {
+      "id": "tasks-kanban",
+      "name": "Tasks Kanban",
+      "category": "System & Utility",
+      "description": "Kanban board management for task visualization and workflow",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": ["task"],
+      "useCase": [
+        "Visualize task workflow",
+        "Move tasks between columns",
+        "Track task progress",
+        "Manage priorities",
+        "Team coordination"
+      ],
+      "docs_url": "/landing/docs/skill-tasks-kanban.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/tasks-kanban",
+      "examples": [
+        "Create kanban board",
+        "Move tasks: todo -> in-progress -> done",
+        "Set task priority",
+        "Track board state"
+      ]
+    },
+    {
+      "id": "json-tool-format",
+      "name": "JSON Tool Format",
+      "category": "System & Utility",
+      "description": "Format and validate tool calls in JSON format",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": [],
+      "useCase": [
+        "Format tool calls",
+        "Validate JSON schemas",
+        "Generate tool documentation",
+        "Debug tool calls",
+        "Tool specification"
+      ],
+      "docs_url": "/landing/docs/skill-json-tool-format.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/json-tool-format",
+      "examples": [
+        "Format tool schema",
+        "Validate parameters",
+        "Generate examples",
+        "Create tool documentation"
+      ]
+    },
+    {
+      "id": "fast-answer",
+      "name": "Fast Answer",
+      "category": "System & Utility",
+      "description": "Quick answers without skills when response is straightforward",
+      "version": "1.0.0",
+      "status": "stable",
+      "dependencies": [],
+      "useCase": [
+        "Quick direct answers",
+        "Skip skill overhead",
+        "Simple queries",
+        "Immediate responses",
+        "Optimization"
+      ],
+      "docs_url": "/landing/docs/skill-fast-answer.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/fast-answer",
+      "examples": [
+        "Answer simple questions directly",
+        "Skip skill selection",
+        "Reduce response time",
+        "Handle straightforward tasks"
+      ]
+    },
+    {
+      "id": "btc-puzzle-solver",
+      "name": "Bitcoin Puzzle Solver",
+      "category": "Utilities",
+      "description": "Solve Bitcoin BIP39 puzzles and cryptographic challenges",
+      "version": "1.0.0",
+      "status": "beta",
+      "dependencies": [],
+      "useCase": [
+        "Solve BIP39 challenges",
+        "Cryptographic problem solving",
+        "Bitcoin puzzle solving",
+        "Security testing",
+        "Challenge solving"
+      ],
+      "docs_url": "/landing/docs/skill-btc-puzzle-solver.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/btc-puzzle-solver",
+      "examples": [
+        "Solve BIP39 wordlists",
+        "Process puzzle inputs",
+        "Validate solutions",
+        "Handle crypto operations"
+      ]
+    },
+    {
+      "id": "btc-puzzle-solve",
+      "name": "BTC Puzzle Solve",
+      "category": "Utilities",
+      "description": "Alternative Bitcoin puzzle solving implementation",
+      "version": "1.0.0",
+      "status": "beta",
+      "dependencies": [],
+      "useCase": [
+        "Solve Bitcoin puzzles",
+        "Alternative implementation",
+        "BIP39 handling",
+        "Cryptographic challenges",
+        "Puzzle solving"
+      ],
+      "docs_url": "/landing/docs/skill-btc-puzzle-solve.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/skills/btc-puzzle-solve",
+      "examples": [
+        "Process puzzles",
+        "Generate solutions",
+        "Validate outputs",
+        "Handle edge cases"
+      ]
+    }
+  ]
+}

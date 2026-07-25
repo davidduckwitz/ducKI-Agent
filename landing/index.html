@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DucKI Agent - Self-Hosted AI Coding & Task Assistant</title>
+    <meta name="description" content="DucKI Agent: Ein vollständig selbstverwalteter AI-Agent für Planung, Recherche, Workflows und Automatisierung. Open Source & kostenlos.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <!-- Navigation -->
+    <nav class="sticky top-0 z-50 bg-white dark:bg-slate-900 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">🦆</div>
+                <a href="/" class="text-xl font-bold text-slate-900 dark:text-white">DucKI Agent</a>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="tools.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Tools</a>
+                <a href="skills.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Skills</a>
+                <a href="documentation.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Docs</a>
+                <a href="about.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">About</a>
+                <a href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-sm font-medium">
+                    <span>GitHub</span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="bg-gradient-to-br from-blue-50 dark:from-slate-900 to-purple-50 dark:to-slate-800 py-20 px-4">
+        <div class="max-w-6xl mx-auto text-center">
+            <div class="mb-6 inline-block">
+                <span class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium">
+                    <span class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                    Open Source & Self-Hosted
+                </span>
+            </div>
+            <h1 class="text-5xl sm:text-6xl font-bold mb-6">
+                Ich plane, codiere und liefere <span class="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">Features end-to-end.</span>
+            </h1>
+            <p class="text-lg text-slate-600 dark:text-slate-300 mb-8 max-w-2xl mx-auto leading-relaxed">
+                DucKI ist ein selbstverwalteter AI Agent für produktive Arbeit: mit Planung, Recherche, Workflows, persistentem Memory und über 16 Tools + 23 Skills.
+            </p>
+            <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <a href="tools.html" class="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors">
+                    Tools & Skills erkunden
+                </a>
+                <a href="documentation.html" class="px-6 py-3 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-medium transition-colors">
+                    Dokumentation lesen
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Facts -->
+    <section class="py-12 px-4 bg-white dark:bg-slate-900">
+        <div class="max-w-6xl mx-auto grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-8">
+            <div class="text-center">
+                <div class="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-2">16</div>
+                <div class="text-sm text-slate-600 dark:text-slate-400">Core Tools</div>
+            </div>
+            <div class="text-center">
+                <div class="text-3xl font-bold text-purple-600 dark:text-purple-400 mb-2">23+</div>
+                <div class="text-sm text-slate-600 dark:text-slate-400">Skills</div>
+            </div>
+            <div class="text-center">
+                <div class="text-3xl font-bold text-green-600 dark:text-green-400 mb-2">100%</div>
+                <div class="text-sm text-slate-600 dark:text-slate-400">Open Source</div>
+            </div>
+            <div class="text-center">
+                <div class="text-3xl font-bold text-orange-600 dark:text-orange-400 mb-2">∞</div>
+                <div class="text-sm text-slate-600 dark:text-slate-400">Erweiterbar</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Core Capabilities -->
+    <section class="py-20 px-4 bg-slate-50 dark:bg-slate-950">
+        <div class="max-w-6xl mx-auto">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Was DucKI übernimmt</h2>
+                <p class="text-lg text-slate-600 dark:text-slate-400">Kernfähigkeiten für produktive Arbeit</p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-8">
+                <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <div class="text-3xl mb-3">📋</div>
+                    <h3 class="text-lg font-semibold mb-2">Planung</h3>
+                    <p class="text-slate-600 dark:text-slate-400">Ziele in konkrete Schritte und priorisierte Tasks zerlegen.</p>
+                </div>
+                <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <div class="text-3xl mb-3">🔍</div>
+                    <h3 class="text-lg font-semibold mb-2">Recherche</h3>
+                    <p class="text-slate-600 dark:text-slate-400">Kontext auswerten und als klare Handlungsempfehlungen liefern.</p>
+                </div>
+                <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <div class="text-3xl mb-3">💾</div>
+                    <h3 class="text-lg font-semibold mb-2">Memory</h3>
+                    <p class="text-slate-600 dark:text-slate-400">Wichtige Informationen persistent halten und intelligent nutzen.</p>
+                </div>
+                <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <div class="text-3xl mb-3">⚙️</div>
+                    <h3 class="text-lg font-semibold mb-2">Automatisierung</h3>
+                    <p class="text-slate-600 dark:text-slate-400">Wiederkehrende Aufgaben über Workflows, CronJobs und Tools.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Key Features -->
+    <section class="py-20 px-4 bg-white dark:bg-slate-900">
+        <div class="max-w-6xl mx-auto">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Besonderheiten von DucKI</h2>
+                <p class="text-lg text-slate-600 dark:text-slate-400">Was DucKI von anderen AI Assistants unterscheidet</p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">🔄</div>
+                    <h3 class="font-semibold mb-2">Multi-Agent Runs</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Parallele Agent-Ausführungen ohne globale Locks.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">🕸️</div>
+                    <h3 class="font-semibold mb-2">Workflow Orchestration</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Graph-Workflows für komplexe Automatisierung.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">🧠</div>
+                    <h3 class="font-semibold mb-2">Persistent Memory</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Self-updating Memory über Sessions hinweg.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">⚡</div>
+                    <h3 class="font-semibold mb-2">Skills System</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Dynamisches Laden und Auto-Auswahl von Skills.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">📚</div>
+                    <h3 class="font-semibold mb-2">LLM-Wiki</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Wissens-Pipeline mit Chunking und Suche.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">🛠️</div>
+                    <h3 class="font-semibold mb-2">Umfangreiches Tooling</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">16 vordefinierte Tools für Filesystem, Git, Browser, etc.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">📊</div>
+                    <h3 class="font-semibold mb-2">Live Operations</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Live-Metriken und Monitoring aktiver Runs.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">⏰</div>
+                    <h3 class="font-semibold mb-2">CronJobs</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Geplante Ausführung zu festen Zeiten.</p>
+                </div>
+                <div class="p-6 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                    <div class="text-2xl mb-3">💬</div>
+                    <h3 class="font-semibold mb-2">Discord Gateway</h3>
+                    <p class="text-sm text-slate-600 dark:text-slate-400">Outbound-Nachrichten mit Speech-to-Text.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture -->
+    <section class="py-20 px-4 bg-slate-50 dark:bg-slate-950">
+        <div class="max-w-6xl mx-auto">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Self-hosted & leichtgewichtig</h2>
+                <p class="text-lg text-slate-600 dark:text-slate-400">Komplett in Node.js gebaut, unabhängig deploybar</p>
+            </div>
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <div class="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">
+                    <div class="text-center p-4">
+                        <div class="text-2xl mb-2">🌐</div>
+                        <div class="text-sm font-medium">Web UI</div>
+                        <div class="text-xs text-slate-500">React + Vite</div>
+                    </div>
+                    <div class="text-center p-4">
+                        <div class="text-2xl mb-2">🔌</div>
+                        <div class="text-sm font-medium">REST API</div>
+                        <div class="text-xs text-slate-500">Express</div>
+                    </div>
+                    <div class="text-center p-4">
+                        <div class="text-2xl mb-2">⚡</div>
+                        <div class="text-sm font-medium">WebSocket</div>
+                        <div class="text-xs text-slate-500">Streaming</div>
+                    </div>
+                    <div class="text-center p-4">
+                        <div class="text-2xl mb-2">📦</div>
+                        <div class="text-sm font-medium">Node.js</div>
+                        <div class="text-xs text-slate-500">TypeScript</div>
+                    </div>
+                    <div class="text-center p-4">
+                        <div class="text-2xl mb-2">🏠</div>
+                        <div class="text-sm font-medium">Self-hosted</div>
+                        <div class="text-xs text-slate-500">Vollständig lokal</div>
+                    </div>
+                </div>
+                <div class="border-t border-slate-200 dark:border-slate-700 pt-8">
+                    <h3 class="font-semibold mb-4">Was im Stack enthalten ist:</h3>
+                    <ul class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-slate-600 dark:text-slate-400">
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 mt-1">✓</span>
+                            <span>Chat + Tasks + Multi-Agent Execution</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 mt-1">✓</span>
+                            <span>Kanban Board & Log System</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 mt-1">✓</span>
+                            <span>LM Studio, OpenRouter, OpenAI Support</span>
+                        </li>
+                        <li class="flex items-start gap-2">
+                            <span class="text-green-500 mt-1">✓</span>
+                            <span>Memory / Skill / Tool Registry</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section class="py-20 px-4 bg-white dark:bg-slate-900">
+        <div class="max-w-6xl mx-auto">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Quickstart in 3 Minuten</h2>
+                <p class="text-lg text-slate-600 dark:text-slate-400">Setup ist leichtgewichtig</p>
+            </div>
+            <div class="bg-slate-50 dark:bg-slate-800 p-8 rounded-lg border border-slate-200 dark:border-slate-700">
+                <div class="space-y-4 mb-8">
+                    <div class="flex gap-4">
+                        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">1</div>
+                        <div>
+                            <p class="font-semibold mb-2">Clone Repository</p>
+                            <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-2 rounded block overflow-x-auto">git clone https://github.com/davidduckwitz/ducKI-Agent</code>
+                        </div>
+                    </div>
+                    <div class="flex gap-4">
+                        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">2</div>
+                        <div>
+                            <p class="font-semibold mb-2">Install & Configure</p>
+                            <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-2 rounded block overflow-x-auto">cd ducKI-Agent && pnpm install && cp .env.example .env</code>
+                        </div>
+                    </div>
+                    <div class="flex gap-4">
+                        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">3</div>
+                        <div>
+                            <p class="font-semibold mb-2">Start Development Server</p>
+                            <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-2 rounded block overflow-x-auto">pnpm run dev</code>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white dark:bg-slate-900 p-4 rounded border border-slate-200 dark:border-slate-700">
+                    <p class="text-sm font-semibold mb-3">Server läuft auf:</p>
+                    <ul class="space-y-1 text-sm text-slate-600 dark:text-slate-400">
+                        <li>🌐 Web UI: <code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">http://localhost:3000</code></li>
+                        <li>🔌 API: <code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">http://localhost:3001</code></li>
+                        <li>💚 Health: <code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">http://localhost:3001/health</code></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Support & Donations -->
+    <section class="py-20 px-4 bg-gradient-to-br from-slate-50 dark:from-slate-950 to-blue-50 dark:to-slate-900">
+        <div class="max-w-6xl mx-auto">
+            <div class="text-center mb-12">
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Support & Spenden</h2>
+                <p class="text-lg text-slate-600 dark:text-slate-400">DucKI ist kostenlos. Freiwillige Unterstützung hilft bei der Weiterentwicklung.</p>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-8 max-w-2xl mx-auto">
+                <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800 text-center">
+                    <div class="text-4xl mb-4">💳</div>
+                    <h3 class="font-semibold mb-3">PayPal</h3>
+                    <a href="https://www.paypal.me/davidduckwitz" target="_blank" rel="noopener noreferrer" class="inline-block px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
+                        Spenden via PayPal
+                    </a>
+                </div>
+                <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <div class="text-4xl mb-4 text-center">₿</div>
+                    <h3 class="font-semibold mb-3 text-center">Bitcoin</h3>
+                    <code class="text-xs bg-slate-100 dark:bg-slate-800 p-2 rounded block text-center break-all text-slate-700 dark:text-slate-300">
+                        1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G
+                    </code>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Call to Action -->
+    <section class="py-16 px-4 bg-blue-600 dark:bg-blue-900">
+        <div class="max-w-6xl mx-auto text-center text-white">
+            <h2 class="text-3xl sm:text-4xl font-bold mb-6">Bereit, DucKI auszuprobieren?</h2>
+            <p class="text-lg mb-8 opacity-90">Starten Sie lokal oder deployen Sie auf Ihrem Server.</p>
+            <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <a href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer" class="px-6 py-3 rounded-lg bg-white text-blue-600 hover:bg-slate-100 font-medium transition-colors">
+                    Auf GitHub starten
+                </a>
+                <a href="tools.html" class="px-6 py-3 rounded-lg border-2 border-white text-white hover:bg-white/10 font-medium transition-colors">
+                    Tools erkunden
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 dark:bg-slate-950 text-slate-400 py-12 px-4">
+        <div class="max-w-6xl mx-auto">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-8 mb-8">
+                <div>
+                    <h3 class="font-semibold text-white mb-4">DucKI Agent</h3>
+                    <p class="text-sm mb-4">Ein selbstverwalteter AI-Agent für produktive Arbeit.</p>
+                    <div class="flex gap-4">
+                        <a href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a>
+                        <a href="https://www.davidduckwitz.de/" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">Website</a>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-white mb-4">Dokumentation</h3>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="documentation.html" class="hover:text-white transition-colors">Doku lesen</a></li>
+                        <li><a href="tools.html" class="hover:text-white transition-colors">Tools</a></li>
+                        <li><a href="skills.html" class="hover:text-white transition-colors">Skills</a></li>
+                        <li><a href="api-docs.html" class="hover:text-white transition-colors">API Docs</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="font-semibold text-white mb-4">Gemeinschaft</h3>
+                    <ul class="space-y-2 text-sm">
+                        <li><a href="https://github.com/davidduckwitz/ducKI-Agent/issues" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">Issues</a></li>
+                        <li><a href="https://github.com/davidduckwitz/ducKI-Agent/pulls" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">Pull Requests</a></li>
+                        <li><a href="https://github.com/davidduckwitz/ducKI-Agent/fork" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">Fork erstellen</a></li>
+                        <li><a href="about.html" class="hover:text-white transition-colors">Über uns</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="border-t border-slate-800 pt-8 flex flex-col sm:flex-row justify-between items-center text-sm">
+                <p>© 2024 DucKI Agent. Mit 💛 entwickelt von David Duckwitz.</p>
+                <div class="mt-4 sm:mt-0 flex gap-4">
+                    <a href="https://github.com/davidduckwitz/ducKI-Agent/blob/main/LICENSE" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">MIT Lizenz</a>
+                    <a href="https://www.davidduckwitz.de/" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">davidduckwitz.de</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="assets/js/main.js"></script>
+</body>
+</html>

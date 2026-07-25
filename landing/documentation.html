@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dokumentation - DucKI Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <!-- Navigation -->
+    <nav class="sticky top-0 z-50 bg-white dark:bg-slate-900 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">🦆</div>
+                <a href="/" class="text-xl font-bold text-slate-900 dark:text-white">DucKI Agent</a>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="tools.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Tools</a>
+                <a href="skills.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Skills</a>
+                <a href="documentation.html" class="text-sm font-medium text-blue-600">Docs</a>
+                <a href="about.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">About</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Header -->
+    <section class="bg-gradient-to-br from-slate-900 to-slate-800 text-white py-12 px-4">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-4xl font-bold mb-4">Dokumentation</h1>
+            <p class="text-lg opacity-90">Alles was Sie über DucKI Agent wissen müssen</p>
+        </div>
+    </section>
+
+    <!-- Content -->
+    <section class="py-12 px-4">
+        <div class="max-w-4xl mx-auto space-y-8">
+            <!-- Quick Start -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">🚀 Quickstart</h2>
+                <p class="text-slate-600 dark:text-slate-400 mb-4">Starten Sie in 3 Minuten:</p>
+                <div class="space-y-3">
+                    <div class="flex gap-3">
+                        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">1</span>
+                        <div>
+                            <p class="font-semibold">Clone Repository</p>
+                            <code class="text-sm bg-slate-100 dark:bg-slate-800 p-2 rounded block">git clone https://github.com/davidduckwitz/ducKI-Agent</code>
+                        </div>
+                    </div>
+                    <div class="flex gap-3">
+                        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">2</span>
+                        <div>
+                            <p class="font-semibold">Install Dependencies</p>
+                            <code class="text-sm bg-slate-100 dark:bg-slate-800 p-2 rounded block">cd ducKI-Agent && pnpm install</code>
+                        </div>
+                    </div>
+                    <div class="flex gap-3">
+                        <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">3</span>
+                        <div>
+                            <p class="font-semibold">Configure & Start</p>
+                            <code class="text-sm bg-slate-100 dark:bg-slate-800 p-2 rounded block">cp .env.example .env && pnpm run dev</code>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Resources -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-6">📚 Ressourcen</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <a href="tools.html" class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800 hover:shadow-md transition-shadow">
+                        <h3 class="font-semibold text-blue-900 dark:text-blue-200 mb-1">🛠️ Tools</h3>
+                        <p class="text-sm text-blue-700 dark:text-blue-300">Alle 16 verfügbaren Tools erkunden</p>
+                    </a>
+                    <a href="skills.html" class="p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800 hover:shadow-md transition-shadow">
+                        <h3 class="font-semibold text-purple-900 dark:text-purple-200 mb-1">⚡ Skills</h3>
+                        <p class="text-sm text-purple-700 dark:text-purple-300">23+ spezialisierte Skills</p>
+                    </a>
+                    <a href="api-docs.html" class="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800 hover:shadow-md transition-shadow">
+                        <h3 class="font-semibold text-green-900 dark:text-green-200 mb-1">🔌 API</h3>
+                        <p class="text-sm text-green-700 dark:text-green-300">REST API Dokumentation</p>
+                    </a>
+                    <a href="https://github.com/davidduckwitz/ducKI-Agent" target="_blank" rel="noopener noreferrer" class="p-4 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow">
+                        <h3 class="font-semibold mb-1">💻 GitHub</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">Source Code & Repository</p>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Setup Hints -->
+            <div class="bg-blue-50 dark:bg-blue-900/20 p-8 rounded-lg border border-blue-200 dark:border-blue-800">
+                <h2 class="text-2xl font-bold mb-4">⚙️ Setup Hinweise</h2>
+                <ul class="space-y-3">
+                    <li class="flex gap-3">
+                        <span class="text-blue-600 text-lg">→</span>
+                        <span><strong>Settings (Einstellungen):</strong> Stellen Sie in <code class="bg-white dark:bg-slate-900 px-2 py-1 rounded">/settings</code> zuerst Ihren LLM-Provider und Modell ein (z.B. LM Studio, OpenRouter, OpenAI)</span>
+                    </li>
+                    <li class="flex gap-3">
+                        <span class="text-blue-600 text-lg">→</span>
+                        <span><strong>Skills aktivieren:</strong> In <code class="bg-white dark:bg-slate-900 px-2 py-1 rounded">/skills</code> können Sie nur benötigte Skills aktivieren</span>
+                    </li>
+                    <li class="flex gap-3">
+                        <span class="text-blue-600 text-lg">→</span>
+                        <span><strong>Chat starten:</strong> Benutzen Sie <code class="bg-white dark:bg-slate-900 px-2 py-1 rounded">/chat</code> für interaktive Arbeit</span>
+                    </li>
+                    <li class="flex gap-3">
+                        <span class="text-blue-600 text-lg">→</span>
+                        <span><strong>Workflows:</strong> Nutzen Sie <code class="bg-white dark:bg-slate-900 px-2 py-1 rounded">/workflow</code> für komplexe Multi-Agent Läufe</span>
+                    </li>
+                    <li class="flex gap-3">
+                        <span class="text-blue-600 text-lg">→</span>
+                        <span><strong>Überwachen:</strong> Verfolgen Sie aktive Agent-Läufe in <code class="bg-white dark:bg-slate-900 px-2 py-1 rounded">/agents</code></span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- Architecture -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">🏗️ Architektur</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-2">Frontend</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">React + Vite UI auf Port 3000</p>
+                    </div>
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-2">Backend</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">Express API + WebSocket auf Port 3001</p>
+                    </div>
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-2">Database</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">SQLite für Persistenz lokal</p>
+                    </div>
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-2">Stack</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">TypeScript + Node.js + pnpm</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Provider Setup -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">🤖 LLM Provider</h2>
+                <p class="text-slate-600 dark:text-slate-400 mb-4">DucKI unterstützt mehrere LLM-Provider:</p>
+                <div class="space-y-3">
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-1">LM Studio (lokal)</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">Kostenlos, vollständig offline</p>
+                    </div>
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-1">OpenRouter</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">Zugriff auf mehrere Modelle mit API-Key</p>
+                    </div>
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-1">OpenAI</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">ChatGPT API mit API-Key</p>
+                    </div>
+                    <div class="p-4 bg-slate-50 dark:bg-slate-800 rounded-lg">
+                        <h3 class="font-semibold mb-1">Ollama</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">Lokale Modelle via Ollama</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FAQ -->
+            <div class="bg-white dark:bg-slate-900 p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-6">❓ Häufig gestellte Fragen</h2>
+                <div class="space-y-4">
+                    <details class="cursor-pointer">
+                        <summary class="font-semibold py-2 hover:text-blue-600">Kann ich DucKI kostenlos verwenden?</summary>
+                        <p class="text-slate-600 dark:text-slate-400 mt-2">Ja, DucKI Agent ist kostenlos und Open Source. Sie können es lokal installieren und verwenden.</p>
+                    </details>
+                    <details class="cursor-pointer">
+                        <summary class="font-semibold py-2 hover:text-blue-600">Funktioniert DucKI vollständig offline?</summary>
+                        <p class="text-slate-600 dark:text-slate-400 mt-2">Ja, mit LM Studio können Sie DucKI vollständig offline betreiben. Wenn Sie externe LLM-Provider nutzen, benötigen Sie einen Internet-Zugang.</p>
+                    </details>
+                    <details class="cursor-pointer">
+                        <summary class="font-semibold py-2 hover:text-blue-600">Auf welchen Systemen läuft DucKI?</summary>
+                        <p class="text-slate-600 dark:text-slate-400 mt-2">DucKI läuft auf Linux, macOS und Windows. Voraussetzung ist Node.js 16+.</p>
+                    </details>
+                    <details class="cursor-pointer">
+                        <summary class="font-semibold py-2 hover:text-blue-600">Wie kann ich Tools oder Skills hinzufügen?</summary>
+                        <p class="text-slate-600 dark:text-slate-400 mt-2">Sie können neue Tools und Skills als Plugins erstellen oder über Pull Requests zum Projekt beitragen.</p>
+                    </details>
+                </div>
+            </div>
+
+            <!-- Support -->
+            <div class="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 p-8 rounded-lg border border-blue-200 dark:border-blue-800">
+                <h2 class="text-2xl font-bold mb-4">💬 Support & Hilfe</h2>
+                <p class="text-slate-600 dark:text-slate-400 mb-4">Benötigen Sie Hilfe? Hier sind die besten Anlaufstellen:</p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <a href="https://github.com/davidduckwitz/ducKI-Agent/issues" target="_blank" rel="noopener noreferrer" class="p-4 bg-white dark:bg-slate-900 rounded-lg hover:shadow-md transition-shadow">
+                        <h3 class="font-semibold mb-1">GitHub Issues</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">Probleme melden oder Features anfragen</p>
+                    </a>
+                    <a href="https://github.com/davidduckwitz/ducKI-Agent/discussions" target="_blank" rel="noopener noreferrer" class="p-4 bg-white dark:bg-slate-900 rounded-lg hover:shadow-md transition-shadow">
+                        <h3 class="font-semibold mb-1">Diskussionen</h3>
+                        <p class="text-sm text-slate-600 dark:text-slate-400">Fragen stellen und Ideen teilen</p>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 dark:bg-slate-950 text-slate-400 py-12 px-4 mt-12">
+        <div class="max-w-6xl mx-auto text-center">
+            <p>© 2024 DucKI Agent. Dokumentation. Entwickelt mit 💛 von David Duckwitz.</p>
+        </div>
+    </footer>
+</body>
+</html>

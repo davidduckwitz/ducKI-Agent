@@ -1,0 +1,411 @@
+{
+  "tools": [
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "category": "Core",
+      "description": "Read, write, delete, list files and directories in the shared workspace",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": true,
+      "dependencies": [],
+      "useCase": [
+        "Read project files and configurations",
+        "Create and modify files",
+        "Manage directories and workspace",
+        "List directory contents"
+      ],
+      "docs_url": "/landing/docs/tool-filesystem.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/filesystem",
+      "examples": [
+        "Read file: action='read', path='file.txt'",
+        "Write file: action='write', path='file.txt', content='...'",
+        "List directory: action='list', path='.'"
+      ]
+    },
+    {
+      "id": "browser",
+      "name": "Browser Automation",
+      "category": "Execution",
+      "description": "Detect browser availability and control browser sessions using Puppeteer for web automation",
+      "version": "1.2.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Navigate to websites",
+        "Click elements and fill forms",
+        "Extract data from web pages",
+        "Take screenshots and PDFs",
+        "Test web applications"
+      ],
+      "docs_url": "/landing/docs/tool-browser.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/browser",
+      "examples": [
+        "Navigate: url='https://example.com'",
+        "Click: selector='button.submit'",
+        "Fill form: selector='input.email', value='test@example.com'"
+      ]
+    },
+    {
+      "id": "git",
+      "name": "Git",
+      "category": "Execution",
+      "description": "Git version control operations: clone, status, add, commit, push, pull, diff, log",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Clone repositories",
+        "Commit changes",
+        "Push and pull from remote",
+        "View git status and diff",
+        "Manage branches"
+      ],
+      "docs_url": "/landing/docs/tool-git.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/git",
+      "examples": [
+        "Clone: action='clone', url='https://github.com/...'",
+        "Commit: action='commit', path='.', message='...'",
+        "Push: action='push', path='.'"
+      ]
+    },
+    {
+      "id": "shell",
+      "name": "Shell",
+      "category": "Execution",
+      "description": "Execute shell commands and scripts in the system",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Run command-line tools",
+        "Execute scripts",
+        "Perform system operations",
+        "Manage processes",
+        "Build and deploy applications"
+      ],
+      "docs_url": "/landing/docs/tool-shell.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/shell",
+      "examples": [
+        "Execute: command='npm install'",
+        "Run script: command='./deploy.sh'",
+        "Check version: command='node --version'"
+      ]
+    },
+    {
+      "id": "http",
+      "name": "HTTP",
+      "category": "Execution",
+      "description": "Make HTTP requests (GET, POST, PUT, DELETE) to APIs and web services",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Call REST APIs",
+        "Send data to services",
+        "Fetch remote data",
+        "Integrate with external systems",
+        "Test API endpoints"
+      ],
+      "docs_url": "/landing/docs/tool-http.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/http",
+      "examples": [
+        "GET request: method='GET', url='https://api.example.com/data'",
+        "POST request: method='POST', url='...', body='{...}'",
+        "With headers: headers={'Authorization': 'Bearer token'}"
+      ]
+    },
+    {
+      "id": "task",
+      "name": "Task Management",
+      "category": "Execution",
+      "description": "Create, read, update, list, and delete tasks for structured work management",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Create and track tasks",
+        "Update task status",
+        "Manage task priorities",
+        "List active tasks",
+        "Organize work"
+      ],
+      "docs_url": "/landing/docs/tool-task.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/task",
+      "examples": [
+        "Create: title='Setup database', description='...'",
+        "Update: id='task-1', status='in_progress'",
+        "List: action='list'"
+      ]
+    },
+    {
+      "id": "memory",
+      "name": "Memory Management",
+      "category": "Intelligence",
+      "description": "Manage persistent memory entries for the agent across sessions",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Store persistent knowledge",
+        "Retrieve memory entries",
+        "Update preferences and facts",
+        "Maintain context across sessions",
+        "Manage user profiles"
+      ],
+      "docs_url": "/landing/docs/tool-memory.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/memory",
+      "examples": [
+        "Write: namespace='user', key='preference', value='...'",
+        "Read: namespace='user', key='preference'",
+        "List: namespace='project'"
+      ]
+    },
+    {
+      "id": "workflow",
+      "name": "Workflow Orchestration",
+      "category": "Orchestration",
+      "description": "Create, inspect, update, run, resume, list, and delete workflow graphs",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Build multi-step workflows",
+        "Orchestrate agent pipelines",
+        "Resume interrupted workflows",
+        "Manage workflow states",
+        "Create reusable workflows"
+      ],
+      "docs_url": "/landing/docs/tool-workflow.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/workflow",
+      "examples": [
+        "Create: action='create', name='deploy', nodes=[...]",
+        "Run: action='run', id='workflow-1'",
+        "Resume: action='resume', id='workflow-1'"
+      ]
+    },
+    {
+      "id": "cronjob",
+      "name": "CronJob Scheduler",
+      "category": "Orchestration",
+      "description": "Schedule and manage cron jobs for automated task execution at specified times",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Schedule periodic tasks",
+        "Automate repetitive work",
+        "Run tasks at specific times",
+        "Manage schedules",
+        "Monitor scheduled executions"
+      ],
+      "docs_url": "/landing/docs/tool-cronjob.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/cronjob",
+      "examples": [
+        "Create: cron='0 9 * * *', prompt='Daily report', action='run'",
+        "List: action='list'",
+        "Delete: action='delete', id='cronjob-1'"
+      ]
+    },
+    {
+      "id": "skill_manage",
+      "name": "Skill Management",
+      "category": "Intelligence",
+      "description": "Manage and load skills dynamically - enable, disable, and control skill behavior",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Load and enable skills",
+        "Disable unused skills",
+        "List available skills",
+        "Configure skill behavior",
+        "Manage skill dependencies"
+      ],
+      "docs_url": "/landing/docs/tool-skill-manage.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/skill_manage",
+      "examples": [
+        "Enable: skill='code-review'",
+        "Disable: skill='fast-answer'",
+        "List: action='list'"
+      ]
+    },
+    {
+      "id": "mcp",
+      "name": "MCP Integration",
+      "category": "Intelligence",
+      "description": "Integrate with MCP (Model Context Protocol) servers for extended capabilities",
+      "version": "1.0.0",
+      "status": "beta",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Connect to MCP servers",
+        "Access extended tools",
+        "Use remote resources",
+        "Integrate with external systems",
+        "Extend agent capabilities"
+      ],
+      "docs_url": "/landing/docs/tool-mcp.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/mcp",
+      "examples": [
+        "Connect: server='mcp://example.com'",
+        "List resources: action='list'",
+        "Call resource: resource='data-source'"
+      ]
+    },
+    {
+      "id": "project",
+      "name": "Project Management",
+      "category": "Execution",
+      "description": "Manage project metadata, settings, and configuration",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Access project configuration",
+        "Manage project metadata",
+        "Update project settings",
+        "View project structure",
+        "Handle project dependencies"
+      ],
+      "docs_url": "/landing/docs/tool-project.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/project",
+      "examples": [
+        "Get config: action='get'",
+        "Update: key='version', value='1.0.0'",
+        "List: action='list'"
+      ]
+    },
+    {
+      "id": "tool_factory",
+      "name": "Tool Factory",
+      "category": "Intelligence",
+      "description": "Create and register new tools dynamically at runtime",
+      "version": "1.0.0",
+      "status": "beta",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Create custom tools",
+        "Register new tool definitions",
+        "Extend agent capabilities",
+        "Build tool chains",
+        "Manage tool lifecycle"
+      ],
+      "docs_url": "/landing/docs/tool-tool-factory.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/tool_factory",
+      "examples": [
+        "Create: name='custom-tool', schema={...}",
+        "Register: tool='custom-tool'",
+        "Update: id='tool-1', schema={...}"
+      ]
+    },
+    {
+      "id": "history",
+      "name": "Chat History",
+      "category": "Execution",
+      "description": "Access and search chat history and conversation logs",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Search previous conversations",
+        "Access chat history",
+        "Retrieve past decisions",
+        "Audit agent actions",
+        "Find context"
+      ],
+      "docs_url": "/landing/docs/tool-history.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/history",
+      "examples": [
+        "Search: query='database setup', limit=10",
+        "Get: session_id='session-1'",
+        "List: action='list', limit=20"
+      ]
+    },
+    {
+      "id": "gateway",
+      "name": "Discord Gateway",
+      "category": "Integration",
+      "description": "Outbound messaging and speech-to-text integration with Discord",
+      "version": "1.0.0",
+      "status": "beta",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Send messages to Discord",
+        "Receive voice input",
+        "Transcribe audio",
+        "Integrate Discord workflows",
+        "Notification system"
+      ],
+      "docs_url": "/landing/docs/tool-gateway.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/gateway",
+      "examples": [
+        "Send message: channel='general', text='...'",
+        "Transcribe: audio_url='...'",
+        "List: action='list'"
+      ]
+    },
+    {
+      "id": "plan",
+      "name": "Planning Tool",
+      "category": "Execution",
+      "description": "Create and manage structured implementation plans for complex tasks",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Create detailed plans",
+        "Break down complex tasks",
+        "Manage project phases",
+        "Track planning progress",
+        "Document implementation steps"
+      ],
+      "docs_url": "/landing/docs/tool-plan.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/plan",
+      "examples": [
+        "Create: title='Deployment', phases=[...]",
+        "Update: id='plan-1', status='in_progress'",
+        "List: action='list'"
+      ]
+    },
+    {
+      "id": "weather_summary",
+      "name": "Weather Summary",
+      "category": "Execution",
+      "description": "Fetch and summarize weather information for given locations",
+      "version": "1.0.0",
+      "status": "stable",
+      "core": false,
+      "dependencies": [],
+      "useCase": [
+        "Get weather data",
+        "Check forecasts",
+        "Summarize conditions",
+        "Plan based on weather",
+        "Monitor alerts"
+      ],
+      "docs_url": "/landing/docs/tool-weather-summary.html",
+      "repository": "https://github.com/davidduckwitz/ducKI-Agent/tree/main/packages/tools/src/weather_summary",
+      "examples": [
+        "Get: location='Berlin'",
+        "Forecast: location='New York', days=7",
+        "Summary: action='summary'"
+      ]
+    }
+  ]
+}
