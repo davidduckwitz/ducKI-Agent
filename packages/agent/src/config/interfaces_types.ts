@@ -24,6 +24,9 @@ export interface AgentRunContextCaps {
   maxContextMessages?: number;
   maxContextChars?: number;
   maxContextMessageChars?: number;
+  supportsImageInput?: boolean;
+  supportsScreenshots?: boolean;
+  maxImageSize?: number;
 }
 
 export interface AgentRunAttachment {

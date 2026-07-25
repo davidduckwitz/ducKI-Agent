@@ -11,9 +11,14 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 export const MessageRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
 export type MessageRole = z.infer<typeof MessageRoleSchema>;
 
+export type LLMContent =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: "low" | "high" | "auto" } }
+  | { type: "image_data"; image_data: { url: string; mime_type: string } };
+
 export interface LLMMessage {
   role: MessageRole;
-  content: string;
+  content: string | LLMContent[];
   toolCallId?: string;
   toolCalls?: ToolCall[];
   metadata?: string | Record<string, unknown>;

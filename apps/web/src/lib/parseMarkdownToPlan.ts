@@ -25,7 +25,7 @@ export function parseMarkdownToPlan(markdown: string): Plan | null {
 
   // Extract numbered steps
   const steps: Array<{ title: string; description: string; tools?: string[] }> = [];
-  const stepRegex = /^\d+\.\s+\*\*(.+?)\*\*\n([\s\S]*?)(?=\n\d+\.|$)/gm;
+  const stepRegex = /^\d+\.\s+\*\*(.+?)\*\*\n([\s\S]*?)(?=\n\d+\.|$)/g;
 
   let stepMatch;
   while ((stepMatch = stepRegex.exec(markdown)) !== null) {
@@ -39,8 +39,8 @@ export function parseMarkdownToPlan(markdown: string): Plan | null {
     // Extract tools for this step
     const tools: string[] = [];
 
-    // Find "Benötigte Tools:" or similar variations
-    const toolsMatch = stepContent.match(/_Benötigte\s+Tools:\s*(.+?)(?=\n|$)/i);
+    // Find "Benötigte Tools:" or similar variations (with or without markdown formatting)
+    const toolsMatch = stepContent.match(/_?Benötigte\s+Tools:\s*(.+?)_?(?=\n|$)/i);
     if (toolsMatch && toolsMatch[1]) {
       // Remove markdown formatting and split by comma
       const cleanedTools = toolsMatch[1]

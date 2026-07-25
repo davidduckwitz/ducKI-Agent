@@ -57,10 +57,13 @@ export class ConversationManager {
         : typeof message.metadata === "string"
           ? message.metadata
           : JSON.stringify(message.metadata);
+      const content = typeof message.content === "string"
+        ? message.content
+        : JSON.stringify(message.content);
       await this.db.addMessage({
         conversationId: this.conversationId,
         role: message.role,
-        content: message.content,
+        content,
         metadata,
         toolCallId: message.toolCallId,
       });

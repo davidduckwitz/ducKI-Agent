@@ -1,5 +1,5 @@
 import type { LLMProvider } from "@ducki/providers";
-import type { LLMMessage, ToolResult } from "@ducki/shared";
+import type { LLMMessage, ToolResult, LLMContent } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
@@ -55,6 +55,20 @@ Use the available tools to create and manage projects and tasks, then work them 
 When a request needs execution, plan first, create or update project/task records as needed, then use tools to carry out the work.
 Always think step-by-step, keep state in the database, and return concise progress updates.
 Use ./shared-workspace as collaborative file area for user-provided artifacts and generated deliverables.
+
+## Vision and Image Support
+You can receive and analyze images in the conversation. This includes:
+- User-provided images for analysis or processing
+- Automatic browser screenshots captured during development/testing
+- Visual feedback on UI/design changes
+
+When you receive an image, analyze it carefully and provide insights about:
+- Visual layout and design
+- Content and text visible in screenshots
+- Errors or issues shown visually
+- Progress of visual tasks
+
+Use visual information to make better decisions about browser interactions and UI testing.
 
 ${TOOL_CALL_FORMAT_BLOCK}`;
 
@@ -2079,6 +2093,34 @@ export class Agent {
    * whole-turn version of the standalone "plan" tool (plan-tool.ts); both share
    * formatPlanAsMarkdown so a plan reads the same regardless of which path produced it.
    */
+  private async handleScreenshotCapture(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    toolResult: ToolResult
+  ): Promise<void> {
+    if (!toolResult.success || toolName !== "browser") return;
+    const action = toolInput.action as string;
+    if (action !== "screenshot") return;
+
+    const buffer = toolResult.data as Buffer | undefined;
+    if (!buffer || !Buffer.isBuffer(buffer)) return;
+
+    const base64Url = `data:image/png;base64,${buffer.toString("base64")}`;
+    const imageContent: LLMContent[] = [
+      { type: "image_data", image_data: { url: base64Url, mime_type: "image/png" } },
+      { type: "text", text: "Browser screenshot captured. Please analyze the visual state and provide insights." },
+    ];
+
+    const screenshotMessage: LLMMessage = {
+      role: "user",
+      content: imageContent,
+      metadata: { source: "browser_screenshot" },
+    };
+
+    await this.conversation.addMessage(screenshotMessage);
+    this.history.add(screenshotMessage, "screenshot");
+  }
+
   private async runPlanMode(
     userInput: string,
     options: AgentRunOptions,
@@ -2839,6 +2881,9 @@ export class Agent {
             await this.conversation.addMessage(toolResultMessage);
             this.history.add(toolResultMessage, call.toolName);
             await rememberSuccessfulTool(call.toolName, call.input, toolResult);
+
+            // Automatically capture and attach screenshot after browser tool execution
+            await this.handleScreenshotCapture(call.toolName, call.input, toolResult);
 
             if (!toolResult.success) anyBatchFailure = true;
           }

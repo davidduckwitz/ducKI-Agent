@@ -1,6 +1,6 @@
 import OpenAI from "openai";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
-import type { LLMMessage, LLMResponse, GenerateOptions } from "@ducki/shared";
+import type { ChatCompletionMessageParam, ChatCompletionContentPart } from "openai/resources/chat/completions.js";
+import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "./base.js";
 
 function sleep(ms: number): Promise<void> {
@@ -27,18 +27,40 @@ function shouldOmitAuthorizationHeader(apiKey: string): boolean {
   return false;
 }
 
+function bufferToBase64DataUri(buffer: Buffer, mimeType: string = "image/png"): string {
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+function convertLLMContentToOpenAI(content: string | LLMContent[]): string | ChatCompletionContentPart[] {
+  if (typeof content === "string") {
+    return content;
+  }
+  return content.map((part): ChatCompletionContentPart => {
+    if (part.type === "text") {
+      return { type: "text", text: part.text };
+    }
+    if (part.type === "image_url") {
+      return { type: "image_url", image_url: { url: part.image_url.url, detail: part.image_url.detail } };
+    }
+    if (part.type === "image_data") {
+      return { type: "image_url", image_url: { url: part.image_data.url } };
+    }
+    return { type: "text", text: "" };
+  });
+}
+
 function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] {
   return messages.map((m): ChatCompletionMessageParam => {
     if (m.role === "tool") {
-      return { role: "tool", content: m.content, tool_call_id: m.toolCallId ?? "unknown" };
+      return { role: "tool", content: typeof m.content === "string" ? m.content : "tool result", tool_call_id: m.toolCallId ?? "unknown" };
     }
     if (m.role === "assistant") {
-      return { role: "assistant", content: m.content };
+      return { role: "assistant", content: typeof m.content === "string" ? m.content : "assistant response" };
     }
     if (m.role === "system") {
-      return { role: "system", content: m.content };
+      return { role: "system", content: typeof m.content === "string" ? m.content : "system prompt" };
     }
-    return { role: "user", content: m.content };
+    return { role: "user", content: convertLLMContentToOpenAI(m.content) };
   });
 }
 

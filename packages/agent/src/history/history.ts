@@ -1,9 +1,9 @@
-import type { LLMMessage } from "@ducki/shared";
+import type { LLMMessage, LLMContent } from "@ducki/shared";
 
 export interface HistoryEntry {
   timestamp: string;
   role: LLMMessage["role"];
-  content: string;
+  content: string | LLMContent[];
   toolName?: string;
 }
 
