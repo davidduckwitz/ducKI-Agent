@@ -15,7 +15,8 @@ interface SetupWizardModalProps {
   settings: SettingEntry[];
 }
 
-type ProviderName = "lmstudio" | "openrouter" | "openai" | "ollama";
+type ProviderName = "lmstudio" | "openrouter" | "openai" | "ollama" | "claude" | "nous";
+type SkillBehavior = "automatic" | "active";
 
 function toBool(value: string | undefined, fallback: boolean): boolean {
   const normalized = String(value ?? "").trim().toLowerCase();
@@ -64,6 +65,11 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [openAiModel, setOpenAiModel] = useState(settingsMap.get("OPENAI_MODEL") ?? "gpt-4o");
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState(settingsMap.get("OLLAMA_BASE_URL") ?? "http://localhost:11434");
   const [ollamaModel, setOllamaModel] = useState(settingsMap.get("OLLAMA_MODEL") ?? "llama3");
+  const [claudeApiKey, setClaudeApiKey] = useState(settingsMap.get("CLAUDE_API_KEY") ?? "");
+  const [claudeModel, setClaudeModel] = useState(settingsMap.get("CLAUDE_MODEL") ?? "claude-3-5-sonnet-20241022");
+  const [nousApiKey, setNousApiKey] = useState(settingsMap.get("NOUS_API_KEY") ?? "");
+  const [nousBaseUrl, setNousBaseUrl] = useState(settingsMap.get("NOUS_BASE_URL") ?? "https://api.nousresearch.com/v1");
+  const [nousModel, setNousModel] = useState(settingsMap.get("NOUS_MODEL") ?? "nous-hermes-2-mixtral-8x7b-dpo");
 
   const [gatewayEnabled, setGatewayEnabled] = useState(Boolean(discordGateway?.enabled));
   const [discordBotToken, setDiscordBotToken] = useState(discordGateway?.authToken ?? "");
@@ -73,6 +79,10 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
   const [codingEnabled, setCodingEnabled] = useState(toBool(settingsMap.get("CODING_ENABLED"), false));
   const [wikiEnabled, setWikiEnabled] = useState(toBool(settingsMap.get("WIKI_ENABLED"), false));
+
+  const [autoSkillSelection, setAutoSkillSelection] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_SELECTION"), true));
+  const [skillBehavior, setSkillBehavior] = useState<SkillBehavior>((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
+  const [autoSkillFallbackNone, setAutoSkillFallbackNone] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
 
   const saveSetup = useMutation({
     mutationFn: async () => {
@@ -95,6 +105,15 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
         writes.push(api.settings.set("OLLAMA_BASE_URL", ollamaBaseUrl));
         writes.push(api.settings.set("OLLAMA_MODEL", ollamaModel));
       }
+      if (provider === "claude") {
+        writes.push(api.settings.set("CLAUDE_API_KEY", claudeApiKey));
+        writes.push(api.settings.set("CLAUDE_MODEL", claudeModel));
+      }
+      if (provider === "nous") {
+        writes.push(api.settings.set("NOUS_API_KEY", nousApiKey));
+        writes.push(api.settings.set("NOUS_BASE_URL", nousBaseUrl));
+        writes.push(api.settings.set("NOUS_MODEL", nousModel));
+      }
 
       const gatewayPayload = gatewayEnabled
         ? [
@@ -114,6 +133,11 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
       writes.push(api.settings.set("CODING_ENABLED", String(codingEnabled)));
       writes.push(api.settings.set("WIKI_ENABLED", String(wikiEnabled)));
+
+      writes.push(api.settings.set("AGENT_AUTO_SKILL_SELECTION", String(autoSkillSelection)));
+      writes.push(api.settings.set("AGENT_SKILL_BEHAVIOR", skillBehavior));
+      writes.push(api.settings.set("AGENT_AUTO_SKILL_FALLBACK_NONE", String(autoSkillFallbackNone)));
+
       writes.push(api.settings.set("SETUP_COMPLETED", "true"));
       writes.push(api.settings.set("SETUP_COMPLETED_AT", new Date().toISOString()));
 
@@ -128,8 +152,14 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
   if (!open) return null;
 
-  const isLastStep = step === 3;
-  const steps = [t("setupWizard.steps.llm"), t("setupWizard.steps.gateway"), t("setupWizard.steps.features"), t("setupWizard.steps.summary")];
+  const isLastStep = step === 4;
+  const steps = [
+    t("setupWizard.steps.llm"),
+    t("setupWizard.steps.gateway"),
+    t("setupWizard.steps.features"),
+    t("setupWizard.steps.agent"),
+    t("setupWizard.steps.summary"),
+  ];
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -141,7 +171,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <Sparkles className="w-5 h-5 text-amber-300" />
                 {t("setupWizard.title")}
               </h2>
-              <p className="text-xs text-gray-400 mt-1">{t("setupWizard.step")} {step + 1} {t("setupWizard.of")} 4</p>
+              <p className="text-xs text-gray-400 mt-1">{t("setupWizard.step")} {step + 1} {t("setupWizard.of")} 5</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 mt-1">
@@ -179,6 +209,8 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <option value="openrouter">OpenRouter</option>
                 <option value="openai">OpenAI</option>
                 <option value="ollama">Ollama</option>
+                <option value="claude">Claude (Anthropic)</option>
+                <option value="nous">Nous Research</option>
               </select>
 
               {provider === "lmstudio" && (
@@ -206,6 +238,23 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input className="input" value={ollamaBaseUrl} onChange={(e) => setOllamaBaseUrl(e.target.value)} placeholder={t("setupWizard.placeholders.ollamaBaseUrl")} />
                   <input className="input" value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} placeholder={t("setupWizard.placeholders.ollamaModel")} />
+                </div>
+              )}
+
+              {provider === "claude" && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <input className="input" type="password" value={claudeApiKey} onChange={(e) => setClaudeApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.claudeApiKey")} />
+                  <input className="input" value={claudeModel} onChange={(e) => setClaudeModel(e.target.value)} placeholder="claude-3-5-sonnet-20241022" />
+                </div>
+              )}
+
+              {provider === "nous" && (
+                <div className="space-y-3">
+                  <input className="input w-full" type="password" value={nousApiKey} onChange={(e) => setNousApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.nousApiKey")} />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <input className="input" value={nousBaseUrl} onChange={(e) => setNousBaseUrl(e.target.value)} placeholder={t("setupWizard.placeholders.nousBaseUrl")} />
+                    <input className="input" value={nousModel} onChange={(e) => setNousModel(e.target.value)} placeholder={t("setupWizard.placeholders.nousModel")} />
+                  </div>
                 </div>
               )}
             </div>
@@ -247,14 +296,49 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
           {step === 3 && (
             <div className="space-y-3">
+              <h3 className="text-base font-semibold">{t("setupWizard.section.agent")}</h3>
+              <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
+                <span>
+                  {t("setupWizard.agent.autoSelection")}
+                  <span className="block text-xs text-gray-400 mt-0.5">{t("setupWizard.agent.autoSelectionHint")}</span>
+                </span>
+                <input type="checkbox" checked={autoSkillSelection} onChange={(e) => setAutoSkillSelection(e.target.checked)} />
+              </label>
+
+              <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 space-y-2">
+                <label className="text-sm text-gray-300 block">{t("setupWizard.agent.behavior")}</label>
+                <select className="input w-full" value={skillBehavior} onChange={(e) => setSkillBehavior(e.target.value as SkillBehavior)}>
+                  <option value="automatic">{t("setupWizard.agent.behaviorAutomatic")}</option>
+                  <option value="active">{t("setupWizard.agent.behaviorActive")}</option>
+                </select>
+              </div>
+
+              {skillBehavior === "automatic" && (
+                <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 space-y-2">
+                  <label className="text-sm text-gray-300 block">{t("setupWizard.agent.fallback")}</label>
+                  <select className="input w-full" value={String(autoSkillFallbackNone)} onChange={(e) => setAutoSkillFallbackNone(e.target.value === "true")}>
+                    <option value="true">{t("setupWizard.agent.fallbackNone")}</option>
+                    <option value="false">{t("setupWizard.agent.fallbackAll")}</option>
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+
+          {step === 4 && (
+            <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.summary")}</h3>
               <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm space-y-2">
                 <p><strong>{t("setupWizard.summary.provider")}:</strong> {provider}</p>
                 {provider === "openrouter" && <p><strong>{t("setupWizard.summary.openRouterModel")}:</strong> {openRouterModel || "openrouter/free"}</p>}
+                {provider === "claude" && <p><strong>{t("setupWizard.summary.claudeModel")}:</strong> {claudeModel}</p>}
+                {provider === "nous" && <p><strong>{t("setupWizard.summary.nousModel")}:</strong> {nousModel}</p>}
                 <p><strong>{t("setupWizard.summary.gateway")}:</strong> {gatewayEnabled ? t("setupWizard.summary.discordActive") : t("setupWizard.summary.off")}</p>
                 {gatewayEnabled && discordChannelId && <p><strong>{t("setupWizard.summary.discordChannel")}:</strong> {discordChannelId}</p>}
                 <p><strong>{t("setupWizard.summary.coding")}:</strong> {codingEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
                 <p><strong>{t("setupWizard.summary.wiki")}:</strong> {wikiEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
+                <p><strong>{t("setupWizard.summary.skillBehavior")}:</strong> {skillBehavior === "automatic" ? t("setupWizard.agent.behaviorAutomatic") : t("setupWizard.agent.behaviorActive")}</p>
+                <p><strong>{t("setupWizard.summary.skillSelection")}:</strong> {autoSkillSelection ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
               </div>
               <p className="text-xs text-gray-400 flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-300" />{t("setupWizard.summary.saveHint")}</p>
             </div>
@@ -275,7 +359,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
               {saveSetup.isPending ? t("setupWizard.saving") : t("setupWizard.finish")}
             </button>
           ) : (
-            <button className="btn-primary inline-flex items-center gap-2" onClick={() => setStep((s) => Math.min(3, s + 1))}>
+            <button className="btn-primary inline-flex items-center gap-2" onClick={() => setStep((s) => Math.min(4, s + 1))}>
               {t("setupWizard.next")} <ChevronRight className="w-4 h-4" />
             </button>
           )}
