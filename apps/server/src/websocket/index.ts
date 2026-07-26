@@ -145,6 +145,22 @@ export function setupWebSocket(
       socket.emit("agent:metrics", agentRegistry.snapshot());
     });
 
+    // Browser preview events
+    socket.on("browser:preview", (data: { tabId?: string; serverId?: string; url?: string; screenshot?: string; htmlContent?: string; conversationId?: number }) => {
+      if (data.conversationId) {
+        socket.emit("browser:preview", {
+          ...data,
+          isStreaming: true,
+        });
+      }
+    });
+
+    socket.on("browser:stop", (data: { serverId?: string }) => {
+      if (data.serverId) {
+        logger.info("Browser stop requested", { serverId: data.serverId });
+      }
+    });
+
     socket.on("disconnect", () => {
       stopSocketAgents(socket.id);
       activeAgentsBySocket.delete(socket.id);

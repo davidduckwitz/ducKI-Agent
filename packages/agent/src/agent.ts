@@ -56,6 +56,35 @@ When a request needs execution, plan first, create or update project/task record
 Always think step-by-step, keep state in the database, and return concise progress updates.
 Use ./shared-workspace as collaborative file area for user-provided artifacts and generated deliverables.
 
+## Browser Tool Workflow (IMPORTANT - READ CAREFULLY)
+When using the browser tool for web automation, emit ALL browser action calls in ONE turn, sequentially.
+The executor automatically handles session ID management and sequential execution.
+
+### CRITICAL: Send All Browser Actions Together
+Send all browser tool calls (launch, goto, screenshot, close) in a single response, in order.
+DO NOT wait for results or ask for confirmation between actions - the executor handles everything.
+
+### How It Works:
+The backend executor:
+1. Executes browser calls SEQUENTIALLY (not in parallel)
+2. Extracts the sessionId from "launch" automatically
+3. Propagates this sessionId to all subsequent browser actions (goto, screenshot, close, etc.)
+4. You can use ANY sessionId placeholder value for non-launch actions - the real ID will be injected
+
+### Correct Workflow (all calls in one response):
+1. [TOOL:browser({"action": "launch"})]
+2. [TOOL:browser({"action": "goto", "sessionId": "browser_session", "url": "https://example.com"})]
+3. [TOOL:browser({"action": "screenshot", "sessionId": "browser_session"})]
+4. [TOOL:browser({"action": "close", "sessionId": "browser_session"})]
+
+### Key Rules:
+- Emit all browser calls in ONE turn, sequentially
+- Launch MUST be first if you need a new session
+- For goto/click/screenshot/close, use ANY sessionId placeholder - the executor will use the real one
+- Do NOT break browser operations across multiple turns
+- Let the executor manage session lifecycle
+- If you see "session not found", ensure launch is first in your sequence
+
 ## Vision and Image Support
 You can receive and analyze images in the conversation. This includes:
 - User-provided images for analysis or processing
@@ -1667,9 +1696,10 @@ export class Agent {
   } {
     const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
     const unparsed: string[] = [];
-    let fromIndex = 0;
     let markerCount = 0;
 
+    // Extract [TOOL:...] format (legacy)
+    let fromIndex = 0;
     while (true) {
       const markerIndex = response.indexOf("[TOOL:", fromIndex);
       if (markerIndex < 0) break;
@@ -1686,11 +1716,113 @@ export class Agent {
       if (parsed) {
         calls.push(parsed);
       } else {
-        // Marker found but unparseable; record for guardrail reporting
         unparsed.push(`[TOOL:${body}]`);
       }
 
       fromIndex = scanResult.endIndex + 1;
+    }
+
+    // Extract <|tool_call>call:toolName(...)<tool_call|> format
+    fromIndex = 0;
+    while (true) {
+      const markerIndex = response.indexOf("<|tool_call>call:", fromIndex);
+      if (markerIndex < 0) break;
+
+      markerCount++;
+      const afterPrefix = response.slice(markerIndex + "<|tool_call>call:".length);
+      const toolNameMatch = afterPrefix.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(/);
+      if (!toolNameMatch?.[1]) {
+        fromIndex = markerIndex + "<|tool_call>call:".length;
+        continue;
+      }
+
+      const toolName = toolNameMatch[1];
+      const openParenPos = afterPrefix.indexOf("(");
+      const closingMarker = ")<tool_call|>";
+      const closingPos = afterPrefix.indexOf(closingMarker);
+
+      if (openParenPos >= 0 && closingPos > openParenPos) {
+        const body = afterPrefix.slice(openParenPos + 1, closingPos);
+        const args = this.parseLooseObject(body);
+        if (args) {
+          const parsed = this.resolveToolNameAndInput(toolName, args);
+          if (parsed) {
+            calls.push(parsed);
+          }
+        } else {
+          unparsed.push(`<|tool_call>call:${toolName}(${body})<tool_call|>`);
+        }
+        fromIndex = markerIndex + "<|tool_call>call:".length + closingPos + closingMarker.length;
+      } else {
+        fromIndex = markerIndex + "<|tool_call>call:".length;
+      }
+    }
+
+    // Extract call:toolName(...) and call:toolName{...} formats (Claude 5 API)
+    fromIndex = 0;
+    while (true) {
+      const callIndex = response.indexOf("call:", fromIndex);
+      if (callIndex < 0) break;
+
+      // Skip if this is part of <|tool_call>call: (already handled above)
+      if (callIndex > 0 && response.slice(callIndex - 17, callIndex) === "<|tool_call>call:") {
+        fromIndex = callIndex + "call:".length;
+        continue;
+      }
+
+      markerCount++;
+      const afterCall = response.slice(callIndex + "call:".length);
+
+      // Try to match: call:toolName(...) with parens
+      let callMatch = afterCall.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(/);
+      let toolName = callMatch?.[1];
+      let openParenPos = callMatch?.[0].length ? callMatch[0].length - 1 : -1;
+
+      // If no parens, try: call:toolName{...} without parens (compact format)
+      if (!toolName) {
+        callMatch = afterCall.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\{/);
+        if (callMatch?.[1]) {
+          toolName = callMatch[1];
+          openParenPos = callMatch[0].length - 1; // Position of {
+          // Handle as brace payload
+          const braceResult = this.scanBracketPayload(afterCall, openParenPos + 1);
+          if (braceResult) {
+            const body = braceResult.body;
+            const args = this.parseLooseObject(body);
+            if (args) {
+              const parsed = this.resolveToolNameAndInput(toolName, args);
+              if (parsed) {
+                calls.push(parsed);
+              }
+            } else {
+              unparsed.push(`call:${toolName}{${body}}`);
+            }
+            fromIndex = callIndex + "call:".length + braceResult.endIndex + 1;
+            continue;
+          }
+        }
+        fromIndex = callIndex + "call:".length;
+        continue;
+      }
+
+      const scanResult = this.scanBracketPayload(afterCall, openParenPos + 1);
+      if (!scanResult) {
+        fromIndex = callIndex + "call:".length;
+        continue;
+      }
+
+      const body = scanResult.body;
+      const args = this.parseLooseObject(body);
+      if (args) {
+        const parsed = this.resolveToolNameAndInput(toolName, args);
+        if (parsed) {
+          calls.push(parsed);
+        }
+      } else {
+        unparsed.push(`call:${toolName}(${body})`);
+      }
+
+      fromIndex = callIndex + "call:".length + scanResult.endIndex + 1;
     }
 
     return { calls, markerCount, unparsed };
@@ -2210,6 +2342,294 @@ export class Agent {
     };
   }
 
+  private async executeToolCallsFromResponse(
+    response: string,
+    controls: AgentRuntimeControls,
+    options: AgentRunOptions,
+    emit: (type: AgentRunEventType, message: string, data?: Record<string, unknown>) => void,
+    iterations: number,
+    repeatedToolCalls: Map<string, number>
+  ): Promise<{ resultMap: Map<string, ToolResult>; cleanedResponse: string; browserToolsCount: number }> {
+    this.logger.info("[TOOL-CALLS] Starting extraction and execution", {
+      responseLength: response.length,
+      hasToolMarkers: /\[TOOL:/.test(response),
+    });
+
+    // Extract all tool calls from response
+    const extractResult = this.extractAllToolCalls(response);
+    let toolCalls = extractResult.calls;
+
+    // Deduplicate tool calls: if same action is called twice in a row, keep only first
+    const deduplicatedCalls: typeof toolCalls = [];
+    const callSignatures = new Set<string>();
+    for (const call of toolCalls) {
+      const signature = `${call.toolName}:${JSON.stringify(call.input)}`;
+      if (!callSignatures.has(signature)) {
+        deduplicatedCalls.push(call);
+        callSignatures.add(signature);
+      } else {
+        this.logger.warn("[TOOL-CALLS] Deduplicating repeated tool call", {
+          toolName: call.toolName,
+          input: call.input,
+        });
+      }
+    }
+    toolCalls = deduplicatedCalls;
+
+    // Count browser launch vs other browser calls
+    const browserLaunches = extractResult.calls.filter(c => c.toolName === "browser" && c.input["action"] === "launch").length;
+    const otherBrowserCalls = extractResult.calls.filter(c => c.toolName === "browser" && c.input["action"] !== "launch").length;
+
+    this.logger.info("[TOOL-CALLS] Extraction complete", {
+      responsePreview: response.slice(0, 300),
+      markerCount: extractResult.markerCount,
+      extractedCount: extractResult.calls.length,
+      browserLaunches,
+      otherBrowserCalls,
+      dedupCount: toolCalls.length,
+      unparsedCount: extractResult.unparsed.length,
+      toolNames: toolCalls.map((c) => c.toolName),
+      allToolDetails: extractResult.calls.map(c => ({ toolName: c.toolName, action: c.input["action"], hasSessionId: !!c.input["sessionId"] })),
+      deduplicatedCount: extractResult.calls.length - toolCalls.length,
+    });
+
+    if (extractResult.unparsed.length > 0) {
+      this.logger.warn("[TOOL-CALLS] Unparsed tool call markers detected", {
+        unparsed: extractResult.unparsed.slice(0, 5),
+      });
+      emit("guardrail", "Partially parsed multi-tool-call batch", {
+        markerCount: extractResult.markerCount,
+        parsed: toolCalls.length,
+        unparsed: extractResult.unparsed,
+      });
+    }
+
+    const resultMap = new Map<string, ToolResult>();
+
+    if (toolCalls.length === 0) {
+      this.logger.info("[TOOL-CALLS] No tool calls found, skipping execution");
+      // Still clean the response to remove any markers (even if unparsed)
+      const cleanedResponse = response
+        .replace(/\[TOOL:[^\]]*\]/g, "")                     // Remove [TOOL:...] markers
+        .replace(/<\|channel>.*?<channel\|>/gs, "")          // Remove <|channel>...<channel|> blocks
+        .replace(/<\|channel>thought[^\n]*\n?/g, "")         // Remove <|channel>thought markers
+        .replace(/<channel\|>/g, "")                          // Remove <channel|> end markers
+        .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
+        .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove other <|...> markers
+        .trim();
+      return { resultMap, cleanedResponse, browserToolsCount: 0 };
+    }
+
+    // Emit initial tool-call detection event
+    emit("tool_call", `Detected ${toolCalls.length} tool call(s) in response`, {
+      count: toolCalls.length,
+      tools: toolCalls.map((c) => c.toolName),
+      toolDetails: toolCalls.map((c) => ({ toolName: c.toolName, inputKeys: Object.keys(c.input) })),
+    });
+
+    // Build execution plan respecting dependencies
+    this.logger.info("[TOOL-CALLS] Building execution plan", { count: toolCalls.length });
+
+    const executionBatches = this.toolGraph.buildExecutionPlan(
+      toolCalls.map((call, idx) => ({
+        toolName: call.toolName,
+        input: call.input,
+        id: `batch_${iterations}_${idx}`,
+      }))
+    );
+
+    this.logger.info("[TOOL-CALLS] Execution plan built", {
+      batchCount: executionBatches.length,
+      batchSizes: executionBatches.map((b) => b.length),
+    });
+
+    // Execute each batch (respecting tool dependencies)
+    for (let batchIdx = 0; batchIdx < executionBatches.length; batchIdx++) {
+      const batch = executionBatches[batchIdx];
+      if (!batch) {
+        this.logger.warn("[TOOL-CALLS] Batch is undefined, skipping", { batchIdx });
+        continue;
+      }
+
+      this.logger.info(`[TOOL-CALLS] Executing batch ${batchIdx + 1}/${executionBatches.length}`, {
+        batchSize: batch.length,
+        tools: batch.map((c) => c.toolName),
+      });
+
+      const validCalls: Array<{ id: string; toolName: string; input: Record<string, unknown> }> = [];
+      const batchValidationStart = Date.now();
+
+      // Validate and preprocess calls
+      for (const call of batch) {
+        const callId = call.id ?? `${call.toolName}_${JSON.stringify(call.input)}`;
+        const signature = this.buildToolCallSignature(call.toolName, call.input);
+        const seen = (repeatedToolCalls.get(signature) ?? 0) + 1;
+        repeatedToolCalls.set(signature, seen);
+
+        this.logger.debug("[TOOL-CALLS] Validating call", {
+          callId,
+          toolName: call.toolName,
+          inputSize: JSON.stringify(call.input).length,
+          repeatCount: seen,
+        });
+
+        if (seen > controls.maxRepeatedToolCall) {
+          this.logger.warn("[TOOL-CALLS] Repeated tool call blocked", {
+            callId,
+            signature,
+            repeatCount: seen,
+            maxAllowed: controls.maxRepeatedToolCall,
+          });
+          resultMap.set(callId, { success: false, data: null, error: "Repeated tool call blocked" });
+          continue;
+        }
+
+        const preflight = await this.preflightToolInput(call.toolName, call.input, controls);
+        if (!preflight.ok) {
+          this.logger.warn("[TOOL-CALLS] Preflight validation failed", {
+            callId,
+            toolName: call.toolName,
+            error: preflight.error,
+          });
+          resultMap.set(callId, { success: false, data: null, error: preflight.error });
+          continue;
+        }
+
+        validCalls.push({ id: callId, toolName: call.toolName, input: preflight.input });
+      }
+
+      const validationTime = Date.now() - batchValidationStart;
+      this.logger.info("[TOOL-CALLS] Validation complete", {
+        validCalls: validCalls.length,
+        rejectedCalls: batch.length - validCalls.length,
+        validationTimeMs: validationTime,
+      });
+
+      if (validCalls.length === 0) {
+        this.logger.info("[TOOL-CALLS] No valid calls in batch after validation, skipping execution");
+        continue;
+      }
+
+      // Execute batch (Browser calls are sequential thanks to executeBatch override)
+      const batchExecutionStart = Date.now();
+      this.logger.info("[TOOL-CALLS] Starting batch execution", {
+        callCount: validCalls.length,
+        isParallel: validCalls.length > 1 && !validCalls.some((c) => c.toolName === "browser"),
+      });
+
+      const executedResults = await this.executor.executeBatch(validCalls);
+      const batchExecutionTime = Date.now() - batchExecutionStart;
+
+      this.logger.info("[TOOL-CALLS] Batch execution complete", {
+        executionTimeMs: batchExecutionTime,
+        resultCount: executedResults.length,
+        successCount: executedResults.filter((r) => r.result.success).length,
+      });
+
+      // Store results, add to conversation, and emit events
+      let latestBrowserSessionId: string | undefined;
+
+      for (const executed of executedResults) {
+        resultMap.set(executed.id, executed.result);
+
+        const toolCall = toolCalls.find((c) => executed.id.includes(c.toolName));
+        this.logger.info("[TOOL-CALLS] Tool execution result", {
+          callId: executed.id,
+          toolName: toolCall?.toolName,
+          success: executed.result.success,
+          error: executed.result.error,
+          resultSize: JSON.stringify(executed.result.data).length,
+        });
+
+        // Add tool result to conversation so LLM sees it in next iteration
+        // Truncate very large results to avoid API token limits
+        const resultJson = JSON.stringify(executed.result);
+        const maxResultSize = 8000; // 8KB limit per tool result
+        const truncatedJson = resultJson.length > maxResultSize
+          ? resultJson.substring(0, maxResultSize - 100) + `\n...[truncated, original size: ${resultJson.length} bytes]`
+          : resultJson;
+
+        const toolResultMessage: LLMMessage = {
+          role: "tool",
+          content: truncatedJson,
+          toolCallId: executed.id,
+        };
+        await this.conversation.addMessage(toolResultMessage);
+        this.history.add(toolResultMessage, toolCall?.toolName ?? "unknown");
+
+        this.logger.info("[TOOL-CALLS] Added tool result to conversation", {
+          callId: executed.id,
+          toolName: toolCall?.toolName,
+          resultSize: resultJson.length,
+          truncated: resultJson.length > maxResultSize,
+        });
+
+        // Extract and track the latest browser sessionId from results
+        if (toolCall?.toolName === "browser" && executed.result.success) {
+          const data = executed.result.data as Record<string, unknown> | undefined;
+          const sessionId = data?.sessionId as string | undefined;
+          if (sessionId) {
+            latestBrowserSessionId = sessionId;
+            this.logger.info("[TOOL-CALLS] Tracked browser sessionId from tool result", {
+              sessionId,
+              callId: executed.id,
+            });
+          }
+        }
+
+        emit("tool_result", `${executed.id}: ${executed.result.success ? "Success" : "Failed"}`, {
+          toolName: toolCall?.toolName,
+          callId: executed.id,
+          success: executed.result.success,
+          error: executed.result.error,
+          dataKeys: executed.result.success && typeof executed.result.data === "object"
+            ? Object.keys(executed.result.data as Record<string, unknown>)
+            : undefined,
+        });
+      }
+
+      // If we got a browser sessionId, add a context message so LLM knows to use it
+      if (latestBrowserSessionId) {
+        const sessionContextMessage: LLMMessage = {
+          role: "assistant",
+          content: `[System Context] Browser session opened: ${latestBrowserSessionId}. I'll use this session ID for subsequent browser actions.`,
+        };
+        await this.conversation.addMessage(sessionContextMessage);
+        this.history.add(sessionContextMessage, "system");
+        this.logger.info("[TOOL-CALLS] Added browser sessionId context message", {
+          sessionId: latestBrowserSessionId,
+        });
+      }
+    }
+
+    // Clean response by removing all tool markers and channel metadata
+    this.logger.info("[TOOL-CALLS] Cleaning response text", {
+      originalLength: response.length,
+      toolMarkerCount: (response.match(/\[TOOL:/g) || []).length,
+      channelMarkerCount: (response.match(/<\|channel>|<channel\|>/g) || []).length,
+      toolCallMarkerCount: (response.match(/<\|tool_call>|<tool_call\|>/g) || []).length,
+    });
+
+    const cleanedResponse = response
+      .replace(/\[TOOL:[^\]]*\]/g, "")                     // Remove [TOOL:...] markers
+      .replace(/<\|channel>.*?<channel\|>/gs, "")          // Remove <|channel>...<channel|> blocks (multiline)
+      .replace(/<\|channel>thought[^\n]*\n?/g, "")         // Remove <|channel>thought line markers
+      .replace(/<channel\|>/g, "")                          // Remove <channel|> end markers
+      .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
+      .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove remaining <|...> markers
+      .trim();
+
+    this.logger.info("[TOOL-CALLS] Response cleanup complete", {
+      cleanedLength: cleanedResponse.length,
+      removed: response.length - cleanedResponse.length,
+    });
+
+    // Count browser tools for iteration control
+    const browserToolsCount = toolCalls.filter(c => c.toolName === "browser").length;
+
+    return { resultMap, cleanedResponse, browserToolsCount };
+  }
+
   private async runLoop(
     userInput: string,
     toolsUsed: string[],
@@ -2583,6 +3003,30 @@ export class Agent {
       memoryContext +
       "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- Treat only explicit requests to send, post, answer, or reply on Discord as outbound gateway operations, not normal chat replies.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- If the Discord target is unclear, ask for the target channel instead of guessing.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
 
+    const estimatePromptTokens = (text: string): number => {
+      return Math.ceil(text.length / 4);
+    };
+
+    const calculateAgentContextTokens = (mode: "full" | "lightweight" | "chatbot"): { system: number; tools: number; skills: number; total: number } => {
+      let selectedPrompt = baseSystemPrompt;
+      let skillsContext = requestedSkillsContext;
+
+      if (mode !== "full") {
+        selectedPrompt = minimalBaseSystemPrompt;
+        skillsContext = "";
+      }
+
+      const systemTokens = estimatePromptTokens(selectedPrompt);
+      const toolsTokens = estimatePromptTokens(toolContext);
+      const skillsTokens = estimatePromptTokens(skillsContext);
+      return {
+        system: systemTokens,
+        tools: toolsTokens,
+        skills: skillsTokens,
+        total: systemTokens + toolsTokens + skillsTokens,
+      };
+    };
+
     const isProviderLoadError = (message: string): boolean => {
       const normalized = message.toLowerCase();
       return normalized.includes("402")
@@ -2688,6 +3132,15 @@ export class Agent {
         let usedChars = 0;
         const useCompression = effectiveMode !== "full";
 
+        // DEBUG: Track what messages are available
+        const messageRoles = allMessages.map((m) => m.role).join(",");
+        this.logger.debug("[BUILDMSGS] All conversation messages", {
+          totalMessages: allMessages.length,
+          roles: messageRoles,
+          toolMessageCount: allMessages.filter((m) => m.role === "tool").length,
+          assistantMessageCount: allMessages.filter((m) => m.role === "assistant").length,
+        });
+
         for (let index = allMessages.length - 1; index >= 0; index--) {
           const message = allMessages[index];
           if (!message) continue;
@@ -2698,13 +3151,14 @@ export class Agent {
 
           // Never compress tool results - LLM needs complete data to process correctly
           const isToolResult = message.role === "tool";
+          const isSystemMessage = message.role === "system";
 
-          if (!isToolResult && useCompression && rawContent.length > 1500) {
+          if (!isToolResult && !isSystemMessage && useCompression && rawContent.length > 1500) {
             clippedContent = rawContent.substring(0, 800) + "\n...[message compressed]";
-          } else if (!isToolResult) {
+          } else if (!isToolResult && !isSystemMessage) {
             clippedContent = this.truncateText(rawContent, Math.max(200, maxContextMessageChars));
           }
-          // Tool results are kept complete (no clipping)
+          // Tool and system results are kept complete (no clipping)
 
           const nextChars = usedChars + clippedContent.length;
           if (selected.length > 0 && nextChars > Math.max(2000, charLimit)) break;
@@ -2715,6 +3169,15 @@ export class Agent {
           });
           usedChars = nextChars;
         }
+
+        // DEBUG: Log what was selected
+        const selectedRoles = selected.map((m) => m.role).join(",");
+        this.logger.debug("[BUILDMSGS] Selected messages for LLM context", {
+          selectedCount: selected.length,
+          roles: selectedRoles,
+          totalChars: usedChars,
+          charLimit,
+        });
 
         return selected.reverse();
       };
@@ -2752,7 +3215,22 @@ export class Agent {
         return [systemMessage, ...contextMessages];
       };
 
+      let currentResponseTokens: { input?: number; output?: number; total?: number } = {};
+
       const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
+        // DEBUG: Log what's being sent to LLM
+        const messageStructure = messages.map((m, i) => ({
+          index: i,
+          role: m.role,
+          contentLength: typeof m.content === "string" ? m.content.length : 0,
+          hasToolMarkers: typeof m.content === "string" && /\[TOOL:|<\|tool_call>/.test(m.content),
+          contentPreview: typeof m.content === "string" ? m.content.substring(0, 50) : "",
+        }));
+        this.logger.info("[LLM-CALL] Sending messages to LLM", {
+          messageCount: messages.length,
+          structure: messageStructure,
+        });
+
         if (options.stream && this.provider.supportsStreaming()) {
           try {
             // The provider streams internally and resolves with the full response.
@@ -2760,14 +3238,29 @@ export class Agent {
             // paths below (options.onChunk(response)), so we do not forward per-delta
             // chunks here to avoid duplicating the content.
             const result = await this.provider.generateStream(messages, {});
+            currentResponseTokens = {
+              input: result.usage.promptTokens,
+              output: result.usage.completionTokens,
+              total: result.usage.totalTokens,
+            };
             return result.content;
           } catch (e) {
             this.logger.warn(`Streaming failed for LLM response: ${String(e)}. Falling back to synchronous generation.`);
             const syncResult = await this.provider.generate(messages);
+            currentResponseTokens = {
+              input: syncResult.usage.promptTokens,
+              output: syncResult.usage.completionTokens,
+              total: syncResult.usage.totalTokens,
+            };
             return syncResult.content;
           }
         }
         const result = await this.provider.generate(messages);
+        currentResponseTokens = {
+          input: result.usage.promptTokens,
+          output: result.usage.completionTokens,
+          total: result.usage.totalTokens,
+        };
         return result.content;
       };
 
@@ -2827,461 +3320,150 @@ export class Agent {
         }
       }
 
-      finalResponse = response;
+      // Don't set finalResponse yet - we'll do it after tool processing
+      // This ensures we use the cleaned response, not the raw response with [TOOL:...] markers
+      // finalResponse = response;  // ← Will be set after executeToolCallsFromResponse()
+
+      const agentContextTokens = calculateAgentContextTokens(effectiveMode);
+      const totalInputTokens = (currentResponseTokens.input ?? 0) + agentContextTokens.total;
 
       emit("decision", "LLM response received", {
         iteration: iterations,
         responseLength: response.length,
         hasToolCallMarker: /\[TOOL:/.test(response) || response.includes("<|tool_call>call:"),
+        llmTokens: {
+          input: currentResponseTokens.input,
+          output: currentResponseTokens.output,
+          total: currentResponseTokens.total,
+        },
+        agentTokens: agentContextTokens,
+        combinedTokens: {
+          input: totalInputTokens,
+          output: currentResponseTokens.output,
+          total: (totalInputTokens ?? 0) + (currentResponseTokens.output ?? 0),
+        },
       });
 
-      // Add assistant message
+      // === NEW OPTION B: Early Tool-Call Extraction & Execution ===
+      // Extract and execute tool calls BEFORE adding response to conversation
+      // This ensures the conversation and chat only see cleaned response text
+      this.logger.info("[RUNLOOP] Starting early tool-call extraction", { iteration: iterations });
+
+      // CRITICAL FIX: Add assistant message FIRST, before tool execution
+      // This ensures proper message ordering for the LLM:
+      // User -> Assistant -> Tool Results -> (next iteration or exit)
+      // Without this, the LLM sees tool results without an assistant message that called them
       const assistantMessage: LLMMessage = { role: "assistant", content: response };
       await this.conversation.addMessage(assistantMessage);
       this.history.add(assistantMessage);
 
-      // Multi tool-call batch path (P2.1): only engages when the response contains more
-      // than one [TOOL:...] marker. A single marker (the overwhelmingly common case) falls
-      // straight through to the existing single-call logic below, unchanged.
-      const extractResult = this.extractAllToolCalls(response);
-      const bracketToolCalls = extractResult.calls;
+      this.logger.info("[RUNLOOP] Added assistant message to conversation (before tool execution)", {
+        iteration: iterations,
+        hasToolMarkers: /\[TOOL:/.test(response) || response.includes("<|tool_call>call:"),
+        responseLength: response.length,
+      });
 
-      if (extractResult.markerCount > extractResult.calls.length && extractResult.unparsed.length > 0) {
-        emit("guardrail", "Partially parsed multi-tool-call batch", {
-          markerCount: extractResult.markerCount,
-          parsed: extractResult.calls.length,
-          unparsed: extractResult.unparsed,
+      // Now extract and execute tools (which will add results after the assistant message)
+      const { resultMap: toolResultsMap, cleanedResponse, browserToolsCount } = await this.executeToolCallsFromResponse(
+        response,
+        adjustedControls,
+        options,
+        emit,
+        iterations,
+        repeatedToolCalls
+      );
+
+      this.logger.info("[RUNLOOP] Tool-call extraction and execution complete", {
+        iteration: iterations,
+        toolsExecuted: toolResultsMap.size,
+        cleanedLength: cleanedResponse.length,
+      });
+
+      // Update finalResponse to cleaned version (for reflection, final output, etc.)
+      finalResponse = cleanedResponse;
+
+      // Stream the cleaned response to user (without [TOOL:...] markers)
+      // The conversation history stores the raw response (with markers), but the user sees cleaned text
+      if (options.stream && options.onChunk && cleanedResponse.length > 0) {
+        this.logger.info("[RUNLOOP] Streaming cleaned response to user", {
+          originalLength: response.length,
+          cleanedLength: cleanedResponse.length,
+          iteration: iterations,
         });
+        options.onChunk(cleanedResponse);
       }
 
-      if (bracketToolCalls.length > 1) {
-        emit("decision", "Multiple tool calls detected, evaluating parallel execution", {
-          count: bracketToolCalls.length,
-          tools: bracketToolCalls.map((c) => c.toolName),
-        });
-
-        const executionBatches = this.toolGraph.buildExecutionPlan(
-          bracketToolCalls.map((call, idx) => ({
-            toolName: call.toolName,
-            input: call.input,
-            id: `batch_${iterations}_${idx}`,
-          }))
-        );
-
-        let anyBatchFailure = false;
-
-        for (const batch of executionBatches) {
-          const resultById = new Map<string, ToolResult>();
-          const validCalls: Array<{ id: string; toolName: string; input: Record<string, unknown> }> = [];
-
-          for (const call of batch) {
-            const callId = call.id ?? `${call.toolName}_${JSON.stringify(call.input)}`;
-            const signature = this.buildToolCallSignature(call.toolName, call.input);
-            const seen = (repeatedToolCalls.get(signature) ?? 0) + 1;
-            repeatedToolCalls.set(signature, seen);
-            if (seen > adjustedControls.maxRepeatedToolCall) {
-              resultById.set(callId, { success: false, data: null, error: "Repeated tool call blocked" });
-              continue;
-            }
-            const preflight = await this.preflightToolInput(call.toolName, call.input, controls);
-            if (!preflight.ok) {
-              resultById.set(callId, { success: false, data: null, error: preflight.error });
-              continue;
-            }
-            validCalls.push({ id: callId, toolName: call.toolName, input: preflight.input });
-          }
-
-          const isParallel = validCalls.length > 1;
-          const batchStartTime = Date.now();
-          const executedResults = validCalls.length > 0 ? await this.executor.executeBatch(validCalls) : [];
-          const batchDurationMs = Date.now() - batchStartTime;
-          for (const executed of executedResults) {
-            resultById.set(executed.id, executed.result);
-          }
-
-          for (const call of batch) {
-            const callId = call.id ?? `${call.toolName}_${JSON.stringify(call.input)}`;
-            const toolResult: ToolResult = resultById.get(callId) ?? {
-              success: false,
-              data: null,
-              error: "Unknown batch execution error",
-            };
-
-            toolTraceCollector.recordTrace({
-              toolName: call.toolName,
-              inputSize: JSON.stringify(call.input).length,
-              resultSize: JSON.stringify(toolResult).length,
-              durationMs: isParallel ? batchDurationMs : Math.round(batchDurationMs / Math.max(1, batch.length)),
-              success: toolResult.success,
-              error: toolResult.error,
-              parallelized: isParallel,
-              timestamp: new Date().toISOString(),
-              executionIndex: iterations,
-            });
-
-            toolsUsed.push(call.toolName);
-            emit("tool_result", `Tool-Ergebnis: ${call.toolName}`, {
-              toolName: call.toolName,
-              success: toolResult.success,
-              error: toolResult.error,
-              parallelized: isParallel,
-            });
-
-            const toolResultMessage: LLMMessage = {
-              role: "tool",
-              content: JSON.stringify(toolResult),
-              toolCallId: callId,
-            };
-            await this.conversation.addMessage(toolResultMessage);
-            this.history.add(toolResultMessage, call.toolName);
-            await rememberSuccessfulTool(call.toolName, call.input, toolResult);
-
-            // Automatically capture and attach screenshot after browser tool execution
-            await this.handleScreenshotCapture(call.toolName, call.input, toolResult);
-
-            if (!toolResult.success) anyBatchFailure = true;
-          }
-        }
-
-        consecutiveToolFailures = anyBatchFailure ? consecutiveToolFailures + 1 : 0;
-        if (consecutiveToolFailures >= adjustedControls.maxConsecutiveToolFailures) {
-          emit("guardrail", "Stopping after repeated tool failures", {
-            consecutiveToolFailures,
-            maxConsecutiveToolFailures: adjustedControls.maxConsecutiveToolFailures,
-          });
-          finalResponse =
-            "Ich habe die Ausfuehrung gestoppt, weil mehrere Tool-Fehler hintereinander aufgetreten sind. Ich kann als naechstes eine gezielte Fehlerbehebung starten.";
-          break;
-        }
-
-        if (this.stopRequested) {
-          emit("reasoning", "Tool-Ausführung abgeschlossen, Stop-Anfrage berücksichtigt.");
-          break;
-        }
-        continue;
-      }
-
-      let parsedToolCall = this.extractToolCall(response);
-      const hasToolCallMarker = /\[TOOL:/.test(response) || response.includes("<|tool_call>call:");
-
-      if (hasToolCallMarker && !parsedToolCall) {
-        malformedToolCallAttempts++;
-
-        // Extract the problematic tool call for debugging
-        const toolCallMatch = response.match(/\[TOOL:([^\]]+)\]|<\|tool_call>call:([^<]+)/);
-        const problematicCall = toolCallMatch?.[1] || toolCallMatch?.[2] || response.slice(0, 100);
-
-        emit("guardrail", "Malformed tool call detected", {
-          attempt: malformedToolCallAttempts,
-          responsePreview: response.slice(0, 280),
-          extractedCall: problematicCall?.slice(0, 100),
-        });
-
-        if (malformedToolCallAttempts >= 2) {
-          finalResponse =
-            "Ich konnte den Tool-Aufruf nicht sicher parsen. Bitte sende die Anweisung erneut, damit ich den Aufruf korrekt ausfuehren kann.";
-          break;
-        }
-
-        const repairHint: LLMMessage = {
-          role: "system",
-          content:
-            `CRITICAL: Tool call format error. Use EXACTLY this format:
-[TOOL:toolName({"key": "value"})]
-
-RULES:
-1. ALL JSON keys MUST have quotes: "key" not key
-2. String values MUST have quotes: "text"
-3. Numbers MUST NOT have quotes: 123 not "123"
-4. Use : not = for key-value pairs
-5. Close properly with )])
-6. Do NOT use {json: ...} or {args: ...}
-
-Example: [TOOL:task({"action": "create", "title": "My Task", "projectId": 1})]
-
-Emit the corrected tool call with valid JSON only, no other text.`,
-        };
-        await this.conversation.addMessage(repairHint);
-        this.history.add(repairHint);
-        continue;
-      }
-
-      malformedToolCallAttempts = 0;
-      if (!parsedToolCall) {
-        const reasoning = await this.reasoner.reason(
-          [...messages, assistantMessage],
-          availableTools.map((tool) => tool.name),
-          `User request: ${effectiveInput}`
-        );
-        emit("reasoning", "Reasoner decision", {
-          action: reasoning.action,
-          confidence: reasoning.confidence,
-          toolName: reasoning.toolName,
-          thinking: typeof reasoning.thinking === "string" ? reasoning.thinking.slice(0, 240) : "",
-        });
-
-        if (
-          reasoning.action === "use_tool" &&
-          reasoning.toolName &&
-          reasoning.toolInput &&
-          reasoning.confidence >= controls.reasonerUseToolMinConfidence
-        ) {
-          parsedToolCall = this.resolveToolNameAndInput(reasoning.toolName, reasoning.toolInput);
-          emit("decision", "Reasoner proposed tool execution", {
-            toolName: parsedToolCall.toolName,
-            confidence: reasoning.confidence,
-            threshold: controls.reasonerUseToolMinConfidence,
-          });
-        } else if (
-          (reasoning.action === "respond" || reasoning.action === "ask_clarification") &&
-          reasoning.response?.trim() &&
-          reasoning.confidence >= controls.reasonerUseToolMinConfidence
-        ) {
-          finalResponse = reasoning.response;
-          if (options.stream && options.onChunk && finalResponse.length > 0) {
-            options.onChunk(finalResponse);
-          }
-          emit("reasoning", "Reasoner provided direct response", {
-            action: reasoning.action,
-            confidence: reasoning.confidence,
-            threshold: controls.reasonerUseToolMinConfidence,
-          });
-          break;
-        }
-      }
-
-      if (!parsedToolCall) {
-        emit("reasoning", "Antwort generiert", {
-          preview: response.slice(0, 280),
-        });
-        if (options.stream && options.onChunk && response.length > 0) {
-          options.onChunk(response);
-        }
+      // If no tool calls were found, we're done
+      if (toolResultsMap.size === 0) {
+        this.logger.info("[RUNLOOP] No tool calls found, exiting loop", { iteration: iterations });
         break; // No tool calls, we're done
       }
 
-      if (workflowOrchestratorRequested && iterations <= 2 && parsedToolCall.toolName !== "workflow") {
-        const enforcedResult: ToolResult = {
-          success: false,
-          data: null,
-          error:
-            "Policy violation: with /workflow-orchestrator, start by using workflow actions (list/get/create/update/run/resume) before unrelated tools.",
-        };
-        emit("guardrail", "Workflow policy enforced", {
-          expectedTool: "workflow",
-          attemptedTool: parsedToolCall.toolName,
+      // === OPTION B: Tool calls executed above in executeToolCallsFromResponse() ===
+      // Legacy multi-call batch execution removed (was lines 3159-3266).
+      // All tool extraction and execution now happens BEFORE response streaming.
+      // If toolResultsMap has entries (toolResultsMap.size > 0), tools were already handled above.
+
+      // If multiple browser actions in one response, it's likely a complete sequence
+      // (launch -> screenshot), so don't iterate again
+      const shouldContinueIterating = browserToolsCount <= 1;
+
+      this.logger.info("[RUNLOOP] Tools executed", {
+        iteration: iterations,
+        toolCount: toolResultsMap.size,
+        browserToolsCount,
+        shouldContinueIterating,
+        cleanedResponseLength: cleanedResponse.length,
+        cleanedResponsePreview: cleanedResponse.slice(0, 100),
+      });
+
+      // If cleaned response is empty (only tool markers, no text), must iterate
+      // to get LLM to provide actual response/description
+      const hasTextContent = cleanedResponse.trim().length > 0;
+
+      if (!shouldContinueIterating && hasTextContent) {
+        this.logger.info("[RUNLOOP] Multiple browser tools executed with response text, treating as complete action", {
+          browserToolsCount,
+          iteration: iterations,
+          responseLength: cleanedResponse.length,
+        });
+        // Set finalResponse for output and break
+        finalResponse = cleanedResponse;
+        this.logger.info("[RUNLOOP] Breaking after multiple browser tools, final output ready", {
+          finalResponseLength: finalResponse.length,
           iteration: iterations,
         });
+        break;
+      }
 
-        const toolResultMessage: LLMMessage = {
-          role: "tool",
-          content: JSON.stringify(enforcedResult),
-          toolCallId: `call_${iterations}_${parsedToolCall.toolName}_policy`,
-        };
-        await this.conversation.addMessage(toolResultMessage);
-        this.history.add(toolResultMessage, parsedToolCall.toolName);
-        consecutiveToolFailures++;
+      // If we have empty response but multiple browser tools executed,
+      // we still need to continue to get LLM to provide text response
+      if (!shouldContinueIterating && !hasTextContent) {
+        // But only allow 1 retry - if LLM STILL doesn't provide text, give up
+        if (iterations >= 2) {
+          this.logger.error("[RUNLOOP] LLM generated only tool calls after 2 iterations with no text response", {
+            iterations,
+            cleanedLength: cleanedResponse.length,
+          });
+          finalResponse = "Browser-Tool-Aktion abgeschlossen. Die Seite wurde erfolgreich verarbeitet.";
+          break;
+        }
+
+        this.logger.warn("[RUNLOOP] Multiple browser tools executed but response is empty, retrying for text response", {
+          browserToolsCount,
+          iteration: iterations,
+          cleanedLength: cleanedResponse.length,
+        });
+        // Continue ONE MORE TIME to let LLM see tool results and provide a real response
         continue;
       }
 
-      const signature = this.buildToolCallSignature(parsedToolCall.toolName, parsedToolCall.input);
-      const seen = (repeatedToolCalls.get(signature) ?? 0) + 1;
-      repeatedToolCalls.set(signature, seen);
-      if (seen > adjustedControls.maxRepeatedToolCall) {
-        emit("guardrail", "Repeated tool call blocked", {
-          toolName: parsedToolCall.toolName,
-          repetition: seen,
-          max: adjustedControls.maxRepeatedToolCall,
-        });
-        finalResponse =
-          "Ich stoppe hier, weil derselbe Tool-Aufruf mehrfach wiederholt wurde. Ich kann den Ablauf jetzt mit angepassten Parametern fortsetzen, wenn du kurz bestätigst, welche Variante gewuenscht ist.";
-        break;
-      }
-
-      emit("tool_call", `Tool-Aufruf: ${parsedToolCall.toolName}`, {
-        toolName: parsedToolCall.toolName,
-        input: parsedToolCall.input,
+      // Single tool or non-browser tools: continue to next iteration
+      this.logger.info("[RUNLOOP] Continuing to next iteration for additional tool calls", {
+        iteration: iterations,
+        toolCount: toolResultsMap.size,
       });
-
-      try {
-        const preflight = await this.preflightToolInput(parsedToolCall.toolName, parsedToolCall.input, controls);
-        const startTime = Date.now();
-        let toolResult: ToolResult = preflight.ok
-          ? await this.executor.execute(parsedToolCall.toolName, preflight.input)
-          : { success: false, data: null, error: preflight.error };
-        const executionTime = Date.now() - startTime;
-
-        // Record execution trace (P3.4)
-        toolTraceCollector.recordTrace({
-          toolName: parsedToolCall.toolName,
-          inputSize: JSON.stringify(parsedToolCall.input).length,
-          resultSize: JSON.stringify(toolResult).length,
-          durationMs: executionTime,
-          success: toolResult.success,
-          error: toolResult.error,
-          parallelized: false,
-          timestamp: new Date().toISOString(),
-          executionIndex: iterations,
-        });
-
-        toolsUsed.push(parsedToolCall.toolName);
-        emit("tool_result", `Tool-Ergebnis: ${parsedToolCall.toolName}`, {
-          toolName: parsedToolCall.toolName,
-          success: toolResult.success,
-          error: toolResult.error,
-        });
-
-        const toolResultMessage: LLMMessage = {
-          role: "tool",
-          content: JSON.stringify(toolResult),
-          toolCallId: `call_${iterations}_${parsedToolCall.toolName}`,
-        };
-        await this.conversation.addMessage(toolResultMessage);
-        this.history.add(toolResultMessage, parsedToolCall.toolName);
-        await rememberSuccessfulTool(parsedToolCall.toolName, parsedToolCall.input, toolResult);
-        if (toolResult.success) {
-          consecutiveToolFailures = 0;
-        } else {
-          const recoveryHint = this.deriveToolRecoveryHint(
-            parsedToolCall.toolName,
-            parsedToolCall.input,
-            String(toolResult.error ?? "")
-          );
-
-          let repaired: { call: { toolName: string; input: Record<string, unknown> }; result: ToolResult } | undefined;
-          if (adjustedControls.selfRepairEnabled && adjustedControls.selfRepairMaxAttempts > 0) {
-            let attemptError = String(toolResult.error ?? "");
-            for (let attempt = 1; attempt <= adjustedControls.selfRepairMaxAttempts; attempt++) {
-              const repairedCall = await this.attemptSelfRepair(
-                parsedToolCall.toolName,
-                parsedToolCall.input,
-                attemptError,
-                recoveryHint
-              );
-              if (!repairedCall) break;
-
-              emit("decision", "Attempting self-repair", {
-                toolName: parsedToolCall.toolName,
-                attempt,
-                maxAttempts: adjustedControls.selfRepairMaxAttempts,
-                repairedInput: repairedCall.input,
-              });
-
-              const retryResult = await this.executor.execute(repairedCall.toolName, repairedCall.input);
-              toolTraceCollector.recordTrace({
-                toolName: repairedCall.toolName,
-                inputSize: JSON.stringify(repairedCall.input).length,
-                resultSize: JSON.stringify(retryResult).length,
-                durationMs: 0,
-                success: retryResult.success,
-                error: retryResult.error,
-                parallelized: false,
-                timestamp: new Date().toISOString(),
-                executionIndex: iterations,
-              });
-
-              emit("tool_result", `Selbstreparatur-Ergebnis: ${repairedCall.toolName}`, {
-                toolName: repairedCall.toolName,
-                success: retryResult.success,
-                error: retryResult.error,
-                attempt,
-              });
-
-              const repairResultMessage: LLMMessage = {
-                role: "tool",
-                content: JSON.stringify(retryResult),
-                toolCallId: `call_${iterations}_${repairedCall.toolName}_repair_${attempt}`,
-              };
-              await this.conversation.addMessage(repairResultMessage);
-              this.history.add(repairResultMessage, repairedCall.toolName);
-              await rememberSuccessfulTool(repairedCall.toolName, repairedCall.input, retryResult);
-
-              if (retryResult.success) {
-                repaired = { call: repairedCall, result: retryResult };
-                toolsUsed.push(repairedCall.toolName);
-                break;
-              }
-
-              attemptError = String(retryResult.error ?? attemptError);
-            }
-          }
-
-          if (repaired) {
-            toolResult = repaired.result;
-            consecutiveToolFailures = 0;
-            emit("decision", "Self-repair succeeded", {
-              originalTool: parsedToolCall.toolName,
-              repairedInput: repaired.call.input,
-            });
-            continue;
-          }
-
-          consecutiveToolFailures++;
-          if (recoveryHint) {
-            const hintMessage: LLMMessage = {
-              role: "system",
-              content: recoveryHint,
-            };
-            await this.conversation.addMessage(hintMessage);
-            this.history.add(hintMessage);
-            emit("decision", "Self-repair hint injected", {
-              toolName: parsedToolCall.toolName,
-              hint: recoveryHint,
-            });
-          }
-
-          // Plan refinement on consecutive failures (P2.2)
-          if (consecutiveToolFailures === 2) {
-            try {
-              const currentPlan = planContext;
-              if (currentPlan && enablePlanningInMode) {
-                const feedback = `Tool '${parsedToolCall.toolName}' failed twice. Error: ${String(toolResult.error ?? "unknown")}. Need alternative approach.`;
-                const refinedPlan = await this.planner.refinePlan(currentPlan, feedback);
-                if (refinedPlan) {
-                  planContext = refinedPlan;
-                  emit("decision", "Plan refined after tool failures", {
-                    toolName: parsedToolCall.toolName,
-                    newSteps: refinedPlan.steps.length,
-                    feedback,
-                  });
-                }
-              }
-            } catch (refinementError) {
-              this.logger.warn("Plan refinement failed", {
-                error: refinementError instanceof Error ? refinementError.message : String(refinementError),
-              });
-            }
-          }
-
-          emit("decision", "Tool execution failed", {
-            toolName: parsedToolCall.toolName,
-            consecutiveToolFailures,
-            maxConsecutiveToolFailures: adjustedControls.maxConsecutiveToolFailures,
-          });
-          if (consecutiveToolFailures >= adjustedControls.maxConsecutiveToolFailures) {
-            emit("guardrail", "Stopping after repeated tool failures", {
-              consecutiveToolFailures,
-              maxConsecutiveToolFailures: adjustedControls.maxConsecutiveToolFailures,
-            });
-            finalResponse =
-              "Ich habe die Ausfuehrung gestoppt, weil mehrere Tool-Fehler hintereinander aufgetreten sind, auch nach automatischen Reparaturversuchen. Bitte pruefe die Fehlermeldung oder gib zusaetzliche Hinweise, damit ich es gezielt erneut versuchen kann.";
-            break;
-          }
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        emit("tool_result", `Tool fehlgeschlagen: ${parsedToolCall.toolName}`, {
-          toolName: parsedToolCall.toolName,
-          success: false,
-          error: message,
-        });
-        break;
-      }
-
-      if (this.stopRequested) {
-        emit("reasoning", "Tool-Ausführung abgeschlossen, Stop-Anfrage berücksichtigt.");
-        break;
-      }
+      continue; // Go to next iteration with tool results in conversation
     }
 
     let reflectionQuality: string | undefined;
@@ -3303,6 +3485,9 @@ Emit the corrected tool call with valid JSON only, no other text.`,
           quality: reflectionResult.quality,
           shouldRetry: reflectionResult.shouldRetry,
           issues: Array.isArray(reflectionResult.issues) ? reflectionResult.issues.slice(0, 3) : [],
+          inputTokens: reflectionResult.inputTokens,
+          outputTokens: reflectionResult.outputTokens,
+          totalTokens: reflectionResult.totalTokens,
         });
 
         if (!reflectionResult.shouldRetry) break;
@@ -3331,6 +3516,9 @@ Emit the corrected tool call with valid JSON only, no other text.`,
         quality: metaReflection.quality,
         shouldRetry: metaReflection.shouldRetry,
         issues: Array.isArray(metaReflection.issues) ? metaReflection.issues.slice(0, 3) : [],
+        inputTokens: metaReflection.inputTokens,
+        outputTokens: metaReflection.outputTokens,
+        totalTokens: metaReflection.totalTokens,
       });
 
       const metaImproved = metaReflection.improvedResponse?.trim();

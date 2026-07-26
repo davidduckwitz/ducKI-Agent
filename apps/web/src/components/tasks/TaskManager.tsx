@@ -130,6 +130,23 @@ export function TaskManager() {
     },
   });
 
+  const processBacklog = useMutation({
+    mutationFn: async () => {
+      const backlogTasks = (tasks as Task[]).filter((task) => task.status === "pending");
+      const promises = backlogTasks.map((task) =>
+        update.mutate({ id: task.id, data: { status: "running" } }, {
+          onSuccess: () => {
+            runTask.mutate(task.id);
+          },
+        })
+      );
+      return Promise.all(promises);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    },
+  });
+
   useEffect(() => {
     setSplitPreview(null);
     if (!selectedTask) return;
@@ -156,7 +173,13 @@ export function TaskManager() {
   const moveTask = (taskId: number, nextStatus: TaskColumnStatus) => {
     const task = (tasks as Task[]).find((item) => item.id === taskId);
     if (!task || task.status === nextStatus) return;
+
     update.mutate({ id: taskId, data: { status: nextStatus } });
+
+    // Auto-start task when moved to "running" column
+    if (nextStatus === "running") {
+      runTask.mutate(taskId);
+    }
   };
 
   const projectName = (projectId?: number) => {
@@ -224,6 +247,15 @@ export function TaskManager() {
               <option key={project.id} value={project.id}>{project.name}</option>
             ))}
           </select>
+          <button
+            onClick={() => processBacklog.mutate()}
+            disabled={tasksByStatus.pending.length === 0 || processBacklog.isPending}
+            className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            title={tasksByStatus.pending.length === 0 ? t("tasks.noBacklogTasks") ?? "Kein Backlog vorhanden" : ""}
+          >
+            <Play className="w-4 h-4" />
+            {t("tasks.processBacklog") ?? "Backlog abarbeiten"}
+          </button>
           <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2">
             <Plus className="w-4 h-4" />
             {t("tasks.newTask")}

@@ -50,6 +50,8 @@ export const api = {
       request<{ conversationId: number }>("/chat/conversation", { method: "POST", body: JSON.stringify(data) }),
     deleteConversation: (conversationId: number) =>
       request<{ deleted: boolean; id: number }>(`/chat/conversations/${conversationId}`, { method: "DELETE" }),
+    clearMessages: (conversationId: number) =>
+      request<{ cleared: boolean; conversationId: number }>(`/chat/conversations/${conversationId}/messages`, { method: "DELETE" }),
   },
 
   workflows: {

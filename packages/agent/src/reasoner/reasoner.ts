@@ -9,6 +9,9 @@ export interface ReasoningResult {
   toolName?: string;
   toolInput?: Record<string, unknown>;
   confidence: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
 }
 
 const REASONING_PROMPT = `You are a reasoning module for an AI agent. Analyze the conversation and determine what to do next.
@@ -59,9 +62,14 @@ export class Reasoner {
       });
 
       const result = JSON.parse(response.content) as ReasoningResult;
+      result.inputTokens = response.usage.promptTokens;
+      result.outputTokens = response.usage.completionTokens;
+      result.totalTokens = response.usage.totalTokens;
+
       this.logger.debug("Reasoning complete", {
         action: result.action,
         confidence: result.confidence,
+        tokens: result.totalTokens,
       });
       return result;
     } catch {

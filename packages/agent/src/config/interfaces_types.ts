@@ -47,7 +47,7 @@ export interface AgentRunOptions {
   attachments?: AgentRunAttachment[];
 }
 
-export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | "mode_selected";
+export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | "mode_selected" | "browser_preview";
 
 export interface AgentRunEvent {
   type: AgentRunEventType;

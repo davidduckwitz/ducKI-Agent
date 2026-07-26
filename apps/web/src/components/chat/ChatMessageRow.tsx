@@ -3,6 +3,7 @@ import { DuckyMascot } from "./DuckyMascot";
 import { eventDataWithoutInternalText, eventIcon, eventLabel, extractInternalLlmText } from "./eventMeta";
 import type { RenderedChatMessage } from "./chatTypes";
 import { api } from "../../lib/api";
+import { BrowserPreview } from "./BrowserPreview";
 
 interface RowCommonProps {
   compactMode?: boolean;
@@ -51,6 +52,25 @@ export function EventRow({
   const internalText = extractInternalLlmText(msg.eventData);
   const restData = eventDataWithoutInternalText(msg.eventData);
 
+  // Support both old format (direct tokens) and new format (nested)
+  const llmTokens = msg.eventData?.llmTokens as { input?: number; output?: number; total?: number } | undefined;
+  const inputTokens = (llmTokens?.input ?? msg.eventData?.inputTokens) as number | undefined;
+  const outputTokens = (llmTokens?.output ?? msg.eventData?.outputTokens) as number | undefined;
+  const totalTokens = (llmTokens?.total ?? msg.eventData?.totalTokens) as number | undefined;
+
+  const agentTokens = msg.eventData?.agentTokens as { system?: number; tools?: number; skills?: number; total?: number } | undefined;
+  const combinedTokens = msg.eventData?.combinedTokens as { input?: number; output?: number; total?: number } | undefined;
+
+  if (msg.eventType === "browser_preview") {
+    // Browser preview is rendered as a full component without additional props
+    // All interactivity is handled within the BrowserPreview component
+    return (
+      <div className={`${ANIMATE_IN} space-y-2`}>
+        <BrowserPreview msg={msg} />
+      </div>
+    );
+  }
+
   return (
     <details
       open={expanded}
@@ -62,13 +82,61 @@ export function EventRow({
           {eventIcon(msg.eventType)}
           <span className="font-medium whitespace-nowrap">{eventLabel(t, msg.eventType)}</span>
           <span className="text-indigo-200/80 truncate">{msg.content}</span>
+          {internalText && (
+            <span className="text-indigo-300/70 truncate text-[10px] italic max-w-[200px]">
+              — {internalText.substring(0, 80)}
+              {internalText.length > 80 ? "..." : ""}
+            </span>
+          )}
         </span>
-        <span className="text-[10px] text-indigo-200/70 whitespace-nowrap">
-          {new Date(msg.timestamp).toLocaleTimeString()}
+        <span className="flex items-center gap-2 text-[10px] text-indigo-200/70 whitespace-nowrap">
+          {totalTokens && <span>⚡ {totalTokens}</span>}
+          <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
         </span>
       </summary>
       <div className="mt-2 pl-6 space-y-2">
         <div className="text-indigo-100 whitespace-pre-wrap">{msg.content}</div>
+        {(inputTokens || outputTokens || totalTokens || agentTokens || combinedTokens) && (
+          <div className="space-y-2">
+            {(agentTokens || combinedTokens) && (
+              <div className="rounded border border-purple-400/30 bg-purple-500/10 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-purple-200/80 mb-1">
+                  🤖 Agent Context Tokens
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-purple-50/90 text-[11px]">
+                  {agentTokens?.system && <div>System: <span className="font-semibold">{agentTokens.system}</span></div>}
+                  {agentTokens?.tools && <div>Tools: <span className="font-semibold">{agentTokens.tools}</span></div>}
+                  {agentTokens?.skills && agentTokens.skills > 0 && <div>Skills: <span className="font-semibold">{agentTokens.skills}</span></div>}
+                  {agentTokens?.total && <div>Subtotal: <span className="font-semibold">{agentTokens.total}</span></div>}
+                </div>
+              </div>
+            )}
+            {(inputTokens || outputTokens || totalTokens) && (
+              <div className="rounded border border-amber-400/30 bg-amber-500/10 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-amber-200/80 mb-1">
+                  🧠 LLM Response Tokens
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-amber-50/90 text-[11px]">
+                  {inputTokens && <div>Input: <span className="font-semibold">{inputTokens}</span></div>}
+                  {outputTokens && <div>Output: <span className="font-semibold">{outputTokens}</span></div>}
+                  {totalTokens && <div>Total: <span className="font-semibold">{totalTokens}</span></div>}
+                </div>
+              </div>
+            )}
+            {combinedTokens && (
+              <div className="rounded border border-green-400/30 bg-green-500/10 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-green-200/80 mb-1">
+                  ⚡ Combined Total Tokens
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-green-50/90 text-[11px]">
+                  {combinedTokens.input && <div>Input: <span className="font-semibold">{combinedTokens.input}</span></div>}
+                  {combinedTokens.output && <div>Output: <span className="font-semibold">{combinedTokens.output}</span></div>}
+                  {combinedTokens.total && <div>Total: <span className="font-semibold">{combinedTokens.total}</span></div>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {internalText && (
           <div className="rounded border border-fuchsia-400/30 bg-fuchsia-500/10 p-2">
             <div className="text-[10px] uppercase tracking-wide text-fuchsia-200/80 mb-1">

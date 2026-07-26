@@ -1,4 +1,4 @@
-import { Activity, BrainCircuit, GitBranch, Sparkles, Wrench } from "lucide-react";
+import { Activity, BrainCircuit, GitBranch, Sparkles, Wrench, Monitor } from "lucide-react";
 import type { AgentEventType } from "./chatTypes";
 
 export function eventIcon(eventType?: AgentEventType) {
@@ -7,6 +7,7 @@ export function eventIcon(eventType?: AgentEventType) {
   if (eventType === "iteration") return <Activity className="w-4 h-4 text-blue-300" />;
   if (eventType === "decision" || eventType === "guardrail") return <BrainCircuit className="w-4 h-4 text-emerald-300" />;
   if (eventType === "mode_selected") return <Sparkles className="w-4 h-4 text-fuchsia-300" />;
+  if (eventType === "browser_preview") return <Monitor className="w-4 h-4 text-cyan-300" />;
   return <BrainCircuit className="w-4 h-4 text-purple-300" />;
 }
 
@@ -18,6 +19,7 @@ export function eventLabel(t: (key: string) => string, eventType?: AgentEventTyp
   if (eventType === "decision") return t("chat.eventDecision");
   if (eventType === "guardrail") return t("chat.eventGuardrail");
   if (eventType === "mode_selected") return t("chat.eventModeSelected");
+  if (eventType === "browser_preview") return t("chat.eventBrowserPreview");
   return t("chat.eventReasoning");
 }
 

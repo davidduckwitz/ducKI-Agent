@@ -68,10 +68,21 @@ interface ChatEvent {
   conversationId?: number;
 }
 
+interface BrowserPreviewState {
+  showModal: boolean;
+  currentPreview?: {
+    tabId?: string;
+    serverId?: string;
+    url?: string;
+    screenshot?: string;
+    htmlContent?: string;
+  };
+}
+
 interface AppState {
   // Agent
   agentStatus: "idle" | "running" | "paused" | "error" | "stopped";
-  
+
   // Chat
   messages: ChatMessage[];
   conversationId: number | undefined;
@@ -79,14 +90,15 @@ interface AppState {
   isLoading: boolean;
   streamingContent: string;
   globalRunningAgents: number;
-  
+
   // Socket
   socket: Socket | null;
   connected: boolean;
 
   // UI
   setupModalOpen: boolean;
-  
+  browserPreview: BrowserPreviewState;
+
   // Actions
   initSocket: () => void;
   disconnectSocket: () => void;
@@ -98,6 +110,7 @@ interface AppState {
   setAgentStatus: (status: AppState["agentStatus"]) => void;
   setGlobalRunningAgents: (count: number) => void;
   setSetupModalOpen: (open: boolean) => void;
+  setBrowserPreviewModal: (show: boolean, preview?: BrowserPreviewState["currentPreview"]) => void;
 }
 
 export type AgentMode = "full" | "plan";
@@ -113,6 +126,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   socket: null,
   connected: false,
   setupModalOpen: false,
+  browserPreview: {
+    showModal: false,
+    currentPreview: undefined,
+  },
 
   initSocket: () => {
     const socketUrl = import.meta.env.DEV
@@ -254,6 +271,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ globalRunningAgents: Number(data?.runningCount ?? 0) });
     });
 
+    socket.on("browser:preview", (data: { tabId?: string; serverId?: string; url?: string; screenshot?: string; htmlContent?: string; conversationId?: number }) => {
+      if (!belongsToActiveConversation(data.conversationId)) return;
+      const msg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "event",
+        content: `Browser preview: ${data.url || "preview"}`,
+        timestamp: new Date().toISOString(),
+        eventType: "browser_preview",
+        eventData: {
+          tabId: data.tabId,
+          serverId: data.serverId,
+          url: data.url,
+          screenshot: data.screenshot,
+          htmlContent: data.htmlContent,
+          isStreaming: true,
+        },
+      };
+      set((s) => ({
+        messages: [...s.messages, msg],
+      }));
+    });
+
     set({ socket });
   },
 
@@ -296,7 +335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     socket.emit("chat:stop", { conversationId });
   },
 
-  clearChat: () => set({ messages: [], conversationId: undefined, awaitingNewConversation: false }),
+  clearChat: () => set({ messages: [] }),
   setConversationId: (id) => set({ conversationId: id, messages: [], awaitingNewConversation: false }),
   setMessages: (messages) =>
     set((s) => ({
@@ -305,4 +344,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   setAgentStatus: (status) => set({ agentStatus: status }),
   setGlobalRunningAgents: (count) => set({ globalRunningAgents: Math.max(0, count) }),
   setSetupModalOpen: (open) => set({ setupModalOpen: open }),
+  setBrowserPreviewModal: (show, preview) =>
+    set({
+      browserPreview: {
+        showModal: show,
+        currentPreview: preview,
+      },
+    }),
 }));

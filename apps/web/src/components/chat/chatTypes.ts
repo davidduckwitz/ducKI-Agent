@@ -6,7 +6,8 @@ export type AgentEventType =
   | "reasoning"
   | "decision"
   | "guardrail"
-  | "mode_selected";
+  | "mode_selected"
+  | "browser_preview";
 
 export interface RenderedChatMessage {
   id: string;

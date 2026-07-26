@@ -41,6 +41,8 @@ interface BrowserWorkerResponse {
   result: ToolResult;
 }
 
+// Sessions map - kept alive in main process so they persist across worker restarts
+const mainProcessSessions = new Map<string, { launchedAt: string; url?: string }>();
 const sessions = new Map<string, BrowserSession>();
 const pending = new Map<
   string,
@@ -266,11 +268,28 @@ async function createSession(options: { headless?: boolean; viewport?: { width: 
 }
 
 async function ensureSession(input: Record<string, unknown>): Promise<{ sessionId: string; session: BrowserSession }> {
-  const sessionId = String(input["sessionId"] ?? "").trim();
-  if (!sessionId) throw new Error("sessionId is required");
-  const session = await getSession(sessionId);
-  if (!session) throw new Error(`Browser session '${sessionId}' not found`);
-  return { sessionId, session };
+  const requestedSessionId = String(input["sessionId"] ?? "").trim();
+  if (!requestedSessionId) throw new Error("sessionId is required");
+
+  const session = await getSession(requestedSessionId);
+  if (session) {
+    return { sessionId: requestedSessionId, session };
+  }
+
+  // Fallback: If requested session not found, use the most recent/first active session
+  const availableIds = Array.from(sessions.keys());
+  console.warn(`[browser] Requested session '${requestedSessionId}' not found. Available sessions: ${availableIds.join(", ")}`);
+
+  if (availableIds.length > 0) {
+    const fallbackSessionId = availableIds[0] as string;
+    const fallbackSession = sessions.get(fallbackSessionId);
+    if (fallbackSession) {
+      console.info(`[browser] Using fallback session: ${fallbackSessionId}`);
+      return { sessionId: fallbackSessionId, session: fallbackSession };
+    }
+  }
+
+  throw new Error(`Browser session '${requestedSessionId}' not found (no fallback sessions available)`);
 }
 
 export const browserTool: ToolExecutor = {
@@ -351,7 +370,22 @@ export const browserTool: ToolExecutor = {
         });
       }
 
-      return await callWorker(input);
+      const result = await callWorker(input);
+
+      // Track sessions in main process
+      if (action === "launch" && result.success) {
+        const data = result.data as Record<string, unknown> | undefined;
+        const sessionId = data?.sessionId as string | undefined;
+        if (sessionId) {
+          mainProcessSessions.set(sessionId, {
+            launchedAt: new Date().toISOString(),
+            url: data?.currentUrl as string | undefined,
+          });
+          console.info(`[browser-main] Tracked session: ${sessionId}`);
+        }
+      }
+
+      return result;
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }
@@ -382,17 +416,20 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         if (browserPath) {
           console.info(`[browser] launching ${browserSelectionLabel(browserPath)} at ${browserPath}`);
         }
+        console.info(`[browser] Session created: ${sessionId}`);
         if (input["url"] && session) {
           await session.page.goto(String(input["url"]), { waitUntil: "domcontentloaded" });
           session.targetUrl = session.page.url();
         }
-        return ok({
+        const result = {
           sessionId,
           browserPath: browserPath ?? null,
           browserName: browserPath ? browserSelectionLabel(browserPath) : null,
           currentUrl: session?.page.url() ?? null,
           launchedAt: session?.launchedAt,
-        });
+        };
+        console.info(`[browser] Returning launch result:`, JSON.stringify(result));
+        return ok(result);
       }
       case "list_pages": {
         const { sessionId, session } = await ensureSession(input);

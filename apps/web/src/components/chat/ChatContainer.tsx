@@ -9,6 +9,7 @@ import { DuckyMascot } from "./DuckyMascot";
 import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
 import { ToolSkillSelector } from "./ToolSkillSelector";
 import { PlanExecutionPanel, type Plan } from "./PlanExecutionPanel";
+import { BrowserPreviewModal } from "./BrowserPreview";
 import type { AgentEventType, RenderedChatMessage } from "./chatTypes";
 
 interface ConversationItem {
@@ -67,6 +68,8 @@ export function ChatContainer() {
     setConversationId,
     setMessages,
     connected,
+    browserPreview,
+    setBrowserPreviewModal,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -84,6 +87,7 @@ export function ChatContainer() {
   const [planExecuting, setPlanExecuting] = useState(false);
   const [planProgress, setPlanProgress] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [totalTokens, setTotalTokens] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
@@ -93,6 +97,14 @@ export function ChatContainer() {
   const activeConversationRef = useRef<HTMLDivElement>(null);
 
   const defaultExpandedForType = (eventType?: AgentEventType) => false;
+
+  useEffect(() => {
+    const total = messages.reduce((sum, msg) => {
+      const tokens = (msg.eventData?.totalTokens as number | undefined) ?? 0;
+      return sum + tokens;
+    }, 0);
+    setTotalTokens(total);
+  }, [messages]);
 
   useEffect(() => {
     if (activeConversationRef.current && conversationsViewportRef.current) {
@@ -494,6 +506,14 @@ export function ChatContainer() {
     },
   });
 
+  const clearMessages = useMutation({
+    mutationFn: (conversationIdToClear: number) => api.chat.clearMessages(conversationIdToClear),
+    onSuccess: async (_data, clearedId) => {
+      clearChat();
+      await qc.invalidateQueries({ queryKey: ["chat", "messages", clearedId] });
+    },
+  });
+
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <aside
@@ -579,6 +599,12 @@ export function ChatContainer() {
           />
         </div>
         <div className="flex items-center gap-2">
+          {totalTokens > 0 && (
+            <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+              <span className="text-base">⚡</span>
+              <span>{totalTokens.toLocaleString()}</span>
+            </div>
+          )}
           <button
             onClick={() => setPlanMode((prev) => !prev)}
             className={`text-sm px-3 py-1.5 rounded-lg border transition ${
@@ -602,7 +628,16 @@ export function ChatContainer() {
               Stop
             </button>
           )}
-          <button onClick={clearChat} className="btn-secondary flex items-center gap-2 text-sm">
+          <button
+            onClick={() => {
+              if (conversationId) {
+                clearMessages.mutate(conversationId);
+              } else {
+                clearChat();
+              }
+            }}
+            className="btn-secondary flex items-center gap-2 text-sm"
+          >
             <Trash2 className="w-4 h-4" />
             {t("chat.clear")}
           </button>
@@ -732,6 +767,14 @@ export function ChatContainer() {
           onClose={() => setShowPlanPanel(false)}
           isExecuting={planExecuting}
           executionProgress={planProgress}
+        />
+      )}
+
+      {/* Browser Preview Modal */}
+      {browserPreview.showModal && browserPreview.currentPreview && (
+        <BrowserPreviewModal
+          data={browserPreview.currentPreview}
+          onClose={() => setBrowserPreviewModal(false)}
         />
       )}
     </div>

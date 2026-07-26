@@ -82,7 +82,7 @@ export const TOOL_ALIAS_TABLE: ToolAliasEntry[] = [
   },
   {
     canonicalTool: "browser",
-    aliases: ["browser_tool", "web", "navigate", "puppeteer", "web_driver"],
+    aliases: ["browser_tool", "browser_control", "web", "navigate", "puppeteer", "web_driver"],
     notes: "Browser automation and web interaction tool.",
   },
   {
@@ -206,6 +206,60 @@ export const TOOL_ACTION_ALIAS_MAP: Record<string, Record<string, string>> = {
     gateway_send: "send",
     send_discord: "send",
     list_configs: "list_configs",
+  },
+  browser: {
+    // Navigation aliases
+    navigate: "goto",
+    nav: "goto",
+    go: "goto",
+    open: "goto",
+    visit: "goto",
+    load: "goto",
+    search: "goto",
+    query: "goto",
+    // Screenshot/capture aliases
+    snap: "screenshot",
+    img: "screenshot",
+    capture: "screenshot",
+    get_screenshot: "screenshot",
+    take_screenshot: "screenshot",
+    // Content extraction aliases
+    get_page_content: "evaluate",
+    get_content: "evaluate",
+    get_html: "evaluate",
+    get_text: "evaluate",
+    extract: "evaluate",
+    scrape: "evaluate",
+    read_page: "evaluate",
+    // Evaluation/script aliases
+    eval: "evaluate",
+    execute: "evaluate",
+    run_script: "evaluate",
+    execute_script: "execute",
+    // Form filling aliases
+    fill_form: "form_fill",
+    submit_form: "form_fill",
+    fill: "form_fill",
+    form_submit: "form_fill",
+    // Click aliases
+    select: "click",
+    tap: "click",
+    press_button: "click",
+    click_button: "click",
+    // Keyboard aliases
+    keystroke: "press",
+    press_key: "press",
+    key: "press",
+    // Type aliases
+    input: "type",
+    enter_text: "type",
+    text: "type",
+    type_text: "type",
+    // Wait aliases
+    wait_for: "wait",
+    wait_for_selector: "wait",
+    delay: "wait",
+    pause: "wait",
   },
 };
 

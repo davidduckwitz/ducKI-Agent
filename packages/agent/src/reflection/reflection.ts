@@ -8,6 +8,9 @@ export interface ReflectionResult {
   suggestions: string[];
   shouldRetry: boolean;
   improvedResponse?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
 }
 
 export class Reflection {
@@ -53,7 +56,11 @@ Return JSON evaluation only.`,
       });
 
       const result = JSON.parse(response.content) as ReflectionResult;
-      this.logger.debug("Reflection complete", { quality: result.quality });
+      result.inputTokens = response.usage.promptTokens;
+      result.outputTokens = response.usage.completionTokens;
+      result.totalTokens = response.usage.totalTokens;
+
+      this.logger.debug("Reflection complete", { quality: result.quality, tokens: result.totalTokens });
       return result;
     } catch {
       return {
