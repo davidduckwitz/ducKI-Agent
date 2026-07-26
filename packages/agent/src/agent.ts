@@ -51,7 +51,8 @@ Rules:
 3. Do NOT use {json: ...} or {args: ...} - put the actual key-value pairs
 4. If multiple independent tool calls needed (no dependencies), emit multiple [TOOL:...] markers in same response
 5. For dependent calls (result needed as input), emit one at a time and wait for result
-6. Always close with )] - never leave it hanging`;
+6. Always close with )] - never leave it hanging
+7. When reporting a tool's result back to the user, copy exact values (numbers, times, dates, names) directly from the tool result - never recalculate, estimate, or recall them from your own knowledge`;
 
 const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
 Use the available tools to create and manage projects and tasks, then work them through to completion.
@@ -127,6 +128,11 @@ export class Agent {
   private skillsRoot: string;
   private stopRequested = false;
   private toolGraph: ToolExecutionGraph;
+  /** Skills loaded into the current/most recent run's prompt - lets resolveToolNameAndInput
+   *  recognize a model calling a skill's slug directly (e.g. [TOOL:datum-uhrzeit-tag()])
+   *  instead of the documented skill_manage(action:"execute") wrapper, which smaller/local
+   *  models routinely do once a skill is merely visible in context. */
+  private activeSkillSlugsForRun = new Set<string>();
   private conversationCompressor: ConversationCompressor;
   private readonly maxConsecutiveToolFailures = parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3");
   private readonly maxRepeatedToolCall = parseInt(process.env["AGENT_MAX_REPEATED_TOOL_CALL"] ?? "3");
@@ -653,7 +659,7 @@ export class Agent {
     }
 
     if (
-      /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput) &&
+      this.isDateTimeIntent(input) &&
       /(datum-uhrzeit-tag|datum-uhrzeit|date-time)/.test(skill.slug)
     ) {
       score = Math.min(1, score + boostAmount);
@@ -664,7 +670,9 @@ export class Agent {
 
   private isDateTimeIntent(input: string): boolean {
     const normalizedInput = input.toLowerCase();
-    return /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput);
+    // "wieviel Uhr"/"wie spät" are at least as common as "Uhrzeit" in natural German but
+    // don't contain that compound word, so they were previously invisible to this check.
+    return /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|wie\s*viel\s*uhr|wie\s*spät|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput);
   }
 
   private tokenOverlapCount(input: string, skill: SkillManifest): number {
@@ -961,6 +969,23 @@ export class Agent {
 
     if (normalized === "plan" && normalizedInput["action"] === undefined) {
       normalizedInput["action"] = normalizedInput["feedback"] !== undefined ? "refine" : "create";
+    }
+
+    // A model that sees a skill's slug in its "Loaded Skills" context (e.g. datum-uhrzeit-tag)
+    // routinely calls it as if it were a tool - [TOOL:datum-uhrzeit-tag()] - instead of the
+    // documented skill_manage(action:"execute", name:...) wrapper. Without this, that call
+    // resolves to no real tool, silently produces no result, and the run ends with a generic
+    // "no answer" fallback despite having picked the right skill.
+    // Guarded against real tool names ("plan" and "memory" exist as both a tool and a skill
+    // slug) so this never hijacks a genuine tool call for one of those.
+    if (
+      this.activeSkillSlugsForRun.has(normalized) &&
+      !this.executor.listTools().some((tool) => tool.name === normalized)
+    ) {
+      return {
+        toolName: "skill_manage",
+        input: { action: "execute", name: normalized, input: normalizedInput },
+      };
     }
 
     return { toolName: normalized, input: normalizedInput };
@@ -1508,6 +1533,24 @@ export class Agent {
       // Will try fixes below
     }
 
+    // Local models routinely truncate the JSON one character early - almost always the
+    // final `}` right before the [TOOL:...] call's own closing `)]`, e.g.
+    // {"command": "..."} emitted as {"command": "...". Close off exactly the brackets that
+    // were actually left open before falling through to the looser fixes below - if that
+    // still doesn't produce valid JSON (or the string itself was left unterminated, where
+    // there's no safe way to guess where it was meant to end), this is a no-op.
+    const repaired = this.closeUnbalancedBrackets(candidate);
+    if (repaired !== candidate) {
+      try {
+        const parsed = JSON.parse(repaired);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Will try fixes below
+      }
+    }
+
     // Second attempt: Fix common issues
     // 1. Convert unquoted keys to quoted keys: key: value => "key": value
     // 2. Handle Hermes quote marks
@@ -1559,6 +1602,45 @@ export class Agent {
     }
 
     return undefined;
+  }
+
+  /** Appends whatever closing braces/brackets a truncated JSON-ish string is missing, using
+   *  the same string-aware scanning as scanBracketPayload (so brackets embedded in string
+   *  values, like the parens in a shell command, are never miscounted). Returns the input
+   *  unchanged if it is already balanced or still inside an unterminated string literal -
+   *  guessing where an open string was meant to end would risk corrupting real content
+   *  instead of fixing a merely-truncated wrapper. */
+  private closeUnbalancedBrackets(text: string): string {
+    const openStack: string[] = [];
+    let inString = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const prevChar = i > 0 ? text[i - 1] : "";
+
+      if (char === '"' && prevChar !== "\\") {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+
+      if (char === "{" || char === "[") {
+        openStack.push(char);
+      } else if (char === "}" || char === "]") {
+        const expectedOpener = char === "}" ? "{" : "[";
+        if (openStack[openStack.length - 1] === expectedOpener) {
+          openStack.pop();
+        }
+      }
+    }
+
+    if (inString || openStack.length === 0) return text;
+
+    const closers = openStack
+      .reverse()
+      .map((opener) => (opener === "{" ? "}" : "]"))
+      .join("");
+    return text + closers;
   }
 
   /** Scans from startPos to find a bracket-delimited payload by counting depth,
@@ -1849,19 +1931,19 @@ export class Agent {
    * multi-call batch path in extractAllToolCalls above.
    */
   private parseBracketBody(body: string): { toolName: string; input: Record<string, unknown> } | undefined {
-    const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)\s*$/);
+    const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)/);
     if (callMatch?.[1]) {
       const args = this.parseLooseObject(callMatch[2] ?? "{}");
       if (args) return this.resolveToolNameAndInput(callMatch[1], args);
     }
 
-    const equalsMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(\{[^]*\})\s*$/);
+    const equalsMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(\{[^]*\})/);
     if (equalsMatch?.[1]) {
       const args = this.parseLooseObject(equalsMatch[2] ?? "{}");
       if (args) return this.resolveToolNameAndInput(equalsMatch[1], args);
     }
 
-    const compactObjectMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})\s*$/);
+    const compactObjectMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*(\{[^]*\})/);
     if (compactObjectMatch?.[1]) {
       const args = this.parseLooseObject(compactObjectMatch[2] ?? "{}");
       if (args) return this.resolveToolNameAndInput(compactObjectMatch[1], args);
@@ -2567,9 +2649,40 @@ export class Agent {
           resultSize: JSON.stringify(executed.result.data).length,
         });
 
+        // A successful browser screenshot carries the actual image as base64 in
+        // data.screenshot. That belongs to the user, not the model's context: emit it
+        // directly as a browser_preview event so the chat UI renders it inline (see
+        // BrowserPreview.tsx), and keep it out of the LLM-facing tool result below - a
+        // multi-KB/MB base64 blob would blow straight through the 8KB truncation next,
+        // corrupting the JSON, and even intact it's just token-wasting noise a text model
+        // can't do anything useful with.
+        const rawResultData = executed.result.data as Record<string, unknown> | undefined;
+        const screenshotBase64 = toolCall?.toolName === "browser" && executed.result.success
+          ? (rawResultData?.["screenshot"] as string | undefined)
+          : undefined;
+
+        if (screenshotBase64) {
+          emit("browser_preview", `Screenshot: ${(rawResultData?.["url"] as string | undefined) ?? "preview"}`, {
+            tabId: rawResultData?.["sessionId"],
+            url: rawResultData?.["url"],
+            screenshot: screenshotBase64,
+            isStreaming: false,
+          });
+        }
+
+        const resultForLlm = screenshotBase64
+          ? {
+              ...executed.result,
+              data: {
+                ...rawResultData,
+                screenshot: `[screenshot image, ${screenshotBase64.length} base64 chars - shown to the user directly, not included here]`,
+              },
+            }
+          : executed.result;
+
         // Add tool result to conversation so LLM sees it in next iteration
         // Truncate very large results to avoid API token limits
-        const resultJson = JSON.stringify(executed.result);
+        const resultJson = JSON.stringify(resultForLlm);
         const maxResultSize = 8000; // 8KB limit per tool result
         const truncatedJson = resultJson.length > maxResultSize
           ? resultJson.substring(0, maxResultSize - 100) + `\n...[truncated, original size: ${resultJson.length} bytes]`
@@ -2775,17 +2888,30 @@ export class Agent {
       });
     }
 
+    // Date/time questions are almost always short enough for shouldUseLightweightMode to
+    // route them into lightweight/chatbot mode below, which otherwise skips loading skill
+    // manifests entirely - that left the dedicated datum-uhrzeit-tag skill permanently
+    // unreachable for exactly the queries it exists to handle, so the LLM fell back to
+    // shelling out to a Unix `date` command that doesn't exist on Windows.
+    const isDateTimeQuery = this.isDateTimeIntent(userInput);
+
     // In lightweight/chatbot modes, limit iterations and disable planning/reflection
     const adjustedControls = { ...controls };
     if (effectiveMode === "lightweight") {
       adjustedControls.maxIterations = Math.min(2, controls.maxIterations);
       adjustedControls.enableReflection = false;
     } else if (effectiveMode === "chatbot") {
-      adjustedControls.maxIterations = 1;
+      // chatbot mode's normal cap of 1 iteration means "make a tool call" and "read the
+      // tool's result back to the user" can never both happen - the loop exits right after
+      // the call, before a second pass could let the model see the result and answer in
+      // words. A date/time question that lands in chatbot mode still needs exactly that one
+      // tool round-trip, so it gets the same 2-iteration budget as lightweight mode instead
+      // of silently ending in "no answer generated" despite the tool having succeeded.
+      adjustedControls.maxIterations = isDateTimeQuery ? Math.min(2, controls.maxIterations) : 1;
       adjustedControls.enableReflection = false;
     }
 
-    const installedSkillManifests = effectiveMode === "full" ? this.loadSkillManifests() : [];
+    const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);
     const enabledAllowlist = new Set(controls.enabledSkillAllowlist);
     const allowlistCandidates = installedSkillManifests.filter((skill) => enabledAllowlist.has(skill.slug));
@@ -2834,6 +2960,27 @@ export class Agent {
       }
     }
 
+    // The Jaccard/overlap scorer above routinely rejects this skill even when
+    // isDateTimeIntent is certain: its manifest text is English ("Provides current date,
+    // time...") while requests are often German ("wie spät ist es?"), so token overlap with
+    // a German question is near-zero and never clears autoSkillMinOverlap. Unlike the fuzzy
+    // auto-select, isDateTimeIntent is a deterministic, high-confidence signal, so force-
+    // include the skill directly instead of leaving it to a scoring pipeline it structurally
+    // can't pass - still gated on enableAutoSkillSelection so a user who disabled auto skill
+    // selection entirely is respected.
+    if (
+      dateSkillFallback &&
+      controls.enableAutoSkillSelection &&
+      this.isDateTimeIntent(effectiveInput) &&
+      !activeSkillManifests.some((skill) => skill.slug === dateSkillFallback.slug)
+    ) {
+      activeSkillManifests = [...activeSkillManifests, dateSkillFallback];
+      emit("decision", "Utility date/time skill force-included", {
+        skill: dateSkillFallback.slug,
+        reason: "date_time_intent_deterministic",
+      });
+    }
+
     const relatedSkillManifests = this.expandRelatedSkills(
       activeSkillManifests,
       installedSkillManifests,
@@ -2846,6 +2993,7 @@ export class Agent {
 
     const activeSkills = activeSkillManifests.map((skill) => this.loadSkillContent(skill));
     const activeSkillSlugs = activeSkills.map((skill) => skill.slug);
+    this.activeSkillSlugsForRun = new Set(activeSkillSlugs);
     const workflowOrchestratorActive = activeSkillSlugs.includes("workflow-orchestrator");
 
     // Register skill embeddings for semantic indexing (P3.3)
@@ -3461,64 +3609,20 @@ export class Agent {
       // All tool extraction and execution now happens BEFORE response streaming.
       // If toolResultsMap has entries (toolResultsMap.size > 0), tools were already handled above.
 
-      // If multiple browser actions in one response, it's likely a complete sequence
-      // (launch -> screenshot), so don't iterate again
-      const shouldContinueIterating = browserToolsCount <= 1;
-
-      this.logger.info("[RUNLOOP] Tools executed", {
+      // Text alongside a batch of tool-call markers (e.g. "Ich werde jetzt einen Screenshot
+      // erstellen...") is announcement text the model wrote BEFORE the tools ran, not a
+      // result-aware summary - it never mentions what the tools actually returned because it
+      // can't yet know. This used to be treated as the final answer whenever more than one
+      // browser tool fired in the same turn (launch -> goto -> screenshot -> close routinely
+      // does), which silently discarded the real results and left the user with only the
+      // "I'm about to..." sentence and no confirmation, screenshot reference, or error report.
+      // Always give the model another turn to see the tool results and respond in words,
+      // bounded by the normal iteration budget and the no-text-produced fallback below.
+      this.logger.info("[RUNLOOP] Tools executed, continuing to next iteration for the model's response", {
         iteration: iterations,
         toolCount: toolResultsMap.size,
         browserToolsCount,
-        shouldContinueIterating,
         cleanedResponseLength: cleanedResponse.length,
-        cleanedResponsePreview: cleanedResponse.slice(0, 100),
-      });
-
-      // If cleaned response is empty (only tool markers, no text), must iterate
-      // to get LLM to provide actual response/description
-      const hasTextContent = cleanedResponse.trim().length > 0;
-
-      if (!shouldContinueIterating && hasTextContent) {
-        this.logger.info("[RUNLOOP] Multiple browser tools executed with response text, treating as complete action", {
-          browserToolsCount,
-          iteration: iterations,
-          responseLength: cleanedResponse.length,
-        });
-        // Set finalResponse for output and break
-        finalResponse = cleanedResponse;
-        this.logger.info("[RUNLOOP] Breaking after multiple browser tools, final output ready", {
-          finalResponseLength: finalResponse.length,
-          iteration: iterations,
-        });
-        break;
-      }
-
-      // If we have empty response but multiple browser tools executed,
-      // we still need to continue to get LLM to provide text response
-      if (!shouldContinueIterating && !hasTextContent) {
-        // But only allow 1 retry - if LLM STILL doesn't provide text, give up
-        if (iterations >= 2) {
-          this.logger.error("[RUNLOOP] LLM generated only tool calls after 2 iterations with no text response", {
-            iterations,
-            cleanedLength: cleanedResponse.length,
-          });
-          finalResponse = "Browser-Tool-Aktion abgeschlossen. Die Seite wurde erfolgreich verarbeitet.";
-          break;
-        }
-
-        this.logger.warn("[RUNLOOP] Multiple browser tools executed but response is empty, retrying for text response", {
-          browserToolsCount,
-          iteration: iterations,
-          cleanedLength: cleanedResponse.length,
-        });
-        // Continue ONE MORE TIME to let LLM see tool results and provide a real response
-        continue;
-      }
-
-      // Single tool or non-browser tools: continue to next iteration
-      this.logger.info("[RUNLOOP] Continuing to next iteration for additional tool calls", {
-        iteration: iterations,
-        toolCount: toolResultsMap.size,
       });
       continue; // Go to next iteration with tool results in conversation
     }

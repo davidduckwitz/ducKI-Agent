@@ -4,6 +4,7 @@ import type { DatabaseService } from "@ducki/database";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 import { ChatCleanupService } from "../lib/chat-cleanup-service.js";
+import { deriveConversationTitle } from "../lib/conversation-title.js";
 
 export const chatRouter: IRouter = Router();
 
@@ -191,7 +192,7 @@ chatRouter.post("/", async (req, res, next) => {
       await agent.loadConversation(conversationId);
       activeConversationId = conversationId;
     } else {
-      activeConversationId = await agent.startConversation();
+      activeConversationId = await agent.startConversation({ name: deriveConversationTitle(message) });
     }
 
     runId = agentRegistry.register({

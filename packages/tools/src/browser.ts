@@ -527,12 +527,19 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         const { sessionId, session } = await ensureSession(input);
         const filePath = String(input["filePath"] ?? "").trim();
         const path = filePath || undefined;
-        const buffer = await session.page.screenshot({ path: path as string | undefined, fullPage: true });
+        // webp because the chat preview (BrowserPreview.tsx) wraps the returned base64 as
+        // `data:image/webp;base64,...` - Puppeteer's default (png) would still render (most
+        // browsers sniff the real format), but mislabels the data URI's declared MIME type.
+        const buffer = await session.page.screenshot({ path: path as string | undefined, fullPage: true, type: "webp" });
         return ok({
           sessionId,
           savedTo: path ?? null,
           bytes: buffer.byteLength,
           url: session.page.url(),
+          // Base64 so it survives the fork's IPC (JSON) transport intact - the caller is
+          // responsible for keeping this out of the LLM-facing tool result (it's for
+          // rendering the preview to the user, not for the model to read as text).
+          screenshot: Buffer.from(buffer).toString("base64"),
         });
       }
       case "evaluate": {

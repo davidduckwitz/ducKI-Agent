@@ -101,6 +101,7 @@ export function ChatContainer() {
   const pendingPrependHeightRef = useRef<number | null>(null);
   const stickToBottomRef = useRef(true);
   const activeConversationRef = useRef<HTMLDivElement>(null);
+  const prevConversationIdRef = useRef<number | undefined>(conversationId);
 
   const defaultExpandedForType = (eventType?: AgentEventType) => false;
 
@@ -153,6 +154,18 @@ export function ChatContainer() {
   });
 
   const conversations = conversationsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+
+  useEffect(() => {
+    // A brand-new chat only gets its conversationId once the server creates it in response
+    // to the first message (see chat:conversation in store.ts) - the sidebar's cached list
+    // has no way to know about it yet. Refetch exactly on that undefined -> defined
+    // transition so the newly named conversation shows up without waiting on staleTime.
+    const previous = prevConversationIdRef.current;
+    prevConversationIdRef.current = conversationId;
+    if (previous === undefined && conversationId !== undefined) {
+      void qc.invalidateQueries({ queryKey: ["chat", "conversations", "page"] });
+    }
+  }, [conversationId, qc]);
 
     const appliedQueryConversationId = useRef(false);
     useEffect(() => {
@@ -808,7 +821,10 @@ export function ChatContainer() {
     mutationFn: (conversationIdToDelete: number) => api.chat.deleteConversation(conversationIdToDelete),
     onSuccess: async (_data, deletedId) => {
       if (conversationId === deletedId) {
-        clearChat();
+        // Not clearChat(): that only wipes the visible messages and leaves conversationId
+        // pointing at the just-deleted row, so the next message sent would try to load a
+        // conversation that no longer exists.
+        setConversationId(undefined);
       }
       await qc.invalidateQueries({ queryKey: ["chat", "conversations", "page"] });
       await qc.invalidateQueries({ queryKey: ["chat", "messages", deletedId] });
@@ -834,7 +850,11 @@ export function ChatContainer() {
           <h2 className="text-sm font-semibold">{t("chat.chats")}</h2>
           <button
             onClick={() => {
-              clearChat();
+              // Not clearChat(): that only wipes the visible messages and leaves the old
+              // conversationId in place, so the next message would silently continue the
+              // previous chat (and inherit its already-generated name) instead of starting
+              // a fresh one.
+              setConversationId(undefined);
             }}
             className="text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700"
           >

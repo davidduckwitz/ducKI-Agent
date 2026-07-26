@@ -29,6 +29,8 @@ For these requests, always execute this skill first; do not fallback to shell da
 - For pure day-of-week queries: set `input: { "showDay": true, "showDate": false, "showTime": false }`.
 - For pure time queries: set `input: { "showTime": true, "showDate": false, "showDay": false }`.
 - For pure date queries: set `input: { "showDate": true, "showTime": false, "showDay": false }`.
+- After execution, report ONLY the exact value from the tool result's `output` (or `iso`) field. Never calculate, estimate, or recall the date/time yourself - the tool result is the single source of truth, and any value you did not copy directly from it is wrong.
+- Example: if the result contains `"output": "14:32:07 Uhr"`, your answer must contain exactly "14:32:07" - not a different, self-generated time.
 
 ## Usage
 The skill reads optional values from `skillInput`:

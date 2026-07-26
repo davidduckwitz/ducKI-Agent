@@ -2,7 +2,10 @@ import type { ToolResult, ToolExecutor } from "@ducki/shared";
 import { execFileSync, execSync } from "node:child_process";
 
 function looksUnixShellCommand(command: string): boolean {
-  return /\b(grep|sed|awk|tail|head|tr|cut|xargs)\b|\/home\/|\/dev\/null|\*\.json|\|\|\s*true/.test(command);
+  // "date" is included because GNU-style `date +FORMAT` is a common LLM habit that silently
+  // misbehaves under cmd.exe instead of failing clearly - Windows' own `date` builtin doesn't
+  // accept `+FORMAT` at all.
+  return /\b(grep|sed|awk|tail|head|tr|cut|xargs|date)\b|\/home\/|\/dev\/null|\*\.json|\|\|\s*true/.test(command);
 }
 
 function findBashOnWindows(): string | undefined {

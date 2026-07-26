@@ -4,6 +4,7 @@ import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
+import { deriveConversationTitle } from "../lib/conversation-title.js";
 
 const logger = getRootLogger().child("WebSocket");
 
@@ -68,7 +69,7 @@ export function setupWebSocket(
           resolvedConversationId = data.conversationId;
         } else {
           const conv = await db.createConversation({
-            name: `Conversation ${new Date().toLocaleString()}`,
+            name: deriveConversationTitle(data.message),
           });
           resolvedConversationId = conv.id;
           socket.emit("chat:conversation", { conversationId: resolvedConversationId });
