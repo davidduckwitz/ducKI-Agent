@@ -1,4 +1,5 @@
-import { Play, MessageSquare, X } from "lucide-react";
+import { Play, MessageSquare, X, CheckCircle2, Clock, AlertCircle } from "lucide-react";
+import { DuckyMascot } from "./DuckyMascot";
 
 export interface Plan {
   id?: number;
@@ -12,6 +13,8 @@ export interface Plan {
   createdAt?: string;
 }
 
+export type StepStatus = "pending" | "in_progress" | "completed" | "failed";
+
 interface PlanExecutionPanelProps {
   plan: Plan;
   onRefine: () => void;
@@ -21,6 +24,8 @@ interface PlanExecutionPanelProps {
   /** Real completion percentage. Omit when execution progress cannot be measured -
    *  the panel then shows an indeterminate bar instead of inventing a number. */
   executionProgress?: number;
+  /** Status of each step */
+  stepStatuses?: Record<number, StepStatus>;
 }
 
 export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
@@ -73,12 +78,58 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
               <div>
                 <p className="text-sm text-gray-400">Schritte ({steps.length}):</p>
                 <ul className="space-y-2 mt-2">
-                  {steps.map((step, idx) => (
-                    <li key={idx} className="text-sm bg-gray-800/50 p-2 rounded">
-                      <span className="text-gray-500 font-medium">{idx + 1}.</span> {step.title}
-                      {step.description && <p className="text-xs text-gray-400 mt-1">{step.description}</p>}
-                    </li>
-                  ))}
+                  {steps.map((step, idx) => {
+                    const status = (props.stepStatuses?.[idx] ?? "pending") as StepStatus;
+                    const isCompleted = status === "completed";
+                    const isFailed = status === "failed";
+                    const isInProgress = status === "in_progress";
+
+                    return (
+                      <li
+                        key={idx}
+                        className={`text-sm p-3 rounded border transition ${
+                          isCompleted
+                            ? "bg-green-500/10 border-green-500/30"
+                            : isFailed
+                              ? "bg-red-500/10 border-red-500/30"
+                              : isInProgress
+                                ? "bg-blue-500/10 border-blue-500/30"
+                                : "bg-gray-800/50 border-gray-700/50"
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="mt-0.5 flex items-center gap-1">
+                            {isCompleted && <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />}
+                            {isFailed && <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />}
+                            {isInProgress && (
+                              <>
+                                <Clock className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
+                                <DuckyMascot working={true} size={20} className="ml-1" title="DucKI arbeitet daran" />
+                              </>
+                            )}
+                            {status === "pending" && <div className="w-4 h-4 rounded-full border border-gray-500 shrink-0" />}
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-300 font-medium">{idx + 1}. {step.title}</span>
+                              {status !== "pending" && (
+                                <span className={`text-xs px-2 py-0.5 rounded ${
+                                  isCompleted ? "bg-green-500/20 text-green-300" :
+                                  isFailed ? "bg-red-500/20 text-red-300" :
+                                  "bg-blue-500/20 text-blue-300"
+                                }`}>
+                                  {status === "completed" ? "Erledigt" :
+                                   status === "failed" ? "Fehler" :
+                                   "In Bearbeitung"}
+                                </span>
+                              )}
+                            </div>
+                            {step.description && <p className="text-xs text-gray-400 mt-1">{step.description}</p>}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}

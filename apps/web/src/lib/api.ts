@@ -213,6 +213,7 @@ export const api = {
         steps: Array<{ title: string; description: string; tools?: string[] }>;
         markdown?: string;
         conversationId?: number;
+        projectId?: number;
       }
     ) =>
       request<{ message: string; planId: number | null; executionResult?: unknown }>(

@@ -8,7 +8,7 @@ import { useI18n } from "../../lib/i18n";
 import { DuckyMascot } from "./DuckyMascot";
 import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
 import { ToolSkillSelector } from "./ToolSkillSelector";
-import { PlanExecutionPanel, type Plan } from "./PlanExecutionPanel";
+import { PlanExecutionPanel, type Plan, type StepStatus } from "./PlanExecutionPanel";
 import { BrowserPreviewModal } from "./BrowserPreview";
 import type { AgentEventType, RenderedChatMessage } from "./chatTypes";
 
@@ -85,6 +85,9 @@ export function ChatContainer() {
   const [currentPlan, setCurrentPlan] = useState<Plan | null | undefined>(null);
   const [lastProcessedPlanId, setLastProcessedPlanId] = useState<string>("");
   const [planExecuting, setPlanExecuting] = useState(false);
+  const [executionProgress, setExecutionProgress] = useState<number | undefined>(0);
+  const [executionStartMessageIndex, setExecutionStartMessageIndex] = useState(-1);
+  const [stepStatuses, setStepStatuses] = useState<Record<number, StepStatus>>({});
   const [searchParams, setSearchParams] = useSearchParams();
   const [totalTokens, setTotalTokens] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -430,8 +433,26 @@ export function ChatContainer() {
   const handlePlanExecution = async () => {
     if (!currentPlan) return;
     setPlanExecuting(true);
+    setExecutionProgress(5);
+    setExecutionStartMessageIndex(messages.length);
 
     try {
+      // Create a project for this plan execution if it doesn't exist
+      let projectId: number | undefined;
+      try {
+        const projectName = `plan-${new Date().getTime()}-${Math.random().toString(36).substr(2, 9)}`;
+        const created = await api.projects.create({
+          name: projectName,
+          description: currentPlan.goal || currentPlan.title,
+        });
+        projectId = (created as any)?.id;
+      } catch (projectError) {
+        console.warn("Could not create project for plan execution:", projectError);
+        // Continue execution without project - not critical
+      }
+
+      setExecutionProgress(15);
+
       // The plan lives in this session's event stream, not in a server-side store, so the
       // steps have to travel with the request - otherwise the agent would only receive an
       // id it cannot resolve back to any actual plan content.
@@ -440,6 +461,7 @@ export function ChatContainer() {
         steps: currentPlan.steps ?? [],
         markdown: currentPlan.markdown,
         conversationId: conversationId ?? undefined,
+        projectId,
       });
 
       setMessages((prev) => [
@@ -454,6 +476,7 @@ export function ChatContainer() {
         },
       ]);
 
+      setExecutionProgress(100);
       setShowPlanPanel(false);
       setPlanExecuting(false);
     } catch (error) {
@@ -469,6 +492,7 @@ export function ChatContainer() {
         },
       ]);
       setPlanExecuting(false);
+      setExecutionProgress(undefined);
     }
   };
 
@@ -494,6 +518,75 @@ export function ChatContainer() {
   useEffect(() => {
     detectPlanFromMessages(lastProcessedPlanId);
   }, [messages, lastProcessedPlanId]);
+
+  // Update execution progress as new events come in during plan execution
+  useEffect(() => {
+    if (!planExecuting || executionStartMessageIndex < 0 || !currentPlan?.steps) return;
+
+    const newMessagesCount = messages.length - executionStartMessageIndex;
+    const totalSteps = currentPlan.steps.length;
+
+    // Map message count to progress: 15% at start, 85% as we get events, 100% at finish
+    // Each step event roughly represents progress
+    let progress = 15 + Math.min(70, (newMessagesCount / Math.max(1, totalSteps * 2)) * 70);
+
+    // If we're still loading (not finished), cap at 95%
+    if (isLoading) {
+      progress = Math.min(95, progress);
+    }
+
+    setExecutionProgress(Math.round(progress));
+  }, [messages, planExecuting, executionStartMessageIndex, isLoading, currentPlan?.steps]);
+
+  // Update step statuses as plan execution progresses
+  useEffect(() => {
+    if (!planExecuting || !currentPlan?.steps) return;
+
+    const newStatuses: Record<number, StepStatus> = {};
+    const stepCount = currentPlan.steps.length;
+    const recentMessages = messages.slice(executionStartMessageIndex).map((m) => m.content).join("\n").toLowerCase();
+
+    // Find which step is currently being worked on by looking for step numbers
+    let maxStepFound = -1;
+    for (let i = 0; i < stepCount; i++) {
+      const stepNum = i + 1;
+      if (recentMessages.includes(`${stepNum}.`)) {
+        maxStepFound = i;
+      }
+    }
+
+    // Mark all steps
+    for (let idx = 0; idx < stepCount; idx++) {
+      if (idx < maxStepFound) {
+        // Steps before current are likely completed
+        newStatuses[idx] = "completed";
+      } else if (idx === maxStepFound) {
+        // Current step - check if it's completed
+        if (
+          recentMessages.includes("erledigt") ||
+          recentMessages.includes("done") ||
+          recentMessages.includes("completed") ||
+          recentMessages.includes("abgeschlossen") ||
+          recentMessages.includes("✓")
+        ) {
+          newStatuses[idx] = "completed";
+        } else if (
+          recentMessages.includes("fehler") ||
+          recentMessages.includes("error") ||
+          recentMessages.includes("failed")
+        ) {
+          newStatuses[idx] = "failed";
+        } else {
+          newStatuses[idx] = "in_progress";
+        }
+      } else {
+        newStatuses[idx] = "pending";
+      }
+    }
+
+    setStepStatuses(newStatuses);
+  }, [messages, planExecuting, currentPlan?.steps, executionStartMessageIndex]);
+
 
   const deleteConversation = useMutation({
     mutationFn: (conversationIdToDelete: number) => api.chat.deleteConversation(conversationIdToDelete),
@@ -766,6 +859,8 @@ export function ChatContainer() {
           onExecute={handlePlanExecution}
           onClose={() => setShowPlanPanel(false)}
           isExecuting={planExecuting}
+          executionProgress={executionProgress}
+          stepStatuses={stepStatuses}
         />
       )}
 

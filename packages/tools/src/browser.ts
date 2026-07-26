@@ -254,9 +254,40 @@ async function createSession(options: { headless?: boolean; viewport?: { width: 
     headless: options.headless ?? false,
     executablePath,
     defaultViewport: options.viewport ?? { width: 1440, height: 1024 },
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      // Anti-bot detection measures
+      "--disable-blink-features=AutomationControlled",
+      "--disable-web-resources",
+      "--disable-background-networking",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-breakpad",
+      "--disable-client-side-phishing-detection",
+      "--disable-default-apps",
+      "--disable-device-discovery-notifications",
+      "--disable-hang-monitor",
+      "--disable-sync",
+      "--metrics-recording-only",
+      "--mute-audio",
+      "--no-first-run",
+    ],
   });
   const page = await browser.newPage();
+
+  // Hide automation indicators
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => false,
+    });
+  });
+
+  // Set realistic user agent
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  );
+
   const sessionId = makeSessionId();
   const session: BrowserSession = {
     browser,

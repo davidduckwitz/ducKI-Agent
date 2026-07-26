@@ -146,6 +146,14 @@ export class CodingAgent {
     return this.agent.executor;
   }
 
+  async loadConversation(conversationId: number): Promise<void> {
+    return this.agent.loadConversation(conversationId);
+  }
+
+  async runOnExistingConversation(prompt: string): Promise<{ response: string; result?: unknown }> {
+    return this.agent.run(prompt);
+  }
+
   async run(goal: string, opts: CodingRunOptions = {}): Promise<CodingRunResult> {
     const maxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
     const conversationId = await this.agent.startConversation({ name: `CodingAgent: ${goal.slice(0, 60)}` });

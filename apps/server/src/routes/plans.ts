@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { resolve } from "node:path";
 import type { Agent } from "@ducki/agent";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { parseMarkdownToPlan } from "@ducki/planer";
@@ -88,6 +89,13 @@ interface ExecutePlanBody {
   steps?: Array<{ title?: string; description?: string; tools?: string[] }>;
   markdown?: string;
   conversationId?: number;
+  projectId?: number;
+}
+
+interface ProjectData {
+  id: number;
+  name: string;
+  folder?: string;
 }
 
 /**
@@ -99,12 +107,10 @@ interface ExecutePlanBody {
 plansRouter.post("/:id/execute", async (req, res, next) => {
   try {
     const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
-    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
-
-    if (!agent) {
-      res.status(500).json(createApiError("Agent not available"));
-      return;
-    }
+    const createCodingAgent = req.app.locals["createCodingAgent"] as
+      | ((options?: { sandboxRoot?: string }) => import("@ducki/agent").CodingAgent)
+      | undefined;
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
 
     const body = (req.body ?? {}) as ExecutePlanBody;
     const rawId = Number(req.params.id);
@@ -136,12 +142,28 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       })
       .join("\n");
 
+    // Check if this is a coding project
+    let projectSandboxInfo = "";
+    if (body.projectId && db) {
+      try {
+        const project = await db.getProject(body.projectId) as ProjectData | null;
+        if (project) {
+          const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
+          const sandboxRoot = resolve("./shared-workspace/coding", projectSlug);
+          projectSandboxInfo = `\n\nPROJEKT-VERZEICHNIS: ${sandboxRoot}\nAlle Dateipfade sind relativ zu diesem Verzeichnis.`;
+        }
+      } catch {
+        // Silently ignore project lookup errors
+      }
+    }
+
     const executionPrompt = [
       "**PLAN-AUSFÜHRUNG**",
       "",
       "Setze den folgenden, bereits vom Nutzer bestätigten Plan jetzt tatsächlich um.",
       "",
       `ZIEL: ${goal}`,
+      projectSandboxInfo,
       "",
       "SCHRITTE:",
       stepList,
@@ -153,6 +175,37 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       "- Wenn ein Schritt endgültig scheitert, brich ab und melde, welche Schritte fertig sind und welcher blockiert.",
       "- Abschließend: kurze Zusammenfassung pro Schritt (erledigt / übersprungen / fehlgeschlagen) inklusive Verifikation.",
     ].join("\n");
+
+    if (body.conversationId && Number.isFinite(body.conversationId)) {
+      if (body.projectId && createCodingAgent && db) {
+        // Use CodingAgent for projects but with the same conversation + execution prompt
+        try {
+          const project = await db.getProject(body.projectId) as ProjectData | null;
+          if (project) {
+            const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
+            const sandboxRoot = resolve("./shared-workspace/coding", projectSlug);
+            const codingAgent = createCodingAgent({ sandboxRoot });
+            await codingAgent.loadConversation(body.conversationId);
+            const result = await codingAgent.runOnExistingConversation(executionPrompt);
+            res.json(createApiResponse({
+              message: "Plan execution finished",
+              planId,
+              executionResult: result,
+            }));
+            return;
+          }
+        } catch (projectError) {
+          console.warn("Could not load project for plan execution, falling back to regular agent:", projectError);
+        }
+      }
+    }
+
+    // Fallback to regular agent
+    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+    if (!agent) {
+      res.status(500).json(createApiError("Agent not available"));
+      return;
+    }
 
     if (body.conversationId && Number.isFinite(body.conversationId)) {
       await agent.loadConversation(body.conversationId);
