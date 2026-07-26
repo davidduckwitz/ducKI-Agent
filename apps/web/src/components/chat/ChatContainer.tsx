@@ -91,7 +91,6 @@ export function ChatContainer() {
   const [lastProcessedPlanId, setLastProcessedPlanId] = useState<string>("");
   const [planExecuting, setPlanExecuting] = useState(false);
   const [executionProgress, setExecutionProgress] = useState<number | undefined>(0);
-  const [executionStartMessageIndex, setExecutionStartMessageIndex] = useState(-1);
   const [stepStatuses, setStepStatuses] = useState<Record<number, StepStatus>>({});
   const [searchParams, setSearchParams] = useSearchParams();
   const [totalTokens, setTotalTokens] = useState(0);
@@ -435,6 +434,29 @@ export function ChatContainer() {
     setInput(`Verbessere diesen Plan: ${currentPlan.goal}\n\nBisheriger Plan: ${currentPlan.markdown || JSON.stringify(currentPlan)}`);
   };
 
+  // Once a plan has actually been executed, "Verbessern" shouldn't just tweak the old plan
+  // description - the real project files now exist, so it should send the agent off to
+  // inspect what's actually there and ask what to change, then send it immediately (no
+  // prefilled text to review) since the whole point is a fast analyze-and-ask round trip.
+  const handlePlanImprovementAnalysis = () => {
+    if (!currentPlan) return;
+    setShowPlanPanel(false);
+    const linkedProjectId = conversations.find((c) => c.id === conversationId)?.projectId;
+    const prompt = [
+      `Der folgende Plan wurde bereits umgesetzt: "${currentPlan.goal}"`,
+      currentPlan.markdown ? `Ursprünglicher Plan:\n${currentPlan.markdown}` : "",
+      linkedProjectId
+        ? `Das zugehörige Projekt hat die ID ${linkedProjectId}. Ermittle darüber (z.B. per project-Tool) den Projektordner und nutze deine Tools (filesystem/git), um den tatsächlichen aktuellen Stand der Dateien zu analysieren.`
+        : "Analysiere die tatsächlich vorhandenen Dateien und den aktuellen Stand des Projekts (nutze deine Tools, z.B. filesystem/git).",
+      "Stelle mir anschließend gezielte Rückfragen dazu, was am bisherigen Ergebnis verbessert, korrigiert oder ergänzt werden soll, bevor du einen neuen, verbesserten Plan erstellst.",
+      "Führe noch keine Änderungen aus - erst Analyse und Rückfragen.",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    sendMessage(prompt, undefined, undefined, "Plan verbessern: Dateien analysieren und Rückfragen stellen");
+  };
+
   const generateProjectNameFromGoal = (goal: string): string => {
     // Extract meaningful words from the goal
     const words = goal
@@ -455,22 +477,25 @@ export function ChatContainer() {
     if (!currentPlan) return;
     setPlanExecuting(true);
     setExecutionProgress(5);
-    setExecutionStartMessageIndex(messages.length);
     setStepStatuses({}); // Reset step statuses
 
     try {
-      // Create a project for this plan execution if it doesn't exist
-      let projectId: number | undefined;
-      try {
-        const projectName = generateProjectNameFromGoal(currentPlan.goal || currentPlan.title || "project");
-        const created = await api.projects.create({
-          name: projectName,
-          description: currentPlan.goal || currentPlan.title,
-        });
-        projectId = (created as any)?.id;
-      } catch (projectError) {
-        console.warn("Could not create project for plan execution:", projectError);
-        // Continue execution without project - not critical
+      // Reuse the project already linked to this conversation (e.g. from a previous
+      // execution of this same plan/thread) instead of spinning up a disconnected new one
+      // each time - an "improve this plan" round must land in the same project folder.
+      let projectId: number | undefined = conversations.find((c) => c.id === conversationId)?.projectId;
+      if (!projectId) {
+        try {
+          const projectName = generateProjectNameFromGoal(currentPlan.goal || currentPlan.title || "project");
+          const created = await api.projects.create({
+            name: projectName,
+            description: currentPlan.goal || currentPlan.title,
+          });
+          projectId = (created as any)?.id;
+        } catch (projectError) {
+          console.warn("Could not create project for plan execution:", projectError);
+          // Continue execution without project - not critical
+        }
       }
 
       setExecutionProgress(15);
@@ -551,6 +576,39 @@ export function ChatContainer() {
     detectPlanFromMessages(lastProcessedPlanId);
   }, [messages, lastProcessedPlanId]);
 
+  // Anchor for "everything that happened during/after this plan's execution" - derived from
+  // the plan announcement message's own position instead of a snapshot taken only when
+  // "Umsetzen" was clicked. That snapshot didn't survive reopening a conversation later (it
+  // reset to -1), which is exactly why step status/progress used to go blank again on reopen.
+  // Using the plan message's index instead works identically for a live run and for replaying
+  // an already-finished plan from persisted history.
+  const planMessageIndex = (() => {
+    if (!currentPlan) return -1;
+    const baseIdx = messages.findIndex((m) => m.id === lastProcessedPlanId);
+    if (baseIdx < 0) return -1;
+
+    // The plan is typically echoed straight back as a plain-text message right after the
+    // "plan" event itself (same step titles/numbers, ending in the planner's own "nothing
+    // executed yet" sentinel). If the execution scan started there, that echo's step titles
+    // would be misread as live progress on a plan that hasn't run at all. Skip past any such
+    // not-yet-executed echoes in the few messages right after the plan marker.
+    let anchor = baseIdx;
+    for (let i = baseIdx + 1; i < Math.min(messages.length, baseIdx + 6); i++) {
+      const content = messages[i]?.content?.toLowerCase() ?? "";
+      if (content.includes("nur ein plan") || content.includes("noch nichts ausgef")) {
+        anchor = i;
+      }
+    }
+    return anchor;
+  })();
+
+  // True once every step has been replayed (live or historical) as "completed" - drives
+  // hiding the "Umsetzen" button (nothing left to execute) and switching "Plan verbessern"
+  // to the file-analysis flow instead of the plain refine-prompt one.
+  const isPlanCompleted = Boolean(
+    currentPlan?.steps?.length && currentPlan.steps.every((_, idx) => stepStatuses[idx] === "completed")
+  );
+
   // Close plan panel and stop tracking when plan execution completes
   useEffect(() => {
     if (!planExecuting) return;
@@ -560,7 +618,7 @@ export function ChatContainer() {
     if (!lastMsg) return;
 
     // If we see a completion-like message or if isLoading stopped, finish execution
-    if (!isLoading && messages.length > executionStartMessageIndex) {
+    if (!isLoading && planMessageIndex >= 0 && messages.length > planMessageIndex + 1) {
       // Give it a moment to ensure all events have arrived
       const timer = setTimeout(() => {
         if (!isLoading) {
@@ -579,6 +637,10 @@ export function ChatContainer() {
           });
           setExecutionProgress(100);
           setPlanExecuting(false);
+          // The execution may have just linked this conversation to a (re-)used project
+          // server-side - refresh the sidebar's conversation list so the next "improve
+          // this plan" round picks up that projectId instead of creating a new project.
+          qc.invalidateQueries({ queryKey: ["chat", "conversations", "page"] });
           // Keep panel open for 2 seconds to show completion, then close
           const closeTimer = setTimeout(() => {
             setShowPlanPanel(false);
@@ -588,9 +650,10 @@ export function ChatContainer() {
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [planExecuting, isLoading, messages, executionStartMessageIndex, currentPlan?.steps]);
+  }, [planExecuting, isLoading, messages, planMessageIndex, currentPlan?.steps]);
 
-  // Live progress + per-step status while a plan executes, combining two signals:
+  // Per-step status (and, from it, progress), combining two signals over everything that
+  // happened after the plan's own announcement message:
   //
   // 1. Tool usage (primary, deterministic): each plan step carries a "Benoetigte Tools"
   //    hint (currentPlan.steps[i].tools). Real tool_call/tool_result events emitted while
@@ -600,16 +663,18 @@ export function ChatContainer() {
   // 2. Explicit "Schritt N" / step-title mentions in the agent's own streamed text
   //    (fallback for steps whose tool hint doesn't distinguish them from a neighbor).
   //
-  // Both run over the live event/chunk stream (chat:event messages plus the in-flight
-  // streamingContent), not just a settled message count, so the UI updates as things happen.
+  // Deliberately NOT gated on planExecuting: this must also recompute for a plan reopened
+  // from a past conversation whose execution already finished (or is still stuck mid-way),
+  // replaying its persisted event history the exact same way live events are replayed - that
+  // is what lets the panel show "last known status" instead of resetting to all-pending.
   useEffect(() => {
-    if (!planExecuting || executionStartMessageIndex < 0 || !currentPlan?.steps) return;
+    if (planMessageIndex < 0 || !currentPlan?.steps) return;
 
     const steps = currentPlan.steps;
     const stepCount = steps.length;
     if (stepCount === 0) return;
 
-    const executionMessages = messages.slice(executionStartMessageIndex);
+    const executionMessages = messages.slice(planMessageIndex + 1);
 
     // --- Signal 1: tool usage vs. each step's declared tool hint ---
     const stepToolSets = steps.map((step) => new Set((step.tools ?? []).map((tool) => tool.toLowerCase())));
@@ -662,10 +727,14 @@ export function ChatContainer() {
     const maxTextMentionedStep = Math.max(-1, ...Array.from(textMentionedSteps));
 
     // Neither signal fires for a single generic step (no tool hint, no "Schritt N" text) -
-    // default to the first not-yet-signaled step so it reads as "in progress" instead of
-    // sitting on "pending" for the whole run with no indication anything is happening.
+    // while a run is actively going, default to the first step so it reads as "in progress"
+    // instead of sitting on "pending" with no indication anything is happening. Only while
+    // planExecuting is true, though: for a plan reopened from history (this session never
+    // clicked "Umsetzen"), guessing step 0 is "active" would be misleading if the real
+    // signals just didn't catch a finished/interrupted run - "no signal" there should mean
+    // "nothing more we know", not "step 1 must be running right now".
     const signaledStep = Math.max(toolActiveStep, maxTextMentionedStep);
-    const activeStep = signaledStep >= 0 ? signaledStep : 0;
+    const activeStep = signaledStep >= 0 ? signaledStep : planExecuting ? 0 : -1;
 
     // --- Merge: whichever signal got further along wins for each step ---
     const newStatuses: Record<number, StepStatus> = {};
@@ -686,6 +755,15 @@ export function ChatContainer() {
     }
     setStepStatuses(newStatuses);
 
+    // A plan nobody has touched yet (no execution messages, not currently running) reads as
+    // 0% - the "10% for started" floor below only makes sense once something has actually
+    // started, live or in the replayed history.
+    const hasStarted = planExecuting || executionMessages.length > 0;
+    if (!hasStarted) {
+      setExecutionProgress(0);
+      return;
+    }
+
     const completedCount = Object.values(newStatuses).filter((s) => s === "completed").length;
     const hasInProgress = Object.values(newStatuses).some((s) => s === "in_progress");
     // 10% for "started", the remaining 85% split across steps (half credit for the one
@@ -693,7 +771,7 @@ export function ChatContainer() {
     const stepFraction = (completedCount + (hasInProgress ? 0.5 : 0)) / stepCount;
     const progress = 10 + stepFraction * 85;
     setExecutionProgress(Math.round(isLoading ? Math.min(95, progress) : progress));
-  }, [messages, streamingContent, planExecuting, currentPlan?.steps, executionStartMessageIndex, isLoading]);
+  }, [messages, streamingContent, planExecuting, currentPlan?.steps, planMessageIndex, isLoading]);
 
 
   const deleteConversation = useMutation({
@@ -963,12 +1041,13 @@ export function ChatContainer() {
       {showPlanPanel && currentPlan && currentPlan.goal && currentPlan.steps && (
         <PlanExecutionPanel
           plan={currentPlan as Plan}
-          onRefine={handlePlanRefinement}
+          onRefine={isPlanCompleted ? handlePlanImprovementAnalysis : handlePlanRefinement}
           onExecute={handlePlanExecution}
           onClose={() => setShowPlanPanel(false)}
           isExecuting={planExecuting}
           executionProgress={executionProgress}
           stepStatuses={stepStatuses}
+          isCompleted={isPlanCompleted}
         />
       )}
 

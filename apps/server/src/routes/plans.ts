@@ -199,6 +199,23 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             if (project) {
               const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
               const sandboxRoot = resolve("./shared-workspace/coding", projectSlug);
+
+              // Persist the resolved sandbox path onto the project and link the
+              // conversation to it, so a later "improve this plan" round on the same
+              // conversation can find and reuse this exact project/folder instead of the
+              // frontend spinning up a brand-new one each time a plan gets (re-)executed.
+              if (project.folder !== sandboxRoot) {
+                await db.updateProject(project.id, { folder: sandboxRoot }).catch(() => {
+                  // Non-critical - execution can proceed even if this bookkeeping write fails.
+                });
+              }
+              const conversation = await db.getConversation(conversationId).catch(() => undefined);
+              if (conversation && conversation.projectId !== project.id) {
+                await db.updateConversation(conversationId, { projectId: project.id }).catch(() => {
+                  // Non-critical - execution can proceed even if this bookkeeping write fails.
+                });
+              }
+
               const codingAgent = createCodingAgent({ sandboxRoot });
               await codingAgent.loadConversation(conversationId);
 

@@ -116,6 +116,10 @@ export class DatabaseService {
     return this.db.select().from(schema.conversations).where(eq(schema.conversations.id, id)).get();
   }
 
+  async updateConversation(id: number, data: Partial<Omit<ConversationInsert, "id" | "createdAt">>): Promise<ConversationSelect | undefined> {
+    return this.db.update(schema.conversations).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(schema.conversations.id, id)).returning().get();
+  }
+
   async listConversations(projectId?: number): Promise<ConversationSelect[]> {
     if (projectId !== undefined) {
       return this.db.select().from(schema.conversations).where(eq(schema.conversations.projectId, projectId)).orderBy(desc(schema.conversations.createdAt)).all();

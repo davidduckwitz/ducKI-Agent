@@ -26,11 +26,14 @@ interface PlanExecutionPanelProps {
   executionProgress?: number;
   /** Status of each step */
   stepStatuses?: Record<number, StepStatus>;
+  /** Every step has already been completed (live or replayed from a past conversation) -
+   *  hides "Umsetzen" (nothing left to run) and relabels "Plan verbessern" accordingly. */
+  isCompleted?: boolean;
 }
 
 export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
   try {
-    const { plan, onRefine, onExecute, onClose, isExecuting = false, executionProgress } = props;
+    const { plan, onRefine, onExecute, onClose, isExecuting = false, executionProgress, isCompleted = false } = props;
 
     if (!plan?.goal) {
       return null;
@@ -39,6 +42,7 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
     const steps = Array.isArray(plan.steps) ? plan.steps : [];
     const hasProgress = typeof executionProgress === "number";
     const progress = Math.min(Math.max(executionProgress ?? 0, 0), 100);
+    const showProgress = isExecuting || isCompleted;
 
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -134,18 +138,22 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
               </div>
             )}
 
-            {isExecuting && (
+            {showProgress && (
               <div>
                 <p className="text-sm text-gray-400">Fortschritt:</p>
                 <div className="w-full bg-gray-700 rounded-full h-2 mt-2 overflow-hidden">
-                  {hasProgress ? (
-                    <div className="bg-blue-500 h-2 rounded-full" style={{ width: `${progress}%` }} />
+                  {hasProgress || isCompleted ? (
+                    <div className="bg-blue-500 h-2 rounded-full" style={{ width: `${isCompleted ? 100 : progress}%` }} />
                   ) : (
                     <div className="bg-blue-500 h-2 w-1/3 rounded-full animate-pulse" />
                   )}
                 </div>
                 <p className="text-xs text-gray-400 mt-1">
-                  {hasProgress ? `${Math.round(progress)}%` : "Umsetzung läuft - Details erscheinen im Chat."}
+                  {isCompleted
+                    ? "100% - Plan umgesetzt."
+                    : hasProgress
+                      ? `${Math.round(progress)}%`
+                      : "Umsetzung läuft - Details erscheinen im Chat."}
                 </p>
               </div>
             )}
@@ -166,16 +174,18 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm flex items-center gap-2 disabled:opacity-50"
             >
               <MessageSquare className="w-4 h-4" />
-              Plan verbessern
+              {isCompleted ? "Verbessern (Dateien analysieren)" : "Plan verbessern"}
             </button>
-            <button
-              onClick={onExecute}
-              disabled={isExecuting}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm text-white flex items-center gap-2 disabled:opacity-50"
-            >
-              <Play className="w-4 h-4" />
-              {isExecuting ? "Läuft..." : "Umsetzen"}
-            </button>
+            {!isCompleted && (
+              <button
+                onClick={onExecute}
+                disabled={isExecuting}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm text-white flex items-center gap-2 disabled:opacity-50"
+              >
+                <Play className="w-4 h-4" />
+                {isExecuting ? "Läuft..." : "Umsetzen"}
+              </button>
+            )}
           </div>
         </div>
       </div>

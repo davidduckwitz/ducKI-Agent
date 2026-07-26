@@ -246,6 +246,28 @@ chatRouter.post("/conversation", async (req, res, next) => {
   }
 });
 
+chatRouter.patch("/conversations/:id", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const conversationId = parseInt(req.params["id"] ?? "0", 10);
+    if (!Number.isFinite(conversationId) || conversationId <= 0) {
+      res.status(400).json(createApiError("Invalid conversation id"));
+      return;
+    }
+
+    const { projectId, name } = req.body as { projectId?: number; name?: string };
+    const updated = await db.updateConversation(conversationId, { projectId, name });
+    if (!updated) {
+      res.status(404).json(createApiError("Conversation not found"));
+      return;
+    }
+
+    res.json(createApiResponse(updated));
+  } catch (error) {
+    next(error);
+  }
+});
+
 chatRouter.delete("/conversations/:id", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
