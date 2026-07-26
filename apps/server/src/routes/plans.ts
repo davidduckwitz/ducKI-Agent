@@ -111,6 +111,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       | ((options?: { sandboxRoot?: string }) => import("@ducki/agent").CodingAgent)
       | undefined;
     const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
+    const io = req.app.locals["io"] as import("socket.io").Server | undefined;
 
     const body = (req.body ?? {}) as ExecutePlanBody;
     const rawId = Number(req.params.id);
@@ -174,49 +175,107 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       "- Prüfe nach jedem Schritt das Resultat. Bei Fehlern: Ursache aus der echten Fehlermeldung ableiten und maximal 3x gezielt neu versuchen.",
       "- Wenn ein Schritt endgültig scheitert, brich ab und melde, welche Schritte fertig sind und welcher blockiert.",
       "- Abschließend: kurze Zusammenfassung pro Schritt (erledigt / übersprungen / fehlgeschlagen) inklusive Verifikation.",
+      "",
+      "WICHTIG für Dateien:",
+      "- Nutze ECHTE Newlines in Dateiinhalten, NICHT escaped Strings wie \\n",
+      "- Schreibe mehrzeilige Inhalte mit echter Zeilenumbruch, z.B. im filesystem-Tool action:write",
     ].join("\n");
 
-    if (body.conversationId && Number.isFinite(body.conversationId)) {
-      if (body.projectId && createCodingAgent && db) {
-        // Use CodingAgent for projects but with the same conversation + execution prompt
-        try {
-          const project = await db.getProject(body.projectId) as ProjectData | null;
-          if (project) {
-            const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
-            const sandboxRoot = resolve("./shared-workspace/coding", projectSlug);
-            const codingAgent = createCodingAgent({ sandboxRoot });
-            await codingAgent.loadConversation(body.conversationId);
-            const result = await codingAgent.runOnExistingConversation(executionPrompt);
-            res.json(createApiResponse({
-              message: "Plan execution finished",
-              planId,
-              executionResult: result,
-            }));
-            return;
-          }
-        } catch (projectError) {
-          console.warn("Could not load project for plan execution, falling back to regular agent:", projectError);
-        }
-      }
-    }
-
-    // Fallback to regular agent
-    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
-    if (!agent) {
-      res.status(500).json(createApiError("Agent not available"));
+    // Return immediately - execution happens asynchronously with WebSocket updates
+    if (!body.conversationId || !Number.isFinite(body.conversationId)) {
+      res.status(400).json(createApiError("conversationId is required for plan execution"));
       return;
     }
 
-    if (body.conversationId && Number.isFinite(body.conversationId)) {
-      await agent.loadConversation(body.conversationId);
-    }
+    const conversationId = body.conversationId;
 
-    const result = await agent.run(executionPrompt);
+    // Start async execution - don't wait for it
+    (async () => {
+      try {
+        if (body.projectId && createCodingAgent && db) {
+          // Use CodingAgent for projects but with the same conversation + execution prompt
+          try {
+            const project = await db.getProject(body.projectId) as ProjectData | null;
+            if (project) {
+              const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
+              const sandboxRoot = resolve("./shared-workspace/coding", projectSlug);
+              const codingAgent = createCodingAgent({ sandboxRoot });
+              await codingAgent.loadConversation(conversationId);
 
+              // Emit start event
+              if (io) {
+                io.emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
+              }
+
+              const result = await codingAgent.runOnExistingConversation(executionPrompt, {
+                stream: true,
+                onChunk: (chunk) => {
+                  io?.emit("chat:chunk", { content: chunk, conversationId });
+                },
+                onEvent: (event) => {
+                  io?.emit("chat:event", { ...event, conversationId });
+                },
+              });
+
+              // Emit completion event
+              if (io) {
+                io.emit("chat:complete", {
+                  response: `Plan execution finished.\n\n${result.response}`,
+                  conversationId
+                });
+              }
+              return;
+            }
+          } catch (projectError) {
+            console.warn("Could not load project for plan execution, falling back to regular agent:", projectError);
+          }
+        }
+
+        // Fallback to regular agent
+        const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+        if (!agent) {
+          throw new Error("Agent not available");
+        }
+
+        await agent.loadConversation(conversationId);
+
+        // Emit start event
+        if (io) {
+          io.emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
+        }
+
+        const result = await agent.run(executionPrompt, {
+          stream: true,
+          onChunk: (chunk) => {
+            io?.emit("chat:chunk", { content: chunk, conversationId });
+          },
+          onEvent: (event) => {
+            io?.emit("chat:event", { ...event, conversationId });
+          },
+        });
+
+        // Emit completion event
+        if (io) {
+          io.emit("chat:complete", {
+            response: result.response,
+            conversationId
+          });
+        }
+      } catch (error) {
+        console.error("Plan execution error:", error);
+        if (io) {
+          io.emit("chat:error", {
+            error: error instanceof Error ? error.message : String(error),
+            conversationId,
+          });
+        }
+      }
+    })().catch(console.error);
+
+    // Return immediately
     res.json(createApiResponse({
-      message: "Plan execution finished",
+      message: "Plan execution started",
       planId,
-      executionResult: result,
     }));
   } catch (error) {
     next(error);

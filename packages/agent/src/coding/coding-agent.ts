@@ -5,7 +5,7 @@ import { filesystemTool, gitTool, shellTool, skillsTool } from "@ducki/tools";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
-import type { AgentEventEmitter } from "../config/interfaces_types.js";
+import type { AgentEventEmitter, AgentRunOptions } from "../config/interfaces_types.js";
 import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
 
 const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
@@ -150,8 +150,11 @@ export class CodingAgent {
     return this.agent.loadConversation(conversationId);
   }
 
-  async runOnExistingConversation(prompt: string): Promise<{ response: string; result?: unknown }> {
-    return this.agent.run(prompt);
+  async runOnExistingConversation(
+    prompt: string,
+    options: AgentRunOptions = {}
+  ): Promise<{ response: string; result?: unknown }> {
+    return this.agent.run(prompt, options);
   }
 
   async run(goal: string, opts: CodingRunOptions = {}): Promise<CodingRunResult> {

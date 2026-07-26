@@ -40,6 +40,11 @@ function parseMessageMetadata(raw?: string | null): Record<string, unknown> | un
   }
 }
 
+// Step titles are free text (LLM/user authored) - escape before dropping them into a RegExp.
+function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function compareMessages(a: RenderedChatMessage, b: RenderedChatMessage): number {
   const aTime = Date.parse(a.timestamp);
   const bTime = Date.parse(b.timestamp);
@@ -430,17 +435,34 @@ export function ChatContainer() {
     setInput(`Verbessere diesen Plan: ${currentPlan.goal}\n\nBisheriger Plan: ${currentPlan.markdown || JSON.stringify(currentPlan)}`);
   };
 
+  const generateProjectNameFromGoal = (goal: string): string => {
+    // Extract meaningful words from the goal
+    const words = goal
+      .toLowerCase()
+      .replace(/[.,!?;:\(\)]/g, "")
+      .split(/\s+/)
+      .filter((w) => w.length > 3 && !["that", "with", "from", "create", "build"].includes(w))
+      .slice(0, 3);
+
+    if (words.length === 0) {
+      return `project-${Date.now()}`;
+    }
+
+    return words.join("-").slice(0, 50);
+  };
+
   const handlePlanExecution = async () => {
     if (!currentPlan) return;
     setPlanExecuting(true);
     setExecutionProgress(5);
     setExecutionStartMessageIndex(messages.length);
+    setStepStatuses({}); // Reset step statuses
 
     try {
       // Create a project for this plan execution if it doesn't exist
       let projectId: number | undefined;
       try {
-        const projectName = `plan-${new Date().getTime()}-${Math.random().toString(36).substr(2, 9)}`;
+        const projectName = generateProjectNameFromGoal(currentPlan.goal || currentPlan.title || "project");
         const created = await api.projects.create({
           name: projectName,
           description: currentPlan.goal || currentPlan.title,
@@ -464,21 +486,25 @@ export function ChatContainer() {
         projectId,
       });
 
+      // Plan execution started - keep panel open for live updates from WebSocket
+      // The agent runs asynchronously and sends updates via chat:event/chat:complete events
+      // Don't close the panel or stop tracking - wait for actual completion message
+
+      // Add a status message
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "event",
-          content: "Plan umgesetzt",
+          content: `Plan-Ausführung gestartet (${currentPlan.steps?.length ?? 0} Schritte)`,
           timestamp: new Date().toISOString(),
-          eventType: "tool_result",
-          eventData: { message: result?.message ?? "Execution finished", planId: currentPlan.id },
+          eventType: "iteration",
+          eventData: { message: result?.message ?? "Plan execution started", planId: currentPlan.id },
         },
       ]);
 
-      setExecutionProgress(100);
-      setShowPlanPanel(false);
-      setPlanExecuting(false);
+      setExecutionProgress(10); // Keep panel visible
+      // Don't close panel or stop tracking - wait for WebSocket completion events
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -512,6 +538,12 @@ export function ChatContainer() {
       setCurrentPlan(planData);
       setShowPlanPanel(true);
       setLastProcessedPlanId(lastPlanMessage.id);
+      // A fresh plan starts clean - without this, a still-mounted stepStatuses/progress
+      // from a previously executed plan would bleed into this one (steps re-indexed from
+      // 0 can collide and show as falsely "Erledigt" before anything has run).
+      setStepStatuses({});
+      setExecutionProgress(0);
+      setPlanExecuting(false);
     }
   };
 
@@ -519,73 +551,149 @@ export function ChatContainer() {
     detectPlanFromMessages(lastProcessedPlanId);
   }, [messages, lastProcessedPlanId]);
 
-  // Update execution progress as new events come in during plan execution
+  // Close plan panel and stop tracking when plan execution completes
+  useEffect(() => {
+    if (!planExecuting) return;
+
+    // Check if the last message is a completion message
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg) return;
+
+    // If we see a completion-like message or if isLoading stopped, finish execution
+    if (!isLoading && messages.length > executionStartMessageIndex) {
+      // Give it a moment to ensure all events have arrived
+      const timer = setTimeout(() => {
+        if (!isLoading) {
+          // Text-based step detection can miss the very last marker (e.g. the agent's
+          // closing summary doesn't repeat "Schritt N") - finalize explicitly so the UI
+          // never ends on a step still shown as "in Bearbeitung".
+          setStepStatuses((prev) => {
+            const stepCount = currentPlan?.steps?.length ?? 0;
+            const finalized: Record<number, StepStatus> = { ...prev };
+            for (let idx = 0; idx < stepCount; idx++) {
+              if (finalized[idx] !== "failed") {
+                finalized[idx] = "completed";
+              }
+            }
+            return finalized;
+          });
+          setExecutionProgress(100);
+          setPlanExecuting(false);
+          // Keep panel open for 2 seconds to show completion, then close
+          const closeTimer = setTimeout(() => {
+            setShowPlanPanel(false);
+          }, 2000);
+          return () => clearTimeout(closeTimer);
+        }
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [planExecuting, isLoading, messages, executionStartMessageIndex, currentPlan?.steps]);
+
+  // Live progress + per-step status while a plan executes, combining two signals:
+  //
+  // 1. Tool usage (primary, deterministic): each plan step carries a "Benoetigte Tools"
+  //    hint (currentPlan.steps[i].tools). Real tool_call/tool_result events emitted while
+  //    the agent runs carry the actual tool name(s) invoked - matching those against each
+  //    step's hint tells us which step is active without depending on the LLM narrating
+  //    "Schritt N" in prose, which it often just doesn't do.
+  // 2. Explicit "Schritt N" / step-title mentions in the agent's own streamed text
+  //    (fallback for steps whose tool hint doesn't distinguish them from a neighbor).
+  //
+  // Both run over the live event/chunk stream (chat:event messages plus the in-flight
+  // streamingContent), not just a settled message count, so the UI updates as things happen.
   useEffect(() => {
     if (!planExecuting || executionStartMessageIndex < 0 || !currentPlan?.steps) return;
 
-    const newMessagesCount = messages.length - executionStartMessageIndex;
-    const totalSteps = currentPlan.steps.length;
+    const steps = currentPlan.steps;
+    const stepCount = steps.length;
+    if (stepCount === 0) return;
 
-    // Map message count to progress: 15% at start, 85% as we get events, 100% at finish
-    // Each step event roughly represents progress
-    let progress = 15 + Math.min(70, (newMessagesCount / Math.max(1, totalSteps * 2)) * 70);
+    const executionMessages = messages.slice(executionStartMessageIndex);
 
-    // If we're still loading (not finished), cap at 95%
-    if (isLoading) {
-      progress = Math.min(95, progress);
-    }
+    // --- Signal 1: tool usage vs. each step's declared tool hint ---
+    const stepToolSets = steps.map((step) => new Set((step.tools ?? []).map((tool) => tool.toLowerCase())));
+    let toolActiveStep = -1;
+    const toolFailedSteps = new Set<number>();
+    for (const msg of executionMessages) {
+      if (msg.eventType !== "tool_call" && msg.eventType !== "tool_result") continue;
+      const data = msg.eventData as { tools?: string[]; toolName?: string; success?: boolean } | undefined;
+      const toolNames = (data?.tools ?? (data?.toolName ? [data.toolName] : [])).map((t) => t.toLowerCase());
+      if (toolNames.length === 0) continue;
 
-    setExecutionProgress(Math.round(progress));
-  }, [messages, planExecuting, executionStartMessageIndex, isLoading, currentPlan?.steps]);
+      const searchFrom = Math.max(toolActiveStep, 0);
+      const matchIdx = stepToolSets.findIndex(
+        (toolSet, idx) => idx >= searchFrom && toolNames.some((t) => toolSet.has(t))
+      );
+      if (matchIdx === -1) continue;
 
-  // Update step statuses as plan execution progresses
-  useEffect(() => {
-    if (!planExecuting || !currentPlan?.steps) return;
-
-    const newStatuses: Record<number, StepStatus> = {};
-    const stepCount = currentPlan.steps.length;
-    const recentMessages = messages.slice(executionStartMessageIndex).map((m) => m.content).join("\n").toLowerCase();
-
-    // Find which step is currently being worked on by looking for step numbers
-    let maxStepFound = -1;
-    for (let i = 0; i < stepCount; i++) {
-      const stepNum = i + 1;
-      if (recentMessages.includes(`${stepNum}.`)) {
-        maxStepFound = i;
+      toolActiveStep = matchIdx;
+      if (msg.eventType === "tool_result") {
+        if (data?.success === false) toolFailedSteps.add(matchIdx);
+        else toolFailedSteps.delete(matchIdx);
       }
     }
 
-    // Mark all steps
+    // --- Signal 2: explicit textual step markers (word-bounded to avoid false hits like
+    // bullet numbers or version strings tripping a bare "1.") ---
+    const liveText = [...executionMessages.map((m) => m.content), streamingContent].join("\n").toLowerCase();
+    const completionWords = ["erledigt", "abgeschlossen", "done", "completed", "finished"];
+    const failureWords = ["fehlgeschlagen", "gescheitert", "failed", "fehler"];
+    const textMentionedSteps = new Set<number>();
+    const textCompletedSteps = new Set<number>();
+    const textFailedSteps = new Set<number>();
+
+    steps.forEach((step, idx) => {
+      const stepNum = idx + 1;
+      const markerPattern = new RegExp(`\\bschritt\\s*${stepNum}\\b|\\bstep\\s*${stepNum}\\b`);
+      const titlePattern = step.title ? new RegExp(`\\b${escapeForRegExp(step.title.toLowerCase())}\\b`) : null;
+      if (!markerPattern.test(liveText) && !titlePattern?.test(liveText)) return;
+      textMentionedSteps.add(idx);
+
+      // Only look at the text between this step's own marker and the next one, so a later
+      // step's "erledigt" doesn't retroactively mark an earlier, still-running step done.
+      const nextMarkerPattern = new RegExp(`\\bschritt\\s*${stepNum + 1}\\b|\\bstep\\s*${stepNum + 1}\\b`);
+      const afterMarker = liveText.split(markerPattern)[1] ?? liveText;
+      const section = afterMarker.split(nextMarkerPattern)[0] ?? afterMarker;
+
+      if (completionWords.some((w) => section.includes(w))) textCompletedSteps.add(idx);
+      else if (failureWords.some((w) => section.includes(w))) textFailedSteps.add(idx);
+    });
+    const maxTextMentionedStep = Math.max(-1, ...Array.from(textMentionedSteps));
+
+    // Neither signal fires for a single generic step (no tool hint, no "Schritt N" text) -
+    // default to the first not-yet-signaled step so it reads as "in progress" instead of
+    // sitting on "pending" for the whole run with no indication anything is happening.
+    const signaledStep = Math.max(toolActiveStep, maxTextMentionedStep);
+    const activeStep = signaledStep >= 0 ? signaledStep : 0;
+
+    // --- Merge: whichever signal got further along wins for each step ---
+    const newStatuses: Record<number, StepStatus> = {};
     for (let idx = 0; idx < stepCount; idx++) {
-      if (idx < maxStepFound) {
-        // Steps before current are likely completed
+      const isDone = idx < activeStep || textCompletedSteps.has(idx);
+      const isFailed = toolFailedSteps.has(idx) || textFailedSteps.has(idx);
+      const isActive = idx === activeStep;
+
+      if (isDone) {
         newStatuses[idx] = "completed";
-      } else if (idx === maxStepFound) {
-        // Current step - check if it's completed
-        if (
-          recentMessages.includes("erledigt") ||
-          recentMessages.includes("done") ||
-          recentMessages.includes("completed") ||
-          recentMessages.includes("abgeschlossen") ||
-          recentMessages.includes("✓")
-        ) {
-          newStatuses[idx] = "completed";
-        } else if (
-          recentMessages.includes("fehler") ||
-          recentMessages.includes("error") ||
-          recentMessages.includes("failed")
-        ) {
-          newStatuses[idx] = "failed";
-        } else {
-          newStatuses[idx] = "in_progress";
-        }
+      } else if (isFailed) {
+        newStatuses[idx] = "failed";
+      } else if (isActive) {
+        newStatuses[idx] = "in_progress";
       } else {
         newStatuses[idx] = "pending";
       }
     }
-
     setStepStatuses(newStatuses);
-  }, [messages, planExecuting, currentPlan?.steps, executionStartMessageIndex]);
+
+    const completedCount = Object.values(newStatuses).filter((s) => s === "completed").length;
+    const hasInProgress = Object.values(newStatuses).some((s) => s === "in_progress");
+    // 10% for "started", the remaining 85% split across steps (half credit for the one
+    // currently in progress so the bar keeps creeping forward between step markers).
+    const stepFraction = (completedCount + (hasInProgress ? 0.5 : 0)) / stepCount;
+    const progress = 10 + stepFraction * 85;
+    setExecutionProgress(Math.round(isLoading ? Math.min(95, progress) : progress));
+  }, [messages, streamingContent, planExecuting, currentPlan?.steps, executionStartMessageIndex, isLoading]);
 
 
   const deleteConversation = useMutation({
