@@ -474,7 +474,7 @@ export function CodingWorkspace() {
       text,
     ].join("\n");
 
-    sendMessage(contextPrefix, undefined, planMode ? "plan" : undefined);
+    sendMessage(contextPrefix, undefined, planMode ? "plan" : undefined, text);
     setChatInput("");
     setShowSelector(false);
     setIsEnsuringConversation(false);
@@ -525,7 +525,9 @@ export function CodingWorkspace() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[320px,1fr] gap-4 h-[calc(100%-108px)] min-h-[620px]">
+      {/* 320px left almost no room for the agent's code output once padding and the
+          message frame were subtracted; 420px fits a typical code line without wrapping. */}
+      <div className="grid grid-cols-1 xl:grid-cols-[420px,1fr] gap-4 h-[calc(100%-108px)] min-h-[620px]">
         <section className="card overflow-hidden flex flex-col">
           {selectedProject ? (
             <div className="min-h-0 flex-1 flex flex-col space-y-2">
@@ -554,7 +556,7 @@ export function CodingWorkspace() {
                       onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
                     />
                   ) : (
-                    <MessageRow key={msg.id} msg={msg} compactMode t={t} />
+                    <MessageRow key={msg.id} msg={msg} compactMode dense t={t} />
                   )
                 )}
                 {isLoading && <StreamingRow compactMode streamingContent={streamingContent} t={t} />}

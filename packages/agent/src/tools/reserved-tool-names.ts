@@ -21,4 +21,5 @@ export const RESERVED_TOOL_NAMES = new Set([
   "workflow",
   "cronjob",
   "tool_factory",
+  "wiki",
 ]);

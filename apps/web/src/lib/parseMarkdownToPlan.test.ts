@@ -87,6 +87,33 @@ describe("parseMarkdownToPlan", () => {
     expect(parseMarkdownToPlan("")).toBeNull();
   });
 
+  // formatPlanAsMarkdown (packages/agent) renders ASCII umlauts - the parser has to
+  // accept that exact shape, not only the pretty-printed fixture above.
+  test("parses the ASCII-umlaut markdown the plan renderer actually emits", () => {
+    const markdown = `## Plan: Login reparieren
+
+**Geschaetzte Komplexitaet:** Hoch
+
+1. **Fehler reproduzieren**
+   Login-Flow lokal nachstellen
+   _Benoetigte Tools: shell, filesystem_`;
+
+    const result = parseMarkdownToPlan(markdown);
+    expect(result?.complexity).toBe(5);
+    expect(result?.steps?.[0]?.tools).toEqual(["shell", "filesystem"]);
+    expect(result?.steps?.[0]?.description).toBe("Login-Flow lokal nachstellen");
+  });
+
+  test("ignores complexity words that only appear in step text", () => {
+    const markdown = `## Plan: Upload Feature
+**Komplexität:** Niedrig
+1. **Datei hochladen**
+   Datei per Formular hochladen`;
+
+    const result = parseMarkdownToPlan(markdown);
+    expect(result?.complexity).toBe(1);
+  });
+
   test("handles steps without tools", () => {
     const markdown = `## Plan: Simple
 1. **Step One**

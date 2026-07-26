@@ -32,6 +32,14 @@ export class ConversationCompressor {
   }
 
   /**
+   * Truncate message content to prevent context overflow during compression.
+   */
+  private truncateMessage(content: string, maxChars: number = 500): string {
+    if (content.length <= maxChars) return content;
+    return content.substring(0, maxChars) + "...[truncated]";
+  }
+
+  /**
    * Summarize a range of messages into a brief summary.
    */
   async summarizeRange(messages: LLMMessage[], startIndex: number, endIndex: number): Promise<ConversationSummary> {
@@ -41,7 +49,7 @@ export class ConversationCompressor {
 
     const rangMessages = messages.slice(startIndex, endIndex + 1);
     const conversationText = rangMessages
-      .map((m) => `[${m.role}]: ${typeof m.content === "string" ? m.content : ""}`)
+      .map((m) => `[${m.role}]: ${this.truncateMessage(typeof m.content === "string" ? m.content : "")}`)
       .join("\n\n");
 
     try {
@@ -52,7 +60,7 @@ export class ConversationCompressor {
             "Compress the following conversation into 2-3 sentences. Preserve key decisions, accomplishments, and context.",
         },
         { role: "user", content: conversationText },
-      ]);
+      ], { maxTokens: 500 });
 
       const decisionsResponse = await this.provider.generate([
         {
@@ -61,7 +69,7 @@ export class ConversationCompressor {
             "Extract 3-5 key decisions or important points from this conversation. Return as JSON array of strings.",
         },
         { role: "user", content: conversationText },
-      ]);
+      ], { maxTokens: 300 });
 
       let keyDecisions: string[] = [];
       try {

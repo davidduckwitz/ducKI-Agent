@@ -44,6 +44,22 @@ export interface CodingRunResult {
   summary: string;
   attempts: number;
   conversationId?: number;
+  /** The command whose exit code decided `success`, or undefined if none could be
+   *  determined - in that case `success` only means "the agent finished without
+   *  throwing", not "the change was proven to work". */
+  verifyCommand?: string;
+  /** True only when a verification command actually ran and passed. */
+  verified: boolean;
+}
+
+/** Verification output is fed back into the next prompt; a full failing build log would
+ *  otherwise crowd out the goal and the agent's own context. Keeps head and tail because
+ *  the first error and the summary line are both diagnostic. */
+function truncateVerifyOutput(output: string, maxChars = 4000): string {
+  if (output.length <= maxChars) return output;
+  const head = output.slice(0, Math.floor(maxChars * 0.6));
+  const tail = output.slice(-Math.floor(maxChars * 0.4));
+  return `${head}\n[... ${output.length - maxChars} Zeichen gekuerzt ...]\n${tail}`;
 }
 
 /**
@@ -55,9 +71,9 @@ export interface CodingRunResult {
  */
 export class CodingAgent {
   private readonly agent: Agent;
+  private readonly eventEmitter: AgentEventEmitter | undefined;
   private readonly defaultMaxAttempts: number;
   private readonly sandboxRoot: string | undefined;
-  private skillContent: string = "";
 
   constructor(
     provider: LLMProvider,
@@ -67,6 +83,7 @@ export class CodingAgent {
   ) {
     this.defaultMaxAttempts = Math.max(1, options.maxAttempts ?? 4);
     this.sandboxRoot = options.sandboxRoot;
+    this.eventEmitter = eventEmitter;
 
     const basePrompt = options.systemPrompt ?? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}`;
 
@@ -150,28 +167,124 @@ export class CodingAgent {
 
     let lastSummary = "";
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const prompt = attempt === 1 ? goal : this.buildFollowUpPrompt(goal, lastSummary);
+      this.emit("iteration", `Coding-Versuch ${attempt}/${maxAttempts}`, {
+        attempt,
+        maxAttempts,
+        verifyCommand,
+      });
+
+      const prompt =
+        attempt === 1
+          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill)
+          : this.buildFollowUpPrompt(goal, lastSummary);
       const runResult = await this.agent.run(prompt);
       lastSummary = runResult.response;
 
       if (!verifyCommand) {
-        return { success: true, summary: lastSummary, attempts: attempt, conversationId };
+        // Nothing to check against - report honestly that the result is unverified
+        // instead of letting "no check" masquerade as a passing check.
+        this.emit("decision", "Keine Verifikation moeglich - Ergebnis ist ungeprueft.", { attempt });
+        return { success: true, verified: false, summary: lastSummary, attempts: attempt, conversationId };
       }
 
-      const verifyResult = await this.agent.executor.execute("shell", { command: verifyCommand });
+      const verifyResult = await this.agent.executor.execute("shell", {
+        command: verifyCommand,
+        // Without an explicit cwd the shell tool falls back to the server process's own
+        // directory, so a sandboxed run would verify the wrong project entirely.
+        ...(this.sandboxRoot ? { cwd: this.sandboxRoot } : {}),
+      });
       if (verifyResult.success) {
-        return { success: true, summary: lastSummary, attempts: attempt, conversationId };
+        this.emit("decision", `Verifikation "${verifyCommand}" erfolgreich.`, { attempt, verifyCommand });
+        return {
+          success: true,
+          verified: true,
+          summary: lastSummary,
+          attempts: attempt,
+          conversationId,
+          verifyCommand,
+        };
       }
 
-      const verifyError = verifyResult.error ?? JSON.stringify(verifyResult.data ?? "");
+      const verifyError = truncateVerifyOutput(verifyResult.error ?? JSON.stringify(verifyResult.data ?? ""));
+      this.emit("decision", `Verifikation "${verifyCommand}" fehlgeschlagen.`, {
+        attempt,
+        verifyCommand,
+        error: verifyError.slice(0, 500),
+      });
       lastSummary = `${lastSummary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`;
 
       if (attempt === maxAttempts) {
-        return { success: false, summary: lastSummary, attempts: attempt, conversationId };
+        return {
+          success: false,
+          verified: false,
+          summary: lastSummary,
+          attempts: attempt,
+          conversationId,
+          verifyCommand,
+        };
       }
     }
 
-    return { success: false, summary: lastSummary, attempts: maxAttempts, conversationId };
+    return {
+      success: false,
+      verified: false,
+      summary: lastSummary,
+      attempts: maxAttempts,
+      conversationId,
+      ...(verifyCommand ? { verifyCommand } : {}),
+    };
+  }
+
+  private emit(type: "iteration" | "decision", message: string, data?: Record<string, unknown>): void {
+    try {
+      this.eventEmitter?.emitEvent({ type, message, data, timestamp: new Date().toISOString() });
+    } catch {
+      // Event delivery is best-effort telemetry - never let it abort a coding run.
+    }
+  }
+
+  /**
+   * Turns a bare goal into an explicit phase contract. Previously the goal string was
+   * handed to the agent verbatim, so "explore before editing" and "this exact command
+   * decides success" existed only in the system directive - the agent had no way to know
+   * which command its work would actually be judged by.
+   */
+  private buildInitialPrompt(goal: string, verifyCommand: string | undefined, detectedSkill: string | undefined): string {
+    const parts: string[] = [`Goal: ${goal}`, ""];
+
+    if (this.sandboxRoot) {
+      parts.push(`Project root: ${this.sandboxRoot} - all paths and commands are relative to it.`, "");
+    }
+
+    parts.push(
+      "Work in these phases, and state which phase you are in:",
+      "1. EXPLORE - locate the relevant files and read them before changing anything.",
+      "2. PLAN - name the exact files you will edit and what changes each one needs.",
+      "3. EDIT - make minimal, targeted edits (prefer the filesystem tool's \"edit\" action).",
+      "4. VERIFY - re-read what you changed and run the verification command below.",
+      "5. REPORT - list the files you changed and what the verification showed."
+    );
+
+    if (verifyCommand) {
+      parts.push(
+        "",
+        `Verification command: \`${verifyCommand}\`. Its exit code decides whether this run counts as successful, so make it pass - do not declare success without running it.`
+      );
+    } else {
+      parts.push(
+        "",
+        "No verification command could be determined for this project. Pick the most appropriate check yourself (build, test, or type-check) via the shell tool and state which one you used."
+      );
+    }
+
+    if (detectedSkill) {
+      parts.push(
+        "",
+        `A "${detectedSkill}" skill looks relevant for this goal - load it via the skill tool before phase 3 and follow it if it applies.`
+      );
+    }
+
+    return parts.join("\n");
   }
 
   private buildFollowUpPrompt(goal: string, previousSummaryWithVerification: string): string {

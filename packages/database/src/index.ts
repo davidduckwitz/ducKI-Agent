@@ -1,10 +1,11 @@
 import { createClient, type Client } from "@libsql/client";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
-import { eq, desc, and, lt } from "drizzle-orm";
+import { eq, desc, and, lt, or, isNull } from "drizzle-orm";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
+import { scoreKeywordRelevance } from "@ducki/shared";
 import * as schema from "./schema.js";
 import { computeNextRun } from "./cron.js";
 import type {
@@ -308,51 +309,50 @@ export class DatabaseService {
     await this.db.delete(schema.memories).where(eq(schema.memories.id, id)).run();
   }
 
+  /**
+   * Relevance search over memories.
+   *
+   * `conversationId` ranks, it does not filter: matches from that conversation are
+   * boosted, but memories learned in other conversations still surface. Long-term memory
+   * is global everywhere else in this codebase (getKnowledgePool reads across all
+   * conversations), and only this path filtered on an exact conversation match - so the
+   * agent's own retrieval could only ever return things it had learned inside the very
+   * chat it was already in, which is exactly when it needs memory least.
+   *
+   * Pass `scopeToConversation` to get the old hard-scoped behaviour.
+   */
   async searchMemories(
     keywords: string[],
     conversationId?: number,
     type?: string,
     status: string = "approved",
-    limit: number = 10
+    limit: number = 10,
+    scopeToConversation: boolean = false
   ): Promise<MemorySelect[]> {
     const conditions = [];
-    if (conversationId !== undefined) conditions.push(eq(schema.memories.conversationId, conversationId));
+    if (conversationId !== undefined && scopeToConversation) {
+      conditions.push(
+        or(eq(schema.memories.conversationId, conversationId), isNull(schema.memories.conversationId))
+      );
+    }
     if (type !== undefined) conditions.push(eq(schema.memories.type, type));
     if (status !== undefined) conditions.push(eq(schema.memories.status, status));
 
-    let memories = conditions.length > 0
+    const memories = conditions.length > 0
       ? await this.db.select().from(schema.memories).where(and(...conditions)).all()
       : await this.db.select().from(schema.memories).all();
 
-    const scored = memories
+    return memories
       .map(m => ({
         entry: m,
-        score: this.scoreMemoryRelevance(m.content, keywords),
+        // Conversation-local memories win ties against global ones of equal relevance.
+        score: scoreKeywordRelevance(m.content, keywords)
+          + (conversationId !== undefined && m.conversationId === conversationId ? 0.15 : 0),
       }))
       .filter(s => s.score > 0)
       .sort((a, b) => (b.score - a.score) || (b.entry.importance - a.entry.importance))
       .slice(0, limit)
       .map(s => s.entry);
-
-    return scored;
-  }
-
-  private scoreMemoryRelevance(content: string, keywords: string[]): number {
-    if (keywords.length === 0) return 0;
-
-    const normalized = content.toLowerCase();
-    let score = 0;
-
-    for (const keyword of keywords) {
-      const keywordLower = keyword.toLowerCase().trim();
-      if (!keywordLower) continue;
-
-      if (normalized.includes(keywordLower)) {
-        score += 1;
-      }
-    }
-
-    return score;
   }
 
   // ============================================================

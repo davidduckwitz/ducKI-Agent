@@ -1,10 +1,41 @@
-const BASE_URL = "/api";
+// Determine base URL: use /api for dev server, or localhost:3001 as fallback for Electron
+function getBaseUrl(): string {
+  // In Electron, use localhost fallback; in browser, try /api first
+  const isElectron = typeof window !== 'undefined' && (window as any).electron;
+
+  if (isElectron) {
+    return 'http://localhost:3001/api';
+  }
+
+  // In development/production browser, use relative /api path
+  return '/api';
+}
+
+const BASE_URL = getBaseUrl();
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  let res: Response;
+
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+    });
+  } catch (error) {
+    // If /api fails, try localhost fallback
+    if (!BASE_URL.includes('localhost')) {
+      try {
+        res = await fetch(`http://localhost:3001/api${path}`, {
+          headers: { "Content-Type": "application/json" },
+          ...options,
+        });
+      } catch {
+        throw error;
+      }
+    } else {
+      throw error;
+    }
+  }
 
   if (!res.ok) {
     const error = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
@@ -175,7 +206,19 @@ export const api = {
     update: (id: number, data: Record<string, unknown>) =>
       request<unknown>(`/plans/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: number) => request<{ deleted: boolean; id: number }>(`/plans/${id}`, { method: "DELETE" }),
-    execute: (id: number) => request<{ message: string; planId: number }>(`/plans/${id}/execute`, { method: "POST" }),
+    execute: (
+      id: number | undefined,
+      payload: {
+        goal: string;
+        steps: Array<{ title: string; description: string; tools?: string[] }>;
+        markdown?: string;
+        conversationId?: number;
+      }
+    ) =>
+      request<{ message: string; planId: number | null; executionResult?: unknown }>(
+        `/plans/${id ?? "draft"}/execute`,
+        { method: "POST", body: JSON.stringify(payload) }
+      ),
     importMarkdown: (markdown: string) =>
       request<unknown>("/plans/import/markdown", { method: "POST", body: JSON.stringify({ markdown }) }),
   },

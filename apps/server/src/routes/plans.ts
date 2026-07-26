@@ -83,61 +83,85 @@ plansRouter.delete("/:id", async (req, res, next) => {
   }
 });
 
+interface ExecutePlanBody {
+  goal?: string;
+  steps?: Array<{ title?: string; description?: string; tools?: string[] }>;
+  markdown?: string;
+  conversationId?: number;
+}
+
 /**
- * Execute a plan: creates project, workflow, and tasks from plan structure,
- * then runs them iteratively with LLM validation and progress tracking
+ * Execute a plan: hands the agent the plan's actual goal and steps, then runs it on the
+ * originating conversation so the execution continues the same thread the plan was
+ * created in. The plan content travels in the request body because plans are not
+ * persisted server-side yet - the id alone identifies nothing the agent could resolve.
  */
 plansRouter.post("/:id/execute", async (req, res, next) => {
   try {
-    const agent = req.app.locals["agent"] as Agent;
-    const conversationId = (req.body as { conversationId?: number }).conversationId;
+    const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
+    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
 
     if (!agent) {
       res.status(500).json(createApiError("Agent not available"));
       return;
     }
 
-    const planId = Number(req.params.id);
-    if (!Number.isFinite(planId) || planId <= 0) {
-      res.status(400).json(createApiError("Invalid plan ID"));
+    const body = (req.body ?? {}) as ExecutePlanBody;
+    const rawId = Number(req.params.id);
+    const planId = Number.isFinite(rawId) && rawId > 0 ? rawId : null;
+
+    const goal = String(body.goal ?? "").trim();
+    const steps = (Array.isArray(body.steps) ? body.steps : [])
+      .map((step) => ({
+        title: String(step?.title ?? "").trim(),
+        description: String(step?.description ?? "").trim(),
+        tools: Array.isArray(step?.tools) ? step.tools.map(String) : [],
+      }))
+      .filter((step) => step.title.length > 0);
+
+    if (!goal) {
+      res.status(400).json(createApiError("goal is required to execute a plan"));
+      return;
+    }
+    if (steps.length === 0) {
+      res.status(400).json(createApiError("steps is required and must contain at least one step"));
       return;
     }
 
-    const executionPrompt = `
-**PLAN-AUSFÜHRUNG - STRUKTURIERT**
+    const stepList = steps
+      .map((step, index) => {
+        const toolHint = step.tools.length > 0 ? `\n   Vorgeschlagene Tools: ${step.tools.join(", ")}` : "";
+        const description = step.description ? `\n   ${step.description}` : "";
+        return `${index + 1}. ${step.title}${description}${toolHint}`;
+      })
+      .join("\n");
 
-Deine Aufgabe ist es, einen geplanten Workflow komplett abzuarbeiten.
+    const executionPrompt = [
+      "**PLAN-AUSFÜHRUNG**",
+      "",
+      "Setze den folgenden, bereits vom Nutzer bestätigten Plan jetzt tatsächlich um.",
+      "",
+      `ZIEL: ${goal}`,
+      "",
+      "SCHRITTE:",
+      stepList,
+      "",
+      "ARBEITSWEISE:",
+      "- Arbeite die Schritte in der angegebenen Reihenfolge ab und respektiere Abhängigkeiten.",
+      "- Führe pro Schritt die tatsächlich nötigen Tools aus; erfinde keine Ergebnisse.",
+      "- Prüfe nach jedem Schritt das Resultat. Bei Fehlern: Ursache aus der echten Fehlermeldung ableiten und maximal 3x gezielt neu versuchen.",
+      "- Wenn ein Schritt endgültig scheitert, brich ab und melde, welche Schritte fertig sind und welcher blockiert.",
+      "- Abschließend: kurze Zusammenfassung pro Schritt (erledigt / übersprungen / fehlgeschlagen) inklusive Verifikation.",
+    ].join("\n");
 
-SCHRITTE (MANDATORY):
-1. **PROJEKT ERSTELLEN**: Erstelle ein Projekt mit Status "executing"
-2. **WORKFLOW ERSTELLEN**: Für jeden Plan-Schritt einen Workflow-Node
-3. **TASKS ERSTELLEN**: Für jeden Schritt eine Task mit konkretem Ziel
-4. **AUSFÜHRUNG STARTEN**:
-   - Führe Tasks der Reihe nach aus
-   - Nach jedem Task: Prüfe Erfolg/Fehler
-   - Bei Fehler: Retry bis zu 3x
-5. **PROGRESS TRACKING**: Nach jedem Task den Progress anzeigen
-6. **VALIDIERUNG**: Am Ende alle Results kontrollieren
-7. **FINALISIERUNG**: Projekt auf "completed" setzen
-
-KONTEXT:
-- Plan ID: ${planId}
-- Conversation: ${conversationId || "keine"}
-- Timeout: 30 Minuten max
-- Retry: 3 Versuche pro Task
-
-WICHTIG:
-- Nutze /create-project, /create-workflow, /create-task Tools
-- Nach jedem Schritt Status melden
-- Bei Fehler: Fehlerdetails anzeigen und neu versuchen
-- Abbruch nur bei kritischen Fehlern
-
-Starte jetzt mit: PROJEKT ERSTELLEN`;
+    if (body.conversationId && Number.isFinite(body.conversationId)) {
+      await agent.loadConversation(body.conversationId);
+    }
 
     const result = await agent.run(executionPrompt);
 
     res.json(createApiResponse({
-      message: "Plan execution started",
+      message: "Plan execution finished",
       planId,
       executionResult: result,
     }));

@@ -1,6 +1,12 @@
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import type { LLMMessage } from "@ducki/shared";
+import { extractKeywords, scoreKeywordRelevance, tokenizeText } from "@ducki/shared";
+
+/** When true (the default), memories the agent learns on its own become immediately
+ *  recallable instead of waiting in a review queue. Set to "false" to keep every
+ *  automatic learning behind manual approval in the Memory UI. */
+const AUTO_APPROVE_SETTING = "MEMORY_AUTO_APPROVE";
 
 export interface MemoryEntry {
   id?: number;
@@ -66,9 +72,38 @@ export class MemorySystem {
       return false;
     }
 
-    await this.db.addMemory({ content: normalized, importance, type: "long-term", conversationId, status });
-    this.logger.debug("Long-term memory added", { content: normalized.slice(0, 60), importance, status });
+    const effectiveStatus = await this.resolveLearningStatus(status);
+    await this.db.addMemory({
+      content: normalized,
+      importance,
+      type: "long-term",
+      conversationId,
+      status: effectiveStatus,
+    });
+    this.logger.debug("Long-term memory added", {
+      content: normalized.slice(0, 60),
+      importance,
+      status: effectiveStatus,
+    });
     return true;
+  }
+
+  /**
+   * Every retrieval path filters on status "approved". Writing automatic learnings as
+   * "pending" therefore meant the agent could never read back anything it taught itself -
+   * it filled a review queue nobody had to empty for the agent to keep working, so from
+   * the agent's point of view it simply never learned. Auto-approval is on by default and
+   * can be turned off for setups that genuinely want a human in the loop.
+   */
+  private async resolveLearningStatus(requested: "approved" | "pending"): Promise<"approved" | "pending"> {
+    if (requested === "approved") return "approved";
+    try {
+      const raw = (await this.db.getSetting(AUTO_APPROVE_SETTING))?.trim().toLowerCase();
+      if (raw === "false" || raw === "0" || raw === "no" || raw === "off") return "pending";
+    } catch {
+      // Setting unavailable - fall through to the default, which keeps learning working.
+    }
+    return "approved";
   }
 
   async rememberFromSuccessfulTask(
@@ -224,12 +259,22 @@ export class MemorySystem {
       .slice(0, Math.floor(this.maxShortTerm / 2));
   }
 
+  /**
+   * Relevance lookup for a free-text query. Previously a whole-query substring match,
+   * which only ever hit when a memory happened to contain the user's exact wording -
+   * for anything longer than a single word that is effectively never.
+   */
   async getRelevantContext(query: string, limit = 5): Promise<string[]> {
+    const keywords = extractKeywords(query);
+    if (keywords.length === 0) return [];
+
     const longTerm = await this.db.getMemories(undefined, "long-term", "approved");
     return longTerm
-      .filter((m) => m.content.toLowerCase().includes(query.toLowerCase()))
+      .map((m) => ({ content: m.content, score: scoreKeywordRelevance(m.content, keywords) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
       .slice(0, limit)
-      .map((m) => m.content);
+      .map((item) => item.content);
   }
 
   async buildSystemContext(conversationId?: number): Promise<string> {
@@ -330,8 +375,11 @@ export class MemorySystem {
     if (!a || !b) return 0;
     if (a === b) return 1;
 
-    const aTokens = new Set(a.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 2));
-    const bTokens = new Set(b.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 2));
+    // Unicode-aware tokenization: the previous /[^a-z0-9]+/ split treated every umlaut as
+    // a word boundary, so "Ausführung" became ["ausf","hrung"] and two German memories
+    // saying the same thing looked unrelated - defeating duplicate detection.
+    const aTokens = new Set(tokenizeText(a, { removeStopwords: false }));
+    const bTokens = new Set(tokenizeText(b, { removeStopwords: false }));
     if (aTokens.size === 0 || bTokens.size === 0) return 0;
 
     let intersection = 0;

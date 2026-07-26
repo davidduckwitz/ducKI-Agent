@@ -32,6 +32,7 @@ import { createMcpTool } from "./lib/mcp-tool.js";
 import { UpdateManager } from "./lib/update-manager.js";
 import { setupDefaultCronjobs } from "./lib/default-cronjobs.js";
 import { LlmWikiService } from "./lib/llm-wiki-service.js";
+import { createWikiTool } from "./lib/wiki-tool.js";
 import { PromptManager } from "./lib/prompt-manager.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
@@ -335,7 +336,8 @@ function buildAgentFactory(
 	providerRef: { current: ReturnType<typeof createProvider> },
 	db: Awaited<ReturnType<typeof getDatabase>>,
 	workflowEngineRef: { current: WorkflowEngine },
-	runtimeTools: ToolExecutor[]
+	runtimeTools: ToolExecutor[],
+	wikiServiceRef: { current?: LlmWikiService }
 ) {
 	return () => {
 		const agent = new Agent(providerRef.current, db);
@@ -345,6 +347,7 @@ function buildAgentFactory(
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
 		agent.executor.registerTool(createCronjobManagementTool(db));
 		agent.executor.registerTool(createToolFactoryTool(db, agent.executor));
+		agent.executor.registerTool(createWikiTool(() => wikiServiceRef.current));
 		for (const tool of createWorkflowTools(db)) {
 			agent.executor.registerTool(tool);
 		}
@@ -537,7 +540,10 @@ async function bootstrap(): Promise<void> {
 	for (const tool of createWorkflowTools(db)) {
 		workflowExecutor.registerTool(tool);
 	}
-	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools);
+	// Filled in a few lines below, once the wiki service exists - the agent factory only
+	// dereferences it when a run actually calls the wiki tool.
+	const wikiServiceRef: { current?: LlmWikiService } = {};
+	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef);
 	const defaultAgent = createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
 	cronjobManager.start();
@@ -549,6 +555,8 @@ async function bootstrap(): Promise<void> {
 	await promptManager.initialize();
 	const wikiService = new LlmWikiService(db, logger.child("LlmWikiService"));
 	await wikiService.start();
+	wikiServiceRef.current = wikiService;
+	workflowExecutor.registerTool(createWikiTool(() => wikiServiceRef.current));
 
 	app.locals["db"] = db;
 	app.locals["logger"] = logger;

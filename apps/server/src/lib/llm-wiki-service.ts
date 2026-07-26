@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node
 import { extname, join, relative, resolve } from "node:path";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
+import { buildMatchSnippet, scoreKeywordRelevance, tokenizeText } from "@ducki/shared";
 
 const ALLOWED_EXTENSIONS = new Set([".md", ".txt", ".json"]);
 
@@ -65,11 +66,16 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Search tokens for wiki content.
+ *
+ * Stopwords are kept out (they appear in every entry and made every document look
+ * equally relevant) and umlauts stay inside their word instead of splitting it - the
+ * previous /[^a-z0-9_-]+/ split turned "Ausführung" into ["ausf","hrung"], so a German
+ * wiki was largely unsearchable with German queries.
+ */
 function tokenize(value: string): string[] {
-  return normalizeWhitespace(value)
-    .toLowerCase()
-    .split(/[^a-z0-9_-]+/)
-    .filter((token) => token.length >= 2);
+  return tokenizeText(normalizeWhitespace(value));
 }
 
 function chunkContent(content: string, chunkSize: number, overlap: number): string[] {
@@ -315,8 +321,8 @@ export class LlmWikiService {
   async search(query: string, limit = 20, includeCandidates = false): Promise<WikiSearchResult[]> {
     const normalized = query.trim();
     if (!normalized) return [];
-    const queryTokens = new Set(tokenize(normalized));
-    if (queryTokens.size === 0) return [];
+    const queryTokens = Array.from(new Set(tokenize(normalized)));
+    if (queryTokens.length === 0) return [];
 
     const entries = await this.db.listLlmWikiEntries(3000);
     const scoped = entries.filter((entry) => {
@@ -328,24 +334,25 @@ export class LlmWikiService {
 
     const scored = scoped
       .map((entry) => {
-        const hayTokens = new Set(tokenize(`${entry.title} ${entry.content}`));
-        if (hayTokens.size === 0) return undefined;
-        let overlap = 0;
-        for (const token of queryTokens) {
-          if (hayTokens.has(token)) overlap += 1;
-        }
-        if (overlap === 0) return undefined;
-        const overlapScore = overlap / Math.max(queryTokens.size, 1);
+        const contentScore = scoreKeywordRelevance(entry.content, queryTokens);
+        // A hit in the title says far more about what an entry is about than a passing
+        // mention somewhere in its body, so it is weighted separately rather than being
+        // flattened into one bag of words with the whole document.
+        const titleScore = scoreKeywordRelevance(entry.title, queryTokens) * 1.5;
+        const relevance = contentScore + titleScore;
+        if (relevance <= 0) return undefined;
+
         const recency = computeRecencyBoost(entry.updatedAt);
         const moderated = statusWeight(entry.status);
-        const score = overlapScore + recency + moderated;
         return {
           id: entry.id,
           sourcePath: entry.sourcePath,
           title: entry.title,
           status: entry.status,
-          score,
-          contentPreview: entry.content.slice(0, 240),
+          score: relevance + recency + moderated,
+          // Show the passage that actually matched, not the first 240 characters of the
+          // document - which for a long note is almost never where the answer is.
+          contentPreview: buildMatchSnippet(entry.content, queryTokens),
           updatedAt: entry.updatedAt,
         };
       })

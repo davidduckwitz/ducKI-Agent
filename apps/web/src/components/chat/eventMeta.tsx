@@ -1,7 +1,12 @@
-import { Activity, BrainCircuit, GitBranch, Sparkles, Wrench, Monitor } from "lucide-react";
+import { Activity, AlertTriangle, BrainCircuit, Check, GitBranch, Sparkles, Wrench, Monitor } from "lucide-react";
 import type { AgentEventType } from "./chatTypes";
 
-export function eventIcon(eventType?: AgentEventType) {
+export function eventIcon(eventType?: AgentEventType, eventData?: Record<string, unknown>) {
+  if (eventType === "tool_result") {
+    const success = eventData?.["success"];
+    if (success === false) return <AlertTriangle className="w-4 h-4 text-red-300" />;
+    if (success === true) return <Check className="w-4 h-4 text-emerald-300" />;
+  }
   if (eventType === "plan") return <GitBranch className="w-4 h-4 text-indigo-300" />;
   if (eventType === "tool_call" || eventType === "tool_result") return <Wrench className="w-4 h-4 text-amber-300" />;
   if (eventType === "iteration") return <Activity className="w-4 h-4 text-blue-300" />;
@@ -9,6 +14,22 @@ export function eventIcon(eventType?: AgentEventType) {
   if (eventType === "mode_selected") return <Sparkles className="w-4 h-4 text-fuchsia-300" />;
   if (eventType === "browser_preview") return <Monitor className="w-4 h-4 text-cyan-300" />;
   return <BrainCircuit className="w-4 h-4 text-purple-300" />;
+}
+
+/**
+ * Colour per event kind. Everything used to render in the same indigo box, so a failed
+ * tool call looked exactly like a successful one and the eye had no way to find the
+ * interesting line in a long run.
+ */
+export function eventTone(eventType?: AgentEventType, eventData?: Record<string, unknown>): string {
+  if (eventType === "tool_result" && eventData?.["success"] === false) {
+    return "border-red-500/40 bg-red-500/10 text-red-100";
+  }
+  if (eventType === "guardrail") return "border-orange-500/40 bg-orange-500/10 text-orange-100";
+  if (eventType === "tool_call") return "border-amber-500/30 bg-amber-500/[0.07] text-amber-100";
+  if (eventType === "tool_result") return "border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-100";
+  if (eventType === "plan") return "border-indigo-500/30 bg-indigo-500/10 text-indigo-100";
+  return "border-gray-600/40 bg-gray-500/[0.07] text-gray-300";
 }
 
 export function eventLabel(t: (key: string) => string, eventType?: AgentEventType) {

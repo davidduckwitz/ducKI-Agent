@@ -17,18 +17,18 @@ Verwende das LLM-Wiki korrekt, bevor externe oder unzuverlaessige Quellen genutz
 Nutze diesen Skill bei Fragen nach vorhandenem Wissen, internen Dokumenten, wiederkehrenden Fakten, Regeln, Projektkonventionen oder wenn der User explizit nach Wiki/Knowledge fragt.
 
 ## Ausfuehrungsreihenfolge
-1. Pruefe, ob das Wiki aktiv ist (`GET /api/wiki/status`).
-2. Suche nach relevanten Eintraegen (`GET /api/wiki/search?query=...`).
-3. Nutze bevorzugt `approved` Eintraege.
-4. Nutze `candidate` nur mit Kennzeichnung als vorlaeufig.
-5. Ignoriere `rejected` und `error`.
-6. Wenn keine Treffer vorhanden sind, kommuniziere dies transparent.
+1. Suche mit dem `wiki`-Tool: `wiki action=search query="..."`.
+2. Formuliere die Suche als Stichworte, nicht als ganzen Satz - gesucht wird ueber Begriffe.
+3. Wenn nichts passt: einmal mit anderen/breiteren Begriffen erneut suchen, bevor du aufgibst.
+4. Fuer den Volltext eines Treffers: `wiki action=get id=<id>`.
+5. Nutze bevorzugt `approved` Eintraege; `candidate` nur mit `includeCandidates=true` und Kennzeichnung als vorlaeufig.
+6. Wenn keine Treffer vorhanden sind, sage das explizit - erfinde keine Wiki-Inhalte.
 
 ## Tool-Nutzung
-Wenn HTTP-Tool verfuegbar ist:
-- Nutze lokale API-Endpunkte unter `/api/wiki/...`.
-- Fuer Suche: `/api/wiki/search` mit `query` und optional `includeCandidates`.
-- Fuer Moderation: `POST /api/wiki/entries/:id/approve` oder `.../reject` nur bei explizitem Korrektur- oder Review-Flow.
+- Primaer: das native `wiki`-Tool (`action=search|get|status`). Es laeuft im selben Prozess,
+  es sind keine URLs, Ports oder HTTP-Aufrufe noetig.
+- Nur fuer Moderation (approve/reject) das HTTP-Tool gegen `/api/wiki/entries/:id/approve`
+  bzw. `.../reject` nutzen, und ausschliesslich bei explizitem Review-Auftrag.
 
 ## Antwortregeln
 - Nenne bei Fakten die Quelle (`sourcePath`/Titel) kurz mit.

@@ -102,7 +102,13 @@ interface AppState {
   // Actions
   initSocket: () => void;
   disconnectSocket: () => void;
-  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode) => void;
+  sendMessage: (
+    content: string,
+    attachments?: ChatAttachment[],
+    agentMode?: AgentMode,
+    /** What to show in the chat when `content` carries extra machine-facing context. */
+    displayContent?: string
+  ) => void;
   stopMessage: () => void;
   clearChat: () => void;
   setConversationId: (id: number | undefined) => void;
@@ -161,18 +167,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
     });
 
-    socket.on("connect_error", (error: Error) => {
-      const errorMsg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: `${t("chat.socketErrorPrefix")} ${error.message}`,
-        timestamp: new Date().toISOString(),
-      };
+    socket.on("connect_error", () => {
       set((s) => ({
         connected: false,
         isLoading: false,
         streamingContent: "",
-        messages: [...s.messages, errorMsg],
       }));
     });
 
@@ -301,14 +300,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ socket: null, connected: false });
   },
 
-  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode) => {
+  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string) => {
     const { socket, conversationId, isLoading } = get();
     if (!socket || !content.trim() || isLoading) return;
 
     const userMsg: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content,
+      // Callers that wrap the prompt in machine-facing context (the coding workspace
+      // prepends a [CODING_CONTEXT] block) pass what the user actually typed here, so the
+      // chat shows their message instead of the scaffolding around it.
+      content: displayContent ?? content,
       timestamp: new Date().toISOString(),
       metadata: attachments && attachments.length > 0 ? { attachments } : undefined,
     };

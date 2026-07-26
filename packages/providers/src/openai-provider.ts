@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionContentPart } from "openai/resources/chat/completions.js";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "./base.js";
+import { ProviderConnectionError, looksLikeConnectionFailure } from "./errors.js";
+import { estimateUsage } from "./token-estimate.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -67,10 +69,15 @@ function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] 
 export class OpenAIProvider implements LLMProvider {
   readonly name: string = "openai";
   readonly model: string;
+  /** Kept so a connection failure can name the endpoint that was actually unreachable. */
+  protected readonly endpoint: string;
   private client: OpenAI;
   private defaultOptions: GenerateOptions;
   private readonly maxRetries: number;
   private readonly baseRetryDelayMs: number;
+  /** Set once a server has rejected `stream_options`, so the retry without it happens
+   *  only on the first stream instead of on every single call. */
+  private streamOptionsUnsupported = false;
 
   constructor(options: ProviderOptions) {
     const rawApiKey = options.apiKey ?? "";
@@ -79,6 +86,7 @@ export class OpenAIProvider implements LLMProvider {
     const baseURL = normalizeBaseUrl(options.baseUrl);
 
     this.model = options.model;
+    this.endpoint = baseURL;
     this.defaultOptions = options.defaultOptions ?? {};
 
     const customFetch: typeof fetch = async (input, init) => {
@@ -152,6 +160,11 @@ export class OpenAIProvider implements LLMProvider {
         return await fn();
       } catch (error) {
         lastError = error;
+        // A refused connection is not a rate limit and will not heal by waiting; report
+        // it straight away, naming the endpoint, instead of burning the retry budget.
+        if (looksLikeConnectionFailure(error)) {
+          throw new ProviderConnectionError(this.name, this.endpoint, error);
+        }
         if (!this.isRateLimitError(error) || attempt >= this.maxRetries) {
           break;
         }
@@ -202,34 +215,72 @@ export class OpenAIProvider implements LLMProvider {
     onChunk?: (chunk: string) => void
   ): Promise<LLMResponse> {
     const merged = { ...this.defaultOptions, ...options };
+    const openAiMessages = toOpenAIMessages(messages);
 
-    const stream = await this.withRateLimitRetry(() =>
+    const createStream = (includeUsage: boolean) =>
       this.client.chat.completions.create({
         model: this.model,
-        messages: toOpenAIMessages(messages),
+        messages: openAiMessages,
         temperature: merged.temperature,
         top_p: merged.topP,
         max_tokens: merged.maxTokens,
         stream: true,
-      })
-    );
+        // Without this the OpenAI streaming protocol never sends a usage chunk at all -
+        // which is why every streamed response reported 0 tokens.
+        ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+      });
+
+    let stream: Awaited<ReturnType<typeof createStream>>;
+    try {
+      stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported));
+    } catch (error) {
+      // Not every OpenAI-compatible server accepts stream_options. Most ignore unknown
+      // fields, but one that rejects them must not lose streaming entirely - drop the
+      // field once and remember that for this provider instance.
+      if (!this.streamOptionsUnsupported && this.rejectsStreamOptions(error)) {
+        this.streamOptionsUnsupported = true;
+        stream = await this.withRateLimitRetry(() => createStream(false));
+      } else {
+        throw error;
+      }
+    }
 
     let fullContent = "";
     let promptTokens = 0;
     let completionTokens = 0;
+    let reportedUsage = false;
     let finalModel = this.model;
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content ?? "";
-      if (delta) {
-        fullContent += delta;
-        onChunk?.(delta);
+    try {
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content ?? "";
+        if (delta) {
+          fullContent += delta;
+          onChunk?.(delta);
+        }
+        if (chunk.usage) {
+          promptTokens = chunk.usage.prompt_tokens ?? 0;
+          completionTokens = chunk.usage.completion_tokens ?? 0;
+          reportedUsage = promptTokens > 0 || completionTokens > 0;
+        }
+        finalModel = chunk.model ?? finalModel;
       }
-      if (chunk.usage) {
-        promptTokens = chunk.usage.prompt_tokens ?? 0;
-        completionTokens = chunk.usage.completion_tokens ?? 0;
+    } catch (error) {
+      // The stream can also die mid-flight; classify that the same way as a failure to
+      // open it, so callers see one error kind for "endpoint gone" either way.
+      if (looksLikeConnectionFailure(error)) {
+        throw new ProviderConnectionError(this.name, this.endpoint, error);
       }
-      finalModel = chunk.model ?? finalModel;
+      throw error;
+    }
+
+    if (!reportedUsage) {
+      const estimate = estimateUsage(openAiMessages, fullContent);
+      return {
+        content: fullContent,
+        usage: { ...estimate, estimated: true },
+        model: finalModel,
+      };
     }
 
     return {
@@ -237,6 +288,14 @@ export class OpenAIProvider implements LLMProvider {
       usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
       model: finalModel,
     };
+  }
+
+  /** A server that does not understand stream_options rejects the request outright
+   *  (HTTP 400) and names the field. */
+  private rejectsStreamOptions(error: unknown): boolean {
+    if (this.getStatusCode(error) !== 400) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    return /stream_options|include_usage/i.test(message);
   }
 
   supportsStreaming(): boolean {

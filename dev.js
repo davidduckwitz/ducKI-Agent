@@ -16,7 +16,7 @@ log('Starting Ducki dev environment...\n');
 
 // First, build shared package once
 log('📦 Building @ducki/shared...');
-const buildShared = spawnSync('pnpm', ['-r', '--filter=@ducki/shared', 'run', 'build'], {
+const buildShared = spawnSync('pnpm', ['--filter=@ducki/shared', 'run', 'build'], {
   stdio: 'inherit',
   shell: true
 });
@@ -32,22 +32,22 @@ log('✅ @ducki/shared built successfully\n');
 log('📦 Starting @ducki/shared in watch mode...');
 sharedProcess = spawn(
   'pnpm',
-  ['-r', '--filter=@ducki/shared', 'run', 'dev'],
+  ['--filter=@ducki/shared', 'run', 'dev'],
   { stdio: 'inherit', shell: true }
 );
 
-// Start other packages after a short delay (shared watch is now running)
+// Start other packages after sufficient delay (shared compilation must be complete)
 setTimeout(() => {
   log('\n🚀 Starting remaining packages in parallel...');
   startOtherPackages();
-}, 1500);
+}, 3000);
 
 function startOtherPackages() {
   if (devProcess) return; // Already started
 
   devProcess = spawn(
     'pnpm',
-    ['-r', '--parallel', '--filter=!@ducki/cli', '--filter=!@ducki/shared', 'run', 'dev'],
+    ['-r', '--parallel', '--filter=!@ducki/cli', '--filter=!@ducki/shared', '--filter=!@ducki/desktop', 'run', 'dev'],
     { stdio: 'inherit', shell: true }
   );
 

@@ -1,0 +1,54 @@
+{
+  "name": "@ducki/desktop",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/main.js",
+  "homepage": "./",
+  "scripts": {
+    "dev": "electron .",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "electron .",
+    "prebuild-prep": "node build.js",
+    "pack": "pnpm prebuild-prep && electron-builder --dir --publish never",
+    "dist": "pnpm prebuild-prep && electron-builder --publish never"
+  },
+  "dependencies": {
+    "@ducki/shared": "workspace:*",
+    "axios": "^1.6.0",
+    "fs-extra": "^11.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0",
+    "pkg": "^5.8.1",
+    "typescript": "^5.5.0"
+  },
+  "build": {
+    "appId": "de.davidduckwitz.ducki-node",
+    "productName": "DucKI Node",
+    "directories": {
+      "buildResources": "."
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "certificateFile": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DucKI Node"
+    }
+  }
+}

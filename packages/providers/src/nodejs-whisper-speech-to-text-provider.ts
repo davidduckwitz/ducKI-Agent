@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { nodewhisper } from "nodejs-whisper";
 import { BaseSpeechToTextProvider, type SpeechToTextProviderOptions } from "./speech-to-text-base.js";
 
@@ -34,6 +35,30 @@ function ensureWindowsCmakeInPath(): void {
   process.env["PATH"] = currentPath ? `${cmakeBin};${currentPath}` : cmakeBin;
 }
 
+/** Where nodejs-whisper looks for the compiled CLI, mirroring its own WhisperHelper. */
+const WHISPER_CLI_CANDIDATES = [
+  join("build", "bin", "Release", "whisper-cli.exe"),
+  join("build", "bin", "Debug", "whisper-cli.exe"),
+  join("build", "bin", "whisper-cli.exe"),
+  join("build", "bin", "whisper-cli"),
+  join("build", "whisper-cli"),
+];
+
+/**
+ * Resolves the whisper.cpp checkout inside the installed nodejs-whisper package.
+ * Returns undefined if the package cannot be located at all.
+ */
+function findWhisperCppPath(): string | undefined {
+  try {
+    // The package's entry point is <pkg>/dist/index.js, so cpp/whisper.cpp sits two
+    // levels up from it.
+    const entry = createRequire(import.meta.url).resolve("nodejs-whisper");
+    return join(dirname(dirname(entry)), "cpp", "whisper.cpp");
+  } catch {
+    return undefined;
+  }
+}
+
 export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider {
   readonly name = "nodejs-whisper";
   private readonly whisperOptions: NodejsWhisperSpeechToTextProviderOptions;
@@ -43,8 +68,39 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
     this.whisperOptions = options;
   }
 
+  /**
+   * Fails early and legibly when whisper.cpp was never compiled.
+   *
+   * nodejs-whisper only builds whisper.cpp as a side effect of *downloading* a model: if
+   * the model file already exists it returns early and skips the build entirely. So once
+   * the build directory is gone (a clean, a reinstall) while the model file remains, the
+   * library can never rebuild itself - it just reports "whisper-cli executable not found"
+   * from deep inside a transcription attempt, which the gateway then swallowed into a
+   * console.warn. Checking up front lets us name the actual remedy instead.
+   */
+  private assertWhisperCliAvailable(): void {
+    const whisperCppPath = findWhisperCppPath();
+    if (!whisperCppPath || !existsSync(whisperCppPath)) {
+      throw new Error(
+        "nodejs-whisper ist nicht installiert (cpp/whisper.cpp fehlt). Fuehre 'pnpm install' aus oder stelle DISCORD_VOICE_STT_PROVIDER auf 'openai' bzw. 'local' um."
+      );
+    }
+
+    const found = WHISPER_CLI_CANDIDATES.some((candidate) => existsSync(join(whisperCppPath, candidate)));
+    if (found) return;
+
+    throw new Error(
+      "whisper.cpp ist nicht kompiliert - die whisper-cli Binary fehlt. " +
+        "Baue sie einmalig mit 'pnpm whisper:build' (benoetigt CMake und C++ Build Tools). " +
+        "Hinweis: nodejs-whisper baut nur beim Modell-Download, und das Modell liegt bereits vor - " +
+        "der Build wird deshalb nie automatisch nachgeholt. " +
+        "Alternativ DISCORD_VOICE_STT_PROVIDER auf 'openai' oder 'local' setzen."
+    );
+  }
+
   async transcribe(audioBuffer: Buffer, options?: { language?: string }): Promise<string> {
     ensureWindowsCmakeInPath();
+    this.assertWhisperCliAvailable();
 
     const timeoutMs = this.whisperOptions.timeoutMs ?? Number.parseInt(process.env["NODEJS_WHISPER_TIMEOUT_MS"] ?? "180000", 10);
     const modelName =

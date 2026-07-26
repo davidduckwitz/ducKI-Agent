@@ -1,6 +1,15 @@
 import { z } from "zod";
 import { resolve, sep } from "node:path";
 
+export {
+  foldGerman,
+  tokenizeText,
+  extractKeywords,
+  scoreKeywordRelevance,
+  buildMatchSnippet,
+  type TokenizeOptions,
+} from "./text-search.js";
+
 // ============================================================
 // Agent Types
 // ============================================================
@@ -40,6 +49,11 @@ export interface LLMResponse {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** True when the server reported no usage and the counts were derived from the text
+     *  instead. Local OpenAI-compatible servers frequently omit usage on the streaming
+     *  path; an approximation is more useful than zeros, but must not be presented as a
+     *  measured value. */
+    estimated?: boolean;
   };
   model?: string;
   finishReason?: string;

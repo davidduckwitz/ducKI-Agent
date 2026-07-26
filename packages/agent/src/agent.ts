@@ -1,5 +1,7 @@
 import type { LLMProvider } from "@ducki/providers";
+import { isProviderConnectionError } from "@ducki/providers";
 import type { LLMMessage, ToolResult, LLMContent } from "@ducki/shared";
+import { tokenizeText } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
@@ -8,13 +10,14 @@ import { join, resolve } from "node:path";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
 import { Planner } from "./planner/planner.js";
-import { createPlanTool, formatPlanAsMarkdown } from "./planner/plan-tool.js";
+import { createPlanTool, formatPlanAsMarkdown, toPlanEventPayload } from "./planner/plan-tool.js";
 import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
 import { Reflection } from "./reflection/reflection.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
 import { resolveToolAlias, resolveToolAction, resolveCanonicalAction } from "./tools/tool-aliases.js";
+import { summarizeToolCall } from "./tools/tool-summary.js";
 import { loadToolManifests, isToolActive, createToolExecutorRegistry, type ToolManifestEntry, type ToolExecutorRegistry } from "./tools/tool-registry.js";
 import { createScriptTools } from "./tools/script-tools.js";
 import { ToolExecutionGraph } from "./executor/tool-graph.js";
@@ -358,19 +361,30 @@ export class Agent {
     return `${value.slice(0, keep)}${suffix}`;
   }
 
+  /**
+   * Picks the terms a memory lookup should search for.
+   *
+   * The previous version took `tokens.slice(0, 3)` - the first three long words of each
+   * signal, whatever they happened to be. For "Kannst du die Suche im Wiki verbessern"
+   * that yields "kannst, suche" and drops "wiki" entirely: the sentence's opening words
+   * are exactly the ones that carry the least meaning. Now stopwords are removed and the
+   * remaining terms are ranked by how often they recur across the signals, so a term that
+   * shows up in both the user input and the active skills outranks an incidental one.
+   */
   private extractMemoryKeywords(signals: string[]): string[] {
-    const keywords = new Set<string>();
+    const frequency = new Map<string, number>();
 
     for (const signal of signals) {
       if (!signal || typeof signal !== "string") continue;
-
-      const text = signal.toLowerCase();
-      const tokens = text.split(/\W+/).filter(t => t.length > 3);
-
-      tokens.slice(0, 3).forEach(t => keywords.add(t));
+      for (const token of new Set(tokenizeText(signal))) {
+        frequency.set(token, (frequency.get(token) ?? 0) + 1);
+      }
     }
 
-    return Array.from(keywords).slice(0, 8);
+    return Array.from(frequency.entries())
+      .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+      .slice(0, 8)
+      .map(([token]) => token);
   }
 
   private shouldUseLightweightMode(userInput: string, hasRecentSkillUsage: boolean): boolean {
@@ -2314,7 +2328,7 @@ export class Agent {
     await this.conversation.addMessage(userMessage);
     this.history.add(userMessage);
 
-    emit("plan", "Erstelle Plan...", { goal: userInput });
+    emit("plan", "Erstelle Plan...", { source: "plan_mode", phase: "start", goal: userInput });
 
     const availableToolNames = this.executor.listTools().map((tool) => tool.name);
     const plan = await this.planner.createPlan(userInput, availableToolNames);
@@ -2328,11 +2342,10 @@ export class Agent {
     await this.conversation.addMessage(assistantMessage);
     this.history.add(assistantMessage);
 
-    emit("plan", "Plan erstellt", {
-      goal: plan.goal,
-      steps: plan.steps.length,
-      complexity: plan.estimatedComplexity,
-    });
+    // Emit the full structured plan (not just a step count): the UI's plan panel renders
+    // and executes from this payload, so anything missing here would have to be recovered
+    // by re-parsing the markdown.
+    emit("plan", "Plan erstellt", { ...toPlanEventPayload(plan, response), phase: "done" });
 
     return {
       response,
@@ -2421,10 +2434,18 @@ export class Agent {
     }
 
     // Emit initial tool-call detection event
-    emit("tool_call", `Detected ${toolCalls.length} tool call(s) in response`, {
+    const callSummaries = toolCalls.map((c) => summarizeToolCall(c.toolName, c.input));
+    emit("tool_call", callSummaries.join(" · "), {
       count: toolCalls.length,
       tools: toolCalls.map((c) => c.toolName),
-      toolDetails: toolCalls.map((c) => ({ toolName: c.toolName, inputKeys: Object.keys(c.input) })),
+      // summary carries what the reader actually needs (which file, which command); the
+      // input keys stay available underneath for debugging.
+      summaries: callSummaries,
+      toolDetails: toolCalls.map((c, index) => ({
+        toolName: c.toolName,
+        summary: callSummaries[index],
+        inputKeys: Object.keys(c.input),
+      })),
     });
 
     // Build execution plan respecting dependencies
@@ -2529,10 +2550,15 @@ export class Agent {
       // Store results, add to conversation, and emit events
       let latestBrowserSessionId: string | undefined;
 
+      // Exact id lookup. This used to be `toolCalls.find(c => executed.id.includes(c.toolName))`,
+      // matching a call id like "batch_1_0" against tool names - which never matches, so every
+      // result was reported with an unknown tool. validCalls already carries the id/tool pairing.
+      const callsById = new Map(validCalls.map((call) => [call.id, call]));
+
       for (const executed of executedResults) {
         resultMap.set(executed.id, executed.result);
 
-        const toolCall = toolCalls.find((c) => executed.id.includes(c.toolName));
+        const toolCall = callsById.get(executed.id);
         this.logger.info("[TOOL-CALLS] Tool execution result", {
           callId: executed.id,
           toolName: toolCall?.toolName,
@@ -2577,8 +2603,15 @@ export class Agent {
           }
         }
 
-        emit("tool_result", `${executed.id}: ${executed.result.success ? "Success" : "Failed"}`, {
+        // Lead with what ran, not with the internal call id: "call_1a2b3c: Success" told
+        // the reader nothing about which tool produced it.
+        const resultSummary = toolCall ? summarizeToolCall(toolCall.toolName, toolCall.input) : "tool";
+        const resultOutcome = executed.result.success
+          ? "OK"
+          : `Fehler: ${executed.result.error ?? "unbekannt"}`;
+        emit("tool_result", `${resultSummary} — ${resultOutcome}`, {
           toolName: toolCall?.toolName,
+          summary: resultSummary,
           callId: executed.id,
           success: executed.result.success,
           error: executed.result.error,
@@ -2950,7 +2983,11 @@ export class Agent {
       ? await this.planner.createPlan(effectiveInput, availableTools.map((tool) => tool.name))
       : undefined;
     if (planContext) {
+      // source:"auto" marks this as internal run-loop context, not a user-facing plan:
+      // the UI only opens its plan panel for source:"plan_mode" events, so an auto-plan
+      // in full mode stays a log entry instead of interrupting the run with a modal.
       emit("plan", `Plan erstellt mit ${planContext.steps.length} Schritt(en).`, {
+        source: "auto",
         complexity: planContext.estimatedComplexity,
         steps: planContext.steps.map((step) => ({ id: step.id, title: step.title })),
       });
@@ -3215,7 +3252,7 @@ export class Agent {
         return [systemMessage, ...contextMessages];
       };
 
-      let currentResponseTokens: { input?: number; output?: number; total?: number } = {};
+      let currentResponseTokens: { input?: number; output?: number; total?: number; estimated?: boolean } = {};
 
       const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
         // DEBUG: Log what's being sent to LLM
@@ -3242,15 +3279,24 @@ export class Agent {
               input: result.usage.promptTokens,
               output: result.usage.completionTokens,
               total: result.usage.totalTokens,
+              estimated: result.usage.estimated === true,
             };
             return result.content;
           } catch (e) {
+            // A dead endpoint cannot be fixed by asking it again without streaming: the
+            // sync retry fails identically, doubles the wait, and buries the real cause
+            // under "falling back to synchronous generation".
+            if (isProviderConnectionError(e)) {
+              this.logger.error(`LLM provider unreachable: ${e.message}`);
+              throw e;
+            }
             this.logger.warn(`Streaming failed for LLM response: ${String(e)}. Falling back to synchronous generation.`);
             const syncResult = await this.provider.generate(messages);
             currentResponseTokens = {
               input: syncResult.usage.promptTokens,
               output: syncResult.usage.completionTokens,
               total: syncResult.usage.totalTokens,
+              estimated: syncResult.usage.estimated === true,
             };
             return syncResult.content;
           }
@@ -3260,6 +3306,7 @@ export class Agent {
           input: result.usage.promptTokens,
           output: result.usage.completionTokens,
           total: result.usage.totalTokens,
+          estimated: result.usage.estimated === true,
         };
         return result.content;
       };
@@ -3271,6 +3318,12 @@ export class Agent {
         response = await generateFromMessages(messages);
       } catch (error) {
         const providerError = error instanceof Error ? error.message : String(error);
+        // Shrinking the prompt cannot help when nothing is listening at the endpoint -
+        // and isProviderLoadError matches loosely enough (on "context", "token") that an
+        // error message could otherwise trip the compact-retry chain by accident.
+        if (isProviderConnectionError(error)) {
+          throw error;
+        }
         const canRetryCompact = compactSkillManifests.length > 0 && activeSkills.length > compactSkillManifests.length;
         if (!canRetryCompact || !isProviderLoadError(providerError)) {
           throw error;
@@ -3335,6 +3388,10 @@ export class Agent {
           input: currentResponseTokens.input,
           output: currentResponseTokens.output,
           total: currentResponseTokens.total,
+          // Local OpenAI-compatible servers often omit usage entirely; the provider then
+          // approximates it. Flagged so the UI can mark the number as an estimate rather
+          // than presenting a guess as a measurement.
+          estimated: currentResponseTokens.estimated === true,
         },
         agentTokens: agentContextTokens,
         combinedTokens: {
@@ -3572,11 +3629,36 @@ export class Agent {
     modeDetector.recordActualComplexity(userInput, effectiveMode, iterations);
 
     return {
-      response: this.sanitizeFinalResponse(finalResponse),
+      response: this.buildNonEmptyResponse(this.sanitizeFinalResponse(finalResponse), toolsUsed, iterations),
       iterations,
       toolsUsed,
       conversationId: this.conversation.id,
     };
+  }
+
+  /**
+   * Guarantees the run returns *something* readable.
+   *
+   * A model that answers with nothing but a tool call - common with smaller local models,
+   * which often go quiet once they see the tool result - left finalResponse empty. The
+   * chat then appended an empty assistant bubble: from the user's side the agent had
+   * visibly executed tools and then simply never answered, with no error to explain it.
+   * Reporting what actually ran is both honest and more useful than silence.
+   */
+  private buildNonEmptyResponse(response: string, toolsUsed: string[], iterations: number): string {
+    if (response.trim().length > 0) return response;
+
+    this.logger.warn("Run produced no text response", { iterations, toolsUsed });
+
+    if (toolsUsed.length === 0) {
+      return "Ich habe zu dieser Anfrage keine Antwort erzeugt. Bitte formuliere sie noch einmal oder praeziser.";
+    }
+
+    const uniqueTools = Array.from(new Set(toolsUsed));
+    return [
+      `Ich habe ${uniqueTools.join(", ")} ausgefuehrt, danach aber keinen Antworttext erzeugt.`,
+      "Die Tool-Ergebnisse stehen oben im Verlauf. Frag gezielt nach, wenn ich sie zusammenfassen soll.",
+    ].join(" ");
   }
 
   stop(): void {

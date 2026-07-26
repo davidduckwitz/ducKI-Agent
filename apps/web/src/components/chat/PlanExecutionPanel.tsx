@@ -18,19 +18,22 @@ interface PlanExecutionPanelProps {
   onExecute: () => void;
   onClose: () => void;
   isExecuting?: boolean;
+  /** Real completion percentage. Omit when execution progress cannot be measured -
+   *  the panel then shows an indeterminate bar instead of inventing a number. */
   executionProgress?: number;
 }
 
 export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
   try {
-    const { plan, onRefine, onExecute, onClose, isExecuting = false, executionProgress = 0 } = props;
+    const { plan, onRefine, onExecute, onClose, isExecuting = false, executionProgress } = props;
 
     if (!plan?.goal) {
       return null;
     }
 
     const steps = Array.isArray(plan.steps) ? plan.steps : [];
-    const progress = Math.min(Math.max(executionProgress || 0, 0), 100);
+    const hasProgress = typeof executionProgress === "number";
+    const progress = Math.min(Math.max(executionProgress ?? 0, 0), 100);
 
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -83,10 +86,16 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
             {isExecuting && (
               <div>
                 <p className="text-sm text-gray-400">Fortschritt:</p>
-                <div className="w-full bg-gray-700 rounded-full h-2 mt-2">
-                  <div className="bg-blue-500 h-2 rounded-full" style={{ width: `${progress}%` }} />
+                <div className="w-full bg-gray-700 rounded-full h-2 mt-2 overflow-hidden">
+                  {hasProgress ? (
+                    <div className="bg-blue-500 h-2 rounded-full" style={{ width: `${progress}%` }} />
+                  ) : (
+                    <div className="bg-blue-500 h-2 w-1/3 rounded-full animate-pulse" />
+                  )}
                 </div>
-                <p className="text-xs text-gray-400 mt-1">{Math.round(progress)}%</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {hasProgress ? `${Math.round(progress)}%` : "Umsetzung läuft - Details erscheinen im Chat."}
+                </p>
               </div>
             )}
           </div>

@@ -3,16 +3,16 @@
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "types": "./src/index.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
     }
   },
   "scripts": {
     "build": "rimraf dist && tsc -p tsconfig.json",
-    "dev": "rimraf dist && tsc -p tsconfig.json --watch",
+    "dev": "tsc -p tsconfig.json --watch",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist"
   },

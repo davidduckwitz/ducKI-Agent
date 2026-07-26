@@ -236,6 +236,8 @@ export const translations: Record<Language, TranslationTree> = {
       executionStopped: "Ausfuehrung gestoppt",
       noOutputYet: "Noch keine Chat-Ausgabe vorhanden.",
       noHtmlToExport: "Kein HTML-Inhalt zum Exportieren verfuegbar.",
+      roleYou: "Du",
+      roleAgent: "DucKI",
     },
     toolsPage: {
       noTools: "Keine Tools geladen",
@@ -709,6 +711,8 @@ export const translations: Record<Language, TranslationTree> = {
       executionStopped: "Execution stopped",
       noOutputYet: "No chat output yet.",
       noHtmlToExport: "No HTML content available to export.",
+      roleYou: "You",
+      roleAgent: "DucKI",
     },
     toolsPage: {
       noTools: "No tools loaded",

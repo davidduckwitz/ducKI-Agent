@@ -17,6 +17,43 @@ const COMPLEXITY_LABEL: Record<string, string> = {
   high: "Hoch",
 };
 
+/** 1-5 scale the plan panel renders as dots. Kept next to COMPLEXITY_LABEL so the
+ *  textual and numeric representations of a complexity can never drift apart. */
+const COMPLEXITY_SCORE: Record<string, number> = {
+  low: 1,
+  medium: 3,
+  high: 5,
+};
+
+/** Structured plan payload for the UI's plan panel. Emitted alongside the markdown so
+ *  the frontend never has to re-parse rendered markdown to recover the steps it needs
+ *  for display and execution. */
+export interface PlanEventPayload {
+  source: "plan_mode";
+  goal: string;
+  title: string;
+  complexity: number;
+  stepCount: number;
+  steps: Array<{ title: string; description: string; tools?: string[] }>;
+  markdown: string;
+}
+
+export function toPlanEventPayload(plan: Plan, markdown: string): PlanEventPayload {
+  return {
+    source: "plan_mode",
+    goal: plan.goal,
+    title: `Plan: ${plan.goal}`,
+    complexity: COMPLEXITY_SCORE[plan.estimatedComplexity] ?? 3,
+    stepCount: plan.steps.length,
+    steps: plan.steps.map((step) => ({
+      title: step.title,
+      description: step.description,
+      ...(step.toolsNeeded?.length ? { tools: step.toolsNeeded } : {}),
+    })),
+    markdown,
+  };
+}
+
 /** Renders a Plan as markdown for display in chat - shared by the standalone "plan" tool
  *  and the agentMode:"plan" run-loop short-circuit so both surfaces stay in sync. */
 export function formatPlanAsMarkdown(plan: Plan): string {

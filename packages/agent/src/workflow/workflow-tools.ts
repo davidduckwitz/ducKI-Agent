@@ -1,6 +1,6 @@
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
-import { resolveWithinRoot } from "@ducki/shared";
+import { extractKeywords, resolveWithinRoot } from "@ducki/shared";
 import { browserTool } from "@ducki/tools";
 import { previewSplit, commitSplit } from "../tasks/task-split-service.js";
 import { resolveCanonicalAction } from "../tools/tool-aliases.js";
@@ -592,11 +592,22 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
             return ok({ entries: memories.slice(0, limit), usage: `${usage}/${await targetLimit(db, target)}`, target, type });
           }
           case "query": {
-            const query = String(input["query"] ?? "").trim().toLowerCase();
+            const query = String(input["query"] ?? "").trim();
             if (!query) return fail("query is required");
-            const memories = await db.getMemories(Number.isFinite(conversationId) ? conversationId : undefined, type);
-            const filtered = memories.filter((entry) => entry.content.toLowerCase().includes(query)).slice(0, limit);
-            return ok(filtered);
+
+            // Keyword relevance instead of a whole-query substring match: the agent asks
+            // things like "what does the user prefer for commit messages", and no stored
+            // memory ever contains that sentence verbatim - so the old filter returned
+            // nothing and the agent concluded it had no memories at all.
+            const keywords = extractKeywords(query);
+            const scopedConversation = Number.isFinite(conversationId) ? conversationId : undefined;
+            if (keywords.length === 0) {
+              const memories = await db.getMemories(scopedConversation, type);
+              return ok(memories.slice(0, limit));
+            }
+
+            const results = await db.searchMemories(keywords, scopedConversation, type, undefined, limit);
+            return ok({ query, keywords, count: results.length, entries: results });
           }
           case "add": {
             const content = String(input["content"] ?? "").trim();

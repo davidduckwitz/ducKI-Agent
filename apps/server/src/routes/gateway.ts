@@ -239,6 +239,26 @@ function gatewayConversationPrefix(config: MessagingGatewayConfig): string {
   return `[${config.portal}] ${config.name}`;
 }
 
+/** Portals a conversation name can be tagged with. Kept in sync with normalizePortal so a
+ *  conversation created before a config was saved (the `runtime-<portal>` fallback in the
+ *  inbound route) is still recognizable as a gateway conversation. */
+const KNOWN_GATEWAY_PORTALS = ["discord", "telegram", "slack", "signal", "custom"];
+
+/**
+ * Decides whether a conversation belongs to a messaging gateway.
+ *
+ * Recognition is name-based because conversations carry no portal column. The listing
+ * endpoint used to apply its own pattern (`startsWith("[") && includes("·")`) which was
+ * *not* the rule getOrCreateGatewayConversation uses to find the same conversations - so
+ * any name the two disagreed on existed for the inbound path but was invisible in the
+ * Gateway UI. Matching the configured prefixes first (exactly what the inbound lookup
+ * does), then falling back to the bare `[portal]` tag, keeps both paths on one rule.
+ */
+export function isGatewayConversationName(name: string, configs: MessagingGatewayConfig[]): boolean {
+  if (configs.some((config) => name.startsWith(gatewayConversationPrefix(config)))) return true;
+  return KNOWN_GATEWAY_PORTALS.some((portal) => name.startsWith(`[${portal}]`));
+}
+
 function ensureGatewayUploadRoot(): void {
   if (!existsSync(GATEWAY_UPLOAD_ROOT)) {
     mkdirSync(GATEWAY_UPLOAD_ROOT, { recursive: true });
@@ -1018,7 +1038,9 @@ gatewayRouter.get("/", async (req, res, next) => {
     const db = req.app.locals["db"] as DatabaseService;
     const configs = parseGatewayConfigs(await db.getSetting(SETTINGS_KEY));
     const conversations = await db.listConversations();
-    const gatewayConversations = conversations.filter((conversation) => conversation.name.startsWith("[") && conversation.name.includes("·"));
+    const gatewayConversations = conversations.filter((conversation) =>
+      isGatewayConversationName(conversation.name, configs)
+    );
     const endpoints = configs.map((config) => ({
       id: config.id,
       portal: config.portal,

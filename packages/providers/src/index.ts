@@ -70,6 +70,11 @@ export function createDefaultProvider(): LLMProvider {
 export { OpenAIProvider, OpenRouterProvider, LMStudioProvider, OllamaProvider, ClaudeProvider, NousProvider };
 export type { LLMProvider };
 export * from "./base.js";
+export {
+  ProviderConnectionError,
+  isProviderConnectionError,
+  looksLikeConnectionFailure,
+} from "./errors.js";
 
 // ============================================================
 // Speech-to-Text Provider Factory

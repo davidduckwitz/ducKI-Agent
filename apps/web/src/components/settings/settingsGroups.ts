@@ -232,6 +232,7 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       name: "Memory-Limits",
       icon: Target,
       keys: [
+        "MEMORY_AUTO_APPROVE",
         "MEMORY_SHORT_TERM_LIMIT",
         "MEMORY_IMPORTANCE_THRESHOLD",
         "AGENT_MEMORY_CHAR_LIMIT",

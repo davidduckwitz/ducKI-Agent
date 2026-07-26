@@ -702,6 +702,19 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "MEMORY_AUTO_APPROVE",
+    label: "Gelerntes automatisch freigeben",
+    description:
+      "Aktiv: Was der Agent selbst lernt, ist sofort wieder abrufbar. Aus: Jeder automatische Lerneintrag landet als 'pending' im Memory-Browser und wirkt erst nach manueller Freigabe.",
+    type: "select",
+    section: "Memory",
+    defaultValue: "true",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus (manuelle Freigabe)", value: "false" },
+    ],
+  },
+  {
     key: "MEMORY_SHORT_TERM_LIMIT",
     label: "Short-Term Memory Limit",
     description: "Maximale Anzahl kurzzeitiger Memory-Eintraege",

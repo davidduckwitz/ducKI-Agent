@@ -42,18 +42,22 @@ export class Planner {
   ) {}
 
   async createPlan(goal: string, availableTools: string[] = []): Promise<Plan> {
-    this.logger.info("Creating plan", { goal });
+    this.logger.info("Creating plan", { goal: goal.substring(0, 200) });
 
     const toolsContext =
       availableTools.length > 0
         ? `\nAvailable tools: ${availableTools.join(", ")}`
         : "";
 
+    const truncatedGoal = goal.length > 2000
+      ? goal.substring(0, 2000) + "\n[...truncated]"
+      : goal;
+
     const messages: LLMMessage[] = [
       { role: "system", content: PLANNER_SYSTEM_PROMPT },
       {
         role: "user",
-        content: `Create a plan for: ${goal}${toolsContext}`,
+        content: `Create a plan for: ${truncatedGoal}${toolsContext}`,
       },
     ];
 

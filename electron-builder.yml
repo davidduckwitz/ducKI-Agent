@@ -1,0 +1,33 @@
+appId: de.davidduckwitz.ducki-node
+productName: DucKI Node
+
+directories:
+  buildResources: apps/desktop
+  output: apps/desktop/dist
+
+files:
+  - "!**"
+  - "apps/desktop/dist/**/*"
+  - "apps/web/dist/**/*"
+  - "apps/server/dist/**/*"
+  - "node_modules/**/*"
+
+extraMetadata:
+  main: dist/main.js
+
+win:
+  target:
+    - nsis
+    - portable
+  certificateFile: null
+  certificatePassword: null
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DucKI Node
+
+portable:
+  artifactName: DucKI-portable.exe

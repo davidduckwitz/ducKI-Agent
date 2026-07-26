@@ -1,12 +1,17 @@
 import { FileText, User } from "lucide-react";
 import { DuckyMascot } from "./DuckyMascot";
-import { eventDataWithoutInternalText, eventIcon, eventLabel, extractInternalLlmText } from "./eventMeta";
+import { eventDataWithoutInternalText, eventIcon, eventLabel, eventTone, extractInternalLlmText } from "./eventMeta";
 import type { RenderedChatMessage } from "./chatTypes";
 import { api } from "../../lib/api";
 import { BrowserPreview } from "./BrowserPreview";
+import { MarkdownMessage } from "./MarkdownMessage";
 
 interface RowCommonProps {
   compactMode?: boolean;
+  /** Layout for narrow side panels (the coding workspace): no avatar gutter, full-width
+   *  bubbles, sender shown as a small label. Chat bubbles with a 32px avatar and a 90%
+   *  max-width leave almost no room for code in a 400px column. */
+  dense?: boolean;
 }
 
 const ANIMATE_IN = "animate-in fade-in slide-in-from-bottom-1 duration-300";
@@ -53,7 +58,10 @@ export function EventRow({
   const restData = eventDataWithoutInternalText(msg.eventData);
 
   // Support both old format (direct tokens) and new format (nested)
-  const llmTokens = msg.eventData?.llmTokens as { input?: number; output?: number; total?: number } | undefined;
+  const llmTokens = msg.eventData?.llmTokens as
+    | { input?: number; output?: number; total?: number; estimated?: boolean }
+    | undefined;
+  const tokensEstimated = llmTokens?.estimated === true;
   const inputTokens = (llmTokens?.input ?? msg.eventData?.inputTokens) as number | undefined;
   const outputTokens = (llmTokens?.output ?? msg.eventData?.outputTokens) as number | undefined;
   const totalTokens = (llmTokens?.total ?? msg.eventData?.totalTokens) as number | undefined;
@@ -71,31 +79,36 @@ export function EventRow({
     );
   }
 
+  const toolName = typeof msg.eventData?.["toolName"] === "string" ? (msg.eventData["toolName"] as string) : undefined;
+
   return (
     <details
       open={expanded}
       onToggle={(e) => onToggle((e.currentTarget as HTMLDetailsElement).open)}
-      className={`${ANIMATE_IN} rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs text-indigo-100`}
+      className={`${ANIMATE_IN} rounded-lg border px-2.5 py-1.5 text-xs ${eventTone(msg.eventType, msg.eventData)}`}
     >
-      <summary className="list-none cursor-pointer select-none flex items-center justify-between gap-3">
-        <span className="flex items-center gap-2 min-w-0">
-          {eventIcon(msg.eventType)}
-          <span className="font-medium whitespace-nowrap">{eventLabel(t, msg.eventType)}</span>
-          <span className="text-indigo-200/80 truncate">{msg.content}</span>
-          {internalText && (
-            <span className="text-indigo-300/70 truncate text-[10px] italic max-w-[200px]">
-              — {internalText.substring(0, 80)}
-              {internalText.length > 80 ? "..." : ""}
+      <summary className="list-none cursor-pointer select-none flex items-baseline justify-between gap-2">
+        <span className="flex items-baseline gap-1.5 min-w-0">
+          <span className="self-center shrink-0">{eventIcon(msg.eventType, msg.eventData)}</span>
+          {/* The tool name is the label that matters for tool events; the generic
+              "Tool Call"/"Tool Result" wording adds nothing next to it. */}
+          <span className="font-medium whitespace-nowrap opacity-90">
+            {toolName ?? eventLabel(t, msg.eventType)}
+          </span>
+          <span className="truncate opacity-80">{msg.content}</span>
+        </span>
+        <span className="flex items-center gap-2 text-[10px] opacity-60 whitespace-nowrap shrink-0">
+          {totalTokens && (
+            <span title={tokensEstimated ? "Geschaetzt - der Provider hat keine Token-Zahlen geliefert" : undefined}>
+              ⚡ {tokensEstimated ? "~" : ""}
+              {totalTokens}
             </span>
           )}
-        </span>
-        <span className="flex items-center gap-2 text-[10px] text-indigo-200/70 whitespace-nowrap">
-          {totalTokens && <span>⚡ {totalTokens}</span>}
           <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
         </span>
       </summary>
       <div className="mt-2 pl-6 space-y-2">
-        <div className="text-indigo-100 whitespace-pre-wrap">{msg.content}</div>
+        <div className="whitespace-pre-wrap opacity-90">{msg.content}</div>
         {(inputTokens || outputTokens || totalTokens || agentTokens || combinedTokens) && (
           <div className="space-y-2">
             {(agentTokens || combinedTokens) && (
@@ -114,7 +127,7 @@ export function EventRow({
             {(inputTokens || outputTokens || totalTokens) && (
               <div className="rounded border border-amber-400/30 bg-amber-500/10 p-2">
                 <div className="text-[10px] uppercase tracking-wide text-amber-200/80 mb-1">
-                  🧠 LLM Response Tokens
+                  🧠 LLM Response Tokens{tokensEstimated ? " (geschaetzt)" : ""}
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-amber-50/90 text-[11px]">
                   {inputTokens && <div>Input: <span className="font-semibold">{inputTokens}</span></div>}
@@ -155,7 +168,12 @@ export function EventRow({
   );
 }
 
-export function MessageRow({ msg, compactMode, t }: RowCommonProps & { msg: RenderedChatMessage; t: (key: string) => string }) {
+export function MessageRow({
+  msg,
+  compactMode,
+  dense,
+  t,
+}: RowCommonProps & { msg: RenderedChatMessage; t: (key: string) => string }) {
   const metadata = msg.metadata as
     | {
         portal?: string;
@@ -165,6 +183,26 @@ export function MessageRow({ msg, compactMode, t }: RowCommonProps & { msg: Rend
         voice?: { transcript?: string };
       }
     | undefined;
+
+  if (dense) {
+    return (
+      <div className={`${ANIMATE_IN} min-w-0`}>
+        <div className="mb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500">
+          {msg.role === "user" ? <User className="h-3 w-3" /> : <DuckyMascot working={false} size={14} />}
+          <span>{msg.role === "user" ? t("chat.roleYou") : t("chat.roleAgent")}</span>
+        </div>
+        <div
+          className={`rounded-lg border px-3 py-2 text-[13px] ${
+            msg.role === "user"
+              ? "whitespace-pre-wrap border-blue-500/40 bg-blue-500/10 text-blue-50"
+              : "border-gray-700 bg-gray-800/70 text-gray-100"
+          }`}
+        >
+          {msg.role === "user" ? msg.content : <MarkdownMessage content={msg.content} />}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`${ANIMATE_IN} flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
@@ -180,7 +218,7 @@ export function MessageRow({ msg, compactMode, t }: RowCommonProps & { msg: Rend
           compactMode
             ? "max-w-[94%] sm:max-w-[82%] lg:max-w-[74%] rounded-lg px-3 py-2 text-[13px]"
             : "max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-xl px-4 py-3 text-sm"
-        } whitespace-pre-wrap ${msg.role === "user" ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-100"}`}
+        } ${msg.role === "user" ? "whitespace-pre-wrap bg-blue-600 text-white" : "bg-gray-800 text-gray-100"}`}
       >
         {metadata && (metadata.portal || metadata.mode || metadata.agentEmoji) && (
           <div className="mb-2 flex flex-wrap gap-1 text-[10px]">
@@ -199,7 +237,9 @@ export function MessageRow({ msg, compactMode, t }: RowCommonProps & { msg: Rend
             )}
           </div>
         )}
-        {msg.content}
+        {/* Agent replies are markdown (code fences, lists, headings); the user's own text
+            is not, and reinterpreting it would mangle whatever they typed. */}
+        {msg.role === "user" ? msg.content : <MarkdownMessage content={msg.content} />}
         {metadata?.attachments && metadata.attachments.length > 0 && (() => {
           const images = metadata.attachments.filter(isImageAttachment);
           const documents = metadata.attachments.filter((a) => !isImageAttachment(a));
@@ -278,9 +318,13 @@ export function StreamingRow({
           compactMode
             ? "max-w-[94%] sm:max-w-[82%] lg:max-w-[74%] rounded-lg px-3 py-2 text-[13px]"
             : "max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-xl px-4 py-3 text-sm"
-        } bg-gray-800 text-gray-100 whitespace-pre-wrap`}
+        } bg-gray-800 text-gray-100`}
       >
-        {streamingContent || <span className="text-gray-400 animate-pulse">{t("chat.workingLabel")}</span>}
+        {streamingContent ? (
+          <MarkdownMessage content={streamingContent} />
+        ) : (
+          <span className="text-gray-400 animate-pulse">{t("chat.workingLabel")}</span>
+        )}
       </div>
     </div>
   );

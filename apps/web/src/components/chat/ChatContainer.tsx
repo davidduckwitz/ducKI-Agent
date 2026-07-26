@@ -85,7 +85,6 @@ export function ChatContainer() {
   const [currentPlan, setCurrentPlan] = useState<Plan | null | undefined>(null);
   const [lastProcessedPlanId, setLastProcessedPlanId] = useState<string>("");
   const [planExecuting, setPlanExecuting] = useState(false);
-  const [planProgress, setPlanProgress] = useState(0);
   const [searchParams, setSearchParams] = useSearchParams();
   const [totalTokens, setTotalTokens] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -431,35 +430,32 @@ export function ChatContainer() {
   const handlePlanExecution = async () => {
     if (!currentPlan) return;
     setPlanExecuting(true);
-    setPlanProgress(0);
 
     try {
-      const interval = setInterval(() => {
-        setPlanProgress((p) => Math.min(p + 5, 95));
-      }, 1000);
-
-      const result = await api.plans.execute(currentPlan.id ?? 1);
-
-      clearInterval(interval);
-      setPlanProgress(100);
+      // The plan lives in this session's event stream, not in a server-side store, so the
+      // steps have to travel with the request - otherwise the agent would only receive an
+      // id it cannot resolve back to any actual plan content.
+      const result = await api.plans.execute(currentPlan.id, {
+        goal: currentPlan.goal,
+        steps: currentPlan.steps ?? [],
+        markdown: currentPlan.markdown,
+        conversationId: conversationId ?? undefined,
+      });
 
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "event",
-          content: "Plan-Umsetzung gestartet",
+          content: "Plan umgesetzt",
           timestamp: new Date().toISOString(),
           eventType: "tool_result",
-          eventData: { message: "Execution started", planId: currentPlan.id },
+          eventData: { message: result?.message ?? "Execution finished", planId: currentPlan.id },
         },
       ]);
 
-      setTimeout(() => {
-        setShowPlanPanel(false);
-        setPlanExecuting(false);
-        setPlanProgress(0);
-      }, 1500);
+      setShowPlanPanel(false);
+      setPlanExecuting(false);
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -473,18 +469,22 @@ export function ChatContainer() {
         },
       ]);
       setPlanExecuting(false);
-      setPlanProgress(0);
     }
   };
 
+  /** Opens the plan panel only for a finished plan-mode plan. Full mode also emits "plan"
+   *  events for its internal auto-plan (source:"auto") - those are run-loop context and
+   *  must not pop a modal over a run that is already executing. */
   const detectPlanFromMessages = (previousProcessedId: string) => {
-    const lastPlanMessage = [...messages].reverse().find((msg) => msg.eventType === "plan");
+    const lastPlanMessage = [...messages]
+      .reverse()
+      .find((msg) => msg.eventType === "plan" && (msg.eventData as { source?: string } | undefined)?.source === "plan_mode");
 
     if (lastPlanMessage?.id === previousProcessedId) return;
     if (!lastPlanMessage?.eventData) return;
 
     const planData = lastPlanMessage.eventData as unknown as Plan;
-    if (planData.goal && planData.steps) {
+    if (planData.goal && Array.isArray(planData.steps) && planData.steps.length > 0) {
       setCurrentPlan(planData);
       setShowPlanPanel(true);
       setLastProcessedPlanId(lastPlanMessage.id);
@@ -766,7 +766,6 @@ export function ChatContainer() {
           onExecute={handlePlanExecution}
           onClose={() => setShowPlanPanel(false)}
           isExecuting={planExecuting}
-          executionProgress={planProgress}
         />
       )}
 
