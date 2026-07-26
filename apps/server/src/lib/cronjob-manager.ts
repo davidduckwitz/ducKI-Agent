@@ -227,14 +227,37 @@ export class CronjobManager {
     if (!toolName) throw new Error("Tool cronjob requires targetRef or payload.toolName");
 
     const input = payload.input && typeof payload.input === "object" ? payload.input : {};
-    const agent = this.createAgent();
-    const result = await agent.executor.execute(toolName, input);
 
-    if (!result.success) {
-      throw new Error(result.error ?? `Tool '${toolName}' failed`);
-    }
+    const prompt = [
+      `Execute the tool '${toolName}' with the following input and return the result:`,
+      `Tool: ${toolName}`,
+      `Input: ${JSON.stringify(input, null, 2)}`,
+      "Return what the tool produced as the result.",
+    ].join("\n");
 
-    return typeof result.data === "string" ? result.data : JSON.stringify(result.data);
+    const run = await runAgentWithRepairRetry(
+      this.createAgent,
+      prompt,
+      (errorMessage) => [
+        "The previous cron tool run failed with a runtime error.",
+        `Error: ${errorMessage}`,
+        "Try again from a clean start with the same tool and input.",
+        prompt,
+      ].join("\n"),
+      async (runAgent) => {
+        let conversationId = job.conversationId;
+
+        if (!conversationId) {
+          conversationId = await runAgent.startConversation({
+            name: `Cron Tool #${toolName} ${job.id}`,
+          });
+          await this.db.updateCronJob(job.id, { conversationId });
+        } else {
+          await runAgent.loadConversation(conversationId);
+        }
+      }
+    );
+    return run.result.response;
   }
 
   private async runSkillJob(job: CronJobSelect): Promise<string> {

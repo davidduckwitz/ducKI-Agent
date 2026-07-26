@@ -3,13 +3,15 @@ import { OpenAIProvider } from "./openai-provider.js";
 import { OpenRouterProvider } from "./openrouter-provider.js";
 import { LMStudioProvider } from "./lmstudio-provider.js";
 import { OllamaProvider } from "./ollama-provider.js";
+import { ClaudeProvider } from "./claude-provider.js";
+import { NousProvider } from "./nous-provider.js";
 import type { SpeechToTextProvider } from "@ducki/shared";
 import { OpenAISpeechToTextProvider } from "./openai-speech-to-text-provider.js";
 import { SileroSpeechToTextProvider } from "./silero-speech-to-text-provider.js";
 import { LocalCommandSpeechToTextProvider } from "./local-command-speech-to-text-provider.js";
 import { NodejsWhisperSpeechToTextProvider } from "./nodejs-whisper-speech-to-text-provider.js";
 
-export type ProviderName = "openai" | "openrouter" | "lmstudio" | "ollama";
+export type ProviderName = "openai" | "openrouter" | "lmstudio" | "ollama" | "claude" | "nous";
 
 export interface ProviderFactoryConfig {
   name: ProviderName;
@@ -43,6 +45,18 @@ export function createProvider(config: ProviderFactoryConfig): LLMProvider {
         baseUrl: config.baseUrl,
         model: config.model,
       });
+    case "claude":
+      return new ClaudeProvider({
+        baseUrl: "https://api.anthropic.com/v1",
+        apiKey: config.apiKey ?? process.env["CLAUDE_API_KEY"],
+        model: config.model ?? process.env["CLAUDE_MODEL"] ?? "claude-3-5-sonnet-20241022",
+      });
+    case "nous":
+      return new NousProvider({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        model: config.model,
+      });
     default:
       throw new Error(`Unknown provider: ${String(config.name)}`);
   }
@@ -53,7 +67,7 @@ export function createDefaultProvider(): LLMProvider {
   return createProvider({ name: providerName });
 }
 
-export { OpenAIProvider, OpenRouterProvider, LMStudioProvider, OllamaProvider };
+export { OpenAIProvider, OpenRouterProvider, LMStudioProvider, OllamaProvider, ClaudeProvider, NousProvider };
 export type { LLMProvider };
 export * from "./base.js";
 

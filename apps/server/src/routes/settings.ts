@@ -17,6 +17,11 @@ const PROVIDER_SETTINGS = new Set([
   "OPENROUTER_API_KEY",
   "OLLAMA_BASE_URL",
   "OLLAMA_MODEL",
+  "CLAUDE_API_KEY",
+  "CLAUDE_MODEL",
+  "NOUS_API_KEY",
+  "NOUS_BASE_URL",
+  "NOUS_MODEL",
 ]);
 
 settingsRouter.get("/", async (req, res, next) => {

@@ -17,6 +17,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.28.0",
     "@ducki/logger": "workspace:*",
     "@ducki/shared": "workspace:*",
     "nodejs-whisper": "^0.3.0",
