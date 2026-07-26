@@ -3,6 +3,7 @@ import { computeNextRun, type CronJobSelect, type DatabaseService } from "@ducki
 import type { Logger } from "@ducki/logger";
 import { runAgentWithRepairRetry } from "./agent-retry.js";
 import { ChatCleanupService } from "./chat-cleanup-service.js";
+import { agentRegistry } from "./agent-registry.js";
 
 interface PromptPayload {
   prompt?: string;
@@ -154,7 +155,10 @@ export class CronjobManager {
       "Use tools where necessary. Keep the final result concise and actionable.",
     ].join("\n");
 
+    let runId: string | undefined;
     try {
+      let conversationId = job.conversationId ?? undefined;
+
       const run = await runAgentWithRepairRetry(
         this.createAgent,
         prompt,
@@ -165,8 +169,6 @@ export class CronjobManager {
           prompt,
         ].join("\n"),
         async (runAgent) => {
-          let conversationId = (job.conversationId ?? null) as number | null | undefined;
-
           if (!conversationId) {
             const newConversationId = await runAgent.startConversation({
               name: `Cron Task #${taskId}`,
@@ -179,6 +181,13 @@ export class CronjobManager {
           } else {
             await runAgent.loadConversation(conversationId);
           }
+
+          runId = agentRegistry.register({
+            source: "task_run",
+            taskId,
+            conversationId,
+            label: `Cron Task #${taskId}`,
+          });
         }
       );
       await this.db.updateTask(taskId, { status: "completed", result: run.result.response });
@@ -187,6 +196,8 @@ export class CronjobManager {
       const message = error instanceof Error ? error.message : String(error);
       await this.db.updateTask(taskId, { status: "failed", result: message });
       throw error;
+    } finally {
+      if (runId) agentRegistry.unregister(runId);
     }
   }
 
@@ -195,30 +206,43 @@ export class CronjobManager {
     const prompt = payload.prompt?.trim() || job.targetRef?.trim();
     if (!prompt) throw new Error("Prompt cronjob requires payload.prompt or targetRef");
 
-    const run = await runAgentWithRepairRetry(
-      this.createAgent,
-      prompt,
-      (errorMessage) => [
-        "The previous cron prompt run failed with a runtime error.",
-        `Error: ${errorMessage}`,
-        "Try again from a clean start with a new solution path.",
-        prompt,
-      ].join("\n"),
-      async (runAgent) => {
-        let conversationId = job.conversationId;
+    let runId: string | undefined;
+    try {
+      let conversationId = job.conversationId ?? undefined;
 
-        if (!conversationId) {
-          conversationId = await runAgent.startConversation({
-            name: payload.conversationName?.trim() || `Cron Prompt #${job.id}`,
-            projectId: payload.projectId,
-          });
-          await this.db.updateCronJob(job.id, { conversationId });
-        } else {
-          await runAgent.loadConversation(conversationId);
+      const run = await runAgentWithRepairRetry(
+        this.createAgent,
+        prompt,
+        (errorMessage) => [
+          "The previous cron prompt run failed with a runtime error.",
+          `Error: ${errorMessage}`,
+          "Try again from a clean start with a new solution path.",
+          prompt,
+        ].join("\n"),
+        async (runAgent) => {
+          if (!conversationId) {
+            conversationId = await runAgent.startConversation({
+              name: payload.conversationName?.trim() || `Cron Prompt #${job.id}`,
+              projectId: payload.projectId,
+            });
+            await this.db.updateCronJob(job.id, { conversationId });
+          } else {
+            await runAgent.loadConversation(conversationId);
+          }
+
+          if (conversationId) {
+            runId = agentRegistry.register({
+              source: "chat_http",
+              conversationId,
+              label: `Cron Prompt #${job.id}`,
+            });
+          }
         }
-      }
-    );
-    return run.result.response;
+      );
+      return run.result.response;
+    } finally {
+      if (runId) agentRegistry.unregister(runId);
+    }
   }
 
   private async runToolJob(job: CronJobSelect): Promise<string> {
@@ -235,29 +259,42 @@ export class CronjobManager {
       "Return what the tool produced as the result.",
     ].join("\n");
 
-    const run = await runAgentWithRepairRetry(
-      this.createAgent,
-      prompt,
-      (errorMessage) => [
-        "The previous cron tool run failed with a runtime error.",
-        `Error: ${errorMessage}`,
-        "Try again from a clean start with the same tool and input.",
-        prompt,
-      ].join("\n"),
-      async (runAgent) => {
-        let conversationId = job.conversationId;
+    let runId: string | undefined;
+    try {
+      let conversationId = job.conversationId ?? undefined;
 
-        if (!conversationId) {
-          conversationId = await runAgent.startConversation({
-            name: `Cron Tool #${toolName} ${job.id}`,
-          });
-          await this.db.updateCronJob(job.id, { conversationId });
-        } else {
-          await runAgent.loadConversation(conversationId);
+      const run = await runAgentWithRepairRetry(
+        this.createAgent,
+        prompt,
+        (errorMessage) => [
+          "The previous cron tool run failed with a runtime error.",
+          `Error: ${errorMessage}`,
+          "Try again from a clean start with the same tool and input.",
+          prompt,
+        ].join("\n"),
+        async (runAgent) => {
+          if (!conversationId) {
+            conversationId = await runAgent.startConversation({
+              name: `Cron Tool #${toolName} ${job.id}`,
+            });
+            await this.db.updateCronJob(job.id, { conversationId });
+          } else {
+            await runAgent.loadConversation(conversationId);
+          }
+
+          if (conversationId) {
+            runId = agentRegistry.register({
+              source: "chat_http",
+              conversationId,
+              label: `Cron Tool #${toolName}`,
+            });
+          }
         }
-      }
-    );
-    return run.result.response;
+      );
+      return run.result.response;
+    } finally {
+      if (runId) agentRegistry.unregister(runId);
+    }
   }
 
   private async runSkillJob(job: CronJobSelect): Promise<string> {
@@ -266,30 +303,43 @@ export class CronjobManager {
     if (!skillSlug) throw new Error("Skill cronjob requires targetRef skill slug");
 
     const prompt = payload.prompt?.trim() || "Execute the scheduled skill run and report the outcome.";
-    const run = await runAgentWithRepairRetry(
-      this.createAgent,
-      `/${skillSlug} ${prompt}`,
-      (errorMessage) => [
-        "The previous cron skill run failed with a runtime error.",
-        `Error: ${errorMessage}`,
-        "Retry from scratch with a new solution path and return the corrected result.",
-        `/${skillSlug} ${prompt}`,
-      ].join("\n"),
-      async (runAgent) => {
-        let conversationId = job.conversationId;
+    let runId: string | undefined;
+    try {
+      let conversationId = job.conversationId ?? undefined;
 
-        if (!conversationId) {
-          conversationId = await runAgent.startConversation({
-            name: payload.conversationName?.trim() || `Cron Skill #${job.id}`,
-            projectId: payload.projectId,
-          });
-          await this.db.updateCronJob(job.id, { conversationId });
-        } else {
-          await runAgent.loadConversation(conversationId);
+      const run = await runAgentWithRepairRetry(
+        this.createAgent,
+        `/${skillSlug} ${prompt}`,
+        (errorMessage) => [
+          "The previous cron skill run failed with a runtime error.",
+          `Error: ${errorMessage}`,
+          "Retry from scratch with a new solution path and return the corrected result.",
+          `/${skillSlug} ${prompt}`,
+        ].join("\n"),
+        async (runAgent) => {
+          if (!conversationId) {
+            conversationId = await runAgent.startConversation({
+              name: payload.conversationName?.trim() || `Cron Skill #${job.id}`,
+              projectId: payload.projectId,
+            });
+            await this.db.updateCronJob(job.id, { conversationId });
+          } else {
+            await runAgent.loadConversation(conversationId);
+          }
+
+          if (conversationId) {
+            runId = agentRegistry.register({
+              source: "chat_http",
+              conversationId,
+              label: `Cron Skill #${skillSlug}`,
+            });
+          }
         }
-      }
-    );
-    return run.result.response;
+      );
+      return run.result.response;
+    } finally {
+      if (runId) agentRegistry.unregister(runId);
+    }
   }
 
   private async runLogsMaintenanceJob(job: CronJobSelect): Promise<string> {

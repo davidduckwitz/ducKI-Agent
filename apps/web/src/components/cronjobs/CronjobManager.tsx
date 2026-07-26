@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, Play, Trash2, Plus, Save, RefreshCw } from "lucide-react";
+import { CalendarClock, Play, Trash2, Plus, Save, RefreshCw, MessageSquare } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 
@@ -19,6 +20,7 @@ interface CronJob {
   lastStatus?: string | null;
   lastError?: string | null;
   lastResult?: string | null;
+  conversationId?: number | null;
 }
 
 interface Task {
@@ -80,6 +82,7 @@ function buildFormFromJob(job: CronJob): FormState {
 export function CronjobManager() {
   const { t } = useI18n();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [form, setForm] = useState<FormState>({
     name: "",
     schedule: "*/15 * * * *",
@@ -400,7 +403,21 @@ export function CronjobManager() {
                 </div>
 
                 {job.lastError && <p className="text-xs text-red-300">{t("cronjobs.error")}: {job.lastError}</p>}
-                {job.lastResult && <p className="text-xs text-gray-400 line-clamp-2">{t("cronjobs.result")}: {job.lastResult}</p>}
+                {job.lastResult && (
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-xs text-gray-400 line-clamp-2">{t("cronjobs.result")}: {job.lastResult}</p>
+                    {job.conversationId && (
+                      <button
+                        onClick={() => navigate(`/chat?conversationId=${job.conversationId}`)}
+                        className="btn-secondary inline-flex items-center gap-1 text-xs shrink-0"
+                        title={`Open chat #${job.conversationId}`}
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                        Chat
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 <div className="flex items-center gap-2 pt-1">
                   <button

@@ -76,6 +76,44 @@ Common workflows:
 4. Use `/workflow` for graph-based execution.
 5. Monitor `/agents` for currently running agents.
 
+## Configuration
+
+### Port Configuration
+
+By default:
+- Frontend (Web UI): `http://localhost:5173`
+- Backend API: `http://localhost:3001`
+
+To use different ports, set environment variables in `.env`:
+
+```bash
+# Frontend port (defaults to 5173, auto-increments if already in use)
+VITE_PORT=5173
+
+# Backend port (defaults to 3001)
+PORT=3001
+```
+
+**Note:** If a port is already in use, the frontend automatically tries the next available port (5174, 5175, etc.).
+
+## Troubleshooting
+
+### Port Already in Use
+
+If you get `Port 5173 is already in use`:
+
+1. **Quick fix:** The dev server will automatically use the next available port (5174, 5175, etc.)
+2. **Manual fix:** Kill the old process:
+   ```bash
+   # Windows: Find and kill the process using port 5173
+   netstat -ano | findstr :5173
+   taskkill /PID <PID> /F
+   
+   # Linux/macOS:
+   lsof -ti:5173 | xargs kill -9
+   ```
+3. **Custom port:** Set `VITE_PORT` in `.env` before running `pnpm dev`
+
 ## Project Structure
 
 ```text

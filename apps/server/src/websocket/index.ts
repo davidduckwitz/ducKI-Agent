@@ -43,6 +43,9 @@ export function setupWebSocket(
   io.on("connection", (socket) => {
     logger.info("Client connected", { id: socket.id });
 
+    // Send initial agent metrics snapshot when client connects
+    socket.emit("agent:metrics", agentRegistry.snapshot());
+
     // Chat with streaming
     socket.on("chat:message", async (data: {
       message: string;

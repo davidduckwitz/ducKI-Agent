@@ -90,8 +90,26 @@ export function ChatContainer() {
   const conversationsViewportRef = useRef<HTMLElement>(null);
   const pendingPrependHeightRef = useRef<number | null>(null);
   const stickToBottomRef = useRef(true);
+  const activeConversationRef = useRef<HTMLDivElement>(null);
 
   const defaultExpandedForType = (eventType?: AgentEventType) => false;
+
+  useEffect(() => {
+    if (activeConversationRef.current && conversationsViewportRef.current) {
+      const viewport = conversationsViewportRef.current;
+      const element = activeConversationRef.current;
+      const elementTop = element.offsetTop;
+      const elementHeight = element.clientHeight;
+      const viewportHeight = viewport.clientHeight;
+      const scrollTop = viewport.scrollTop;
+
+      if (elementTop < scrollTop) {
+        viewport.scrollTop = elementTop - 8;
+      } else if (elementTop + elementHeight > scrollTop + viewportHeight) {
+        viewport.scrollTop = elementTop + elementHeight - viewportHeight + 8;
+      }
+    }
+  }, [conversationId]);
 
   const conversationsQuery = useInfiniteQuery({
     queryKey: ["chat", "conversations", "page"],
@@ -498,6 +516,7 @@ export function ChatContainer() {
         {conversations.map((conv) => (
           <div
             key={conv.id}
+            ref={conversationId === conv.id ? activeConversationRef : null}
             className={`w-full rounded-lg border px-3 py-2 transition ${
               conversationId === conv.id
                 ? "border-blue-500 bg-blue-500/10"
