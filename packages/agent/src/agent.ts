@@ -1643,6 +1643,62 @@ export class Agent {
     return text + closers;
   }
 
+  /** Serializes a tool result to JSON bounded to maxSize, without ever slicing the
+   *  serialized text itself - naively cutting a JSON string at a byte offset (the previous
+   *  approach) routinely lands mid-string or mid-escape and produces invalid JSON, which then
+   *  breaks two things downstream: the model receives unparseable garbage as the tool result
+   *  in the next iteration, and reloading the conversation later re-parses this same content
+   *  to decide success/failure (see mapPersistedMessage in ChatContainer.tsx) - a parse
+   *  failure there silently defaults to "failed", mislabeling a successful call. Truncating
+   *  individual string fields *before* serializing keeps the structure valid at any size. */
+  private boundToolResultJson(
+    value: unknown,
+    maxSize: number,
+    maxFieldLength = 4000
+  ): { json: string; truncated: boolean; originalSize: number } {
+    const original = JSON.stringify(value);
+    if (original.length <= maxSize) {
+      return { json: original, truncated: false, originalSize: original.length };
+    }
+
+    const bounded = this.truncateLargeStrings(value, maxFieldLength);
+    const boundedJson = JSON.stringify(bounded);
+    if (boundedJson.length <= maxSize) {
+      return { json: boundedJson, truncated: true, originalSize: original.length };
+    }
+
+    // Per-field truncation still wasn't enough (e.g. many separately-bounded fields) - fall
+    // back to a minimal, always-valid summary rather than slicing boundedJson itself.
+    const summary = {
+      success: (value as { success?: boolean } | null)?.success ?? false,
+      error: (value as { error?: string } | null)?.error,
+      truncated: true,
+      note: `Result too large to include (${original.length} bytes) even after truncating individual fields - ask more narrowly if you need specific details.`,
+    };
+    return { json: JSON.stringify(summary), truncated: true, originalSize: original.length };
+  }
+
+  /** Recursively truncates long string leaves so a large object still serializes to valid,
+   *  bounded JSON (see boundToolResultJson). */
+  private truncateLargeStrings(value: unknown, maxFieldLength: number): unknown {
+    if (typeof value === "string") {
+      return value.length > maxFieldLength
+        ? `${value.slice(0, maxFieldLength)}...[truncated, ${value.length - maxFieldLength} more chars]`
+        : value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => this.truncateLargeStrings(item, maxFieldLength));
+    }
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+        out[key] = this.truncateLargeStrings(val, maxFieldLength);
+      }
+      return out;
+    }
+    return value;
+  }
+
   /** Scans from startPos to find a bracket-delimited payload by counting depth,
    *  correctly handling nested JSON with `]` inside strings/arrays.
    *  Returns the payload body (between [ and ]) and the index of the closing bracket,
@@ -2682,11 +2738,11 @@ export class Agent {
 
         // Add tool result to conversation so LLM sees it in next iteration
         // Truncate very large results to avoid API token limits
-        const resultJson = JSON.stringify(resultForLlm);
         const maxResultSize = 8000; // 8KB limit per tool result
-        const truncatedJson = resultJson.length > maxResultSize
-          ? resultJson.substring(0, maxResultSize - 100) + `\n...[truncated, original size: ${resultJson.length} bytes]`
-          : resultJson;
+        const { json: truncatedJson, truncated, originalSize } = this.boundToolResultJson(
+          resultForLlm,
+          maxResultSize
+        );
 
         const toolResultMessage: LLMMessage = {
           role: "tool",
@@ -2699,8 +2755,8 @@ export class Agent {
         this.logger.info("[TOOL-CALLS] Added tool result to conversation", {
           callId: executed.id,
           toolName: toolCall?.toolName,
-          resultSize: resultJson.length,
-          truncated: resultJson.length > maxResultSize,
+          resultSize: originalSize,
+          truncated,
         });
 
         // Extract and track the latest browser sessionId from results
