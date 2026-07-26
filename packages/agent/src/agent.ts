@@ -2695,11 +2695,17 @@ export class Agent {
 
           const rawContent = typeof message.content === "string" ? message.content : "";
           let clippedContent = rawContent;
-          if (useCompression && rawContent.length > 1500) {
+
+          // Never compress tool results - LLM needs complete data to process correctly
+          const isToolResult = message.role === "tool";
+
+          if (!isToolResult && useCompression && rawContent.length > 1500) {
             clippedContent = rawContent.substring(0, 800) + "\n...[message compressed]";
-          } else {
+          } else if (!isToolResult) {
             clippedContent = this.truncateText(rawContent, Math.max(200, maxContextMessageChars));
           }
+          // Tool results are kept complete (no clipping)
+
           const nextChars = usedChars + clippedContent.length;
           if (selected.length > 0 && nextChars > Math.max(2000, charLimit)) break;
 
@@ -3070,7 +3076,7 @@ Emit the corrected tool call with valid JSON only, no other text.`,
         const toolResultMessage: LLMMessage = {
           role: "tool",
           content: JSON.stringify(enforcedResult),
-          toolCallId: `call_${iterations}`,
+          toolCallId: `call_${iterations}_${parsedToolCall.toolName}_policy`,
         };
         await this.conversation.addMessage(toolResultMessage);
         this.history.add(toolResultMessage, parsedToolCall.toolName);
@@ -3128,7 +3134,7 @@ Emit the corrected tool call with valid JSON only, no other text.`,
         const toolResultMessage: LLMMessage = {
           role: "tool",
           content: JSON.stringify(toolResult),
-          toolCallId: `call_${iterations}`,
+          toolCallId: `call_${iterations}_${parsedToolCall.toolName}`,
         };
         await this.conversation.addMessage(toolResultMessage);
         this.history.add(toolResultMessage, parsedToolCall.toolName);
@@ -3184,7 +3190,7 @@ Emit the corrected tool call with valid JSON only, no other text.`,
               const repairResultMessage: LLMMessage = {
                 role: "tool",
                 content: JSON.stringify(retryResult),
-                toolCallId: `call_${iterations}_repair_${attempt}`,
+                toolCallId: `call_${iterations}_${repairedCall.toolName}_repair_${attempt}`,
               };
               await this.conversation.addMessage(repairResultMessage);
               this.history.add(repairResultMessage, repairedCall.toolName);
