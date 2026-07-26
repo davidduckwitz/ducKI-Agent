@@ -438,16 +438,46 @@ export function ChatContainer() {
   // description - the real project files now exist, so it should send the agent off to
   // inspect what's actually there and ask what to change, then send it immediately (no
   // prefilled text to review) since the whole point is a fast analyze-and-ask round trip.
-  const handlePlanImprovementAnalysis = () => {
+  const handlePlanImprovementAnalysis = async () => {
     if (!currentPlan) return;
     setShowPlanPanel(false);
     const linkedProjectId = conversations.find((c) => c.id === conversationId)?.projectId;
+
+    // Left to guess, the agent has no reliable way to derive the real absolute folder from a
+    // project id/name alone (it doesn't know the shared-workspace/coding/<slug> convention,
+    // and the actual content is often one level deeper in a sub-folder it created itself) -
+    // it previously latched onto a plausible-looking but wrong path and got "Directory not
+    // found". Since execution already persists the resolved folder onto the project (see
+    // plans.ts), fetch and hand over that exact path instead of leaving it to chance.
+    let projectFolderHint =
+      "Analysiere die tatsächlich vorhandenen Dateien und den aktuellen Stand des Projekts (nutze deine Tools, z.B. filesystem/git).";
+    if (linkedProjectId) {
+      try {
+        const project = (await api.projects.get(linkedProjectId)) as { name?: string; folder?: string } | null;
+        // project.folder is only populated once this project has been executed at least
+        // once since the folder-persisting fix shipped (older projects predate it) - for
+        // those, fall back to the same slug rule the server itself uses to resolve a
+        // project's sandbox (name.toLowerCase().replace(/\s+/g, "-")), which is a
+        // deterministic derivation, not a guess.
+        const resolvedFolder =
+          project?.folder ||
+          (project?.name ? `shared-workspace/coding/${project.name.toLowerCase().replace(/\s+/g, "-")}` : undefined);
+        projectFolderHint = resolvedFolder
+          ? [
+              `Das Projekt liegt in folgendem Ordner (relativ zum Arbeitsverzeichnis des Servers, falls kein absoluter Pfad): ${resolvedFolder}`,
+              "Nutze GENAU diesen Pfad als basePath für deine filesystem/git-Tool-Aufrufe - rate den Pfad nicht selbst und verwende keinen anderen Ordner.",
+              "Liste zuerst den Inhalt dieses Ordners auf (die eigentlichen Dateien können in einem Unterordner liegen), bevor du einzelne Dateien liest.",
+            ].join("\n")
+          : `Das zugehörige Projekt hat die ID ${linkedProjectId}. Ermittle darüber (z.B. per project-Tool) den echten Projektordner, bevor du filesystem/git-Tools darauf anwendest.`;
+      } catch {
+        // Fall back to the generic instruction above if the project lookup fails.
+      }
+    }
+
     const prompt = [
       `Der folgende Plan wurde bereits umgesetzt: "${currentPlan.goal}"`,
       currentPlan.markdown ? `Ursprünglicher Plan:\n${currentPlan.markdown}` : "",
-      linkedProjectId
-        ? `Das zugehörige Projekt hat die ID ${linkedProjectId}. Ermittle darüber (z.B. per project-Tool) den Projektordner und nutze deine Tools (filesystem/git), um den tatsächlichen aktuellen Stand der Dateien zu analysieren.`
-        : "Analysiere die tatsächlich vorhandenen Dateien und den aktuellen Stand des Projekts (nutze deine Tools, z.B. filesystem/git).",
+      projectFolderHint,
       "Stelle mir anschließend gezielte Rückfragen dazu, was am bisherigen Ergebnis verbessert, korrigiert oder ergänzt werden soll, bevor du einen neuen, verbesserten Plan erstellst.",
       "Führe noch keine Änderungen aus - erst Analyse und Rückfragen.",
     ]
