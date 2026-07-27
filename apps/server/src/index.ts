@@ -267,11 +267,19 @@ async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabas
 	);
 
 	if (providerName === "lmstudio") {
+		const rawApiKey = readSettingValue(settingMap, "LM_STUDIO_API_KEY", "LM_STUDIO_API_KEY");
+		const normalizedKey = normalizeApiKey(rawApiKey);
+		console.log("[DEBUG loadProviderFromSettings] LM Studio config:", {
+			hasRawApiKey: !!rawApiKey,
+			rawKeyLength: rawApiKey?.length ?? 0,
+			hasNormalizedKey: !!normalizedKey,
+			normalizedKeyLength: normalizedKey?.length ?? 0,
+		});
 		const provider = createProvider({
 			name: "lmstudio",
 			baseUrl: readSettingValue(settingMap, "LM_STUDIO_BASE_URL", "LM_STUDIO_BASE_URL", "http://localhost:1234/v1"),
 			model: readSettingValue(settingMap, "LM_STUDIO_MODEL", "LM_STUDIO_MODEL", "local-model"),
-			apiKey: normalizeApiKey(readSettingValue(settingMap, "LM_STUDIO_API_KEY", "LM_STUDIO_API_KEY")),
+			apiKey: normalizedKey,
 		});
 		return { provider, providerName };
 	}

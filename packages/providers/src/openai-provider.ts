@@ -35,6 +35,19 @@ function bufferToBase64DataUri(buffer: Buffer, mimeType: string = "image/png"): 
 
 function convertLLMContentToOpenAI(content: string | LLMContent[]): string | ChatCompletionContentPart[] {
   if (typeof content === "string") {
+    // Check if the string is JSON (happens when content was serialized to DB and reloaded)
+    if (content.trim().startsWith("[") || content.trim().startsWith("{")) {
+      try {
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) {
+          // Recursively convert the parsed content
+          return convertLLMContentToOpenAI(parsed);
+        }
+      } catch {
+        // Not valid JSON, treat as plain text
+        return content;
+      }
+    }
     return content;
   }
   return content.map((part): ChatCompletionContentPart => {
@@ -62,7 +75,31 @@ function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] 
     if (m.role === "system") {
       return { role: "system", content: typeof m.content === "string" ? m.content : "system prompt" };
     }
-    return { role: "user", content: convertLLMContentToOpenAI(m.content) };
+
+    // For user messages with vision content
+    const metadata = typeof m.metadata === "object" ? (m.metadata as Record<string, unknown>) : {};
+    const isVisionMessage = metadata?.source === "browser_screenshot";
+
+    // Check for images in LLMContent array (standard format)
+    let hasImageUrl = false;
+    if (Array.isArray(m.content)) {
+      hasImageUrl = (m.content as LLMContent[]).some((part) => part.type === "image_url");
+    }
+
+    // DEBUG: Log vision messages
+    if (isVisionMessage || hasImageUrl) {
+      console.log("[DEBUG toOpenAIMessages] Vision message detected:", {
+        source: metadata.source,
+        contentType: typeof m.content,
+        contentIsArray: Array.isArray(m.content),
+        hasImageUrl,
+        contentLength: Array.isArray(m.content) ? (m.content as LLMContent[]).length : 0,
+      });
+    }
+
+    const userMessage: any = { role: "user", content: convertLLMContentToOpenAI(m.content) };
+
+    return userMessage;
   });
 }
 
@@ -181,6 +218,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
+    console.log("[DEBUG OpenAIProvider.generate] Provider name:", this.name, "Type:", this.constructor.name);
     const merged = { ...this.defaultOptions, ...options };
 
     const completion = await this.withRateLimitRetry(() =>

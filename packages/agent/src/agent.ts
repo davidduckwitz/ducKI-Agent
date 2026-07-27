@@ -60,6 +60,10 @@ When a request needs execution, plan first, create or update project/task record
 Always think step-by-step, keep state in the database, and return concise progress updates.
 Use ./shared-workspace as collaborative file area for user-provided artifacts and generated deliverables.
 
+CRITICAL: When you say you will do something (e.g., "I will create a file", "I will send to Discord"), you MUST emit the actual [TOOL:...] calls immediately - DO NOT just describe what you will do. Every action must be followed by its tool call.
+
+IMPORTANT: NEVER repeat the same tool call twice in the same conversation. Once you call a tool, you have already executed it - do not call it again unless the result indicates failure. If you need to use a tool again with different parameters, that's OK, but with the SAME parameters, skip it.
+
 ## Browser Tool Workflow (IMPORTANT - READ CAREFULLY)
 When using the browser tool for web automation, emit ALL browser action calls in ONE turn, sequentially.
 The executor automatically handles session ID management and sequential execution.
@@ -144,6 +148,7 @@ export class Agent {
   private readonly autoSkillMinOverlap = parseInt(process.env["AGENT_AUTO_SKILL_MIN_OVERLAP"] ?? "2");
   private autoSkillSelectionAttempts = 0;
   private autoSkillSelections = 0;
+  private currentScreenshotMessage: LLMMessage | undefined;
 
   constructor(
     private readonly provider: LLMProvider,
@@ -996,7 +1001,9 @@ export class Agent {
     input: Record<string, unknown>,
     controls: AgentRuntimeControls
   ): Promise<{ ok: true; input: Record<string, unknown> } | { ok: false; error: string }> {
-    const normalizedName = toolName.trim().toLowerCase();
+    // Resolve tool aliases FIRST (e.g., "task_split" -> "task")
+    const resolvedToolName = resolveToolAlias(toolName);
+    const normalizedName = resolvedToolName.trim().toLowerCase();
     const normalizedInput: Record<string, unknown> = { ...input };
 
     if (normalizedName === "shell" && normalizedInput["timeout"] === undefined) {
@@ -1841,6 +1848,19 @@ export class Agent {
    * avoiding silent drops of payloads containing `]` (array values, strings with brackets).
    * Returns found calls plus unparsed markers for guardrail reporting.
    */
+  /**
+   * Check if a tool can safely be called with empty/default arguments.
+   * Stateless tools (shell, filesystem, etc) can use fallback with empty args.
+   * Stateful tools (browser, etc) require specific parameters and should fail.
+   */
+  private canUseFallbackEmptyArgs(toolName: string): boolean {
+    const statelessTools = new Set([
+      "shell", "http", "task", "project", "memory", "workflow",
+      "history", "git", "skill_manage", "plan"
+    ]);
+    return statelessTools.has(toolName.toLowerCase());
+  }
+
   private extractAllToolCalls(response: string): {
     calls: Array<{ toolName: string; input: Record<string, unknown> }>;
     markerCount: number;
@@ -1901,7 +1921,17 @@ export class Agent {
           if (parsed) {
             calls.push(parsed);
           }
+        } else if (this.canUseFallbackEmptyArgs(toolName)) {
+          // Fallback: try calling with empty args if parsing failed (only for stateless tools)
+          const parsed = this.resolveToolNameAndInput(toolName, {});
+          if (parsed) {
+            this.logger.debug("[PARSER] Fallback: <|tool_call> format with empty args", { toolName, body });
+            calls.push(parsed);
+          } else {
+            unparsed.push(`<|tool_call>call:${toolName}(${body})<tool_call|>`);
+          }
         } else {
+          // Don't fallback for stateful tools - incomplete args are too risky
           unparsed.push(`<|tool_call>call:${toolName}(${body})<tool_call|>`);
         }
         fromIndex = markerIndex + "<|tool_call>call:".length + closingPos + closingMarker.length;
@@ -1970,6 +2000,15 @@ export class Agent {
         if (parsed) {
           calls.push(parsed);
         }
+      } else if (toolName && /^[A-Za-z_][A-Za-z0-9_\-]*$/.test(toolName) && this.canUseFallbackEmptyArgs(toolName)) {
+        // Fallback: try calling with empty args if parsing failed (only for stateless tools)
+        this.logger.debug("[PARSER] Fallback: call format with empty args", { toolName, body });
+        const parsed = this.resolveToolNameAndInput(toolName, {});
+        if (parsed) {
+          calls.push(parsed);
+        } else {
+          unparsed.push(`call:${toolName}(${body})`);
+        }
       } else {
         unparsed.push(`call:${toolName}(${body})`);
       }
@@ -2014,6 +2053,22 @@ export class Agent {
       if (firstBrace >= 0 && lastBrace > firstBrace) {
         const args = this.parseLooseObject(tail.slice(firstBrace, lastBrace + 1));
         if (args) return this.resolveToolNameAndInput(toolName, args);
+      }
+    }
+
+    // Last resort: if we can extract just the tool name with no arguments
+    // For stateless tools (shell, filesystem, etc), call with empty args
+    // For stateful tools (browser, etc), better to fail than execute with incomplete state
+    const toolNameOnly = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)(?:\s|$)/);
+    if (toolNameOnly?.[1]) {
+      const toolName = toolNameOnly[1];
+
+      if (this.canUseFallbackEmptyArgs(toolName)) {
+        this.logger.debug("[PARSER] Fallback: stateless tool with empty args", { toolName, body });
+        return this.resolveToolNameAndInput(toolName, {});
+      } else {
+        this.logger.debug("[PARSER] Fallback rejected for stateful tool", { toolName, body, reason: "requires_specific_args" });
+        // Don't use fallback for stateful tools like browser that need specific parameters
       }
     }
 
@@ -2377,23 +2432,17 @@ export class Agent {
    * whole-turn version of the standalone "plan" tool (plan-tool.ts); both share
    * formatPlanAsMarkdown so a plan reads the same regardless of which path produced it.
    */
-  private compressImageBuffer(buffer: Buffer, maxSizeBytes: number = 50000): Buffer {
-    // Reduce image size for better compatibility with external APIs (Gemini, etc.)
-    // Gemini/OpenRouter works better with smaller images than Claude does
+  private compressImageBuffer(buffer: Buffer, maxSizeBytes: number = 200000): Buffer {
+    // LM Studio (and most LLM providers) can handle 200KB+ images
+    // Only warn if significantly larger
     if (buffer.length > maxSizeBytes) {
       this.logger.warn("Image buffer exceeds limit for external APIs", {
         size: buffer.length,
         max: maxSizeBytes,
-        recommendation: "Consider using sharp library for actual compression; currently truncating base64 encoding",
+        recommendation: "Consider installing sharp library for real compression; for now accepting oversized image",
       });
-      // Truncate base64 to fit within limits (rough estimate: base64 is 33% larger than binary)
-      const base64Length = (maxSizeBytes * 3) / 4;
-      const b64 = buffer.toString("base64").slice(0, base64Length);
-      try {
-        return Buffer.from(b64, "base64");
-      } catch {
-        return buffer;
-      }
+      // Don't truncate - it destroys the image! Better to send full image than corrupted one
+      return buffer;
     }
     return buffer;
   }
@@ -2473,15 +2522,17 @@ export class Agent {
 
     if (!buffer) return;
 
-    // Compress image aggressively to fit in database (target ~20KB compressed)
+    // Compress image for efficiency (WebP is already compressed)
     buffer = this.compressImageBuffer(buffer);
 
-    // Final safety check - if still too large, skip to avoid database truncation
-    const maxSizeForDb = 50000; // 50KB hard limit
+    // Allow larger images for better vision analysis (200KB limit)
+    // Database can handle this, and LLM providers support it
+    const maxSizeForDb = 200000; // 200KB limit
     if (buffer.length > maxSizeForDb) {
-      this.logger.warn("Screenshot still too large after compression, skipping", {
+      this.logger.warn("Screenshot exceeds maximum size, skipping", {
         size: buffer.length,
         max: maxSizeForDb,
+        recommendation: "Image is too large even after compression",
       });
       return;
     }
@@ -2489,57 +2540,40 @@ export class Agent {
     const url = (data.url as string) ?? "(unknown)";
     const base64String = buffer.toString("base64");
 
-    const instruction =
-      `Screenshot captured from: ${url}\n\n` +
-      `Analyze this screenshot carefully and provide:\n` +
-      `1. What page/content is visible?\n` +
-      `2. Key elements, text, or features you can see\n` +
-      `3. Any visual indicators of success, errors, or problems\n` +
-      `4. Layout and design observations\n` +
-      `5. Recommendations for next steps based on what you see`;
+    const analysisText = `Screenshot captured from: ${url}\n\nAnalyze this screenshot and describe:\n1. Page content and what you see\n2. Key text, buttons, and interactive elements\n3. Visual layout and design\n4. Any errors or status indicators\n5. Current state relative to expected result`;
 
-    // Detect provider type to use appropriate image format
-    const isOllamaProvider = this.provider.name?.toLowerCase().includes("ollama") ||
-                             this.provider.name?.toLowerCase().includes("lmstudio");
+    // Use standard LLMContent[] format for ALL providers
+    // Each provider implementation handles conversion to its own API format:
+    // - OpenAI/Claude: uses content array directly
+    // - Ollama: converts image_url to separate images field
+    const imageContent: LLMContent[] = [
+      {
+        type: "image_url",
+        image_url: { url: `data:image/webp;base64,${base64String}`, detail: "high" }
+      },
+      {
+        type: "text",
+        text: analysisText
+      }
+    ];
 
-    let screenshotMessage: LLMMessage;
+    const screenshotMessage: LLMMessage = {
+      role: "user",
+      content: imageContent,
+      metadata: { source: "browser_screenshot", url },
+    };
 
-    if (isOllamaProvider) {
-      // Ollama/LM Studio (Gemma4) expects images as separate field: { role, content, images: [base64] }
-      screenshotMessage = {
-        role: "user",
-        content: instruction,
-        metadata: { source: "browser_screenshot" },
-      } as any;
-      (screenshotMessage as any).images = [base64String];
-
-      this.logger.info("Screenshot message added (Ollama format)", {
-        base64Size: base64String.length,
-        bufferSize: buffer.length,
-        provider: this.provider.name,
-      });
-    } else {
-      // OpenAI-compatible format: { role, content: [{ type: "image_url", ... }, { type: "text", ... }] }
-      const imageContent: LLMContent[] = [
-        { type: "image_url", image_url: { url: `data:image/webp;base64,${base64String}` } },
-        { type: "text", text: instruction },
-      ];
-      screenshotMessage = {
-        role: "user",
-        content: imageContent,
-        metadata: { source: "browser_screenshot" },
-      };
-
-      this.logger.info("Screenshot message added (OpenAI format)", {
-        base64Size: base64String.length,
-        bufferSize: buffer.length,
-        provider: this.provider.name,
-      });
-    }
-
-    await this.conversation.addMessage(screenshotMessage);
+    // Store screenshot message to be added at each iteration
+    // Don't persist to DB - vision messages are ephemeral but need to persist across iterations
+    this.currentScreenshotMessage = screenshotMessage;
     this.history.add(screenshotMessage, "screenshot");
 
+    this.logger.info("Screenshot vision message stored for iterations", {
+      base64Size: base64String.length,
+      bufferSize: buffer.length,
+      url,
+      provider: this.provider.name,
+    });
   }
 
   private async runPlanMode(
@@ -2633,14 +2667,23 @@ export class Agent {
       deduplicatedCount: extractResult.calls.length - toolCalls.length,
     });
 
-    if (extractResult.unparsed.length > 0) {
-      this.logger.warn("[TOOL-CALLS] Unparsed tool call markers detected", {
+    // Only trigger guardrail if we found markers but couldn't parse ANY of them.
+    // If we successfully parsed some calls despite unparsed markers, let them execute.
+    if (extractResult.unparsed.length > 0 && toolCalls.length === 0) {
+      this.logger.warn("[TOOL-CALLS] Unparsed tool call markers detected with no successful parses", {
         unparsed: extractResult.unparsed.slice(0, 5),
       });
-      emit("guardrail", "Partially parsed multi-tool-call batch", {
+      emit("guardrail", "Unable to parse any tool calls from response", {
         markerCount: extractResult.markerCount,
         parsed: toolCalls.length,
         unparsed: extractResult.unparsed,
+      });
+    } else if (extractResult.unparsed.length > 0 && toolCalls.length > 0) {
+      // Log partial parse success (some calls were extracted, some weren't) at debug level
+      this.logger.debug("[TOOL-CALLS] Partial parse success: extracted some calls despite unparsed markers", {
+        parsed: toolCalls.length,
+        unparsed: extractResult.unparsed.length,
+        proceeding: true,
       });
     }
 
@@ -2795,12 +2838,11 @@ export class Agent {
         });
 
         // A successful browser screenshot carries the actual image as base64 in
-        // data.screenshot. That belongs to the user, not the model's context: emit it
-        // directly as a browser_preview event so the chat UI renders it inline (see
-        // BrowserPreview.tsx), and keep it out of the LLM-facing tool result below - a
-        // multi-KB/MB base64 blob would blow straight through the 8KB truncation next,
-        // corrupting the JSON, and even intact it's just token-wasting noise a text model
-        // can't do anything useful with.
+        // data.screenshot. Remove it from the tool result to save tokens (the actual
+        // screenshot is added to the conversation as a separate vision message by
+        // handleScreenshotCapture, so the model can analyze it). A multi-KB/MB base64
+        // blob in the tool result would waste tokens and add nothing since the model
+        // will see the same image in the vision message with better context.
         const rawResultData = executed.result.data as Record<string, unknown> | undefined;
         const screenshotBase64 = toolCall?.toolName === "browser" && executed.result.success
           ? (rawResultData?.["screenshot"] as string | undefined)
@@ -2886,15 +2928,10 @@ export class Agent {
         });
       }
 
-      // If we got a browser sessionId, add a context message so LLM knows to use it
+      // Browser session ID is tracked internally - no need to add to conversation
+      // This keeps the conversation clean without system context noise
       if (latestBrowserSessionId) {
-        const sessionContextMessage: LLMMessage = {
-          role: "assistant",
-          content: `[System Context] Browser session opened: ${latestBrowserSessionId}. I'll use this session ID for subsequent browser actions.`,
-        };
-        await this.conversation.addMessage(sessionContextMessage);
-        this.history.add(sessionContextMessage, "system");
-        this.logger.info("[TOOL-CALLS] Added browser sessionId context message", {
+        this.logger.info("[TOOL-CALLS] Tracked browser sessionId internally", {
           sessionId: latestBrowserSessionId,
         });
       }
@@ -3047,8 +3084,37 @@ export class Agent {
     // shelling out to a Unix `date` command that doesn't exist on Windows.
     const isDateTimeQuery = this.isDateTimeIntent(userInput);
 
+    // Detect what tools/queries are involved - this affects iteration limits for ALL modes
+    const hasBrowserTool = userInput.toLowerCase().includes("browser") ||
+                           userInput.toLowerCase().includes("screenshot") ||
+                           userInput.toLowerCase().includes("navigate") ||
+                           userInput.toLowerCase().includes("goto");
+    const hasTaskTool = userInput.toLowerCase().includes("task") ||
+                        userInput.toLowerCase().includes("project") ||
+                        userInput.toLowerCase().includes("tracked");
+
     // In lightweight/chatbot modes, limit iterations and disable planning/reflection
     const adjustedControls = { ...controls };
+
+    // Adjust iteration limits based on detected tools/queries (applies to all modes)
+    if (hasTaskTool) {
+      // Task execution needs 3+ iterations: execute tools, read results, generate response
+      adjustedControls.maxIterations = Math.min(Math.max(3, controls.maxIterations), 10);
+    } else if (isDateTimeQuery || hasBrowserTool) {
+      // Browser/Date-time queries need 2+ iterations
+      adjustedControls.maxIterations = Math.min(Math.max(2, controls.maxIterations), 10);
+    }
+
+    this.logger.debug("[RUNLOOP] Mode and iteration adjustment", {
+      effectiveMode,
+      currentMaxIterations: controls.maxIterations,
+      adjustedMaxIterations: adjustedControls.maxIterations,
+      hasTaskTool,
+      hasBrowserTool,
+      isDateTimeQuery,
+      userInputPreview: userInput.substring(0, 100),
+    });
+
     if (effectiveMode === "lightweight") {
       adjustedControls.maxIterations = Math.min(2, controls.maxIterations);
       adjustedControls.enableReflection = false;
@@ -3059,7 +3125,27 @@ export class Agent {
       // words. A date/time question that lands in chatbot mode still needs exactly that one
       // tool round-trip, so it gets the same 2-iteration budget as lightweight mode instead
       // of silently ending in "no answer generated" despite the tool having succeeded.
-      adjustedControls.maxIterations = isDateTimeQuery ? Math.min(2, controls.maxIterations) : 1;
+      // Similarly, browser tools that capture screenshots need 2 iterations: first to take
+      // the screenshot, second to analyze the vision message that was added.
+      // Task execution needs 3 iterations: execute, read result, generate response
+      const hasBrowserTool = userInput.toLowerCase().includes("browser") ||
+                             userInput.toLowerCase().includes("screenshot") ||
+                             userInput.toLowerCase().includes("navigate") ||
+                             userInput.toLowerCase().includes("goto");
+      const hasTaskTool = userInput.toLowerCase().includes("task") ||
+                          userInput.toLowerCase().includes("project") ||
+                          userInput.toLowerCase().includes("tracked");
+
+      if (hasTaskTool) {
+        // Task execution needs 3 iterations minimum
+        adjustedControls.maxIterations = Math.min(3, controls.maxIterations);
+      } else if (isDateTimeQuery || hasBrowserTool) {
+        // Browser/Date-time queries need 2 iterations
+        adjustedControls.maxIterations = Math.min(2, controls.maxIterations);
+      } else {
+        // Other simple queries need 1 iteration
+        adjustedControls.maxIterations = 1;
+      }
       adjustedControls.enableReflection = false;
     }
 
@@ -3426,6 +3512,13 @@ export class Agent {
     const repeatedToolCalls = new Map<string, number>();
     let malformedToolCallAttempts = 0;
 
+    this.logger.info("[RUNLOOP] Starting iteration loop", {
+      maxIterations: adjustedControls.maxIterations,
+      hasTaskTool,
+      hasBrowserTool,
+      isDateTimeQuery,
+    });
+
     while (iterations < adjustedControls.maxIterations) {
       if (this.stopRequested) {
         emit("reasoning", "Run wurde vom Benutzer gestoppt.");
@@ -3462,7 +3555,14 @@ export class Agent {
       }
 
       const buildConversationWindow = (messageLimit: number, charLimit: number): LLMMessage[] => {
-        const allMessages = this.conversation.getMessages();
+        let allMessages = this.conversation.getMessages();
+
+        // Add current screenshot message if one exists (it needs to be in every iteration)
+        if (this.currentScreenshotMessage) {
+          this.logger.debug("[BUILDMSGS] Adding stored screenshot message to conversation window");
+          allMessages = [...allMessages, this.currentScreenshotMessage];
+        }
+
         if (allMessages.length === 0) return [];
 
         const selected: LLMMessage[] = [];
@@ -3481,7 +3581,13 @@ export class Agent {
         for (let index = allMessages.length - 1; index >= 0; index--) {
           const message = allMessages[index];
           if (!message) continue;
-          if (selected.length >= Math.max(1, messageLimit)) break;
+
+          // Tool results are CRITICAL - never skip them even if messageLimit reached
+          // They contain the results that the LLM needs to process
+          const isToolResult = message.role === "tool";
+
+          // For non-tool messages, respect the limit
+          if (!isToolResult && selected.length >= Math.max(1, messageLimit)) break;
 
           // Support both string content and array content (e.g., multimodal messages with images)
           let rawContent = "";
@@ -3503,7 +3609,6 @@ export class Agent {
           let clippedContent: string | LLMContent[] = finalContent;
 
           // Never compress tool results or multimodal content - LLM needs complete data
-          const isToolResult = message.role === "tool";
           const isSystemMessage = message.role === "system";
           const isMultimodal = Array.isArray(finalContent);
 
