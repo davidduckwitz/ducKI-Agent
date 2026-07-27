@@ -116,8 +116,28 @@ function buildScriptTool(
         );
         scriptOutcome = { result: executed.result ?? null, logs: executed.logs };
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        let friendlyError = message;
+
+        // Enhance common error messages
+        if (message.includes("require() is not available")) {
+          friendlyError = message;
+        } else if (message.includes("is not a function") && message.includes("execSync")) {
+          friendlyError = "Script cannot execute shell commands. Use the 'shell' tool instead. " + message;
+        } else if (message.includes("readFileSync") || message.includes("writeFileSync")) {
+          friendlyError = "Script cannot directly access files. Use the 'filesystem' tool instead. " + message;
+        } else if (message.includes("timed out")) {
+          friendlyError = "Script execution timed out (1500ms limit). Optimize the script logic.";
+        }
+
+        logger.warn("Script execution failed", {
+          name: manifest.name,
+          error: friendlyError,
+          input: input && typeof input === "object" ? Object.keys(input).join(", ") : undefined,
+        });
+
         // Hard script failure: no subagent call, no LLM cost for a run that never produced a result.
-        return { success: false, data: null, error: error instanceof Error ? error.message : String(error) };
+        return { success: false, data: null, error: friendlyError };
       }
 
       if (!manifest.subagent) {

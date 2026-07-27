@@ -65,30 +65,52 @@ export const shellTool: ToolExecutor = {
     try {
       if (isWindows && looksUnixShellCommand(command)) {
         const bashPath = findBashOnWindows();
-        if (!bashPath) {
+        if (bashPath) {
+          const output = execFileSync(bashPath, ["-lc", command], {
+            cwd,
+            encoding: "utf8",
+            timeout,
+            maxBuffer: 10 * 1024 * 1024,
+          });
+
+          return {
+            success: true,
+            data: {
+              output: output.trim(),
+              exitCode: 0,
+              shell: "bash",
+            },
+          };
+        }
+
+        // Fallback to PowerShell on Windows if bash is not available
+        try {
+          const psCommand = `${command}; $?`;
+          const output = execFileSync("powershell", ["-NoProfile", "-Command", psCommand], {
+            cwd,
+            encoding: "utf8",
+            timeout,
+            maxBuffer: 10 * 1024 * 1024,
+          });
+
+          return {
+            success: true,
+            data: {
+              output: output.trim(),
+              exitCode: 0,
+              shell: "powershell",
+            },
+          };
+        } catch (fallbackError) {
           return {
             success: false,
             data: null,
             error:
-              "Unix shell command detected on Windows, but bash is not available. Use PowerShell commands or install Git Bash/WSL.",
+              "Unix shell command detected on Windows, but bash is not available and PowerShell fallback failed. " +
+              "Install Git Bash/WSL for Unix commands, or rewrite the command for PowerShell/cmd.exe. " +
+              (fallbackError instanceof Error ? fallbackError.message : String(fallbackError)),
           };
         }
-
-        const output = execFileSync(bashPath, ["-lc", command], {
-          cwd,
-          encoding: "utf8",
-          timeout,
-          maxBuffer: 10 * 1024 * 1024,
-        });
-
-        return {
-          success: true,
-          data: {
-            output: output.trim(),
-            exitCode: 0,
-            shell: "bash",
-          },
-        };
       }
 
       const output = execSync(command, {

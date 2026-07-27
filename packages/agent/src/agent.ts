@@ -2377,12 +2377,23 @@ export class Agent {
    * whole-turn version of the standalone "plan" tool (plan-tool.ts); both share
    * formatPlanAsMarkdown so a plan reads the same regardless of which path produced it.
    */
-  private compressImageBuffer(buffer: Buffer, maxSizeBytes: number = 100000): Buffer {
-    // Simple compression: if buffer is larger than maxSize, indicate it should be compressed
-    // In production, use 'sharp' library for actual image resizing
-    // For now, return as-is and rely on LLM provider's vision API to handle compression
+  private compressImageBuffer(buffer: Buffer, maxSizeBytes: number = 50000): Buffer {
+    // Reduce image size for better compatibility with external APIs (Gemini, etc.)
+    // Gemini/OpenRouter works better with smaller images than Claude does
     if (buffer.length > maxSizeBytes) {
-      this.logger.warn("Large image buffer", { size: buffer.length, max: maxSizeBytes, recommendation: "Consider using sharp library for resize" });
+      this.logger.warn("Image buffer exceeds limit for external APIs", {
+        size: buffer.length,
+        max: maxSizeBytes,
+        recommendation: "Consider using sharp library for actual compression; currently truncating base64 encoding",
+      });
+      // Truncate base64 to fit within limits (rough estimate: base64 is 33% larger than binary)
+      const base64Length = (maxSizeBytes * 3) / 4;
+      const b64 = buffer.toString("base64").slice(0, base64Length);
+      try {
+        return Buffer.from(b64, "base64");
+      } catch {
+        return buffer;
+      }
     }
     return buffer;
   }
@@ -2431,26 +2442,104 @@ export class Agent {
     const action = toolInput.action as string;
     if (action !== "screenshot") return;
 
-    let buffer = toolResult.data as Buffer | undefined;
-    if (!buffer || !Buffer.isBuffer(buffer)) return;
+    const data = toolResult.data as Record<string, unknown> | undefined;
+    if (!data) return;
 
-    // Optional: Compress image if too large
+    let buffer: Buffer | undefined;
+
+    // Try multiple approaches to extract screenshot data
+    if (Buffer.isBuffer(data)) {
+      // Legacy: direct buffer (for backwards compatibility)
+      buffer = data;
+    } else if (typeof data.screenshot === "string" && data.screenshot.length > 0) {
+      // New format: base64-encoded string in 'screenshot' field (from browser tool)
+      try {
+        buffer = Buffer.from(data.screenshot, "base64");
+      } catch (error) {
+        this.logger.warn("Failed to decode base64 screenshot", { error: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    } else if (typeof data.savedTo === "string" && data.savedTo.length > 0) {
+      // File path: try to read from disk
+      try {
+        if (existsSync(data.savedTo)) {
+          buffer = readFileSync(data.savedTo);
+        }
+      } catch (error) {
+        this.logger.warn("Failed to read screenshot file", { path: data.savedTo, error: error instanceof Error ? error.message : String(error) });
+        return;
+      }
+    }
+
+    if (!buffer) return;
+
+    // Compress image aggressively to fit in database (target ~20KB compressed)
     buffer = this.compressImageBuffer(buffer);
 
-    const base64Url = `data:image/png;base64,${buffer.toString("base64")}`;
-    const imageContent: LLMContent[] = [
-      { type: "image_data", image_data: { url: base64Url, mime_type: "image/png" } },
-      { type: "text", text: "Browser screenshot captured. Please analyze the visual state and provide insights." },
-    ];
+    // Final safety check - if still too large, skip to avoid database truncation
+    const maxSizeForDb = 50000; // 50KB hard limit
+    if (buffer.length > maxSizeForDb) {
+      this.logger.warn("Screenshot still too large after compression, skipping", {
+        size: buffer.length,
+        max: maxSizeForDb,
+      });
+      return;
+    }
 
-    const screenshotMessage: LLMMessage = {
-      role: "user",
-      content: imageContent,
-      metadata: { source: "browser_screenshot" },
-    };
+    const url = (data.url as string) ?? "(unknown)";
+    const base64String = buffer.toString("base64");
+
+    const instruction =
+      `Screenshot captured from: ${url}\n\n` +
+      `Analyze this screenshot carefully and provide:\n` +
+      `1. What page/content is visible?\n` +
+      `2. Key elements, text, or features you can see\n` +
+      `3. Any visual indicators of success, errors, or problems\n` +
+      `4. Layout and design observations\n` +
+      `5. Recommendations for next steps based on what you see`;
+
+    // Detect provider type to use appropriate image format
+    const isOllamaProvider = this.provider.name?.toLowerCase().includes("ollama") ||
+                             this.provider.name?.toLowerCase().includes("lmstudio");
+
+    let screenshotMessage: LLMMessage;
+
+    if (isOllamaProvider) {
+      // Ollama/LM Studio (Gemma4) expects images as separate field: { role, content, images: [base64] }
+      screenshotMessage = {
+        role: "user",
+        content: instruction,
+        metadata: { source: "browser_screenshot" },
+      } as any;
+      (screenshotMessage as any).images = [base64String];
+
+      this.logger.info("Screenshot message added (Ollama format)", {
+        base64Size: base64String.length,
+        bufferSize: buffer.length,
+        provider: this.provider.name,
+      });
+    } else {
+      // OpenAI-compatible format: { role, content: [{ type: "image_url", ... }, { type: "text", ... }] }
+      const imageContent: LLMContent[] = [
+        { type: "image_url", image_url: { url: `data:image/webp;base64,${base64String}` } },
+        { type: "text", text: instruction },
+      ];
+      screenshotMessage = {
+        role: "user",
+        content: imageContent,
+        metadata: { source: "browser_screenshot" },
+      };
+
+      this.logger.info("Screenshot message added (OpenAI format)", {
+        base64Size: base64String.length,
+        bufferSize: buffer.length,
+        provider: this.provider.name,
+      });
+    }
 
     await this.conversation.addMessage(screenshotMessage);
     this.history.add(screenshotMessage, "screenshot");
+
   }
 
   private async runPlanMode(
@@ -2758,6 +2847,13 @@ export class Agent {
           resultSize: originalSize,
           truncated,
         });
+
+        // Handle screenshot capture: extract image data and add as visual message to conversation
+        await this.handleScreenshotCapture(
+          toolCall?.toolName ?? "unknown",
+          toolCall?.input ?? {},
+          executed.result
+        );
 
         // Extract and track the latest browser sessionId from results
         if (toolCall?.toolName === "browser" && executed.result.success) {
@@ -3387,21 +3483,38 @@ export class Agent {
           if (!message) continue;
           if (selected.length >= Math.max(1, messageLimit)) break;
 
-          const rawContent = typeof message.content === "string" ? message.content : "";
-          let clippedContent = rawContent;
+          // Support both string content and array content (e.g., multimodal messages with images)
+          let rawContent = "";
+          let finalContent: string | LLMContent[] = message.content;
 
-          // Never compress tool results - LLM needs complete data to process correctly
+          if (typeof message.content === "string") {
+            rawContent = message.content;
+            finalContent = rawContent;
+          } else if (Array.isArray(message.content)) {
+            // Multimodal content (e.g., image + text) - pass through as-is without clipping
+            // These messages are typically screenshots that need full image data
+            finalContent = message.content;
+            rawContent = (message.content as LLMContent[])
+              .filter((c) => c.type === "text")
+              .map((c) => (c as any).text || "")
+              .join(" ");
+          }
+
+          let clippedContent: string | LLMContent[] = finalContent;
+
+          // Never compress tool results or multimodal content - LLM needs complete data
           const isToolResult = message.role === "tool";
           const isSystemMessage = message.role === "system";
+          const isMultimodal = Array.isArray(finalContent);
 
-          if (!isToolResult && !isSystemMessage && useCompression && rawContent.length > 1500) {
+          if (!isToolResult && !isSystemMessage && !isMultimodal && useCompression && rawContent.length > 1500) {
             clippedContent = rawContent.substring(0, 800) + "\n...[message compressed]";
-          } else if (!isToolResult && !isSystemMessage) {
+          } else if (!isToolResult && !isSystemMessage && !isMultimodal) {
             clippedContent = this.truncateText(rawContent, Math.max(200, maxContextMessageChars));
           }
-          // Tool and system results are kept complete (no clipping)
+          // Tool results, system messages, and multimodal content are kept complete (no clipping)
 
-          const nextChars = usedChars + clippedContent.length;
+          const nextChars = usedChars + (typeof clippedContent === "string" ? clippedContent.length : rawContent.length);
           if (selected.length > 0 && nextChars > Math.max(2000, charLimit)) break;
 
           selected.push({
@@ -3460,13 +3573,34 @@ export class Agent {
 
       const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
         // DEBUG: Log what's being sent to LLM
-        const messageStructure = messages.map((m, i) => ({
-          index: i,
-          role: m.role,
-          contentLength: typeof m.content === "string" ? m.content.length : 0,
-          hasToolMarkers: typeof m.content === "string" && /\[TOOL:|<\|tool_call>/.test(m.content),
-          contentPreview: typeof m.content === "string" ? m.content.substring(0, 50) : "",
-        }));
+        const messageStructure = messages.map((m, i) => {
+          let contentLength = 0;
+          let hasToolMarkers = false;
+          let contentPreview = "";
+          let isMultimodal = false;
+
+          if (typeof m.content === "string") {
+            contentLength = m.content.length;
+            hasToolMarkers = /\[TOOL:|<\|tool_call>/.test(m.content);
+            contentPreview = m.content.substring(0, 50);
+          } else if (Array.isArray(m.content)) {
+            isMultimodal = true;
+            const textParts = (m.content as LLMContent[])
+              .filter((c) => c.type === "text")
+              .map((c) => (c as any).text || "");
+            contentPreview = textParts.join(" ").substring(0, 50);
+            contentLength = textParts.join(" ").length;
+          }
+
+          return {
+            index: i,
+            role: m.role,
+            contentLength,
+            hasToolMarkers,
+            contentPreview,
+            isMultimodal,
+          };
+        });
         this.logger.info("[LLM-CALL] Sending messages to LLM", {
           messageCount: messages.length,
           structure: messageStructure,

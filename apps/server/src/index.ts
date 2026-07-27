@@ -222,7 +222,14 @@ function readSettingValue(
 
 function parseProviderName(value: string | undefined): ProviderName {
 	const normalized = value?.trim().toLowerCase();
-	if (normalized === "openai" || normalized === "openrouter" || normalized === "ollama" || normalized === "lmstudio") {
+	if (
+		normalized === "openai" ||
+		normalized === "openrouter" ||
+		normalized === "ollama" ||
+		normalized === "lmstudio" ||
+		normalized === "claude" ||
+		normalized === "nous"
+	) {
 		return normalized;
 	}
 	return "lmstudio";
@@ -285,6 +292,25 @@ async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabas
 			baseUrl: readSettingValue(settingMap, "OPENAI_BASE_URL", "OPENAI_BASE_URL", "https://api.openai.com/v1"),
 			model: readSettingValue(settingMap, "OPENAI_MODEL", "OPENAI_MODEL", "gpt-4o"),
 			apiKey: normalizeApiKey(readSettingValue(settingMap, "OPENAI_API_KEY", "OPENAI_API_KEY")),
+		});
+		return { provider, providerName };
+	}
+
+	if (providerName === "claude") {
+		const provider = createProvider({
+			name: "claude",
+			model: readSettingValue(settingMap, "CLAUDE_MODEL", "CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+			apiKey: normalizeApiKey(readSettingValue(settingMap, "CLAUDE_API_KEY", "CLAUDE_API_KEY")),
+		});
+		return { provider, providerName };
+	}
+
+	if (providerName === "nous") {
+		const provider = createProvider({
+			name: "nous",
+			baseUrl: readSettingValue(settingMap, "NOUS_BASE_URL", "NOUS_BASE_URL"),
+			model: readSettingValue(settingMap, "NOUS_MODEL", "NOUS_MODEL"),
+			apiKey: normalizeApiKey(readSettingValue(settingMap, "NOUS_API_KEY", "NOUS_API_KEY")),
 		});
 		return { provider, providerName };
 	}

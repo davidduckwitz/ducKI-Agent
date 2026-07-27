@@ -121,6 +121,10 @@ export class Executor {
           this.lastBrowserSessionId = sessionId;
           this.registerBrowserSession(sessionId, { launchedAt: new Date().toISOString() });
           this.logger.info("Browser launched: tracked session", { sessionId });
+        } else if (action === "close") {
+          // Clear the session ID when closing to prevent reuse of closed sessions
+          this.logger.info("Browser closed: clearing session ID", { sessionId: this.lastBrowserSessionId });
+          this.lastBrowserSessionId = undefined;
         } else if (sessionId && sessionId !== this.lastBrowserSessionId) {
           // Update if a different session is returned
           this.lastBrowserSessionId = sessionId;
@@ -198,7 +202,11 @@ export class Executor {
       if (result.success && result.data) {
         const data = result.data as Record<string, unknown>;
         const sessionId = data.sessionId as string | undefined;
-        if (sessionId) {
+        // Check if this is a close action to clear the session ID
+        if (action === "close") {
+          this.lastBrowserSessionId = undefined;
+          this.logger.debug("Browser closed in batch: cleared session ID");
+        } else if (sessionId) {
           this.lastBrowserSessionId = sessionId;
           this.logger.debug("Updated last browser session ID", { sessionId });
         }

@@ -92,6 +92,18 @@ export function runScriptInSandbox(
     URLSearchParams,
     [inputVar]: sanitizeRuntimeValue(runtime?.input),
     [contextVar]: sanitizeRuntimeValue(runtime?.context),
+    require: () => {
+      throw new Error(
+        "require() is not available in scripts. Scripts cannot load external modules. " +
+        "Use the 'shell' tool to execute shell commands or 'filesystem' tool for file operations."
+      );
+    },
+    import: () => {
+      throw new Error(
+        "import is not available in scripts. Scripts cannot load external modules. " +
+        "Use the 'shell' tool to execute shell commands or 'filesystem' tool for file operations."
+      );
+    },
   });
   const wrappedScript = `(function () {\n"use strict";\n${script}\n})();`;
   const vmScript = new Script(wrappedScript);
