@@ -2364,7 +2364,7 @@ export class Agent {
   }
 
   private async loadRuntimeControls(): Promise<AgentRuntimeControls> {
-    const defaults: AgentRuntimeControls = {
+    const defaults: any = {
       maxIterations: this.maxIterations,
       timeoutMs: this.timeoutMs,
       shellToolTimeoutMs: 120_000,
@@ -2390,6 +2390,34 @@ export class Agent {
       autoSkillFallbackNone: true,
       enabledSkillAllowlist: [],
       enabledOptionalTools: [],
+      // Provider Settings (NEW)
+      providerErrorRetryPolicy: "auto",
+      providerErrorMaxRetries: 3,
+      providerErrorRetryBackoffMs: 1000,
+      providerErrorRetryBackoffMultiplier: 2,
+      providerCompressionThreshold: 80,
+      providerAutoCompressOnError: true,
+      providerCompressionMinChars: 50000,
+      providerCredentialRotationStrategy: "auto",
+      providerMaxErrorsBeforeRotation: 5,
+      providerFailoverEnabled: true,
+      providerFailoverStrategy: "intelligent",
+      providerMaxErrorsPerProvider: 5,
+      providerErrorResetWindowMs: 5 * 60 * 1000,
+      providerLogClassifications: false,
+      providerLogRetries: true,
+      providerLogFailovers: true,
+      providerDebugMode: false,
+      anthropicTimeoutMs: 30000,
+      anthropicMaxRetries: 3,
+      anthropicExtendedThinkingEnabled: false,
+      anthropicStreamingEnabled: true,
+      geminiTimeoutMs: 30000,
+      geminiMaxRetries: 3,
+      geminiSafetyThreshold: "BLOCK_NONE",
+      bedrockTimeoutMs: 30000,
+      bedrockMaxRetries: 3,
+      bedrockRegion: "us-east-1",
     };
 
     try {
@@ -2400,7 +2428,7 @@ export class Agent {
         return v === null || v === undefined || String(v).trim().length === 0 ? undefined : String(v);
       };
 
-      return {
+      const result: any = {
         maxIterations: this.parseNumberSetting(get("AGENT_MAX_ITERATIONS"), defaults.maxIterations, 1, 200),
         timeoutMs: this.parseNumberSetting(get("AGENT_TIMEOUT_MS"), defaults.timeoutMs, 5000, 3_600_000),
         shellToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_SHELL_MS"), defaults.shellToolTimeoutMs, 1000, 3_600_000),
@@ -2427,7 +2455,36 @@ export class Agent {
         enabledSkillAllowlist: this.parseSlugListSetting(get("ENABLED_SKILLS")),
         enabledOptionalTools: this.parseSlugListSetting(get("ENABLED_OPTIONAL_TOOLS")),
         alwaysLoadSkills: this.parseSlugListSetting(get("ALWAYS_LOAD_SKILLS")),
+        // Provider Settings (NEW)
+        providerErrorRetryPolicy: (get("AGENT_PROVIDER_ERROR_RETRY_POLICY") ?? defaults.providerErrorRetryPolicy) as any,
+        providerErrorMaxRetries: this.parseNumberSetting(get("AGENT_PROVIDER_ERROR_MAX_RETRIES"), defaults.providerErrorMaxRetries, 1, 10),
+        providerErrorRetryBackoffMs: this.parseNumberSetting(get("AGENT_PROVIDER_ERROR_RETRY_BACKOFF_MS"), defaults.providerErrorRetryBackoffMs, 100, 30000),
+        providerErrorRetryBackoffMultiplier: this.parseFloatSetting(get("AGENT_PROVIDER_ERROR_RETRY_BACKOFF_MULTIPLIER"), defaults.providerErrorRetryBackoffMultiplier, 1, 5),
+        providerCompressionThreshold: this.parseNumberSetting(get("AGENT_PROVIDER_COMPRESSION_THRESHOLD"), defaults.providerCompressionThreshold, 50, 99),
+        providerAutoCompressOnError: this.parseBooleanSetting(get("AGENT_PROVIDER_AUTO_COMPRESS_ON_ERROR"), defaults.providerAutoCompressOnError),
+        providerCompressionMinChars: this.parseNumberSetting(get("AGENT_PROVIDER_COMPRESSION_MIN_CHARS"), defaults.providerCompressionMinChars, 1000, 1000000),
+        providerCredentialRotationStrategy: (get("AGENT_PROVIDER_CREDENTIAL_ROTATION_STRATEGY") ?? defaults.providerCredentialRotationStrategy) as any,
+        providerMaxErrorsBeforeRotation: this.parseNumberSetting(get("AGENT_PROVIDER_MAX_ERRORS_BEFORE_ROTATION"), defaults.providerMaxErrorsBeforeRotation, 1, 100),
+        providerFailoverEnabled: this.parseBooleanSetting(get("AGENT_PROVIDER_FAILOVER_ENABLED"), defaults.providerFailoverEnabled),
+        providerFailoverStrategy: (get("AGENT_PROVIDER_FAILOVER_STRATEGY") ?? defaults.providerFailoverStrategy) as any,
+        providerMaxErrorsPerProvider: this.parseNumberSetting(get("AGENT_PROVIDER_MAX_ERRORS_PER_PROVIDER"), defaults.providerMaxErrorsPerProvider, 1, 100),
+        providerErrorResetWindowMs: this.parseNumberSetting(get("AGENT_PROVIDER_ERROR_RESET_WINDOW_MS"), defaults.providerErrorResetWindowMs, 60000, 3600000),
+        providerLogClassifications: this.parseBooleanSetting(get("AGENT_PROVIDER_LOG_CLASSIFICATIONS"), defaults.providerLogClassifications),
+        providerLogRetries: this.parseBooleanSetting(get("AGENT_PROVIDER_LOG_RETRIES"), defaults.providerLogRetries),
+        providerLogFailovers: this.parseBooleanSetting(get("AGENT_PROVIDER_LOG_FAILOVERS"), defaults.providerLogFailovers),
+        providerDebugMode: this.parseBooleanSetting(get("AGENT_PROVIDER_DEBUG_MODE"), defaults.providerDebugMode),
+        anthropicTimeoutMs: this.parseNumberSetting(get("AGENT_ANTHROPIC_TIMEOUT_MS"), defaults.anthropicTimeoutMs, 5000, 600000),
+        anthropicMaxRetries: this.parseNumberSetting(get("AGENT_ANTHROPIC_MAX_RETRIES"), defaults.anthropicMaxRetries, 0, 10),
+        anthropicExtendedThinkingEnabled: this.parseBooleanSetting(get("AGENT_ANTHROPIC_EXTENDED_THINKING"), defaults.anthropicExtendedThinkingEnabled),
+        anthropicStreamingEnabled: this.parseBooleanSetting(get("AGENT_ANTHROPIC_STREAMING"), defaults.anthropicStreamingEnabled),
+        geminiTimeoutMs: this.parseNumberSetting(get("AGENT_GEMINI_TIMEOUT_MS"), defaults.geminiTimeoutMs, 5000, 600000),
+        geminiMaxRetries: this.parseNumberSetting(get("AGENT_GEMINI_MAX_RETRIES"), defaults.geminiMaxRetries, 0, 10),
+        geminiSafetyThreshold: (get("AGENT_GEMINI_SAFETY_THRESHOLD") ?? defaults.geminiSafetyThreshold) as any,
+        bedrockTimeoutMs: this.parseNumberSetting(get("AGENT_BEDROCK_TIMEOUT_MS"), defaults.bedrockTimeoutMs, 5000, 600000),
+        bedrockMaxRetries: this.parseNumberSetting(get("AGENT_BEDROCK_MAX_RETRIES"), defaults.bedrockMaxRetries, 0, 10),
+        bedrockRegion: (get("AGENT_BEDROCK_REGION") ?? defaults.bedrockRegion) as any,
       };
+      return result;
     } catch {
       return defaults;
     }

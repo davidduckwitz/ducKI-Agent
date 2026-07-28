@@ -1,5 +1,6 @@
 import type { LLMMessage, LLMResponse, GenerateOptions } from "@ducki/shared";
 import type { LLMProvider } from "../base.js";
+import type { ProviderRouterConfig } from "../adapter-config.js";
 import { BaseAdapter } from "./base-adapter.js";
 
 interface ProviderStack {
@@ -25,22 +26,49 @@ interface FailoverResult<T> {
  * - Automatic failover on errors (retryable errors only)
  * - Provider health tracking
  * - Error classification (some errors don't warrant failover)
- * - Configurable retry policy
+ * - Settings-aware configuration
  */
 export class ProviderRouter implements LLMProvider {
   readonly name = "provider-router";
   readonly model: string;
   private stack: ProviderStack;
   private errorHistory: Map<string, { count: number; lastError: string; timestamp: number }> = new Map();
-  private readonly maxErrorsPerProvider = 5;
-  private readonly errorResetWindow = 5 * 60 * 1000; // 5 minutes
+  private config: ProviderRouterConfig;
 
-  constructor(primary: LLMProvider, fallbacks: LLMProvider[] = []) {
+  constructor(primary: LLMProvider, fallbacks: LLMProvider[] = [], config?: Partial<ProviderRouterConfig>) {
     this.stack = { primary, fallbacks };
     this.model = primary.model;
 
+    // Default config
+    const defaults: ProviderRouterConfig = {
+      maxErrorsPerProvider: 5,
+      errorResetWindow: 5 * 60 * 1000, // 5 minutes
+      healthCheckInterval: 30000, // 30 seconds
+      healthCheckEnabled: true,
+      failoverEnabled: true,
+      failoverStrategy: "intelligent",
+      failoverLogging: true,
+      providerPriorities: {
+        anthropic: 100,
+        gemini: 80,
+        bedrock: 60,
+      },
+    };
+
+    this.config = { ...defaults, ...config };
+
     if (fallbacks.length === 0) {
       console.warn("[ProviderRouter] No fallback providers configured. Single point of failure!");
+    }
+  }
+
+  /**
+   * Update configuration at runtime
+   */
+  updateConfig(config: Partial<ProviderRouterConfig>): void {
+    this.config = { ...this.config, ...config };
+    if (this.config.failoverLogging) {
+      console.log("[ProviderRouter] Configuration updated", { config: this.config });
     }
   }
 
@@ -55,17 +83,19 @@ export class ProviderRouter implements LLMProvider {
    * Check if a provider is healthy based on error history
    */
   private isProviderHealthy(providerName: string): boolean {
+    if (!this.config.healthCheckEnabled) return true;
+
     const history = this.errorHistory.get(providerName);
     if (!history) return true;
 
     // Reset errors if enough time has passed
-    if (Date.now() - history.timestamp > this.errorResetWindow) {
+    if (Date.now() - history.timestamp > this.config.errorResetWindow) {
       this.errorHistory.delete(providerName);
       return true;
     }
 
     // Unhealthy if too many errors
-    return history.count < this.maxErrorsPerProvider;
+    return history.count < this.config.maxErrorsPerProvider;
   }
 
   /**
@@ -77,12 +107,22 @@ export class ProviderRouter implements LLMProvider {
     history.lastError = error;
     history.timestamp = Date.now();
     this.errorHistory.set(providerName, history);
+
+    if (this.config.failoverLogging) {
+      console.log(`[ProviderRouter] Error recorded for ${providerName}:`, {
+        count: history.count,
+        maxAllowed: this.config.maxErrorsPerProvider,
+        error: error.slice(0, 100),
+      });
+    }
   }
 
   /**
    * Classify error and determine if failover is appropriate
    */
   private shouldFailover(error: unknown): boolean {
+    if (!this.config.failoverEnabled) return false;
+
     if (!(error instanceof Error)) return true;
 
     const message = error.message.toLowerCase();
@@ -286,6 +326,7 @@ export class ProviderRouter implements LLMProvider {
   getProviderStatus(): {
     primary: { name: string; healthy: boolean; errors: number };
     fallbacks: Array<{ name: string; healthy: boolean; errors: number }>;
+    config: ProviderRouterConfig;
   } {
     return {
       primary: {
@@ -298,6 +339,7 @@ export class ProviderRouter implements LLMProvider {
         healthy: this.isProviderHealthy(f.name),
         errors: this.errorHistory.get(f.name)?.count ?? 0,
       })),
+      config: this.config,
     };
   }
 

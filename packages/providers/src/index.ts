@@ -8,6 +8,8 @@ import { NousProvider } from "./nous-provider.js";
 // Import new multi-provider adapters
 import { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter } from "./adapters/index.js";
 import type { SpeechToTextProvider } from "@ducki/shared";
+// Export adapter configurations
+export type { AdapterConfig, ProviderRouterConfig } from "./adapter-config.js";
 import { OpenAISpeechToTextProvider } from "./openai-speech-to-text-provider.js";
 import { SileroSpeechToTextProvider } from "./silero-speech-to-text-provider.js";
 import { LocalCommandSpeechToTextProvider } from "./local-command-speech-to-text-provider.js";

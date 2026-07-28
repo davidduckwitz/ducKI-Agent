@@ -1,10 +1,13 @@
 import type { Logger } from "@ducki/logger";
+import type { ErrorClassifierConfig } from "../config/provider-settings.js";
 
 /**
  * Comprehensive error classification system (9-step pipeline).
  *
  * Classifies LLM API errors into actionable categories with recovery flags.
  * Priority order: Provider-specific → HTTP → Error codes → Patterns → Fallbacks
+ *
+ * Settings-aware: Follows AgentRuntimeControls configuration
  */
 
 export enum ErrorCategory {
@@ -57,21 +60,61 @@ export interface ErrorClassification {
 }
 
 export class ErrorClassifier {
-  constructor(private readonly logger?: Logger) {}
+  private config: ErrorClassifierConfig;
+
+  constructor(private readonly logger?: Logger, config?: Partial<ErrorClassifierConfig>) {
+    // Default config
+    const defaults: ErrorClassifierConfig = {
+      retryableErrorCategories: [
+        "RateLimited",
+        "TimeoutError",
+        "NetworkError",
+        "ProviderDown",
+        "TransientError",
+        "ContextWindowExceeded",
+        "Timeout",
+      ],
+      maxRetryAttempts: 3,
+      retryBackoffMs: 1000,
+      retryBackoffMultiplier: 2,
+      shouldCompressionThreshold: 80,
+      autoCompressOnError: true,
+      compressionMinChars: 50000,
+      rotationStrategy: "auto",
+      maxErrorsBeforeRotation: 5,
+      enableFallback: true,
+      fallbackStrategy: "primary-first",
+      logClassifications: false,
+      logRetries: true,
+    };
+
+    this.config = { ...defaults, ...config };
+  }
+
+  /**
+   * Update configuration at runtime
+   */
+  updateConfig(config: Partial<ErrorClassifierConfig>): void {
+    this.config = { ...this.config, ...config };
+    if (this.logger) {
+      this.logger.info("ErrorClassifier config updated", { config: this.config });
+    }
+  }
 
   /**
    * Classify an error (9-step pipeline)
    */
-  classify(error: unknown, context?: { lastProvider?: string; retryAttempt?: number }): ErrorClassification {
+  classify(error: unknown, context?: any): ErrorClassification {
     const message = this.extractMessage(error);
     const statusCode = this.extractStatusCode(error);
 
     // Log classification for debugging
-    if (this.logger) {
+    if (this.logger && this.config.logClassifications) {
       this.logger.debug("Classifying error", {
         message,
         statusCode,
         provider: context?.lastProvider,
+        attempt: context?.retryAttempt,
       });
     }
 
@@ -572,16 +615,22 @@ export class ErrorClassifier {
    * STEP 9: Unknown (Default Retry)
    */
   private classifyUnknown(message: string): ErrorClassification {
-    return {
+    const classification: ErrorClassification = {
       category: ErrorCategory.UnknownError,
-      retryable: true,
+      retryable: this.config.retryableErrorCategories.includes(ErrorCategory.UnknownError),
       shouldCompress: false,
       shouldRotateCredential: false,
-      shouldFallback: true,
+      shouldFallback: this.config.enableFallback,
       severity: "transient",
       recommendation: "Retry or check logs for more information",
       originalMessage: message,
     };
+
+    if (this.logger && this.config.logRetries && classification.retryable) {
+      this.logger.info("Error is retryable", { category: classification.category });
+    }
+
+    return classification;
   }
 
   /**

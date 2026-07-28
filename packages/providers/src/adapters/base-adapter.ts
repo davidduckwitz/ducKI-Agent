@@ -1,5 +1,6 @@
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "../base.js";
+import type { AdapterConfig } from "../adapter-config.js";
 
 /**
  * Base adapter for multi-provider LLM support.
@@ -11,6 +12,8 @@ import type { LLMProvider, ProviderOptions } from "../base.js";
  * 3. Translate errors to standardized format
  * 4. Track token usage accurately
  * 5. Support both streaming and non-streaming
+ *
+ * Settings-aware: Follows AdapterConfig for runtime tuning
  */
 export abstract class BaseAdapter implements LLMProvider {
   abstract readonly name: string;
@@ -18,12 +21,39 @@ export abstract class BaseAdapter implements LLMProvider {
   protected defaultOptions: GenerateOptions;
   protected baseUrl: string;
   protected apiKey?: string;
+  protected config: AdapterConfig;
 
-  constructor(options: ProviderOptions) {
+  constructor(options: ProviderOptions, config?: Partial<AdapterConfig>) {
     this.model = options.model;
     this.baseUrl = options.baseUrl;
     this.apiKey = options.apiKey;
     this.defaultOptions = options.defaultOptions ?? {};
+
+    // Default adapter config
+    const defaults: AdapterConfig = {
+      timeoutMs: 30000,
+      streamTimeoutMs: 60000,
+      maxRetries: 3,
+      backoffStrategy: "exponential",
+      enableExtendedThinking: false,
+      temperatureDefault: 1,
+      enableStreaming: true,
+      enableVision: false,
+      logRequests: false,
+      logResponses: false,
+    };
+
+    this.config = { ...defaults, ...config };
+  }
+
+  /**
+   * Update adapter config at runtime
+   */
+  updateConfig(config: Partial<AdapterConfig>): void {
+    this.config = { ...this.config, ...config };
+    if (this.config.logRequests) {
+      console.log(`[${this.name}Adapter] Config updated`, { config: this.config });
+    }
   }
 
   /**
@@ -76,13 +106,19 @@ export abstract class BaseAdapter implements LLMProvider {
   }
 
   /**
-   * Merge user options with defaults
+   * Merge user options with defaults and adapter config
    */
   protected mergeOptions(options?: GenerateOptions): GenerateOptions {
-    const merged = { ...this.defaultOptions, ...options };
+    const merged = {
+      ...this.defaultOptions,
+      ...options,
+      temperature: options?.temperature ?? this.config.temperatureDefault,
+    };
 
     // Constrain maxTokens to model limits
-    if (merged.maxTokens) {
+    if (this.config.maxTokensOverride) {
+      merged.maxTokens = this.config.maxTokensOverride;
+    } else if (merged.maxTokens) {
       const maxAllowed = this.getMaxOutputTokens();
       merged.maxTokens = Math.min(merged.maxTokens, maxAllowed);
     } else {

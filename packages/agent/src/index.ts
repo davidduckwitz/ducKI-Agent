@@ -1,7 +1,19 @@
 export { Agent } from "./agent.js";
-export { AgentOptions, AgentRunResult, AgentRunEvent, AgentRunEventType, AgentRunOptions } from "./config/interfaces_types.js"
+export { AgentOptions, AgentRunResult, AgentRunEvent, AgentRunEventType, AgentRunOptions, AgentRuntimeControls } from "./config/interfaces_types.js"
 export { ErrorClassifier, ErrorCategory } from "./executor/error-classifier.js";
 export type { ErrorClassification } from "./executor/error-classifier.js";
+// Settings exports
+export { loadAgentRuntimeControls, providerSettingsToRuntimeControls } from "./config/load-runtime-controls.js";
+export { createProviderSettings, loadProviderSettingsFromEnv } from "./config/provider-settings.js";
+export type {
+  ProviderSettings,
+  ErrorClassifierConfig,
+  AnthropicConfig,
+  GeminiConfig,
+  BedrockConfig,
+} from "./config/provider-settings.js";
+// Re-export from providers to avoid circular deps
+export type { AdapterConfig, ProviderRouterConfig } from "@ducki/providers";
 export { ConversationManager } from "./conversation/conversation.js";
 export { MemorySystem } from "./memory/memory.js";
 export { Planner } from "./planner/planner.js";

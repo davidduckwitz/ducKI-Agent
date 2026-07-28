@@ -77,22 +77,31 @@ export interface SkillScore {
 }
 
 export interface AgentRuntimeControls {
+  // Execution
   maxIterations: number;
   timeoutMs: number;
   shellToolTimeoutMs: number;
   httpToolTimeoutMs: number;
   browserToolTimeoutMs: number;
   gitToolTimeoutMs: number;
+
+  // Memory & Reflection
   enableAutoMemory: boolean;
   enableReflection: boolean;
   reflectionMaxRetries: number;
   reflectionStoreMemory: boolean;
   reflectionMetaReview: boolean;
+
+  // Reasoning & Tools
   reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;
   maxRepeatedToolCall: number;
+
+  // Self-Repair
   selfRepairEnabled: boolean;
   selfRepairMaxAttempts: number;
+
+  // Skills
   enableAutoSkillSelection: boolean;
   autoSkillScoreThreshold: number;
   autoSkillMarginThreshold: number;
@@ -103,6 +112,51 @@ export interface AgentRuntimeControls {
   enabledSkillAllowlist: string[];
   enabledOptionalTools: string[];
   alwaysLoadSkills?: string[];
+
+  // ============================================================
+  // PROVIDER SETTINGS (NEW)
+  // ============================================================
+
+  // Error Handling
+  providerErrorRetryPolicy: "auto" | "manual";
+  providerErrorMaxRetries: number;
+  providerErrorRetryBackoffMs: number;
+  providerErrorRetryBackoffMultiplier: number;
+
+  // Compression
+  providerCompressionThreshold: number; // % of max context
+  providerAutoCompressOnError: boolean;
+  providerCompressionMinChars: number;
+
+  // Credential Rotation
+  providerCredentialRotationStrategy: "auto" | "manual";
+  providerMaxErrorsBeforeRotation: number;
+
+  // Failover
+  providerFailoverEnabled: boolean;
+  providerFailoverStrategy: "intelligent" | "round-robin" | "random";
+  providerMaxErrorsPerProvider: number;
+  providerErrorResetWindowMs: number;
+
+  // Logging
+  providerLogClassifications: boolean;
+  providerLogRetries: boolean;
+  providerLogFailovers: boolean;
+  providerDebugMode: boolean;
+
+  // Adapter-Specific
+  anthropicTimeoutMs: number;
+  anthropicMaxRetries: number;
+  anthropicExtendedThinkingEnabled: boolean;
+  anthropicStreamingEnabled: boolean;
+
+  geminiTimeoutMs: number;
+  geminiMaxRetries: number;
+  geminiSafetyThreshold: "BLOCK_NONE" | "BLOCK_LOW" | "BLOCK_MED" | "BLOCK_HIGH";
+
+  bedrockTimeoutMs: number;
+  bedrockMaxRetries: number;
+  bedrockRegion: string;
 }
 
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
