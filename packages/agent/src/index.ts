@@ -1,5 +1,7 @@
 export { Agent } from "./agent.js";
 export { AgentOptions, AgentRunResult, AgentRunEvent, AgentRunEventType, AgentRunOptions } from "./config/interfaces_types.js"
+export { ErrorClassifier, ErrorCategory } from "./executor/error-classifier.js";
+export type { ErrorClassification } from "./executor/error-classifier.js";
 export { ConversationManager } from "./conversation/conversation.js";
 export { MemorySystem } from "./memory/memory.js";
 export { Planner } from "./planner/planner.js";

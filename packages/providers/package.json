@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.28.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.500.0",
+    "@google/generative-ai": "^0.13.0",
     "@ducki/logger": "workspace:*",
     "@ducki/shared": "workspace:*",
     "nodejs-whisper": "^0.3.0",

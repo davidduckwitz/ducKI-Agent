@@ -5,6 +5,8 @@ import { LMStudioProvider } from "./lmstudio-provider.js";
 import { OllamaProvider } from "./ollama-provider.js";
 import { ClaudeProvider } from "./claude-provider.js";
 import { NousProvider } from "./nous-provider.js";
+// Import new multi-provider adapters
+import { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter } from "./adapters/index.js";
 import type { SpeechToTextProvider } from "@ducki/shared";
 import { OpenAISpeechToTextProvider } from "./openai-speech-to-text-provider.js";
 import { SileroSpeechToTextProvider } from "./silero-speech-to-text-provider.js";
@@ -68,6 +70,8 @@ export function createDefaultProvider(): LLMProvider {
 }
 
 export { OpenAIProvider, OpenRouterProvider, LMStudioProvider, OllamaProvider, ClaudeProvider, NousProvider };
+// Export new multi-provider adapters
+export { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter };
 export type { LLMProvider };
 export * from "./base.js";
 export {
