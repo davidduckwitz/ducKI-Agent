@@ -44,6 +44,14 @@ Examples of CORRECT tool calls:
 - [TOOL:task({"action": "create", "title": "My Task", "projectId": 1})]
 - [TOOL:project({"action": "list"})]
 - [TOOL:shell({"command": "ls -la"})]
+- [TOOL:browser({"action": "screenshot", "sessionId": "browser_session"})]
+
+CRITICAL FOR BROWSER TASKS: ALWAYS capture screenshots AFTER navigating to a page:
+1. [TOOL:browser({"action": "launch"})]
+2. [TOOL:browser({"action": "goto", "sessionId": "browser_session", "url": "..."})]
+3. [TOOL:browser({"action": "screenshot", "sessionId": "browser_session"})]  ← REQUIRED to see page
+4. Analyze the screenshot content
+5. Take action based on what you see
 
 Rules:
 1. ALL JSON keys must be in double quotes ("key" not 'key' or key)
@@ -3877,10 +3885,28 @@ export class Agent {
         iteration: iterations,
         toolsExecuted: toolResultsMap.size,
         cleanedLength: cleanedResponse.length,
+        browserToolsCount,
+        hasScreenshot: !!this.currentScreenshotMessage,
       });
 
       // Update finalResponse to cleaned version (for reflection, final output, etc.)
       finalResponse = cleanedResponse;
+
+      // If we captured a screenshot and are still within iteration budget, add analysis prompt
+      if (this.currentScreenshotMessage && browserToolsCount > 0 && iterations < adjustedControls.maxIterations) {
+        this.logger.info("[SCREENSHOT] Screenshot captured, adding analysis prompt for next iteration", {
+          iteration: iterations,
+          remainingIterations: adjustedControls.maxIterations - iterations,
+        });
+
+        // Add a user message asking the model to analyze the screenshot
+        const analyzePrompt: LLMMessage = {
+          role: "user",
+          content: "Please analyze the screenshot I provided above. What do you see? Describe the page content, key information, and any relevant details that answer my original question.",
+        };
+        await this.conversation.addMessage(analyzePrompt);
+        this.history.add(analyzePrompt, "screenshot_analysis_prompt");
+      }
 
       // Stream the cleaned response to user (without [TOOL:...] markers)
       // The conversation history stores the raw response (with markers), but the user sees cleaned text
