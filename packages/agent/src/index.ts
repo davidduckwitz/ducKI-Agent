@@ -60,3 +60,6 @@ export { SkillBundleManager, DEFAULT_SKILL_BUNDLES } from "./skill-selector/skil
 export type { SkillBundle } from "./skill-selector/skill-bundle.js";
 export { AdvancedSkillSelector } from "./skill-selector/advanced-selector.js";
 export type { SelectionContext, SelectionResult } from "./skill-selector/advanced-selector.js";
+export { SkillSelectionService, skillSelectionService } from "./skill-selector/skill-selection-service.js";
+export { SkillSelector, skillSelector } from "./skill-selector/selector.js";
+export type { SkillMetrics } from "./skill-selector/selector.js";
