@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, type LucideIcon } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, type LucideIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
@@ -10,7 +10,7 @@ import { cn } from "../../lib/utils";
 import { ChatCleanupSettings } from "./ChatCleanupSettings";
 import { ProviderConfigSettings } from "./ProviderConfigSettings";
 import { CredentialManagementSettings } from "./CredentialManagementSettings";
-import { SkillsManagementSettings } from "./SkillsManagementSettings";
+import { DatabaseSettings } from "./DatabaseSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -25,7 +25,7 @@ interface SettingField {
   label: string;
   description: string;
   type: SettingFieldType;
-  section: "Provider" | "API" | "Speech" | "Agent" | "Memory";
+  section: "Provider" | "API" | "Speech" | "Agent" | "Memory" | "Database";
   defaultValue: string;
   options?: { label: string; value: string }[];
 }
@@ -825,10 +825,38 @@ const PREDEFINED_FIELDS: SettingField[] = [
     section: "Memory",
     defaultValue: "200",
   },
+  {
+    key: "DATABASE_ENGINE",
+    label: "Database Engine",
+    description: "Wählen Sie zwischen SQLite (lokal) und MySQL/MariaDB (netzwerk). SQLite ist das Fallback.",
+    type: "select",
+    section: "Database",
+    defaultValue: "sqlite",
+    options: [
+      { label: "SQLite (lokal)", value: "sqlite" },
+      { label: "MySQL/MariaDB (Netzwerk)", value: "mysql" },
+    ],
+  },
+  {
+    key: "DATABASE_URL",
+    label: "Database Connection URL",
+    description: "SQLite: file:./storage/ducki.db | MySQL: mysql://user:password@host:port/database",
+    type: "text",
+    section: "Database",
+    defaultValue: "file:./storage/ducki.db",
+  },
+  {
+    key: "DB_URL",
+    label: "Fallback Database URL",
+    description: "Alternativer URL für Datenbankverbindung (wird vor DATABASE_URL geprüft). Leer lassen zum Überspringen.",
+    type: "text",
+    section: "Database",
+    defaultValue: "",
+  },
 ];
 
-const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Skills";
+const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database"];
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials";
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   ...TAB_ICONS,
@@ -941,7 +969,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Skills", "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Skills", "Chat Cleanup"];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1065,9 +1093,9 @@ export function Settings() {
 
       {activeTab === "LLM Provider Config" && <ProviderConfigSettings />}
 
-      {activeTab === "Credentials" && <CredentialManagementSettings />}
+      {activeTab === "Database" && <DatabaseSettings />}
 
-      {activeTab === "Skills" && <SkillsManagementSettings />}
+      {activeTab === "Credentials" && <CredentialManagementSettings />}
 
       {activeTab === "Chat Cleanup" && (
         <div className="card space-y-3">
@@ -1123,7 +1151,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Skills" && (
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && (
         <div className="space-y-4">
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);

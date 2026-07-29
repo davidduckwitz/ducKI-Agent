@@ -12,6 +12,7 @@ import {
   Target,
   Database,
   BookOpen,
+  HardDrive,
   type LucideIcon,
 } from "lucide-react";
 
@@ -261,5 +262,6 @@ export const TAB_ICONS: Record<string, LucideIcon> = {
   API: KeyRound,
   Speech: Mic,
   Agent: Sparkles,
-  Memory: Database,
+  Memory: BookOpen,
+  Database: HardDrive,
 };

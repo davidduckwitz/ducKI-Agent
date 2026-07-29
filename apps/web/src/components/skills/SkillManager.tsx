@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Eye, EyeOff, Play, Plus, Save, Search, Star, Trash2, UploadCloud, X } from "lucide-react";
+import { BookOpen, Check, Eye, EyeOff, Play, Plus, Save, Search, Star, Trash2, UploadCloud, X, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
 import { CodePreview } from "../common/CodePreview";
 import { useI18n } from "../../lib/i18n";
+import { SkillsManagementSettings } from "../settings/SkillsManagementSettings";
+import { cn } from "../../lib/utils";
 
 interface SkillItem {
   slug: string;
@@ -191,6 +193,7 @@ const importedSkillTemplates: Array<{ name: string; description: string; content
 export function SkillManager() {
   const { t } = useI18n();
   const qc = useQueryClient();
+  const [activeTab, setActiveTab] = useState<"skills" | "bundles">("skills");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState("");
   const [draftSkill, setDraftSkill] = useState<DraftSkill>({ name: "", description: "" });
@@ -489,29 +492,62 @@ export function SkillManager() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-        <div className="card">
-          <p className="text-xs text-gray-400">{t("skillsPage.total")}</p>
-          <p className="text-2xl font-semibold">{skills.length}</p>
-        </div>
-        <div className="card border-purple-500/30 bg-purple-500/5">
-          <p className="text-xs text-purple-200">Always Loaded</p>
-          <p className="text-2xl font-semibold text-purple-100">{alwaysLoadedSet.size}</p>
-        </div>
-        <div className="card border-amber-500/30 bg-amber-500/5">
-          <p className="text-xs text-amber-200">{t("skillsPage.pinned")}</p>
-          <p className="text-2xl font-semibold text-amber-100">{pinnedSet.size}</p>
-        </div>
-        <div className="card border-emerald-500/30 bg-emerald-500/5">
-          <p className="text-xs text-emerald-200">{t("skillsPage.activeInContext")}</p>
-          <p className="text-2xl font-semibold text-emerald-100">{enabledSet.size}</p>
-        </div>
-        <div className="card border-gray-700 bg-gray-900/40">
-          <p className="text-xs text-gray-400">{t("skillsPage.deactivated")}</p>
-          <p className="text-2xl font-semibold text-gray-200">{skills.length - enabledSet.size}</p>
-        </div>
+      {/* Tab Navigation */}
+      <div className="card p-2 flex gap-2">
+        <button
+          onClick={() => setActiveTab("skills")}
+          className={cn(
+            "px-4 py-2 rounded-lg font-medium text-sm transition-colors",
+            activeTab === "skills"
+              ? "bg-blue-600 text-white"
+              : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+          )}
+        >
+          <BookOpen className="w-4 h-4 inline mr-2" />
+          Skills
+        </button>
+        <button
+          onClick={() => setActiveTab("bundles")}
+          className={cn(
+            "px-4 py-2 rounded-lg font-medium text-sm transition-colors",
+            activeTab === "bundles"
+              ? "bg-blue-600 text-white"
+              : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+          )}
+        >
+          <Sparkles className="w-4 h-4 inline mr-2" />
+          Bundles
+        </button>
       </div>
 
+      {activeTab === "skills" ? (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <div className="card">
+              <p className="text-xs text-gray-400">{t("skillsPage.total")}</p>
+              <p className="text-2xl font-semibold">{skills.length}</p>
+            </div>
+            <div className="card border-purple-500/30 bg-purple-500/5">
+              <p className="text-xs text-purple-200">Always Loaded</p>
+              <p className="text-2xl font-semibold text-purple-100">{alwaysLoadedSet.size}</p>
+            </div>
+            <div className="card border-amber-500/30 bg-amber-500/5">
+              <p className="text-xs text-amber-200">{t("skillsPage.pinned")}</p>
+              <p className="text-2xl font-semibold text-amber-100">{pinnedSet.size}</p>
+            </div>
+            <div className="card border-emerald-500/30 bg-emerald-500/5">
+              <p className="text-xs text-emerald-200">{t("skillsPage.activeInContext")}</p>
+              <p className="text-2xl font-semibold text-emerald-100">{enabledSet.size}</p>
+            </div>
+            <div className="card border-gray-700 bg-gray-900/40">
+              <p className="text-xs text-gray-400">{t("skillsPage.deactivated")}</p>
+              <p className="text-2xl font-semibold text-gray-200">{skills.length - enabledSet.size}</p>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {activeTab === "skills" && (
       <div className="grid grid-cols-1 lg:grid-cols-[360px,minmax(0,1fr)] gap-4 h-[calc(100%-210px)] min-h-[560px]">
         <div className="card overflow-y-auto space-y-3">
           <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 space-y-2 sticky top-0 z-10">
@@ -755,6 +791,7 @@ export function SkillManager() {
           )}
         </div>
       </div>
+      )}
 
       {showManageModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
@@ -833,6 +870,10 @@ export function SkillManager() {
             </div>
           </div>
         </div>
+      )}
+
+      {activeTab === "bundles" && (
+        <SkillsManagementSettings />
       )}
     </div>
   );

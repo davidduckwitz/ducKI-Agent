@@ -23,14 +23,26 @@ interface SkillBundle {
   dependencies: string[];
 }
 
-// Mock data for default skill bundles
+// Helper to create skill manifests from slugs
+const createSkillManifest = (slug: string, name?: string): SkillManifest => ({
+  slug,
+  name: name || slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+  description: `${slug} skill`,
+});
+
+// Mock data for default skill bundles - prefilled with actual skills
 const DEFAULT_SKILL_BUNDLES: SkillBundle[] = [
   {
     id: "web-development",
     name: "Web Development",
     description: "Skills for web application development and frontend work",
     category: "development",
-    skills: [],
+    skills: [
+      createSkillManifest("browser-control", "Browser Control"),
+      createSkillManifest("coding-system", "Coding System"),
+      createSkillManifest("code-review", "Code Review"),
+      createSkillManifest("json-tool-format", "JSON Tool Format"),
+    ],
     tags: ["frontend", "javascript", "typescript", "react", "html", "css"],
     priority: "high",
     minSkillsRequired: 1,
@@ -42,7 +54,13 @@ const DEFAULT_SKILL_BUNDLES: SkillBundle[] = [
     name: "Backend Development",
     description: "Skills for backend services and API development",
     category: "development",
-    skills: [],
+    skills: [
+      createSkillManifest("coding-system", "Coding System"),
+      createSkillManifest("test-driven-development", "Test Driven Development"),
+      createSkillManifest("shared-workspace-api-first", "API First Design"),
+      createSkillManifest("json-tool-format", "JSON Tool Format"),
+      createSkillManifest("code-review", "Code Review"),
+    ],
     tags: ["backend", "nodejs", "database", "api", "server"],
     priority: "high",
     minSkillsRequired: 1,
@@ -54,7 +72,13 @@ const DEFAULT_SKILL_BUNDLES: SkillBundle[] = [
     name: "DevOps & Infrastructure",
     description: "Skills for deployment, infrastructure, and monitoring",
     category: "infrastructure",
-    skills: [],
+    skills: [
+      createSkillManifest("cronjobs", "Cronjobs"),
+      createSkillManifest("shared-workspace-ops", "Workspace Operations"),
+      createSkillManifest("tool-orchestration", "Tool Orchestration"),
+      createSkillManifest("mcp-integration", "MCP Integration"),
+      createSkillManifest("security-skill", "Security Hardening"),
+    ],
     tags: ["docker", "kubernetes", "ci/cd", "deployment", "cloud", "aws", "azure"],
     priority: "high",
     minSkillsRequired: 1,
@@ -66,7 +90,12 @@ const DEFAULT_SKILL_BUNDLES: SkillBundle[] = [
     name: "Data Analysis",
     description: "Skills for data processing, analysis, and visualization",
     category: "data",
-    skills: [],
+    skills: [
+      createSkillManifest("history-search", "History Search"),
+      createSkillManifest("json-tool-format", "JSON Tool Format"),
+      createSkillManifest("llm-wiki", "LLM Wiki"),
+      createSkillManifest("memory", "Memory Management"),
+    ],
     tags: ["data", "analysis", "sql", "python", "statistics", "visualization"],
     priority: "medium",
     minSkillsRequired: 1,
@@ -78,7 +107,13 @@ const DEFAULT_SKILL_BUNDLES: SkillBundle[] = [
     name: "Automation & Scripting",
     description: "Skills for task automation and script development",
     category: "automation",
-    skills: [],
+    skills: [
+      createSkillManifest("cronjobs", "Cronjobs"),
+      createSkillManifest("workflow-orchestrator", "Workflow Orchestrator"),
+      createSkillManifest("tool-orchestration", "Tool Orchestration"),
+      createSkillManifest("discord", "Discord Integration"),
+      createSkillManifest("tasks-kanban", "Tasks Kanban"),
+    ],
     tags: ["automation", "scripting", "bash", "shell", "workflow", "robotics"],
     priority: "medium",
     minSkillsRequired: 1,
@@ -90,7 +125,12 @@ const DEFAULT_SKILL_BUNDLES: SkillBundle[] = [
     name: "Code Quality & Review",
     description: "Skills for code review, testing, and quality assurance",
     category: "analysis",
-    skills: [],
+    skills: [
+      createSkillManifest("code-review", "Code Review"),
+      createSkillManifest("test-driven-development", "Test Driven Development"),
+      createSkillManifest("security-skill", "Security Analysis"),
+      createSkillManifest("json-tool-format", "JSON Validation"),
+    ],
     tags: ["testing", "review", "quality", "linting", "debugging"],
     priority: "medium",
     minSkillsRequired: 1,
@@ -102,7 +142,12 @@ const DEFAULT_SKILL_BUNDLES: SkillBundle[] = [
     name: "Documentation",
     description: "Skills for creating and maintaining documentation",
     category: "communication",
-    skills: [],
+    skills: [
+      createSkillManifest("llm-wiki", "LLM Wiki"),
+      createSkillManifest("plan", "Plan Mode"),
+      createSkillManifest("auto-plan", "Auto Plan"),
+      createSkillManifest("coding-system", "Coding System"),
+    ],
     tags: ["documentation", "writing", "markdown", "api-docs", "guides"],
     priority: "low",
     minSkillsRequired: 1,

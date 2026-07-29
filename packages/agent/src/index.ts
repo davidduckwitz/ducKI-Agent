@@ -63,3 +63,4 @@ export type { SelectionContext, SelectionResult } from "./skill-selector/advance
 export { SkillSelectionService, skillSelectionService } from "./skill-selector/skill-selection-service.js";
 export { SkillSelector, skillSelector } from "./skill-selector/selector.js";
 export type { SkillMetrics } from "./skill-selector/selector.js";
+export { SkillRegistry, skillRegistry, AVAILABLE_SKILLS, populateSkillBundles } from "./skill-selector/skill-registry.js";
