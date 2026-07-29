@@ -72,6 +72,15 @@ CRITICAL: When you say you will do something (e.g., "I will create a file", "I w
 
 IMPORTANT: NEVER repeat the same tool call twice in the same conversation. Once you call a tool, you have already executed it - do not call it again unless the result indicates failure. If you need to use a tool again with different parameters, that's OK, but with the SAME parameters, skip it.
 
+## Responding to Tool Results - CRITICAL
+When you receive tool execution results (messages marked as "tool" role):
+1. ALWAYS analyze what each tool returned
+2. Synthesize the results into a coherent summary
+3. Answer the user's original question based on the actual results
+4. If a tool returned an error, acknowledge it and explain what it means
+5. Do NOT emit only a tool call and then go silent - you MUST provide a response after tools execute
+6. If multiple tools were executed, summarize their combined results together
+
 ## Browser Tool Workflow (IMPORTANT - READ CAREFULLY)
 When using the browser tool for web automation, emit ALL browser action calls in ONE turn, sequentially.
 The executor automatically handles session ID management and sequential execution.
@@ -3576,6 +3585,8 @@ export class Agent {
     let consecutiveToolFailures = 0;
     const repeatedToolCalls = new Map<string, number>();
     let malformedToolCallAttempts = 0;
+    let toolsJustExecuted = false; // Track if tools were executed in previous iteration
+    let emptyResponseAfterTools = false; // Track if we got empty response after tool execution
 
     this.logger.info("[RUNLOOP] Starting iteration loop", {
       maxIterations: adjustedControls.maxIterations,
@@ -3909,6 +3920,53 @@ export class Agent {
         },
       });
 
+      // CRITICAL: Detect and handle empty responses after tool execution
+      // This is a common issue with smaller/local models that go silent after seeing tool results
+      const responseIsEmpty = response.trim().length === 0;
+      if (responseIsEmpty && toolsJustExecuted && !emptyResponseAfterTools && iterations < adjustedControls.maxIterations) {
+        this.logger.warn("[RUNLOOP] Model returned empty response after tool execution, attempting recovery", {
+          iteration: iterations,
+          toolsJustExecuted,
+        });
+
+        emit("guardrail", "Model returned empty response after tool execution, retrying with explicit prompt", {
+          iteration: iterations,
+        });
+
+        // Add an explicit prompt forcing the model to respond based on tool results
+        const recoveryPrompt: LLMMessage = {
+          role: "user",
+          content: "You executed the tools. Please provide a concise response based on their results. What information did they return? How does it answer the original question?",
+        };
+        await this.conversation.addMessage(recoveryPrompt);
+        this.history.add(recoveryPrompt, "empty_response_recovery");
+
+        // Mark that we've attempted recovery once
+        emptyResponseAfterTools = true;
+
+        // Retry the LLM call
+        try {
+          messages = buildMessages("full");
+          response = await generateFromMessages(messages);
+          this.logger.info("[RUNLOOP] Recovery retry succeeded", {
+            iteration: iterations,
+            newResponseLength: response.length,
+          });
+          emit("decision", "LLM recovery retry succeeded", {
+            iteration: iterations,
+            recoveredResponseLength: response.length,
+          });
+        } catch (recoveryError) {
+          this.logger.error("[RUNLOOP] Recovery retry failed", {
+            iteration: iterations,
+            error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+          });
+          emit("guardrail", "Recovery retry failed, continuing with empty response", {
+            error: recoveryError instanceof Error ? recoveryError.message : "unknown error",
+          });
+        }
+      }
+
       // === NEW OPTION B: Early Tool-Call Extraction & Execution ===
       // Extract and execute tool calls BEFORE adding response to conversation
       // This ensures the conversation and chat only see cleaned response text
@@ -3949,20 +4007,57 @@ export class Agent {
       // Update finalResponse to cleaned version (for reflection, final output, etc.)
       finalResponse = cleanedResponse;
 
-      // If we captured a screenshot and are still within iteration budget, add analysis prompt
-      if (this.currentScreenshotMessage && browserToolsCount > 0 && iterations < adjustedControls.maxIterations) {
-        this.logger.info("[SCREENSHOT] Screenshot captured, adding analysis prompt for next iteration", {
+      // Mark that tools were just executed so we can detect if the next iteration returns empty
+      if (toolResultsMap.size > 0) {
+        toolsJustExecuted = true;
+        emptyResponseAfterTools = false; // Reset recovery flag for this execution batch
+      }
+
+      // If tools were executed and we're still within iteration budget, add analysis prompt
+      // This ensures the LLM analyzes results and provides a response (not just execute and go silent)
+      if (toolResultsMap.size > 0 && iterations < adjustedControls.maxIterations) {
+        const toolNames = Array.from(new Set(
+          Array.from(toolResultsMap.keys())
+            .map(id => {
+              // Try to extract tool name from call id or result
+              const result = toolResultsMap.get(id);
+              if (result?.data && typeof result.data === "object") {
+                const data = result.data as Record<string, unknown>;
+                return data.tool as string || "unknown";
+              }
+              return "unknown";
+            })
+            .filter(name => name !== "unknown")
+        )).join(", ") || `${toolResultsMap.size} tool(s)`;
+
+        this.logger.info("[TOOL-RESULTS] Tools executed, adding analysis prompt for next iteration", {
           iteration: iterations,
+          toolCount: toolResultsMap.size,
+          toolNames,
           remainingIterations: adjustedControls.maxIterations - iterations,
+          hasScreenshot: !!this.currentScreenshotMessage,
         });
 
-        // Add a user message asking the model to analyze the screenshot
-        const analyzePrompt: LLMMessage = {
-          role: "user",
-          content: "Please analyze the screenshot I provided above. What do you see? Describe the page content, key information, and any relevant details that answer my original question.",
-        };
+        // Add a user message asking the model to analyze tool results
+        // This is critical: without this prompt, the model might go silent after tool execution
+        let analyzePrompt: LLMMessage;
+
+        if (this.currentScreenshotMessage && browserToolsCount > 0) {
+          // If we also have a screenshot, ask about that specifically
+          analyzePrompt = {
+            role: "user",
+            content: "Please analyze the screenshot and other tool results provided above. What information did they provide? How do they answer my original question? Provide a clear summary.",
+          };
+        } else {
+          // For non-browser tools, ask for analysis of results
+          analyzePrompt = {
+            role: "user",
+            content: `Please analyze the results from the ${toolNames} tool(s) that just executed. What information did they provide? How do they answer my original question? Provide a clear summary based on these results.`,
+          };
+        }
+
         await this.conversation.addMessage(analyzePrompt);
-        this.history.add(analyzePrompt, "screenshot_analysis_prompt");
+        this.history.add(analyzePrompt, "tool_results_analysis_prompt");
       }
 
       // Stream the cleaned response to user (without [TOOL:...] markers)
@@ -3979,6 +4074,7 @@ export class Agent {
       // If no tool calls were found, we're done
       if (toolResultsMap.size === 0) {
         this.logger.info("[RUNLOOP] No tool calls found, exiting loop", { iteration: iterations });
+        toolsJustExecuted = false; // Reset flag since no tools were executed
         break; // No tool calls, we're done
       }
 
