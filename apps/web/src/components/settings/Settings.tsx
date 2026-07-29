@@ -10,6 +10,7 @@ import { cn } from "../../lib/utils";
 import { ChatCleanupSettings } from "./ChatCleanupSettings";
 import { ProviderConfigSettings } from "./ProviderConfigSettings";
 import { CredentialManagementSettings } from "./CredentialManagementSettings";
+import { SkillsManagementSettings } from "./SkillsManagementSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -827,7 +828,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials";
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Skills";
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   ...TAB_ICONS,
@@ -835,6 +836,7 @@ const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   "Chat Cleanup": Trash2,
   "LLM Provider Config": Sliders,
   Credentials: Lock,
+  Skills: Sparkles,
   Other: SettingsIcon,
 };
 
@@ -939,7 +941,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup"];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Skills", "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Skills", "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1065,6 +1067,8 @@ export function Settings() {
 
       {activeTab === "Credentials" && <CredentialManagementSettings />}
 
+      {activeTab === "Skills" && <SkillsManagementSettings />}
+
       {activeTab === "Chat Cleanup" && (
         <div className="card space-y-3">
           <ChatCleanupSettings />
@@ -1119,7 +1123,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && (
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Skills" && (
         <div className="space-y-4">
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);
