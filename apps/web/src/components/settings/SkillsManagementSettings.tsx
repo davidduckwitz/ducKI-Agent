@@ -658,6 +658,29 @@ export function SkillsManagementSettings() {
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="text-sm font-semibold mb-1 block">Skills (comma-separated slugs)</label>
+                <input
+                  type="text"
+                  value={(formData.skills || []).map((s) => s.slug).join(", ")}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      skills: e.target.value.split(",").map((slug) => ({
+                        slug: slug.trim().toLowerCase().replace(/\s+/g, "-"),
+                        name: slug.trim(),
+                        description: "",
+                      })).filter((s) => s.slug.length > 0),
+                    })
+                  }
+                  placeholder="e.g., frontend-dev, react-components, typescript-basics"
+                  className="input w-full"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Add skill references to this bundle. Skills will be created with auto-generated names from slugs.
+                </p>
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-border bg-muted/30">
