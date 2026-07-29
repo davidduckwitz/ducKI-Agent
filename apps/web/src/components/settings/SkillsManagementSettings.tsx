@@ -141,9 +141,11 @@ interface BundleCardProps {
   onToggle: (bundleId: string) => void;
   expandedBundles: Set<string>;
   onToggleExpand: (bundleId: string) => void;
+  onEdit: (bundle: SkillBundle) => void;
+  onDelete: (bundleId: string) => void;
 }
 
-function BundleCard({ bundle, isSelected, onToggle, expandedBundles, onToggleExpand }: BundleCardProps) {
+function BundleCard({ bundle, isSelected, onToggle, expandedBundles, onToggleExpand, onEdit, onDelete }: BundleCardProps) {
   const isExpanded = expandedBundles.has(bundle.id);
   const PriorityIcon = PRIORITY_ICONS[bundle.priority];
 
@@ -170,14 +172,30 @@ function BundleCard({ bundle, isSelected, onToggle, expandedBundles, onToggleExp
             </div>
             <p className="text-xs text-muted-foreground mb-2">{bundle.description}</p>
           </div>
-          <button
-            onClick={() => onToggleExpand(bundle.id)}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronDown
-              className={cn("w-4 h-4 transition-transform", isExpanded && "rotate-180")}
-            />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onEdit(bundle)}
+              className="px-2 py-1 text-xs rounded bg-secondary hover:bg-secondary/80 transition-colors"
+              title="Edit bundle"
+            >
+              ✎
+            </button>
+            <button
+              onClick={() => onDelete(bundle.id)}
+              className="px-2 py-1 text-xs rounded bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 transition-colors"
+              title="Delete bundle"
+            >
+              ✕
+            </button>
+            <button
+              onClick={() => onToggleExpand(bundle.id)}
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ChevronDown
+                className={cn("w-4 h-4 transition-transform", isExpanded && "rotate-180")}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Bundle Stats */}
@@ -251,11 +269,23 @@ function BundleCard({ bundle, isSelected, onToggle, expandedBundles, onToggleExp
 }
 
 export function SkillsManagementSettings() {
-  const [bundles] = useState<SkillBundle[]>(DEFAULT_SKILL_BUNDLES);
+  const [bundles, setBundles] = useState<SkillBundle[]>(DEFAULT_SKILL_BUNDLES);
   const [selectedBundles, setSelectedBundles] = useState<Set<string>>(new Set());
   const [expandedBundles, setExpandedBundles] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingBundleId, setEditingBundleId] = useState<string | null>(null);
+  const [formData, setFormData] = useState<Partial<SkillBundle>>({
+    name: "",
+    description: "",
+    category: "development",
+    priority: "medium",
+    minSkillsRequired: 1,
+    maxConcurrent: 2,
+    tags: [],
+    dependencies: [],
+  });
 
   const filteredBundles = useMemo(() => {
     return bundles.filter((bundle) => {
@@ -301,17 +331,109 @@ export function SkillsManagementSettings() {
       .reduce((sum, max) => sum + max, 0),
   };
 
+  const handleCreateBundle = () => {
+    if (!formData.name?.trim()) return;
+
+    const newBundle: SkillBundle = {
+      id: formData.name.toLowerCase().replace(/\s+/g, "-"),
+      name: formData.name,
+      description: formData.description || "",
+      category: (formData.category as SkillBundle["category"]) || "development",
+      skills: formData.skills || [],
+      tags: formData.tags || [],
+      priority: formData.priority as SkillBundle["priority"] || "medium",
+      minSkillsRequired: formData.minSkillsRequired || 1,
+      maxConcurrent: formData.maxConcurrent || 2,
+      dependencies: formData.dependencies || [],
+    };
+
+    setBundles([...bundles, newBundle]);
+    setFormData({
+      name: "",
+      description: "",
+      category: "development",
+      priority: "medium",
+      minSkillsRequired: 1,
+      maxConcurrent: 2,
+      tags: [],
+      dependencies: [],
+    });
+    setShowCreateModal(false);
+  };
+
+  const handleUpdateBundle = (bundleId: string) => {
+    const updated = bundles.map((b) =>
+      b.id === bundleId
+        ? {
+            ...b,
+            name: formData.name || b.name,
+            description: formData.description || b.description,
+            category: (formData.category as SkillBundle["category"]) || b.category,
+            priority: (formData.priority as SkillBundle["priority"]) || b.priority,
+            minSkillsRequired: formData.minSkillsRequired || b.minSkillsRequired,
+            maxConcurrent: formData.maxConcurrent || b.maxConcurrent,
+            tags: formData.tags || b.tags,
+            dependencies: formData.dependencies || b.dependencies,
+          }
+        : b
+    );
+    setBundles(updated);
+    setEditingBundleId(null);
+    setFormData({
+      name: "",
+      description: "",
+      category: "development",
+      priority: "medium",
+      minSkillsRequired: 1,
+      maxConcurrent: 2,
+      tags: [],
+      dependencies: [],
+    });
+  };
+
+  const handleDeleteBundle = (bundleId: string) => {
+    setBundles(bundles.filter((b) => b.id !== bundleId));
+    setSelectedBundles(new Set(Array.from(selectedBundles).filter((id) => id !== bundleId)));
+  };
+
+  const openEditModal = (bundle: SkillBundle) => {
+    setFormData(bundle);
+    setEditingBundleId(bundle.id);
+  };
+
   return (
     <div className="card space-y-4">
       {/* Header */}
-      <div className="space-y-2">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-primary" />
-          Skills & Bundles
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Manage skill bundles for intelligent context-aware skill selection. Select bundles to activate for your agent.
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-2 flex-1">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <Sparkles className="w-5 h-5 text-primary" />
+            Skills & Bundles
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Manage skill bundles for intelligent context-aware skill selection. Select bundles to activate for your agent.
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            setEditingBundleId(null);
+            setFormData({
+              name: "",
+              description: "",
+              category: "development",
+              priority: "medium",
+              minSkillsRequired: 1,
+              maxConcurrent: 2,
+              tags: [],
+              dependencies: [],
+            });
+            setShowCreateModal(true);
+          }}
+          className="btn-primary text-sm flex items-center gap-2 whitespace-nowrap"
+        >
+          <Sparkles className="w-4 h-4" />
+          Create Bundle
+        </button>
       </div>
 
       {/* Stats */}
@@ -380,6 +502,8 @@ export function SkillsManagementSettings() {
               onToggle={toggleBundleSelection}
               expandedBundles={expandedBundles}
               onToggleExpand={toggleExpandBundle}
+              onEdit={openEditModal}
+              onDelete={handleDeleteBundle}
             />
           ))
         ) : (
@@ -423,6 +547,147 @@ export function SkillsManagementSettings() {
           The agent automatically selects skills from your selected bundles based on user input, task type, complexity level, and time constraints. Each bundle respects its maxConcurrent limit to optimize context usage.
         </p>
       </div>
+
+      {/* Create/Edit Modal */}
+      {(showCreateModal || editingBundleId) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-2xl rounded-xl border border-border bg-card shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border sticky top-0 bg-card/95">
+              <h3 className="text-lg font-semibold">
+                {editingBundleId ? "Edit Skill Bundle" : "Create New Skill Bundle"}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setEditingBundleId(null);
+                  setFormData({});
+                }}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-semibold mb-1 block">Bundle Name *</label>
+                  <input
+                    type="text"
+                    value={formData.name || ""}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="e.g., Frontend Development"
+                    className="input w-full"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold mb-1 block">Category</label>
+                  <select
+                    value={formData.category || "development"}
+                    onChange={(e) => setFormData({ ...formData, category: e.target.value as SkillBundle["category"] })}
+                    className="input w-full"
+                  >
+                    <option value="development">Development</option>
+                    <option value="infrastructure">Infrastructure</option>
+                    <option value="data">Data</option>
+                    <option value="communication">Communication</option>
+                    <option value="automation">Automation</option>
+                    <option value="analysis">Analysis</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold mb-1 block">Description</label>
+                <textarea
+                  value={formData.description || ""}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Brief description of this skill bundle..."
+                  className="input w-full min-h-20"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <label className="text-sm font-semibold mb-1 block">Priority</label>
+                  <select
+                    value={formData.priority || "medium"}
+                    onChange={(e) => setFormData({ ...formData, priority: e.target.value as SkillBundle["priority"] })}
+                    className="input w-full"
+                  >
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold mb-1 block">Min Required</label>
+                  <input
+                    type="number"
+                    value={formData.minSkillsRequired || 1}
+                    onChange={(e) => setFormData({ ...formData, minSkillsRequired: parseInt(e.target.value) || 1 })}
+                    min="1"
+                    className="input w-full"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold mb-1 block">Max Concurrent</label>
+                  <input
+                    type="number"
+                    value={formData.maxConcurrent || 2}
+                    onChange={(e) => setFormData({ ...formData, maxConcurrent: parseInt(e.target.value) || 2 })}
+                    min="1"
+                    className="input w-full"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold mb-1 block">Tags (comma-separated)</label>
+                  <input
+                    type="text"
+                    value={(formData.tags || []).join(", ")}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        tags: e.target.value.split(",").map((t) => t.trim()).filter(Boolean),
+                      })
+                    }
+                    placeholder="e.g., frontend, react, typescript"
+                    className="input w-full"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-border bg-muted/30">
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setEditingBundleId(null);
+                  setFormData({});
+                }}
+                className="btn-secondary"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (editingBundleId) {
+                    handleUpdateBundle(editingBundleId);
+                  } else {
+                    handleCreateBundle();
+                  }
+                }}
+                disabled={!formData.name?.trim()}
+                className="btn-primary"
+              >
+                {editingBundleId ? "Update Bundle" : "Create Bundle"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
