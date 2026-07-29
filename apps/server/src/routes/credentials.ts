@@ -7,6 +7,7 @@ const CREDENTIALS_KEY = "credentials:agent";
 
 let credentialManager: CredentialManager;
 let database: DatabaseService;
+let initialized = false;
 
 /**
  * Initialize credentials from database
@@ -18,8 +19,10 @@ async function initializeCredentials() {
       const data = JSON.parse(stored);
       credentialManager.importCredentials(data);
     }
+    initialized = true;
   } catch (error) {
     console.error("Failed to initialize credentials from database", error);
+    initialized = true;
   }
 }
 
@@ -32,12 +35,21 @@ export function setupCredentialRoutes(db: DatabaseService): void {
   // Initialize on startup
   void initializeCredentials();
 
+  // Register all handlers
+  registerCredentialHandlers();
+}
+
+function registerCredentialHandlers(): void {
   /**
    * GET /
    * List all registered credentials (without exposing full API keys)
    */
   credentialRouter.get("/", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const provider = req.query.provider as string | undefined;
 
       let credentials: Credential[];
@@ -79,6 +91,10 @@ export function setupCredentialRoutes(db: DatabaseService): void {
    */
   credentialRouter.post("/", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const { provider, credentialId, apiKey, displayName } = req.body;
 
       if (!provider || !credentialId || !apiKey || !displayName) {
@@ -138,6 +154,10 @@ export function setupCredentialRoutes(db: DatabaseService): void {
    */
   credentialRouter.patch("/:credentialId", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const { credentialId } = req.params;
       const { displayName } = req.body;
 
@@ -185,6 +205,10 @@ export function setupCredentialRoutes(db: DatabaseService): void {
    */
   credentialRouter.delete("/:credentialId", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const { credentialId } = req.params;
 
       const exported = credentialManager.exportCredentials();
@@ -226,6 +250,10 @@ export function setupCredentialRoutes(db: DatabaseService): void {
    */
   credentialRouter.get("/rotation-status/:provider", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const { provider } = req.params;
       const status = credentialManager.getRotationStatus(provider);
 
@@ -245,6 +273,10 @@ export function setupCredentialRoutes(db: DatabaseService): void {
    */
   credentialRouter.get("/rotation-config", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const stored = await database.getSetting("credentials:rotation-config");
       const config: Partial<CredentialRotationConfig> = stored
         ? JSON.parse(stored)
@@ -274,6 +306,10 @@ export function setupCredentialRoutes(db: DatabaseService): void {
    */
   credentialRouter.patch("/rotation-config", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const config = req.body as Partial<CredentialRotationConfig>;
 
       credentialManager.updateRotationConfig(config);
@@ -297,6 +333,10 @@ export function setupCredentialRoutes(db: DatabaseService): void {
    */
   credentialRouter.post("/rotate/:provider", async (req, res) => {
     try {
+      if (!initialized) {
+        return res.status(503).json(createApiResponse({ error: "Service initializing..." }));
+      }
+
       const { provider } = req.params;
 
       const rotated = await credentialManager.rotateCredential(provider);

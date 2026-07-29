@@ -50,3 +50,8 @@ export { RESERVED_TOOL_NAMES } from "./tools/reserved-tool-names.js";
 export { TOOL_CALL_FORMAT_BLOCK } from "./agent.js";
 export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
+// Context compression & memory optimization
+export { TokenCounter } from "./context/token-counter.js";
+export type { ModelTokenConfig } from "./context/token-counter.js";
+export { ContextManager } from "./context/context-manager.js";
+export type { ContextManagerConfig, PruningStrategy } from "./context/context-manager.js";

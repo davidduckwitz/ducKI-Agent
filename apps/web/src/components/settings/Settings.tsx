@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, type LucideIcon } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, type LucideIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
@@ -9,6 +9,7 @@ import { ACCENT_COLORS, THEME_MODES, type AccentColor, type ThemeMode } from "..
 import { cn } from "../../lib/utils";
 import { ChatCleanupSettings } from "./ChatCleanupSettings";
 import { ProviderConfigSettings } from "./ProviderConfigSettings";
+import { CredentialManagementSettings } from "./CredentialManagementSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -826,13 +827,14 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config";
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials";
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   ...TAB_ICONS,
   Theme: Palette,
   "Chat Cleanup": Trash2,
   "LLM Provider Config": Sliders,
+  Credentials: Lock,
   Other: SettingsIcon,
 };
 
@@ -937,7 +939,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "LLM Provider Config", "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "LLM Provider Config", "Chat Cleanup"];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1060,6 +1062,8 @@ export function Settings() {
       )}
 
       {activeTab === "LLM Provider Config" && <ProviderConfigSettings />}
+
+      {activeTab === "Credentials" && <CredentialManagementSettings />}
 
       {activeTab === "Chat Cleanup" && (
         <div className="card space-y-3">
