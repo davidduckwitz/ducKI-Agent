@@ -7,9 +7,12 @@ import { ClaudeProvider } from "./claude-provider.js";
 import { NousProvider } from "./nous-provider.js";
 // Import new multi-provider adapters
 import { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter } from "./adapters/index.js";
+import { CredentialManager } from "./credential-manager.js";
+import { CredentialAwareRouter } from "./adapters/credential-aware-router.js";
 import type { SpeechToTextProvider } from "@ducki/shared";
 // Export adapter configurations
 export type { AdapterConfig, ProviderRouterConfig } from "./adapter-config.js";
+export type { Credential, CredentialRotationConfig } from "./credential-manager.js";
 import { OpenAISpeechToTextProvider } from "./openai-speech-to-text-provider.js";
 import { SileroSpeechToTextProvider } from "./silero-speech-to-text-provider.js";
 import { LocalCommandSpeechToTextProvider } from "./local-command-speech-to-text-provider.js";
@@ -72,8 +75,8 @@ export function createDefaultProvider(): LLMProvider {
 }
 
 export { OpenAIProvider, OpenRouterProvider, LMStudioProvider, OllamaProvider, ClaudeProvider, NousProvider };
-// Export new multi-provider adapters
-export { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter };
+// Export new multi-provider adapters and credential management
+export { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter, CredentialManager, CredentialAwareRouter };
 export type { LLMProvider };
 export * from "./base.js";
 export {

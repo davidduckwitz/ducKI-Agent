@@ -18,7 +18,7 @@ import {
 	type CodingAgent,
 	createScriptTools,
 } from "@ducki/agent";
-import { getDatabase } from "@ducki/database";
+import { getDatabase, type DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
 import type { ToolExecutor } from "@ducki/shared";
@@ -46,6 +46,7 @@ import { memoryRouter } from "./routes/memory.js";
 import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
+import { credentialRouter, setupCredentialRoutes } from "./routes/credentials.js";
 import { sharedRouter } from "./routes/shared.js";
 import { skillsRouter } from "./routes/skills.js";
 import { tasksRouter } from "./routes/tasks.js";
@@ -389,7 +390,7 @@ function buildAgentFactory(
 	};
 }
 
-function registerRoutes(app: express.Express): void {
+function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/chat", chatRouter);
 	app.use("/api/tasks", tasksRouter);
 	app.use("/api/projects", projectsRouter);
@@ -397,6 +398,8 @@ function registerRoutes(app: express.Express): void {
 	app.use("/api/tools", toolsRouter);
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);
+	setupCredentialRoutes(database);
+	app.use("/api/credentials", credentialRouter);
 	app.use("/api/logs", logsRouter);
 	app.use("/api/agents", agentsRouter);
 	app.use("/api/skills", skillsRouter);
@@ -625,7 +628,7 @@ async function bootstrap(): Promise<void> {
 	setupWebSocket(io, createAgent, db);
 	app.locals["io"] = io;
 
-	registerRoutes(app);
+	registerRoutes(app, db);
 
 	app.get("/health", (_req, res) => {
 		res.json({
