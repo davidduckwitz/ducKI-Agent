@@ -218,44 +218,60 @@ export class CryptoService {
     apiSecret?: string
   ): Promise<{ success: boolean; message: string }> {
     try {
+      console.log(`[Crypto] Testing ${provider} API connection with key: ${apiKey.substring(0, 10)}...`);
+
       const apiProvider = getApiProvider(provider, apiKey, apiSecret);
+      console.log(`[Crypto] API Provider created: ${apiProvider.constructor.name}`);
 
       // Test with a known Bitcoin address for Bitref
       if (provider === "bitref") {
-        const testAddress = "1A1z7agoat5JNrGomQkqSCBeaSeixhn5h5"; // Satoshi's wallet
+        const testAddress = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"; // Valid SegWit address
+        console.log(`[Crypto] Testing Bitref balance for address: ${testAddress}`);
+
         const balance = await apiProvider.getBalance(testAddress);
+        console.log(`[Crypto] Bitref balance result:`, balance);
+
         return {
           success: true,
-          message: `Bitref API connection successful. Balance for test address: ${balance.balance} ${balance.unit}`,
+          message: `Bitref API connection successful. Balance: ${balance.balance} satoshis`,
         };
       }
 
       // Test with Etherscan
       if (provider === "etherscan") {
         const testAddress = "0x0000000000000000000000000000000000000000"; // Burn address
+        console.log(`[Crypto] Testing Etherscan balance for address: ${testAddress}`);
+
         const balance = await apiProvider.getBalance(testAddress);
+        console.log(`[Crypto] Etherscan balance result:`, balance);
+
         return {
           success: true,
-          message: `Etherscan API connection successful. Balance for test address: ${balance.balance} ${balance.unit}`,
+          message: `Etherscan API connection successful. Balance: ${balance.balance} ${balance.unit}`,
         };
       }
 
       // Test with XRP Ledger
       if (provider === "xrpscan") {
         const testAddress = "rN7n7otQDd6FczFgLdmqtXSVE7upbtykqd"; // Bitstamp wallet
+        console.log(`[Crypto] Testing XRP Ledger balance for address: ${testAddress}`);
+
         const balance = await apiProvider.getBalance(testAddress);
+        console.log(`[Crypto] XRP Ledger balance result:`, balance);
+
         return {
           success: true,
-          message: `XRP Ledger API connection successful. Balance for test address: ${balance.balance} ${balance.unit}`,
+          message: `XRP Ledger API connection successful. Balance: ${balance.balance} ${balance.unit}`,
         };
       }
 
       return { success: false, message: "Unknown provider" };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[Crypto] API test failed:`, error);
       return {
         success: false,
-        message: `API connection failed: ${message}`,
+        message: `API connection failed: ${errorMessage}`,
       };
     }
   }

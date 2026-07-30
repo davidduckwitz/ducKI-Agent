@@ -1,8 +1,9 @@
-export { BlockchainApiProvider, Fee } from "./blockchain-api.js";
-export { BitrefProvider } from "./bitref-provider.js";
+export { BlockchainApiProvider } from "./blockchain-api";
+export type { Fee } from "./blockchain-api";
+export { BitrefProvider } from "./bitref-provider";
 
-import { BlockchainApiProvider } from "./blockchain-api.js";
-import { BitrefProvider } from "./bitref-provider.js";
+import { BlockchainApiProvider } from "./blockchain-api";
+import { BitrefProvider } from "./bitref-provider";
 
 export function getApiProvider(
   provider: "bitref" | "etherscan" | "xrpscan",

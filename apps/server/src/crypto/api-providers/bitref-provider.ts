@@ -1,5 +1,5 @@
-import { BlockchainApiProvider, Fee } from "./blockchain-api.js";
-import { Balance, Transaction, TransactionStatus } from "../wallets/wallet-base.js";
+import { BlockchainApiProvider, Fee } from "./blockchain-api";
+import { Balance, Transaction, TransactionStatus } from "../wallets/wallet-base";
 
 export class BitrefProvider extends BlockchainApiProvider {
   provider = "bitref";
@@ -13,7 +13,7 @@ export class BitrefProvider extends BlockchainApiProvider {
     this.apiKey = apiKey;
   }
 
-  async getBalance(address: string): Promise<Balance> {
+  override async getBalance(address: string): Promise<Balance> {
     this.checkRateLimit();
 
     try {
@@ -26,16 +26,27 @@ export class BitrefProvider extends BlockchainApiProvider {
         }
       );
 
-      if (!response.ok) {
-        if (response.status === 401) throw new Error("Invalid Bitref API key");
-        if (response.status === 429) throw new Error("Bitref rate limit exceeded");
-        throw new Error(`Bitref API error: ${response.statusText}`);
-      }
-
       const data = (await response.json()) as {
         confirmed_balance?: number;
         unconfirmed_balance?: number;
+        error?: string;
       };
+
+      // Check for API error response
+      if (data.error) {
+        if (data.error.includes("not found in the allow list")) {
+          throw new Error(
+            "API key not registered with Bitref. Get a free API key at https://bitref.com/account/request/"
+          );
+        }
+        throw new Error(`Bitref API error: ${data.error}`);
+      }
+
+      if (!response.ok) {
+        if (response.status === 401) throw new Error("Invalid or unauthorized Bitref API key");
+        if (response.status === 429) throw new Error("Bitref rate limit exceeded");
+        throw new Error(`Bitref API error: ${response.statusText}`);
+      }
 
       // Combine confirmed and unconfirmed balance
       const totalBalance = ((data.confirmed_balance || 0) + (data.unconfirmed_balance || 0)).toString();
@@ -52,7 +63,7 @@ export class BitrefProvider extends BlockchainApiProvider {
     }
   }
 
-  async getTransactions(address: string, limit = 50): Promise<Transaction[]> {
+  override async getTransactions(address: string, limit = 50): Promise<Transaction[]> {
     this.checkRateLimit();
 
     try {
@@ -81,12 +92,11 @@ export class BitrefProvider extends BlockchainApiProvider {
       // Return up to 'limit' transactions
       return data.slice(0, limit).map((tx) => ({
         hash: tx.tx_hash || "",
-        fromAddress: address, // Bitref doesn't provide sender/receiver in list
-        toAddress: address,
+        from: address, // Bitref doesn't provide sender/receiver in list
+        to: address,
         amount: tx.fee ? String(tx.fee) : "0",
         status: tx.height ? ("confirmed" as const) : ("pending" as const),
-        timestamp: (tx.time || 0) * 1000,
-        blockNumber: tx.height,
+        fee: tx.fee ? String(tx.fee) : undefined,
       }));
     } catch (error) {
       throw new Error(
@@ -95,7 +105,7 @@ export class BitrefProvider extends BlockchainApiProvider {
     }
   }
 
-  async getTransactionStatus(hash: string): Promise<TransactionStatus> {
+  override async getTransactionStatus(hash: string): Promise<TransactionStatus> {
     this.checkRateLimit();
 
     try {
@@ -121,9 +131,8 @@ export class BitrefProvider extends BlockchainApiProvider {
 
       return {
         hash,
-        confirmations: data.confirmations || (data.confirmed ? 1 : 0),
-        blockNumber: undefined,
         status: data.confirmed ? ("confirmed" as const) : ("pending" as const),
+        confirmations: data.confirmations || (data.confirmed ? 1 : 0),
       };
     } catch (error) {
       throw new Error(
@@ -132,7 +141,7 @@ export class BitrefProvider extends BlockchainApiProvider {
     }
   }
 
-  async estimateFee(): Promise<Fee> {
+  override async estimateFee(): Promise<Fee> {
     this.checkRateLimit();
 
     try {
@@ -168,7 +177,7 @@ export class BitrefProvider extends BlockchainApiProvider {
     }
   }
 
-  async broadcastTransaction(signedTx: string): Promise<string> {
+  override async broadcastTransaction(signedTx: string): Promise<string> {
     this.checkRateLimit();
 
     try {
@@ -197,7 +206,7 @@ export class BitrefProvider extends BlockchainApiProvider {
     }
   }
 
-  protected checkRateLimit(): void {
+  protected override checkRateLimit(): void {
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastRequestTime;
 
