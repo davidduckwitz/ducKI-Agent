@@ -1,61 +1,29 @@
-import { randomBytes, createHash } from "crypto";
+import { ECPairFactory } from "ecpair";
+import { payments, networks } from "bitcoinjs-lib";
+import * as tinysecp from "tiny-secp256k1";
+import { randomBytes } from "crypto";
 import { BaseWallet, Address, Balance } from "./wallet-base";
 
-// Base58 alphabet
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-function encodeBase58(buffer: Buffer): string {
-  let num = 0n;
-  for (const byte of buffer) {
-    num = num * 256n + BigInt(byte);
-  }
-
-  const encoded: string[] = [];
-  while (num > 0n) {
-    const idx = Number(num % 58n);
-    const char = BASE58_ALPHABET[idx];
-    if (char) encoded.unshift(char);
-    num = num / 58n;
-  }
-
-  for (const byte of buffer) {
-    if (byte === 0) encoded.unshift("1");
-    else break;
-  }
-
-  return encoded.join("");
-}
-
-function generateP2PKHAddress(publicKey: Buffer): string {
-  const sha256 = createHash("sha256").update(publicKey).digest();
-  const ripemd160 = createHash("ripemd160").update(sha256).digest();
-
-  // Add version byte (0x00 for mainnet P2PKH)
-  const versioned = Buffer.concat([Buffer.from([0x00]), ripemd160]);
-
-  // Double SHA256 for checksum
-  const hash1 = createHash("sha256").update(versioned).digest();
-  const hash2 = createHash("sha256").update(hash1).digest();
-  const checksum = hash2.slice(0, 4);
-
-  // Concatenate and encode
-  const full = Buffer.concat([versioned, checksum]);
-  return encodeBase58(full);
-}
+const ECPair = ECPairFactory(tinysecp);
 
 export class BitcoinWallet extends BaseWallet {
   currency: "BTC" = "BTC";
+  private network = networks.bitcoin; // Mainnet
 
   override async generateAddress(derivationPath?: string): Promise<Address> {
+    // Generate random private key
     const privateKey = randomBytes(32);
-    // Generate public key from private (simplified - in production use proper EC)
-    const publicKey = randomBytes(33); // Mock public key
-    const address = generateP2PKHAddress(publicKey);
+    const keyPair = ECPair.fromPrivateKey(privateKey);
+
+    // Generate P2PKH address (Legacy - starts with 1)
+    const { address } = payments.p2pkh({ pubkey: keyPair.publicKey });
+
+    if (!address) throw new Error("Failed to generate Bitcoin address");
 
     return {
       currency: "BTC",
       address,
-      publicKey: publicKey.toString("hex"),
+      publicKey: Buffer.from(keyPair.publicKey).toString("hex"),
       derivationPath: derivationPath || "m/44'/0'/0'/0/0",
       balance: "0",
     };
@@ -69,19 +37,34 @@ export class BitcoinWallet extends BaseWallet {
     throw new Error("Transaction broadcasting requires provider/API");
   }
 
-  override async importPrivateKey(key: string, label: string): Promise<Address> {
-    if (!key || key.length < 10) throw new Error("Invalid private key");
+  override async importPrivateKey(privateKeyHex: string, label: string): Promise<Address> {
+    try {
+      // Create keyPair from private key (hex or WIF)
+      let keyPair: ReturnType<typeof ECPair.fromPrivateKey>;
 
-    const publicKey = randomBytes(33);
-    const address = generateP2PKHAddress(publicKey);
+      if (privateKeyHex.length === 64) {
+        // Hex format
+        const privateKey = Buffer.from(privateKeyHex, "hex");
+        keyPair = ECPair.fromPrivateKey(privateKey);
+      } else {
+        // WIF format
+        keyPair = ECPair.fromWIF(privateKeyHex);
+      }
 
-    return {
-      currency: "BTC",
-      address,
-      publicKey: publicKey.toString("hex"),
-      label,
-      balance: "0",
-    };
+      const { address } = payments.p2pkh({ pubkey: keyPair.publicKey });
+
+      if (!address) throw new Error("Failed to generate address from private key");
+
+      return {
+        currency: "BTC",
+        address,
+        publicKey: Buffer.from(keyPair.publicKey).toString("hex"),
+        label,
+        balance: "0",
+      };
+    } catch (error) {
+      throw new Error(`Invalid Bitcoin private key: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   override async exportAddress(address: string): Promise<{ address: string; publicKey?: string }> {

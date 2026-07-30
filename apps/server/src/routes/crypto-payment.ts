@@ -33,6 +33,48 @@ export function createCryptoPaymentRouter(db: DatabaseService): Router {
     }
   });
 
+  // Get single address
+  router.get("/addresses/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const address = await cryptoService.getAddressById(parseInt(id));
+      if (!address) {
+        return res.status(404).json({ error: "Address not found" });
+      }
+      res.json({ data: address });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Update address label
+  router.patch("/addresses/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { label } = req.body;
+
+      if (!label) {
+        return res.status(400).json({ error: "Label is required" });
+      }
+
+      await cryptoService.updateAddressLabel(parseInt(id), label);
+      res.json({ data: { success: true } });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Delete address
+  router.delete("/addresses/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      await cryptoService.deleteAddress(parseInt(id));
+      res.json({ data: { success: true } });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
   // Import private key
   router.post("/addresses/import", async (req: Request, res: Response) => {
     try {

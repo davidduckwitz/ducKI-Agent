@@ -1,38 +1,20 @@
-import { randomBytes, createHash } from "crypto";
+import { ethers } from "ethers";
 import { BaseWallet, Address, Balance } from "./wallet-base";
-
-function generateEthereumAddress(): string {
-  const publicKey = randomBytes(64);
-  const hash = createHash("sha256").update(publicKey).digest();
-  const addressBytes = hash.slice(-20);
-  const hexAddress = "0x" + addressBytes.toString("hex");
-
-  // Simple checksum: use first 20 bytes of sha256
-  const addr = hexAddress.slice(2).toLowerCase();
-  const hashHex = createHash("sha256").update(addr).digest("hex");
-
-  let checksummed = "0x";
-  for (let i = 0; i < addr.length; i++) {
-    const hashChar = hashHex[i];
-    const addrChar = addr[i];
-    if (hashChar !== undefined && addrChar !== undefined) {
-      const hashValue = parseInt(hashChar, 16);
-      checksummed += hashValue >= 8 ? addrChar.toUpperCase() : addrChar;
-    }
-  }
-  return checksummed;
-}
 
 export class EthereumWallet extends BaseWallet {
   currency: "ETH" = "ETH";
 
   override async generateAddress(derivationPath?: string): Promise<Address> {
-    const address = generateEthereumAddress();
+    // Generate a new random wallet
+    const wallet = ethers.Wallet.createRandom();
+
+    // Get EIP-55 checksummed address
+    const address = ethers.getAddress(wallet.address);
 
     return {
       currency: "ETH",
       address,
-      publicKey: randomBytes(65).toString("hex"),
+      publicKey: wallet.signingKey.publicKey,
       derivationPath: derivationPath || "m/44'/60'/0'/0/0",
       balance: "0",
     };
@@ -46,18 +28,30 @@ export class EthereumWallet extends BaseWallet {
     throw new Error("Transaction broadcasting requires provider/API");
   }
 
-  override async importPrivateKey(key: string, label: string): Promise<Address> {
-    if (!key || key.length < 10) throw new Error("Invalid private key");
+  override async importPrivateKey(privateKeyHex: string, label: string): Promise<Address> {
+    try {
+      // Create wallet from private key
+      let wallet: ethers.Wallet;
 
-    const address = generateEthereumAddress();
+      if (privateKeyHex.startsWith("0x")) {
+        wallet = new ethers.Wallet(privateKeyHex);
+      } else {
+        wallet = new ethers.Wallet("0x" + privateKeyHex);
+      }
 
-    return {
-      currency: "ETH",
-      address,
-      publicKey: randomBytes(65).toString("hex"),
-      label,
-      balance: "0",
-    };
+      // Get EIP-55 checksummed address
+      const address = ethers.getAddress(wallet.address);
+
+      return {
+        currency: "ETH",
+        address,
+        publicKey: wallet.signingKey.publicKey,
+        label,
+        balance: "0",
+      };
+    } catch (error) {
+      throw new Error(`Invalid Ethereum private key: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   override async exportAddress(address: string): Promise<{ address: string; publicKey?: string }> {
@@ -65,8 +59,13 @@ export class EthereumWallet extends BaseWallet {
   }
 
   override validateAddress(address: string): boolean {
-    // Ethereum address validation: 0x followed by 40 hex chars
-    return /^0x[a-fA-F0-9]{40}$/.test(address);
+    try {
+      // ethers.getAddress validates and returns checksummed address
+      ethers.getAddress(address);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   override getDecimals(): number {
