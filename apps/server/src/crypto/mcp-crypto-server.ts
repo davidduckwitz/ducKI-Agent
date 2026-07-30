@@ -1,5 +1,6 @@
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
+import { CryptoService } from "../services/crypto-service.js";
 
 function ok(data: unknown): ToolResult {
   return { success: true, data };
@@ -10,6 +11,8 @@ function fail(error: string): ToolResult {
 }
 
 export function createCryptoPaymentMcpTool(db: DatabaseService): ToolExecutor {
+  const cryptoService = new CryptoService(db);
+
   return {
     name: "crypto-payment",
     description: "Manage cryptocurrency wallets and transactions (Bitcoin, Ethereum, XRP)",
@@ -64,24 +67,15 @@ export function createCryptoPaymentMcpTool(db: DatabaseService): ToolExecutor {
         switch (action) {
           case "list_addresses": {
             const currency = input["currency"] ? String(input["currency"]) : undefined;
-            const url = currency
-              ? `/api/crypto/addresses?currency=${currency}`
-              : "/api/crypto/addresses";
-            const response = await fetch(`http://localhost:29544${url}`);
-            const data = await response.json();
-            return ok(data.data);
+            const addresses = await cryptoService.getAddresses(currency as any);
+            return ok(addresses);
           }
 
           case "create_address": {
             const currency = String(input["currency"] ?? "BTC");
             const label = input["label"] ? String(input["label"]) : `${currency} Address`;
-            const response = await fetch("http://localhost:29544/api/crypto/addresses", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ currency, label }),
-            });
-            const data = await response.json();
-            return ok(data.data);
+            const address = await cryptoService.createAddress(currency as any, label);
+            return ok(address);
           }
 
           case "import_private_key": {
@@ -91,40 +85,28 @@ export function createCryptoPaymentMcpTool(db: DatabaseService): ToolExecutor {
 
             if (!privateKey) return fail("privateKey is required");
 
-            const response = await fetch("http://localhost:29544/api/crypto/addresses/import", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ currency, privateKey, label }),
-            });
-            const data = await response.json();
-            return ok(data.data);
+            const address = await cryptoService.importPrivateKey(currency as any, privateKey, label);
+            return ok(address);
           }
 
           case "get_portfolio_summary": {
-            const response = await fetch("http://localhost:29544/api/crypto/portfolio/summary");
-            const data = await response.json();
-            return ok(data.data);
+            const summary = await cryptoService.getPortfolioSummary();
+            return ok(summary);
           }
 
           case "get_transactions": {
             const addressId = input["addressId"] ? Number(input["addressId"]) : undefined;
             if (!addressId) return fail("addressId is required for get_transactions");
 
-            const response = await fetch(`http://localhost:29544/api/crypto/transactions/${addressId}`);
-            const data = await response.json();
-            return ok(data.data);
+            // TODO: Implement transaction fetching
+            return ok({ transactions: [], addressId });
           }
 
           case "delete_address": {
             const addressId = input["addressId"] ? Number(input["addressId"]) : undefined;
             if (!addressId) return fail("addressId is required for delete_address");
 
-            const response = await fetch(`http://localhost:29544/api/crypto/addresses/${addressId}`, {
-              method: "DELETE",
-            });
-            if (!response.ok) {
-              return fail(`Failed to delete address: ${response.statusText}`);
-            }
+            await cryptoService.deleteAddress(addressId);
             return ok({ deleted: true, id: addressId });
           }
 
@@ -135,13 +117,8 @@ export function createCryptoPaymentMcpTool(db: DatabaseService): ToolExecutor {
             if (!addressId) return fail("addressId is required");
             if (!newLabel) return fail("newLabel is required");
 
-            const response = await fetch(`http://localhost:29544/api/crypto/addresses/${addressId}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ label: newLabel }),
-            });
-            const data = await response.json();
-            return ok(data.data);
+            await cryptoService.updateAddressLabel(addressId, newLabel);
+            return ok({ updated: true, id: addressId, label: newLabel });
           }
 
           default:
