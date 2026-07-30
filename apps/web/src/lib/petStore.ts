@@ -56,7 +56,8 @@ export const DEFAULT_PET_SETTINGS: PetSettings = {
   size: 64,
   speed: 1,
   opacity: 1,
-  followCursor: true,
+  // Off by default: the pet should mind its own business until asked to follow.
+  followCursor: false,
   reactToEvents: true,
   showBubbles: true,
   locomotion: "auto",
@@ -94,7 +95,14 @@ export const usePetStore = create<PetStoreState>()(
     }),
     {
       name: "ducki.pet",
-      version: 1,
+      version: 2,
+      // v1 shipped with cursor following on; v2 turns it off once for everyone
+      // who still carries the old value. Re-enable it in the settings if wanted.
+      migrate: (persisted, fromVersion) => {
+        const state = (persisted ?? {}) as Partial<PetSettings>;
+        if (fromVersion < 2) return { ...state, followCursor: false };
+        return state;
+      },
       partialize: (state) => ({
         enabled: state.enabled,
         petId: state.petId,

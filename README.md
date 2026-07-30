@@ -375,7 +375,8 @@ Interaction:
   (ground pets fall, bounce and walk on from where they land).
 - Click for a reaction + speech bubble, right-click for the pet menu
   (wave, jump, sleep, reset position, settings, hide).
-- The pet chases the mouse pointer and gets startled by fast pointer moves.
+- It gets startled by fast pointer moves; chasing the cursor is off by default and
+  can be switched on in the settings.
 - It falls asleep after a minute without interaction and wakes up when the cursor
   comes close.
 
