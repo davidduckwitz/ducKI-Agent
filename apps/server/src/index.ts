@@ -54,6 +54,8 @@ import { toolsRouter } from "./routes/tools.js";
 import { updatesRouter } from "./routes/updates.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { wikiRouter } from "./routes/wiki.js";
+import { createCryptoPaymentRouter } from "./routes/crypto-payment.js";
+import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
 import { setupWebSocket } from "./websocket/index.js";
 
 const logger = getRootLogger().child("Server");
@@ -410,6 +412,7 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/tools", toolsRouter);
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);
+	app.use("/api/crypto", createCryptoPaymentRouter(database));
 	setupCredentialRoutes(database);
 	app.use("/api/credentials", credentialRouter);
 	app.use("/api/logs", logsRouter);
@@ -558,7 +561,11 @@ async function bootstrap(): Promise<void> {
 	const mcpRegistry = new MCPRegistry();
 	const mcpServers = parseMcpServerConfigs(await db.getSetting(MCP_SERVERS_SETTING));
 	await mcpRegistry.syncServers(mcpServers);
-	const runtimeTools: ToolExecutor[] = [...allTools, createMcpTool(mcpRegistry)];
+	const runtimeTools: ToolExecutor[] = [
+		...allTools,
+		createMcpTool(mcpRegistry),
+		createCryptoPaymentMcpTool(db),
+	];
 	const providerRef: { current: ReturnType<typeof createProvider> } = { current: provider };
 
 	// Persistent Executor dedicated to the WorkflowEngine (tool_call nodes dispatch

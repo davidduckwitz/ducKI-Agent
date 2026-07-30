@@ -33,15 +33,19 @@ export function useBackendConfig() {
   };
 
   const getBackendUrl = (): string => {
+    // Check if running in Tauri or Electron (desktop apps need absolute URLs)
+    const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI__;
+    const isElectron = typeof window !== "undefined" && (window as any).electron;
+    const isDesktop = isTauri || isElectron;
+
     if (config.type === "remote" && config.url) {
-      // Remove trailing slash if present
       return config.url.replace(/\/$/, "");
     }
-    // Local: use /api for dev server, or localhost for production
-    const isElectron = typeof window !== "undefined" && (window as any).electron;
-    if (isElectron) {
+
+    // Local: use absolute localhost URL on desktop, /api on web
+    if (isDesktop) {
       const port = config.port || 3001;
-      return `http://localhost:${port}/api`;
+      return `http://localhost:${port}`;
     }
     return "/api";
   };

@@ -364,3 +364,81 @@ export function useCreatePriceAlert() {
     },
   });
 }
+
+// Settings
+export interface CryptoSettings {
+  currency: string;
+  theme?: string;
+  refreshIntervalSeconds: number;
+  autoSyncEnabled: boolean;
+  notificationsEnabled: boolean;
+  exportFormat: string;
+}
+
+export interface ApiCredential {
+  provider: "bitref" | "etherscan" | "xrpscan";
+  apiKey?: string; // Not returned from server for security, but cached locally
+  apiSecret?: string; // Not returned from server for security, but cached locally
+}
+
+export function useCryptoSettings() {
+  return useQuery({
+    queryKey: ["crypto", "settings"],
+    queryFn: async () => {
+      const response = await fetch("/api/crypto/settings");
+      if (!response.ok) throw new Error("Failed to fetch settings");
+      const data = await response.json();
+      return data.data as CryptoSettings;
+    },
+  });
+}
+
+// Hook to get cached API credentials from localStorage
+export function useCachedApiCredentials() {
+  return {
+    get: (provider: string) => {
+      try {
+        const cached = localStorage.getItem(`crypto_credentials_${provider}`);
+        return cached ? JSON.parse(cached) : null;
+      } catch {
+        return null;
+      }
+    },
+    save: (provider: string, apiKey: string, apiSecret?: string) => {
+      try {
+        localStorage.setItem(
+          `crypto_credentials_${provider}`,
+          JSON.stringify({ apiKey, apiSecret })
+        );
+      } catch (error) {
+        console.error("Failed to cache credentials:", error);
+      }
+    },
+    clear: (provider: string) => {
+      try {
+        localStorage.removeItem(`crypto_credentials_${provider}`);
+      } catch (error) {
+        console.error("Failed to clear cached credentials:", error);
+      }
+    },
+  };
+}
+
+export function useUpdateCryptoSettings() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (settings: Partial<CryptoSettings>) => {
+      const response = await fetch("/api/crypto/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      if (!response.ok) throw new Error("Failed to update settings");
+      const data = await response.json();
+      return data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["crypto", "settings"] });
+    },
+  });
+}

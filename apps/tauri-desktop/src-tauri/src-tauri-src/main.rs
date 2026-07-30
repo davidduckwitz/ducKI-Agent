@@ -23,7 +23,8 @@ fn start_backend_server(backend_process: State<BackendProcess>) -> Result<(), St
     // Try to start the backend server
     let exe_path = if cfg!(debug_assertions) {
         // In development, use node to run the server
-        // This assumes the server is built and available at apps/server/dist/index.js
+        // Path from exe: ...tauri-desktop/target/debug/ducki-desktop.exe
+        // Going up: debug -> target -> tauri-desktop -> apps -> repo root (5 parents)
         std::env::current_exe()
             .map_err(|e| format!("Failed to get current exe path: {}", e))?
             .parent()
@@ -32,13 +33,19 @@ fn start_backend_server(backend_process: State<BackendProcess>) -> Result<(), St
             .ok_or("Failed to get parent of parent")?
             .parent()
             .ok_or("Failed to get parent of parent of parent")?
+            .parent()
+            .ok_or("Failed to get parent of parent of parent of parent")?
+            .parent()
+            .ok_or("Failed to get parent of parent of parent of parent of parent")?
             .join("apps/server/dist/index.js")
     } else {
-        // In production, use the bundled server executable
+        // In production, use the bundled server executable from resources folder
+        // The executable is in resources/server.exe relative to the app executable
         std::env::current_exe()
             .map_err(|e| format!("Failed to get current exe path: {}", e))?
             .parent()
             .ok_or("Failed to get parent of exe")?
+            .join("resources")
             .join("server.exe")
     };
 

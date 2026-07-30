@@ -1,0 +1,32 @@
+function updateClock() {
+    const now = new Date();
+    
+    // Formatiere Uhrzeit
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    
+    const timeString = `${hours}:${minutes}:${seconds}`;
+    
+    // Formatiere Datum
+    const options = {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        timeZone: 'Europe/Berlin'
+    };
+    
+    const dateString = now.toLocaleDateString('de-DE', options);
+    
+    // Update DOM
+    const clockElement = document.getElementById('clock');
+    const dateElement = document.getElementById('date');
+    
+    if (clockElement) {
+        clockElement.textContent = timeString;
+    }
+    
+    if (dateElement) {
+        dateElement.textContent = dateString;
+    }n}nn// Initial updatenupdateClock();nn// Update every secondnsetInterval(updateClock, 1000);

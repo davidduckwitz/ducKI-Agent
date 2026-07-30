@@ -1,11 +1,11 @@
-import { useState } from "react";
-import { useSetApiCredentials, useAddresses, usePortfolioSummary, useExportPortfolio } from "../../hooks/useCrypto";
+import { useState, useEffect } from "react";
+import { useSetApiCredentials, useAddresses, usePortfolioSummary, useExportPortfolio, useCryptoSettings, useUpdateCryptoSettings, useCachedApiCredentials } from "../../hooks/useCrypto";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { Loader2, AlertCircle, Download, FileJson, FileText } from "lucide-react";
+import { Loader2, AlertCircle, Download, FileJson, FileText, CheckCircle2 } from "lucide-react";
 import { Alert, AlertDescription } from "../ui/alert";
 import { exportAddressesToCSV, exportPortfolioToCSV } from "../../lib/csv-export";
 
@@ -15,33 +15,109 @@ export function CryptoSettingsPanel() {
   const [apiSecret, setApiSecret] = useState("");
   const [testingConnection, setTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const setApiCredentials = useSetApiCredentials();
   const { data: addresses } = useAddresses();
   const { data: portfolio } = usePortfolioSummary();
   const exportPortfolio = useExportPortfolio();
+  const { data: settings } = useCryptoSettings();
+  const updateSettings = useUpdateCryptoSettings();
+  const cachedCredentials = useCachedApiCredentials();
+
+  // Settings state
+  const [refreshInterval, setRefreshInterval] = useState<number>(300);
+  const [autoSync, setAutoSync] = useState<boolean>(true);
+  const [notifications, setNotifications] = useState<boolean>(false);
 
   const handleSaveCredentials = async () => {
-    await setApiCredentials.mutateAsync({
-      provider,
-      apiKey,
-      apiSecret: apiSecret || undefined,
-    });
-    setApiKey("");
-    setApiSecret("");
+    if (!apiKey.trim()) {
+      setSaveError("API Key ist erforderlich");
+      return;
+    }
+
+    setSaveError(null);
+    try {
+      await setApiCredentials.mutateAsync({
+        provider,
+        apiKey,
+        apiSecret: apiSecret || undefined,
+      });
+      // Cache credentials locally for persistence across tab switches
+      cachedCredentials.save(provider, apiKey, apiSecret);
+      setSaveSuccess(true);
+      // DO NOT clear the fields after saving - keep them for reference/editing
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Fehler beim Speichern";
+      setSaveError(errorMessage);
+      console.error("Failed to save credentials:", error);
+    }
   };
 
+  useEffect(() => {
+    if (saveSuccess) {
+      const timer = setTimeout(() => setSaveSuccess(false), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [saveSuccess]);
+
+  useEffect(() => {
+    if (settings) {
+      setRefreshInterval(settings.refreshIntervalSeconds || 300);
+      setAutoSync(settings.autoSyncEnabled !== false);
+      setNotifications(settings.notificationsEnabled || false);
+    }
+  }, [settings]);
+
+  // Load cached API credentials when provider changes or component mounts
+  useEffect(() => {
+    const cached = cachedCredentials.get(provider);
+    if (cached) {
+      setApiKey(cached.apiKey || "");
+      setApiSecret(cached.apiSecret || "");
+    } else {
+      setApiKey("");
+      setApiSecret("");
+    }
+  }, [provider]);
+
   const handleTestConnection = async () => {
+    if (!apiKey.trim()) {
+      setSaveError("API Key ist erforderlich");
+      return;
+    }
+
     setTestingConnection(true);
+    setSaveError(null);
     try {
-      // Simple test by fetching portfolio summary
-      const response = await fetch("/api/crypto/portfolio/summary");
+      // Test with backend API that uses the Bitref provider
+      const response = await fetch("/api/crypto/api-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          apiKey,
+          apiSecret: apiSecret || undefined,
+        }),
+      });
+
       if (response.ok) {
-        setTestResult("success");
+        const data = await response.json();
+        if (data.success || data.data?.success) {
+          setTestResult("success");
+        } else {
+          setSaveError(data.error || "Verbindungstest fehlgeschlagen");
+          setTestResult("error");
+        }
       } else {
+        const errorData = await response.json();
+        setSaveError(errorData.error || "Verbindungstest fehlgeschlagen");
         setTestResult("error");
       }
-    } catch {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Verbindungsfehler";
+      setSaveError(errorMessage);
       setTestResult("error");
     } finally {
       setTestingConnection(false);
@@ -69,6 +145,24 @@ export function CryptoSettingsPanel() {
         <CardTitle>API Konfiguration</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {saveSuccess && (
+          <Alert className="bg-green-500/10 border-green-500/20">
+            <CheckCircle2 className="h-4 w-4 text-green-600" />
+            <AlertDescription className="text-green-600">
+              Anmeldedaten erfolgreich gespeichert!
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {saveError && (
+          <Alert className="bg-red-500/10 border-red-500/20">
+            <AlertCircle className="h-4 w-4 text-red-600" />
+            <AlertDescription className="text-red-600">
+              {saveError}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {testResult === "success" && (
           <Alert className="bg-green-500/10 border-green-500/20">
             <AlertCircle className="h-4 w-4 text-green-600" />
@@ -189,6 +283,78 @@ export function CryptoSettingsPanel() {
                 "Etherscan: 5 calls/second (free tier)"}
               {provider === "xrpscan" && "XRP Ledger: Public API (no limits)"}
             </div>
+          </div>
+        </div>
+
+        {/* Portfolio Settings Section */}
+        <div className="border-t pt-6">
+          <h3 className="font-semibold mb-3">Portfolio-Einstellungen</h3>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="refreshInterval">
+                Aktualisierungsintervall: {refreshInterval}s
+              </Label>
+              <input
+                id="refreshInterval"
+                type="range"
+                min="60"
+                max="3600"
+                step="60"
+                value={refreshInterval}
+                onChange={(e) => setRefreshInterval(Number(e.target.value))}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground">
+                Wie oft Daten automatisch aktualisiert werden (in Sekunden)
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Automatische Synchronisierung</Label>
+                <p className="text-xs text-muted-foreground">
+                  Adressen und Transaktionen automatisch aktualisieren
+                </p>
+              </div>
+              <Button
+                variant={autoSync ? "default" : "outline"}
+                size="sm"
+                onClick={() => setAutoSync(!autoSync)}
+              >
+                {autoSync ? "✓ An" : "Aus"}
+              </Button>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Benachrichtigungen</Label>
+                <p className="text-xs text-muted-foreground">
+                  Benachrichtigungen bei wichtigen Ereignissen
+                </p>
+              </div>
+              <Button
+                variant={notifications ? "default" : "outline"}
+                size="sm"
+                onClick={() => setNotifications(!notifications)}
+              >
+                {notifications ? "✓ An" : "Aus"}
+              </Button>
+            </div>
+
+            <Button
+              onClick={() => updateSettings.mutateAsync({
+                refreshIntervalSeconds: refreshInterval,
+                autoSyncEnabled: autoSync,
+                notificationsEnabled: notifications,
+              })}
+              disabled={updateSettings.isPending}
+              className="w-full"
+            >
+              {updateSettings.isPending && (
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              )}
+              Einstellungen speichern
+            </Button>
           </div>
         </div>
 

@@ -1,4 +1,5 @@
-export { BaseWallet, Address, Balance, Transaction, TransactionStatus } from "./wallet-base";
+export type { Address, Balance, Transaction, TransactionStatus } from "./wallet-base";
+export { BaseWallet } from "./wallet-base";
 export { BitcoinWallet } from "./bitcoin-wallet";
 export { EthereumWallet } from "./ethereum-wallet";
 export { XRPWallet } from "./xrp-wallet";

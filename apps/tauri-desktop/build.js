@@ -61,24 +61,34 @@ if (copyRecursive(serverDistSrc, serverDistDest)) {
   log('⚠ Server dist not found, skipping...');
 }
 
-// Bundle server into executable with pkg (only for production build)
-if (process.env.TAURI_ENV_PLATFORM === 'win32' && process.env.TAURI_ENV_PROFILE_RELEASE === 'true') {
-  log('\nBundling server executable with pkg...');
-  const serverExePath = path.join(serverDistDest, 'server.exe');
+// Bundle server into executable with pkg
+log('\nBundling server executable with pkg...');
+const serverExePath = path.join(serverDistDest, 'server.exe');
 
-  const pkgResult = spawnSync('npx', [
-    'pkg',
-    path.join(serverDistDest, 'index.js'),
-    '--output', serverExePath,
-    '--target', 'node20-win-x64',
-    '--compress', 'Brotli'
-  ], { stdio: 'inherit', shell: true });
+const pkgResult = spawnSync('npx', [
+  'pkg',
+  path.join(serverDistDest, 'index.js'),
+  '--output', serverExePath,
+  '--target', 'node18-win-x64',
+  '--compress', 'Brotli'
+], { stdio: 'inherit', shell: true });
 
-  if (pkgResult.status === 0) {
-    log('✓ Server executable created with pkg');
-  } else {
-    log('⚠ pkg bundling not available for development');
+if (pkgResult.status === 0) {
+  log('✓ Server executable created with pkg');
+
+  // Copy server.exe to Tauri resources for bundling
+  const tauriResourcesDir = path.join(__dirname, 'src-tauri/resources');
+  fs.mkdirSync(tauriResourcesDir, { recursive: true });
+
+  const serverExeDest = path.join(tauriResourcesDir, 'server.exe');
+  try {
+    fs.copyFileSync(serverExePath, serverExeDest);
+    log('✓ Server executable copied to Tauri resources');
+  } catch (err) {
+    log(`⚠ Failed to copy server.exe to Tauri resources: ${err.message}`);
   }
+} else {
+  log('⚠ pkg bundling failed');
 }
 
 log('✓ Build preparation complete');

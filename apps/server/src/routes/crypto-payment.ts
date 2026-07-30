@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { DatabaseService } from "@ducki/database";
-import { CryptoService } from "../services/crypto-service";
+import { CryptoService } from "../services/crypto-service.js";
 
 export function createCryptoPaymentRouter(db: DatabaseService): Router {
   const router = Router();
@@ -70,6 +70,60 @@ export function createCryptoPaymentRouter(db: DatabaseService): Router {
 
       await cryptoService.setApiCredentials(provider, apiKey, apiSecret);
       res.json({ data: { success: true } });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Get crypto settings
+  router.get("/settings", async (req: Request, res: Response) => {
+    try {
+      const settings = {
+        currency: "USD",
+        theme: "dark",
+        refreshIntervalSeconds: 300,
+        autoSyncEnabled: true,
+        notificationsEnabled: false,
+        exportFormat: "json",
+      };
+      res.json({ data: settings });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Update crypto settings
+  router.patch("/settings", async (req: Request, res: Response) => {
+    try {
+      const { currency, theme, refreshIntervalSeconds, autoSyncEnabled, notificationsEnabled, exportFormat } = req.body;
+
+      const settings = {
+        currency: currency || "USD",
+        theme: theme || "dark",
+        refreshIntervalSeconds: refreshIntervalSeconds || 300,
+        autoSyncEnabled: autoSyncEnabled !== false,
+        notificationsEnabled: notificationsEnabled || false,
+        exportFormat: exportFormat || "json",
+      };
+
+      // In a real implementation, these would be saved to the database
+      res.json({ data: { success: true, settings } });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  });
+
+  // Test API connection with provider
+  router.post("/api-test", async (req: Request, res: Response) => {
+    try {
+      const { provider, apiKey, apiSecret } = req.body;
+
+      if (!provider || !apiKey) {
+        return res.status(400).json({ error: "Provider and apiKey are required" });
+      }
+
+      const testResult = await cryptoService.testApiConnection(provider, apiKey, apiSecret);
+      res.json({ data: testResult });
     } catch (error) {
       res.status(500).json({ error: (error as Error).message });
     }

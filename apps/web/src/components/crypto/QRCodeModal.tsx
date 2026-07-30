@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Download, Copy } from "lucide-react";
@@ -19,28 +19,58 @@ export function QRCodeModal({
   onOpenChange,
 }: QRCodeModalProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
 
   useEffect(() => {
-    if (!open || !canvasRef.current) return;
+    if (!open) return;
 
-    // Dynamically import qrcode library to avoid build issues
-    import("qrcode").then((QRCode) => {
-      QRCode.toCanvas(canvasRef.current, address, {
-        width: 300,
-        margin: 2,
-        color: {
-          dark: "#000000",
-          light: "#FFFFFF",
-        },
+    // Dynamically import qrcode library and generate as data URL
+    import("qrcode")
+      .then((QRCode) => {
+        // Generate QR code as data URL
+        const options = {
+          errorCorrectionLevel: "H" as const,
+          type: "image/png" as const,
+          margin: 2,
+          width: 300,
+          color: {
+            dark: "#000000",
+            light: "#FFFFFF",
+          },
+        };
+        return QRCode.toDataURL(address, options);
+      })
+      .then((dataUrl: string) => {
+        if (typeof dataUrl === "string") {
+          setQrDataUrl(dataUrl);
+
+          // Also render to canvas for download functionality
+          if (canvasRef.current) {
+            const img = new Image();
+            img.onload = () => {
+              const ctx = canvasRef.current?.getContext("2d");
+              if (ctx && canvasRef.current) {
+                canvasRef.current.width = 300;
+                canvasRef.current.height = 300;
+                ctx.drawImage(img, 0, 0);
+              }
+            };
+            img.src = dataUrl;
+          }
+        }
+      })
+      .catch((error) => {
+        console.error("QR Code generation failed:", error);
+        setQrDataUrl("");
       });
-    });
   }, [open, address]);
 
   const handleDownload = () => {
-    if (!canvasRef.current) return;
+    if (!qrDataUrl) return;
 
     const link = document.createElement("a");
-    link.href = canvasRef.current.toDataURL();
+    link.href = qrDataUrl;
     link.download = `${currency}-${label || "address"}-qr.png`;
     link.click();
   };
@@ -57,12 +87,21 @@ export function QRCodeModal({
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* QR Code Canvas */}
+          {/* QR Code Display */}
           <div className="flex justify-center p-4 bg-white rounded-lg">
-            <canvas
-              ref={canvasRef}
-              className="max-w-xs"
-            />
+            {qrDataUrl ? (
+              <img
+                ref={imgRef}
+                src={qrDataUrl}
+                alt="QR Code"
+                className="max-w-xs w-full h-auto"
+              />
+            ) : (
+              <canvas
+                ref={canvasRef}
+                className="max-w-xs"
+              />
+            )}
           </div>
 
           {/* Label & Address Info */}

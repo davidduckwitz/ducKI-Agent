@@ -6,7 +6,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Badge } from "../ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog";
-import { Loader2, Plus, Trash2, Copy, QrCode, Edit2 } from "lucide-react";
+import { Loader2, Plus, Trash2, Copy, QrCode, Edit2, Eye, EyeOff } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { QRCodeModal } from "./QRCodeModal";
 import { CurrencyIcon, getCurrencyColor, getCurrencyBgColor } from "./CurrencyIcon";
@@ -18,7 +18,7 @@ export function AddressesList() {
   const createAddress = useCreateAddress();
   const importPrivateKey = useImportPrivateKey();
 
-  const [selectedCurrency, setSelectedCurrency] = useState<"BTC" | "ETH" | "XRP">("BTC");
+  const [selectedCurrency, setSelectedCurrency] = useState<"BTC" | "ETH" | "XRP" | "ALL">("ALL");
   const [newLabel, setNewLabel] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingLabel, setEditingLabel] = useState("");
@@ -32,11 +32,13 @@ export function AddressesList() {
     label?: string;
     currency: "BTC" | "ETH" | "XRP";
   } | null>(null);
+  const [createDialogCurrency, setCreateDialogCurrency] = useState<"BTC" | "ETH" | "XRP">("BTC");
+  const [showPrivateKey, setShowPrivateKey] = useState<number | null>(null);
 
   const handleCreateAddress = async () => {
     await createAddress.mutateAsync({
-      currency: selectedCurrency,
-      label: newLabel || `${selectedCurrency} Address`,
+      currency: createDialogCurrency,
+      label: newLabel || `${createDialogCurrency} Address`,
     });
     setNewLabel("");
   };
@@ -78,7 +80,20 @@ export function AddressesList() {
     setQrModalOpen(true);
   };
 
-  const filteredAddresses = addresses?.filter(a => selectedCurrency ? a.currency === selectedCurrency : true) || [];
+  const filteredAddresses = addresses?.filter(a =>
+    selectedCurrency === "ALL" ? true : a.currency === selectedCurrency
+  ) || [];
+
+  // Group addresses by currency
+  const groupedAddresses = {
+    BTC: filteredAddresses.filter(a => a.currency === "BTC"),
+    ETH: filteredAddresses.filter(a => a.currency === "ETH"),
+    XRP: filteredAddresses.filter(a => a.currency === "XRP"),
+  };
+
+  const currencyGroups = selectedCurrency === "ALL"
+    ? (Object.entries(groupedAddresses).filter(([_, addrs]) => addrs.length > 0) as [string, typeof filteredAddresses][])
+    : [[selectedCurrency, filteredAddresses] as [string, typeof filteredAddresses]];
 
   if (isLoading) {
     return (
@@ -93,7 +108,7 @@ export function AddressesList() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-4">
           <CardTitle>Adressen</CardTitle>
           <div className="flex gap-2">
             <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
@@ -155,12 +170,12 @@ export function AddressesList() {
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Neue {selectedCurrency} Adresse</DialogTitle>
+                  <DialogTitle>Neue {createDialogCurrency} Adresse</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                   <div>
                     <Label>Währung</Label>
-                    <Select value={selectedCurrency} onValueChange={(v) => setSelectedCurrency(v as any)}>
+                    <Select value={createDialogCurrency} onValueChange={(v) => setCreateDialogCurrency(v as any)}>
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -190,85 +205,148 @@ export function AddressesList() {
             </Dialog>
           </div>
         </div>
+
+        {/* Currency Filter Buttons */}
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant={selectedCurrency === "ALL" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSelectedCurrency("ALL")}
+          >
+            Alle ({addresses?.length || 0})
+          </Button>
+          <Button
+            variant={selectedCurrency === "BTC" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSelectedCurrency("BTC")}
+            className={selectedCurrency === "BTC" ? "bg-orange-600 hover:bg-orange-700" : ""}
+          >
+            ₿ Bitcoin ({groupedAddresses.BTC.length})
+          </Button>
+          <Button
+            variant={selectedCurrency === "ETH" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSelectedCurrency("ETH")}
+            className={selectedCurrency === "ETH" ? "bg-purple-600 hover:bg-purple-700" : ""}
+          >
+            Ξ Ethereum ({groupedAddresses.ETH.length})
+          </Button>
+          <Button
+            variant={selectedCurrency === "XRP" ? "default" : "outline"}
+            size="sm"
+            onClick={() => setSelectedCurrency("XRP")}
+            className={selectedCurrency === "XRP" ? "bg-blue-600 hover:bg-blue-700" : ""}
+          >
+            ✕ XRP ({groupedAddresses.XRP.length})
+          </Button>
+        </div>
       </CardHeader>
+
       <CardContent>
         {filteredAddresses.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             Keine Adressen vorhanden
           </div>
         ) : (
-          <div className="space-y-3">
-            {filteredAddresses.map((addr) => (
-              <div
-                key={addr.id}
-                className={`flex items-center justify-between p-3 border rounded-lg hover:bg-accent/50 transition-colors ${getCurrencyBgColor(addr.currency)} border-current/20`}
-              >
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className={`p-1.5 rounded-full ${getCurrencyBgColor(addr.currency)}`}>
-                      <CurrencyIcon currency={addr.currency} size={16} className={getCurrencyColor(addr.currency)} />
-                    </div>
-                    {editingId === addr.id ? (
-                      <Input
-                        autoFocus
-                        value={editingLabel}
-                        onChange={(e) => setEditingLabel(e.target.value)}
-                        onBlur={() => handleUpdateLabel(addr.id!)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") handleUpdateLabel(addr.id!);
-                          if (e.key === "Escape") setEditingId(null);
-                        }}
-                        className="h-7 text-sm w-40"
-                      />
-                    ) : (
-                      <span className="font-medium">{addr.label || "Unlabeled"}</span>
-                    )}
+          <div className="space-y-6">
+            {currencyGroups.map(([currency, addrs]) => (
+              <div key={currency}>
+                <h3 className="text-sm font-semibold text-muted-foreground mb-3 flex items-center gap-2">
+                  <div className={`p-1.5 rounded-full ${getCurrencyBgColor(currency as any)}`}>
+                    <CurrencyIcon currency={currency as any} size={14} className={getCurrencyColor(currency as any)} />
                   </div>
-                  <div className="text-xs text-muted-foreground font-mono mt-1">
-                    {addr.address.substring(0, 16)}...{addr.address.substring(addr.address.length - 8)}
-                  </div>
-                  {addr.balance && addr.balance !== "0" && (
-                    <div className="text-sm text-muted-foreground mt-1">
-                      Balance: {parseFloat(addr.balance).toFixed(6)} {addr.currency}
+                  {currency === "BTC" ? "Bitcoin" : currency === "ETH" ? "Ethereum" : "XRP"} ({addrs.length})
+                </h3>
+                <div className="space-y-2 ml-6">
+                  {addrs.map((addr) => (
+                    <div
+                      key={addr.id}
+                      className={`flex items-center justify-between p-3 border rounded-lg hover:bg-accent/50 transition-colors ${getCurrencyBgColor(addr.currency)} border-current/20`}
+                    >
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          {editingId === addr.id ? (
+                            <Input
+                              autoFocus
+                              value={editingLabel}
+                              onChange={(e) => setEditingLabel(e.target.value)}
+                              onBlur={() => handleUpdateLabel(addr.id!)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleUpdateLabel(addr.id!);
+                                if (e.key === "Escape") setEditingId(null);
+                              }}
+                              className="h-7 text-sm w-40"
+                            />
+                          ) : (
+                            <span className="font-medium">{addr.label || "Unlabeled"}</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground font-mono mt-1">
+                          {addr.address.substring(0, 16)}...{addr.address.substring(addr.address.length - 8)}
+                        </div>
+                        {showPrivateKey === addr.id && (
+                          <div className="text-xs text-yellow-600 font-mono mt-2 p-2 bg-yellow-50 dark:bg-yellow-950 rounded border border-yellow-200 dark:border-yellow-800">
+                            <div className="text-xs font-semibold mb-1">⚠️ Private Key (GEHEIM):</div>
+                            <div className="break-all select-all">{addr.publicKey || "N/A"}</div>
+                          </div>
+                        )}
+                        {addr.balance && addr.balance !== "0" && (
+                          <div className="text-sm text-muted-foreground mt-1">
+                            Balance: {parseFloat(addr.balance).toFixed(6)} {addr.currency}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setEditingId(addr.id!);
+                            setEditingLabel(addr.label || "");
+                          }}
+                          title="Label bearbeiten"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => copyToClipboard(addr.address)}
+                          title="Adresse kopieren"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleShowQRCode({
+                            address: addr.address,
+                            label: addr.label,
+                            currency: addr.currency
+                          })}
+                          title="QR-Code anzeigen"
+                        >
+                          <QrCode className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setShowPrivateKey(showPrivateKey === addr.id ? null : addr.id!)}
+                          title="Private Key anzeigen"
+                        >
+                          {showPrivateKey === addr.id ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteAddress(addr.id!)}
+                          title="Löschen"
+                        >
+                          <Trash2 className="h-4 w-4 text-red-500" />
+                        </Button>
+                      </div>
                     </div>
-                  )}
-                </div>
-                <div className="flex gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setEditingId(addr.id!);
-                      setEditingLabel(addr.label || "");
-                    }}
-                  >
-                    <Edit2 className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => copyToClipboard(addr.address)}
-                  >
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleShowQRCode({
-                      address: addr.address,
-                      label: addr.label,
-                      currency: addr.currency
-                    })}
-                  >
-                    <QrCode className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleDeleteAddress(addr.id!)}
-                  >
-                    <Trash2 className="h-4 w-4 text-red-500" />
-                  </Button>
+                  ))}
                 </div>
               </div>
             ))}

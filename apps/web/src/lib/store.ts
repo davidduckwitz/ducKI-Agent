@@ -196,9 +196,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   showToolDock: true,
 
   initSocket: () => {
-    const socketUrl = import.meta.env.DEV
-      ? (import.meta.env.VITE_SOCKET_URL ?? "http://127.0.0.1:3001")
-      : undefined;
+    // Determine socket URL based on environment
+    let socketUrl: string | undefined;
+
+    // In dev, always try localhost:3001 (works for both browser and Tauri)
+    if (import.meta.env.DEV) {
+      socketUrl = import.meta.env.VITE_SOCKET_URL ?? "http://localhost:3001";
+    } else {
+      // In production, check if we're in Tauri/Electron (desktop)
+      const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI__;
+      const isElectron = typeof window !== "undefined" && (window as any).electron;
+      if (isTauri || isElectron) {
+        socketUrl = "http://localhost:3001";
+      }
+      // Otherwise undefined - browser production will use current URL
+    }
     const socket = io(socketUrl, {
       path: "/socket.io",
       transports: ["websocket"],

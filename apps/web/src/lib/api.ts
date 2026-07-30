@@ -1,5 +1,10 @@
 // Determine base URL: use configurable backend or default
 function getBaseUrl(): string {
+  // Check if running in Tauri or Electron (desktop apps need absolute URLs)
+  const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI__;
+  const isElectron = typeof window !== 'undefined' && (window as any).electron;
+  const isDesktop = isTauri || isElectron;
+
   // Try to get configured backend URL from localStorage
   try {
     const config = localStorage.getItem('backend-config');
@@ -8,24 +13,20 @@ function getBaseUrl(): string {
       if (parsed.type === 'remote' && parsed.url) {
         return parsed.url.replace(/\/$/, ''); // Remove trailing slash
       }
-      if (parsed.type === 'local' && parsed.port) {
-        const isElectron = typeof window !== 'undefined' && (window as any).electron;
-        if (isElectron) {
-          return `http://localhost:${parsed.port}/api`;
-        }
+      if (parsed.type === 'local' && parsed.port && isDesktop) {
+        return `http://localhost:${parsed.port}`;
       }
     }
   } catch {
     // Fall through to defaults
   }
 
-  // Default behavior: use /api for dev server, or localhost:3001 as fallback for Electron
-  const isElectron = typeof window !== 'undefined' && (window as any).electron;
-  if (isElectron) {
-    return 'http://localhost:3001/api';
+  // Default behavior: desktop apps need absolute localhost URLs
+  if (isDesktop) {
+    return 'http://localhost:3001';
   }
 
-  // In development/production browser, use relative /api path
+  // In browser, use relative /api path (proxy will handle it)
   return '/api';
 }
 
@@ -50,7 +51,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     // If /api fails, try localhost fallback
     if (!BASE_URL.includes('localhost')) {
       try {
-        res = await fetch(`http://localhost:3001/api${path}`, {
+        res = await fetch(`http://localhost:3001${path}`, {
           headers: { "Content-Type": "application/json" },
           ...options,
         });

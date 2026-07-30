@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "identifier": "de.davidduckwitz.ducki-node",
   "build": {
-    "beforeDevCommand": "pnpm build:prep",
+    "beforeBuildCommand": "pnpm build:prep",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../web/dist"
   },
@@ -25,6 +25,9 @@
   },
   "bundle": {
     "active": true,
+    "icon": [
+      "icons/icon.ico"
+    ],
     "windows": {
       "certificateThumbprint": null,
       "wix": null

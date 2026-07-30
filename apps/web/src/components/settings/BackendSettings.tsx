@@ -5,7 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { AlertCircle, CheckCircle } from "lucide-react";
+import { AlertCircle, CheckCircle, Info } from "lucide-react";
 import { Alert, AlertDescription } from "../ui/alert";
 
 export function BackendSettings() {
@@ -15,6 +15,7 @@ export function BackendSettings() {
   const [port, setPort] = useState(String(config.port || 3001));
   const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
   const handleSave = () => {
     const newConfig = {
@@ -22,7 +23,9 @@ export function BackendSettings() {
       ...(type === "remote" ? { url } : { port: parseInt(port) }),
     };
     saveConfig(newConfig);
-    testBackendConnection();
+    setSaveSuccess(true);
+    setTestResult(null);
+    setTimeout(() => setSaveSuccess(false), 3000);
   };
 
   const testBackendConnection = async () => {
@@ -104,11 +107,19 @@ export function BackendSettings() {
           </div>
         )}
 
+        {/* Save Success Alert */}
+        {saveSuccess && (
+          <Alert variant="success">
+            <CheckCircle className="h-4 w-4" />
+            <AlertDescription>Konfiguration gespeichert! Testen Sie die Verbindung optional.</AlertDescription>
+          </Alert>
+        )}
+
         {/* Test Result */}
         {testResult === "success" && (
           <Alert variant="success">
             <CheckCircle className="h-4 w-4" />
-            <AlertDescription>Backend-Verbindung erfolgreich!</AlertDescription>
+            <AlertDescription>✓ Backend-Verbindung erfolgreich!</AlertDescription>
           </Alert>
         )}
 
@@ -116,15 +127,23 @@ export function BackendSettings() {
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              Backend-Verbindung fehlgeschlagen. Stelle sicher, dass der Server läuft.
+              ✗ Verbindung fehlgeschlagen. Server läuft wahrscheinlich nicht. (Config wurde trotzdem gespeichert)
             </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Warning if not tested */}
+        {!testResult && !saveSuccess && (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription>Tipp: Klicken Sie auf "Verbindung testen", um zu prüfen, ob der Server erreichbar ist.</AlertDescription>
           </Alert>
         )}
 
         {/* Actions */}
         <div className="flex gap-2 pt-4">
-          <Button onClick={handleSave}>
-            Speichern & Testen
+          <Button onClick={handleSave} variant="default">
+            Speichern
           </Button>
           <Button
             variant="outline"

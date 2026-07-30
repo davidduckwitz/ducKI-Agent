@@ -1,4 +1,4 @@
-import { Balance, Transaction, TransactionStatus } from "../wallets/wallet-base";
+import { Balance, Transaction, TransactionStatus } from "../wallets/wallet-base.js";
 
 export interface Fee {
   fast: string;

@@ -74,7 +74,7 @@ function registerCredentialHandlers(): void {
         maskedKey: c.key.slice(0, 4) + "***" + c.key.slice(-4),
       }));
 
-      res.json(createApiResponse({ data: masked }));
+      res.json(createApiResponse(masked));
     } catch (error) {
       res.status(500).json(
         createApiResponse({
