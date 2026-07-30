@@ -264,8 +264,13 @@ export function CodingWorkspace() {
     const last = messages[messages.length - 1];
     if (!last) return;
     if (last.role === "user") return;
+    // Reload files list when agent responds
     void qc.invalidateQueries({ queryKey: ["coding", "files", selectedProject] });
-  }, [messages, qc, selectedProject]);
+    // Also reload current file if selected
+    if (selectedPath) {
+      void qc.invalidateQueries({ queryKey: ["coding", "read", selectedProject, selectedPath] });
+    }
+  }, [messages, qc, selectedProject, selectedPath]);
 
   const selectedItem = useMemo(
     () => (filesQuery.data?.files ?? []).find((file) => file.path === selectedPath),
