@@ -37,6 +37,7 @@ import { THEME_MODES, type ThemeMode } from "../../lib/theme";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { CodingSidebarPanel } from "../coding/CodingSidebarPanel";
 import { DuckyMascot } from "../chat/DuckyMascot";
+import { PetLayer } from "../pet/PetLayer";
 
 interface NavItem {
   to: string;
@@ -432,6 +433,9 @@ export function Layout() {
         onClose={() => setSetupModalOpen(false)}
         settings={(settingsQuery.data ?? []) as Array<{ key: string; value: string }>}
       />
+
+      {/* Free-roaming desk pet on top of the whole window (opt-out in settings). */}
+      <PetLayer />
     </div>
   );
 }

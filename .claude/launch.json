@@ -7,6 +7,13 @@
       "runtimeArgs": ["dev"],
       "port": 5173,
       "autoPort": true
+    },
+    {
+      "name": "ducki-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@ducki/web", "dev"],
+      "port": 5174,
+      "autoPort": true
     }
   ]
 }

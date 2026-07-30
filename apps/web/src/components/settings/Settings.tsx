@@ -11,6 +11,7 @@ import { ChatCleanupSettings } from "./ChatCleanupSettings";
 import { ProviderConfigSettings } from "./ProviderConfigSettings";
 import { CredentialManagementSettings } from "./CredentialManagementSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
+import { AnimationSettings } from "./AnimationSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -856,11 +857,12 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials";
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character";
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   ...TAB_ICONS,
   Theme: Palette,
+  Character: Palette,
   "Chat Cleanup": Trash2,
   "LLM Provider Config": Sliders,
   Credentials: Lock,
@@ -969,7 +971,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup"];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1088,6 +1090,13 @@ export function Settings() {
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">{t("themeSettings.tabLabel")}</h2>
           <ThemeSettingsTab />
+        </div>
+      )}
+
+      {activeTab === "Character" && (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">🎨 Character & Animation</h2>
+          <AnimationSettings />
         </div>
       )}
 

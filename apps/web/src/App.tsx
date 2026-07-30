@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Layout } from "./components/layout/Layout";
@@ -8,6 +8,7 @@ import { ProjectManager } from "./components/projects/ProjectManager";
 import { TaskManager } from "./components/tasks/TaskManager";
 import { useI18n } from "./lib/i18n";
 import { api } from "./lib/api";
+import { initializeCharacterSystem } from "./components/chat/characters";
 
 const ToolRegistry = lazy(async () => {
   const module = await import("./components/tools/ToolRegistry");
@@ -97,6 +98,11 @@ function CodingGate() {
 
 export default function App() {
   const { t } = useI18n();
+
+  // Initialize character system on app startup
+  useEffect(() => {
+    initializeCharacterSystem();
+  }, []);
 
   return (
     <BrowserRouter>

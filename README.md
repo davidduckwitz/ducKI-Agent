@@ -52,6 +52,7 @@ After startup:
 | Tooling | Filesystem, HTTP, shell, git, browser automation, skills management, workflow and memory tools |
 | Live operations | Agent live metrics and active run monitoring page |
 | CronJobs | Run at a specific Time for Tasks / skills and Prompts |
+| Desk Pet | Draggable companion that walks/flies through the UI and reacts to agent events, configurable in `/settings` -> `Character` |
 
 # Donation & Help
 
@@ -361,6 +362,59 @@ Server -> client:
 - Enable/disable skills in `/skills`.
 - Agent can auto-select relevant skills when enabled.
 - Memory supports add/replace/remove/batch/approval flows.
+
+## Desk Pet
+
+A small companion lives on top of the whole web UI: it walks along the window
+floor (or flies freely), reacts to what the agent is doing, and can be picked up
+and thrown anywhere. Everything is configured in `/settings` -> `Character` tab.
+
+Interaction:
+
+- Drag & drop the pet anywhere; releasing it mid-air throws it with real momentum
+  (ground pets fall, bounce and walk on from where they land).
+- Click for a reaction + speech bubble, right-click for the pet menu
+  (wave, jump, sleep, reset position, settings, hide).
+- The pet chases the mouse pointer and gets startled by fast pointer moves.
+- It falls asleep after a minute without interaction and wakes up when the cursor
+  comes close.
+
+Agent reactions (toggleable):
+
+| Event | Reaction |
+| --- | --- |
+| Agent run starts | Working animation + "working on it" bubble |
+| Run finished | Happy jump + "done" bubble |
+| `agentStatus = error` | Shake / fail animation |
+| WebSocket disconnect / reconnect | Sad state, waves again when back online |
+
+Settings (`/settings` -> `Character` -> `Desk Pet`):
+
+- On/off, pet gallery, size, speed, opacity, ground offset.
+- Movement mode: `automatic` (use the pet's own), forced `walking` or forced `flying`.
+- Toggles for cursor following, agent-event reactions and speech bubbles.
+- State preview (idle, walk, run, fly, jump, wave, work, fail, sleep, drag) plus
+  trigger buttons to test wave/jump/reset position on the live pet.
+
+Built-in pets: `Ducki` (duck, ground), `Pixel Cat` (ground), `Ghost` (air),
+`Helper Bot` (air) - all drawn as SVG + CSS, no image assets required.
+
+Custom sprite-sheet pets:
+
+1. `Character` tab -> `Import sprite sheet`, choose a PNG/GIF/WebP sheet.
+2. Enter the grid (columns x rows) - the frame size is derived from the image.
+3. Map sheet rows to engine states (`row`, `frames`, `loop`) and check them in the
+   state viewer, then save.
+4. Unmapped states fall back to related ones (`run` -> `walk` -> `idle`), so a
+   partially mapped sheet still animates everywhere.
+
+Storage note: pet settings, last position and imported sheets live in the
+browser's `localStorage` (`ducki.pet`), not in the server DB - they are per
+device and per browser. Sprite sheets are stored as data URLs, so keep them
+small (a few hundred KB).
+
+Implementation lives in `apps/web/src/components/pet/` (engine, renderer, overlay,
+importer) with the settings UI in `apps/web/src/components/settings/PetSettingsPanel.tsx`.
 
 ## LLM-Wiki
 

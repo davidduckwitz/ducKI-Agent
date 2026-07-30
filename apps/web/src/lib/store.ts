@@ -125,6 +125,10 @@ interface AppState {
   browserPreview: BrowserPreviewState;
   animationStyle: "matrix" | "neon" | "minimal";
 
+  // Character System (NEW)
+  selectedCharacterId: string;
+  characterCustomizations: Record<string, unknown>;
+
   // Tool Management
   toolCalls: ToolCallRecord[];
   browserSessions: BrowserSession[];
@@ -149,6 +153,11 @@ interface AppState {
   setSetupModalOpen: (open: boolean) => void;
   setBrowserPreviewModal: (show: boolean, preview?: BrowserPreviewState["currentPreview"]) => void;
   setAnimationStyle: (style: "matrix" | "neon" | "minimal") => void;
+
+  // Character System (NEW)
+  setSelectedCharacterId: (id: string) => void;
+  setCharacterCustomizations: (customizations: Record<string, unknown>) => void;
+  updateCharacterCustomization: (key: string, value: unknown) => void;
 
   // Tool Management
   addToolCall: (toolCall: ToolCallRecord) => void;
@@ -179,6 +188,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     showModal: false,
     currentPreview: undefined,
   },
+  // Character System (NEW)
+  selectedCharacterId: "duck-matrix",
+  characterCustomizations: {},
   toolCalls: [],
   browserSessions: [],
   showToolDock: true,
@@ -448,4 +460,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       browserSessions: s.browserSessions.filter((session) => session.tabId !== tabId),
     })),
   setShowToolDock: (show) => set({ showToolDock: show }),
+
+  // Character System (NEW)
+  setSelectedCharacterId: (id) => set({ selectedCharacterId: id }),
+  setCharacterCustomizations: (customizations) => set({ characterCustomizations: customizations }),
+  updateCharacterCustomization: (key, value) =>
+    set((s) => ({
+      characterCustomizations: {
+        ...s.characterCustomizations,
+        [key]: value,
+      },
+    })),
 }));

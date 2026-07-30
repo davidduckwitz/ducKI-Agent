@@ -6,7 +6,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { DuckyMascot } from "./DuckyMascot";
-import { MatrixDuck } from "./MatrixDuck";
+import { DynamicCharacter } from "./characters/DynamicCharacter";
 import { ToolResponseDock } from "./ToolResponseCard";
 import { BrowserSessionManager } from "./BrowserSessionManager";
 import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
@@ -81,6 +81,8 @@ export function ChatContainer() {
     toolCalls,
     removeToolCall,
     showToolDock,
+    selectedCharacterId,
+    characterCustomizations,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -1041,7 +1043,7 @@ export function ChatContainer() {
 
           {messages.length === 0 && (
             <div className="text-center text-gray-500 py-20">
-              <MatrixDuck isWorking={false} size={56} />
+              <DynamicCharacter isWorking={false} size={56} characterId={selectedCharacterId} customConfig={characterCustomizations} />
               <p className="mt-4">{t("chat.startConversation")}</p>
             </div>
           )}
@@ -1061,14 +1063,14 @@ export function ChatContainer() {
             )
           )}
 
-          {/* Streaming with Matrix Duck at bottom */}
+          {/* Streaming with Dynamic Character at bottom */}
           {isLoading && (
             <div className="flex gap-3 items-end pt-2">
               <div className="flex-1">
                 <StreamingRow compactMode={compactMode} streamingContent={streamingContent} t={t} />
               </div>
               <div className="shrink-0">
-                <MatrixDuck isWorking={true} size={64} />
+                <DynamicCharacter isWorking={true} size={64} characterId={selectedCharacterId} customConfig={characterCustomizations} />
               </div>
             </div>
           )}
