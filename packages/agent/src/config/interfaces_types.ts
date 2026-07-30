@@ -1,3 +1,12 @@
+import type { AgentHook } from "../hooks/agent-hooks.js";
+import type {
+  AgentRunEventSnapshot,
+  AgentEventEmitter as AgentEventEmitterV2,
+  AgentRunEventType
+} from "../events/agent-events.js";
+
+// Re-export granular event types
+export type { AgentRunEventSnapshot, AgentEventEmitterV2, AgentRunEventType };
 
 export interface AgentOptions {
   name?: string;
@@ -7,6 +16,8 @@ export interface AgentOptions {
   enableReflection?: boolean;
   enablePlanning?: boolean;
   enableAutoMemory?: boolean;
+  /** Hooks for intercepting agent lifecycle events (Phase 1) */
+  hooks?: AgentHook[];
 }
 
 export type AgentStatus = "idle" | "running" | "paused" | "error" | "stopped";
@@ -47,12 +58,11 @@ export interface AgentRunOptions {
   attachments?: AgentRunAttachment[];
 }
 
-export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | "mode_selected" | "browser_preview";
-
 export interface AgentRunEvent {
-  type: AgentRunEventType;
+  type: AgentRunEventType; // Includes all old and new event types
   message: string;
   data?: Record<string, unknown>;
+  snapshot?: any; // AgentRunEventSnapshot, made optional for backward compat
   timestamp: string;
 }
 

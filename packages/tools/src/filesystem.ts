@@ -118,7 +118,7 @@ export const filesystemTool: ToolExecutor = {
           type: "string",
           description: "REQUIRED: Full file or directory path. Examples: /shared-workspace/config.json, ./data/file.txt, data/subfolder/. Must be provided.",
         },
-        content: { type: "string", description: "Content to write (for write/append)" },
+        content: { type: "string", description: "Content to write (for write/append). Use actual line breaks (newlines) in multiline content - each line should be on a separate line, not escaped as \\n." },
         offset: { type: "number", description: "For read: first line to return (0-indexed, default 0)" },
         limit: { type: "number", description: "For read: maximum number of lines to return" },
         maxBytes: { type: "number", description: "For read: byte cap before truncation (default 262144 = 256KB)" },
@@ -147,8 +147,25 @@ export const filesystemTool: ToolExecutor = {
     const dryRun = (input["dryRun"] as boolean | undefined) ?? false;
     const createDirs = (input["createDirs"] as boolean | undefined) ?? true;
     const overwrite = (input["overwrite"] as boolean | undefined) ?? true;
-    const content = input["content"] as string | undefined;
+    let content = input["content"] as string | undefined;
     const recursive = (input["recursive"] as boolean | undefined) ?? false;
+
+    // De-escape literal \n, \t, \r sequences that LLM might generate
+    if (content) {
+      content = content
+        .replace(/\\n/g, "\n")
+        .replace(/\\t/g, "\t")
+        .replace(/\\r/g, "\r");
+
+      // Fix common code pattern where LLM outputs 'n' instead of newline
+      // Look for common code boundaries followed by 'n' and spaces/indentation
+      // This handles: }n    , ;n    , )n    , ]n    , 'n    , "n    , etc.
+      content = content.replace(/([};)\]']|\/\/)n(\s)/g, "$1\n$2");
+      content = content.replace(/([};)\]'])n([a-zA-Z_/])/g, "$1\n$2");
+
+      // Also handle the pattern: 'n' followed by multiple spaces (indentation)
+      content = content.replace(/n(?=\s{4,})/g, "\n");
+    }
 
     try {
       const filePath = resolvePath(String(input["path"] ?? ""), {
@@ -234,9 +251,23 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "edit": {
-          const oldString = input["oldString"] as string | undefined;
-          const newString = input["newString"] as string | undefined;
+          let oldString = input["oldString"] as string | undefined;
+          let newString = input["newString"] as string | undefined;
           const replaceAll = (input["replaceAll"] as boolean | undefined) ?? false;
+
+          // De-escape newString and oldString
+          if (newString) {
+            newString = newString
+              .replace(/\\n/g, "\n")
+              .replace(/\\t/g, "\t")
+              .replace(/\\r/g, "\r");
+          }
+          if (oldString) {
+            oldString = oldString
+              .replace(/\\n/g, "\n")
+              .replace(/\\t/g, "\t")
+              .replace(/\\r/g, "\r");
+          }
           if (!oldString) return { success: false, data: null, error: "oldString required for edit" };
           if (newString === undefined) return { success: false, data: null, error: "newString required for edit" };
           if (!existsSync(filePath)) {

@@ -26,6 +26,12 @@ import { ConversationCompressor } from "./conversation/compressor.js";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
 import { createDynamicToolResolver } from "./dynamic-tools/dynamic-tool-resolver.js";
+import { HookRegistry, type AgentHook } from "./hooks/agent-hooks.js";
+import { AGENT_HOOK_NAMES } from "./hooks/hook-names.js";
+import { EventEmitterV2, AGENT_EVENT_TYPES } from "./events/index.js";
+import { InputNormalizerPipeline, AliasNormalizer, TypeCoercer, JSONRepairNormalizer } from "./tools/input-normalizer.js";
+import type { ToolApprovalPolicy } from "./tools/tool-approval-policy.js";
+import { createCompletionTool } from "./tools/completion-tool.js";
 
 import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
@@ -71,6 +77,14 @@ Use ./shared-workspace as collaborative file area for user-provided artifacts an
 CRITICAL: When you say you will do something (e.g., "I will create a file", "I will send to Discord"), you MUST emit the actual [TOOL:...] calls immediately - DO NOT just describe what you will do. Every action must be followed by its tool call.
 
 IMPORTANT: NEVER repeat the same tool call twice in the same conversation. Once you call a tool, you have already executed it - do not call it again unless the result indicates failure. If you need to use a tool again with different parameters, that's OK, but with the SAME parameters, skip it.
+
+## Real-Time Data Queries
+For queries requiring CURRENT/REAL data (not LLM training data), ALWAYS use tools:
+- Current date/time: Use shell tool (e.g., "date" or "Get-Date" command)
+- Current file contents: Use file-read tool (do NOT use memory/conversation context)
+- Current system state: Use shell or system tools
+- Current web data: Use browser tool
+DO NOT answer these from conversation memory or LLM knowledge alone - execute tools to get actual current data.
 
 ## Responding to Tool Results - CRITICAL
 When you receive tool execution results (messages marked as "tool" role):
@@ -167,6 +181,14 @@ export class Agent {
   private autoSkillSelections = 0;
   private currentScreenshotMessage: LLMMessage | undefined;
 
+  // Phase 1: Hook system and granular events
+  private hookRegistry: HookRegistry;
+  private eventEmitterV2: EventEmitterV2;
+
+  // Phase 2: Tool approval policies and input normalization
+  private toolApprovalPolicy: ToolApprovalPolicy | undefined;
+  private inputNormalizer: InputNormalizerPipeline;
+
   constructor(
     private readonly provider: LLMProvider,
     private readonly db: DatabaseService,
@@ -191,10 +213,38 @@ export class Agent {
       this.skillsRoot = existsSync(monorepoCandidate) ? monorepoCandidate : existsSync(cwdLocal) ? cwdLocal : cwdLocal;
     }
 
+    // Phase 1: Initialize hook registry and event emitter V2
+    this.hookRegistry = new HookRegistry(this.logger);
+    if (options.hooks) {
+      for (const hook of options.hooks) {
+        this.hookRegistry.register(hook.name, hook);
+      }
+    }
+
+    this.eventEmitterV2 = new EventEmitterV2({
+      onEvent: (event) => {
+        // Emit to both new V2 system and legacy eventEmitter (backward compat)
+        this.eventEmitter?.emitEvent(event as AgentRunEvent);
+      },
+      onChunk: (chunk) => {
+        this.eventEmitter?.emitChunk?.(chunk);
+      },
+    });
+
+    // Phase 2: Initialize input normalization pipeline
+    this.inputNormalizer = new InputNormalizerPipeline(this.logger);
+    this.inputNormalizer.addNormalizer(new AliasNormalizer());
+    this.inputNormalizer.addNormalizer(new TypeCoercer());
+    this.inputNormalizer.addNormalizer(new JSONRepairNormalizer());
+
     this.conversation = new ConversationManager(db, this.logger);
     this.memory = new MemorySystem(db, this.logger);
     this.planner = new Planner(provider, this.logger);
     this.executor = new Executor(this.logger, createDynamicToolResolver(db));
+
+    // Phase 3B: Register completion tools
+    this.executor.registerTool(createCompletionTool({ name: "submit_solution", completesRun: true }));
+
     for (const tool of createWorkflowTools(db)) {
       this.executor.registerTool(tool);
     }
@@ -279,6 +329,11 @@ export class Agent {
     const toolsUsed: string[] = [];
     let iterations = 0;
     const controls = await this.loadRuntimeControls();
+
+    // === PRE-FLIGHT TOOLS: Execute real-time data queries before LLM inference ===
+    // This prevents hallucination about current state (time, date, system status, etc.)
+    // Best practice: gather ground truth before letting LLM reason
+    await this.executePreFlightTools(userInput, options);
 
     let timedOut = false;
     let settled = false;
@@ -1021,7 +1076,20 @@ export class Agent {
     // Resolve tool aliases FIRST (e.g., "task_split" -> "task")
     const resolvedToolName = resolveToolAlias(toolName);
     const normalizedName = resolvedToolName.trim().toLowerCase();
-    const normalizedInput: Record<string, unknown> = { ...input };
+    let normalizedInput: Record<string, unknown> = { ...input };
+
+    // Phase 2: Apply input normalization pipeline
+    const normResult = await this.inputNormalizer.normalize(normalizedName, normalizedInput);
+    if (normResult.transformations.length > 0) {
+      normalizedInput = normResult.normalized;
+      this.logger.debug("Input normalized", {
+        toolName: normalizedName,
+        transformations: normResult.transformations.map((t) => `${t.field}: ${t.via}`),
+      });
+    }
+    if (normResult.warnings.length > 0) {
+      this.logger.warn("Input normalization warnings", { toolName: normalizedName, warnings: normResult.warnings });
+    }
 
     if (normalizedName === "shell" && normalizedInput["timeout"] === undefined) {
       normalizedInput["timeout"] = controls.shellToolTimeoutMs;
@@ -2556,6 +2624,66 @@ export class Agent {
     };
   }
 
+  private async executePreFlightTools(userInput: string, options: AgentRunOptions): Promise<void> {
+    // BEST PRACTICE: Execute real-time data tools BEFORE LLM inference to prevent hallucination
+    // This ensures the agent has ground truth before reasoning
+
+    // Detect queries needing current date/time
+    const dateTimePattern = /\b(current|today|what is the|what time)?\s*(date|time|now|today's date)\b/i;
+    const needsDateTime = dateTimePattern.test(userInput);
+
+    if (needsDateTime) {
+      try {
+        // Execute 'date' command automatically for time queries
+        // Use the executor which handles tool invocation properly
+        const dateResult = await this.executor.execute("shell", { command: "date" });
+
+        if (dateResult) {
+          // Handle different result formats from executor
+          let dateOutput = "";
+
+          if (typeof dateResult === "string") {
+            dateOutput = dateResult;
+          } else if (typeof dateResult === "object") {
+            const result = dateResult as any;
+            // Executor returns {output, exitCode, shell} for shell commands
+            if (result.output && typeof result.output === "string") {
+              dateOutput = result.output;
+            } else if (result.data && typeof result.data === "string") {
+              dateOutput = result.data;
+            } else if (result.stdout && typeof result.stdout === "string") {
+              dateOutput = result.stdout;
+            } else if (result.result && typeof result.result === "string") {
+              dateOutput = result.result;
+            } else if (result.success === true && result.data) {
+              // If it's a ToolResult object with success flag
+              dateOutput = typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2);
+            }
+          }
+
+          if (dateOutput.trim()) {
+            // Add the date/time result to conversation BEFORE LLM sees it
+            const dateMessage: LLMMessage = {
+              role: "system",
+              content: `GROUND TRUTH - CURRENT SYSTEM DATE/TIME (executed before reasoning):\n${dateOutput.trim()}`,
+            };
+            await this.conversation.addMessage(dateMessage);
+
+            this.logger.info("[PRE-FLIGHT] Injected current date/time before LLM inference", {
+              output: dateOutput,
+              query: userInput,
+            });
+          }
+        }
+      } catch (error) {
+        this.logger.warn("[PRE-FLIGHT] Failed to execute date tool", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // Don't fail the agent - just continue without the ground truth
+      }
+    }
+  }
+
   private async handleScreenshotCapture(
     toolName: string,
     toolInput: Record<string, unknown>,
@@ -2949,9 +3077,25 @@ export class Agent {
           maxResultSize
         );
 
+        // Format tool result: extract actual output for readability, keep full JSON as fallback
+        let resultContent = truncatedJson;
+        try {
+          const parsed = JSON.parse(truncatedJson);
+          if (parsed.data) {
+            // If there's an output field, present it clearly
+            if (typeof parsed.data === "object" && "output" in parsed.data) {
+              resultContent = `Tool Result: ${parsed.data.output}\n\n[Full result: ${truncatedJson}]`;
+            } else if (typeof parsed.data === "string") {
+              resultContent = `Tool Result: ${parsed.data}`;
+            }
+          }
+        } catch {
+          // If parsing fails, use the raw JSON
+        }
+
         const toolResultMessage: LLMMessage = {
           role: "tool",
-          content: truncatedJson,
+          content: resultContent,
           toolCallId: executed.id,
         };
         await this.conversation.addMessage(toolResultMessage);
@@ -3039,6 +3183,23 @@ export class Agent {
     return { resultMap, cleanedResponse, browserToolsCount };
   }
 
+  /**
+   * Execute hooks safely with error handling and logging.
+   * Returns {proceed: false} if any hook aborted; true otherwise.
+   */
+  private async executeHookSafely<TContext = unknown>(
+    hookName: string,
+    context: TContext
+  ): Promise<{ proceed: boolean; reason?: string; output?: Record<string, unknown> }> {
+    try {
+      return await this.hookRegistry.executeHooks(hookName, context);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error("Hook execution error", { hookName, error: message });
+      return { proceed: false, reason: `Hook error: ${message}` };
+    }
+  }
+
   private async runLoop(
     userInput: string,
     toolsUsed: string[],
@@ -3046,13 +3207,39 @@ export class Agent {
     controls: AgentRuntimeControls,
     options: AgentRunOptions
   ): Promise<AgentRunResult> {
+    const runStartTime = Date.now();
+    const toolsUsedThisRun = new Set<string>(toolsUsed);
+
+    // Initialize adjustedControls early so emit() can reference it
+    let adjustedControls: AgentRuntimeControls | undefined;
+
     const emit = (
-      type: AgentRunEventType,
+      type: AgentRunEventType | string,
       message: string,
       data?: Record<string, unknown>
     ) => {
       const timestamp = new Date().toISOString();
-      options.onEvent?.({ type, message, data, timestamp });
+      const elapsed = Date.now() - runStartTime;
+
+      // Build snapshot for granular event system (Phase 1)
+      const snapshot = {
+        conversationLength: (this.conversation as any).messages?.length ?? 0,
+        currentIteration: iterations,
+        maxIterations: (adjustedControls ?? controls).maxIterations,
+        toolsUsedThisIteration: Array.from(toolsUsedThisRun),
+        toolsUsedInRun: Array.from(toolsUsedThisRun),
+        elapsed,
+        timestamp,
+      };
+
+      // Emit via V2 event emitter (batched, with snapshot)
+      this.eventEmitterV2.emitEvent({
+        type: type as AgentRunEventType,
+        message,
+        data,
+        snapshot,
+        timestamp,
+      });
 
       // Persist event timeline so reloaded chats can render tool/reasoning history.
       if (this.conversation.id !== undefined) {
@@ -3061,7 +3248,7 @@ export class Agent {
             conversationId: this.conversation.id,
             role: "event",
             content: message,
-            toolResult: JSON.stringify({ eventType: type, data, timestamp }),
+            toolResult: JSON.stringify({ eventType: type, data, timestamp, snapshot }),
           })
           .catch(() => {
             // Ignore event persistence errors to avoid interrupting the run loop.
@@ -3074,7 +3261,7 @@ export class Agent {
       toolInput: Record<string, unknown>,
       toolResult: ToolResult
     ): Promise<void> => {
-      if (!adjustedControls.enableAutoMemory) return;
+      if (!adjustedControls!.enableAutoMemory) return;
       if (!toolResult.success) return;
 
       try {
@@ -3168,7 +3355,7 @@ export class Agent {
                         userInput.toLowerCase().includes("tracked");
 
     // In lightweight/chatbot modes, limit iterations and disable planning/reflection
-    const adjustedControls = { ...controls };
+    adjustedControls = { ...controls };
 
     // Adjust iteration limits based on detected tools/queries (applies to all modes)
     if (hasTaskTool) {
@@ -4205,6 +4392,9 @@ export class Agent {
 
     // Record actual mode outcome for self-calibration (P3.2)
     modeDetector.recordActualComplexity(userInput, effectiveMode, iterations);
+
+    // Phase 1: Flush any pending events before returning
+    this.eventEmitterV2.flushPending();
 
     return {
       response: this.buildNonEmptyResponse(this.sanitizeFinalResponse(finalResponse), toolsUsed, iterations),

@@ -53,7 +53,7 @@ export function createProvider(config: ProviderFactoryConfig): LLMProvider {
         model: config.model,
       });
     case "claude":
-      return new ClaudeProvider({
+      return new AnthropicAdapter({
         baseUrl: "https://api.anthropic.com/v1",
         apiKey: config.apiKey ?? process.env["CLAUDE_API_KEY"],
         model: config.model ?? process.env["CLAUDE_MODEL"] ?? "claude-3-5-sonnet-20241022",

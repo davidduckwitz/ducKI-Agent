@@ -1,0 +1,203 @@
+/**
+ * Tool approval policies: runtime-modifiable rules that gate tool execution.
+ * Enables security policies, input validation, and tool-specific restrictions.
+ */
+
+/**
+ * Result of an approval rule check.
+ */
+export interface ApprovalCheckResult {
+  approved: boolean;
+  reason?: string;
+  /** If approved, may contain corrected input to use instead of original */
+  corrected?: Record<string, unknown>;
+  /** If approval requires user confirmation, set this to true */
+  requiresConfirmation?: boolean;
+}
+
+/**
+ * A single approval rule that checks whether a tool call should be allowed.
+ */
+export interface ToolApprovalRule {
+  name: string;
+  description?: string;
+  /** Check if this tool call should be approved */
+  check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult>;
+}
+
+/**
+ * Strategy for combining multiple approval rules.
+ */
+export type ApprovalStrategy = "all_must_approve" | "any_deny_blocks" | "first_deny_wins";
+
+/**
+ * A collection of approval rules with execution strategy.
+ */
+export class ToolApprovalPolicy {
+  constructor(
+    readonly rules: ToolApprovalRule[] = [],
+    readonly strategy: ApprovalStrategy = "first_deny_wins"
+  ) {}
+
+  /**
+   * Check if a tool call is approved by all rules.
+   */
+  async check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult> {
+    if (this.rules.length === 0) {
+      return { approved: true };
+    }
+
+    let lastResult: ApprovalCheckResult = { approved: true };
+    const allResults: ApprovalCheckResult[] = [];
+
+    for (const rule of this.rules) {
+      try {
+        const result = await rule.check(toolName, input);
+        allResults.push(result);
+        lastResult = result;
+
+        // Short-circuit on first denial
+        if (!result.approved && this.strategy === "first_deny_wins") {
+          return result;
+        }
+      } catch (error) {
+        return {
+          approved: false,
+          reason: `Approval rule '${rule.name}' failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
+
+    // Check strategy
+    if (this.strategy === "any_deny_blocks") {
+      const denied = allResults.find((r) => !r.approved);
+      if (denied) return denied;
+    }
+
+    return { approved: true };
+  }
+
+  /**
+   * Add a rule to this policy.
+   */
+  addRule(rule: ToolApprovalRule): void {
+    this.rules.push(rule);
+  }
+
+  /**
+   * Remove a rule by name.
+   */
+  removeRule(name: string): boolean {
+    const index = this.rules.findIndex((r) => r.name === name);
+    if (index === -1) return false;
+    this.rules.splice(index, 1);
+    return true;
+  }
+}
+
+/**
+ * Built-in approval rules
+ */
+
+/**
+ * Denies tool calls matching a pattern.
+ */
+export class DenyInputPattern implements ToolApprovalRule {
+  readonly name: string;
+  readonly description: string;
+
+  constructor(
+    readonly toolName: string,
+    readonly inputPattern: RegExp,
+    readonly reason: string
+  ) {
+    this.name = `deny-${toolName}-pattern`;
+    this.description = `Deny ${toolName} calls matching ${inputPattern}`;
+  }
+
+  async check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult> {
+    if (toolName !== this.toolName) return { approved: true };
+
+    // Check all input values as strings
+    const inputStr = JSON.stringify(input);
+    if (this.inputPattern.test(inputStr)) {
+      return { approved: false, reason: this.reason };
+    }
+
+    return { approved: true };
+  }
+}
+
+/**
+ * Denies specific tools entirely.
+ */
+export class DenyTool implements ToolApprovalRule {
+  readonly name: string;
+  readonly description: string;
+
+  constructor(readonly toolName: string, readonly reason: string = "Tool is disabled") {
+    this.name = `deny-${toolName}`;
+    this.description = `Deny all ${toolName} calls`;
+  }
+
+  async check(toolName: string, _input: Record<string, unknown>): Promise<ApprovalCheckResult> {
+    if (toolName === this.toolName) {
+      return { approved: false, reason: this.reason };
+    }
+    return { approved: true };
+  }
+}
+
+/**
+ * Requires confirmation for specific tool/action combinations.
+ */
+export class RequireConfirmation implements ToolApprovalRule {
+  readonly name: string;
+  readonly description: string;
+
+  constructor(
+    readonly toolName: string,
+    readonly actionPattern?: RegExp,
+    readonly reason: string = "Requires confirmation"
+  ) {
+    this.name = `confirm-${toolName}`;
+    this.description = `Require confirmation for ${toolName}`;
+  }
+
+  async check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult> {
+    if (toolName !== this.toolName) return { approved: true };
+
+    if (this.actionPattern) {
+      const action = String(input.action ?? "");
+      if (!this.actionPattern.test(action)) {
+        return { approved: true };
+      }
+    }
+
+    return { approved: true, requiresConfirmation: true, reason: this.reason };
+  }
+}
+
+/**
+ * Allows only specific actions on a tool.
+ */
+export class AllowedActions implements ToolApprovalRule {
+  readonly name: string;
+  readonly description: string;
+
+  constructor(readonly toolName: string, readonly actions: string[], readonly reason: string = "Action not allowed") {
+    this.name = `allowed-actions-${toolName}`;
+    this.description = `Allow only ${actions.join(", ")} on ${toolName}`;
+  }
+
+  async check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult> {
+    if (toolName !== this.toolName) return { approved: true };
+
+    const action = String(input.action ?? "").toLowerCase();
+    if (!this.actions.some((a) => a.toLowerCase() === action)) {
+      return { approved: false, reason: `${this.reason}: ${action}` };
+    }
+
+    return { approved: true };
+  }
+}

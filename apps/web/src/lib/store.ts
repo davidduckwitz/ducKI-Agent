@@ -79,6 +79,31 @@ interface BrowserPreviewState {
   };
 }
 
+export interface BrowserSession {
+  tabId: string;
+  url: string;
+  title?: string;
+  isActive: boolean;
+  cookies?: string[];
+  lastUsed: string;
+}
+
+export interface ToolCallRecord {
+  id: string;
+  toolName: string;
+  action?: string;
+  timestamp: string;
+  input?: Record<string, unknown>;
+  status: "executing" | "completed" | "failed";
+  result?: {
+    success: boolean;
+    output?: string;
+    error?: string;
+    data?: unknown;
+  };
+  tabId?: string;
+}
+
 interface AppState {
   // Agent
   agentStatus: "idle" | "running" | "paused" | "error" | "stopped";
@@ -98,6 +123,12 @@ interface AppState {
   // UI
   setupModalOpen: boolean;
   browserPreview: BrowserPreviewState;
+  animationStyle: "matrix" | "neon" | "minimal";
+
+  // Tool Management
+  toolCalls: ToolCallRecord[];
+  browserSessions: BrowserSession[];
+  showToolDock: boolean;
 
   // Actions
   initSocket: () => void;
@@ -117,6 +148,17 @@ interface AppState {
   setGlobalRunningAgents: (count: number) => void;
   setSetupModalOpen: (open: boolean) => void;
   setBrowserPreviewModal: (show: boolean, preview?: BrowserPreviewState["currentPreview"]) => void;
+  setAnimationStyle: (style: "matrix" | "neon" | "minimal") => void;
+
+  // Tool Management
+  addToolCall: (toolCall: ToolCallRecord) => void;
+  updateToolCall: (id: string, updates: Partial<ToolCallRecord>) => void;
+  removeToolCall: (id: string) => void;
+  clearToolCalls: () => void;
+  addBrowserSession: (session: BrowserSession) => void;
+  updateBrowserSession: (tabId: string, updates: Partial<BrowserSession>) => void;
+  removeBrowserSession: (tabId: string) => void;
+  setShowToolDock: (show: boolean) => void;
 }
 
 export type AgentMode = "full" | "plan";
@@ -132,10 +174,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   socket: null,
   connected: false,
   setupModalOpen: false,
+  animationStyle: "matrix",
   browserPreview: {
     showModal: false,
     currentPreview: undefined,
   },
+  toolCalls: [],
+  browserSessions: [],
+  showToolDock: true,
 
   initSocket: () => {
     const socketUrl = import.meta.env.DEV
@@ -292,6 +338,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
     });
 
+    // Tool call tracking
+    socket.on("tool:call_started", (data: { timestamp: string; conversationId?: number; data?: Record<string, unknown> }) => {
+      if (!belongsToActiveConversation(data.conversationId)) return;
+      const toolData = data.data as { count?: number; tools?: string[]; summaries?: string[] } | undefined;
+      const callId = crypto.randomUUID();
+      const toolCall: ToolCallRecord = {
+        id: callId,
+        toolName: toolData?.tools?.[0] ?? "unknown",
+        timestamp: data.timestamp,
+        status: "executing",
+        input: toolData,
+      };
+      get().addToolCall(toolCall);
+    });
+
     set({ socket });
   },
 
@@ -353,4 +414,38 @@ export const useAppStore = create<AppState>((set, get) => ({
         currentPreview: preview,
       },
     }),
+  setAnimationStyle: (style) => set({ animationStyle: style }),
+
+  // Tool Management
+  addToolCall: (toolCall) =>
+    set((s) => ({
+      toolCalls: [...s.toolCalls, toolCall],
+    })),
+  updateToolCall: (id, updates) =>
+    set((s) => ({
+      toolCalls: s.toolCalls.map((call) =>
+        call.id === id ? { ...call, ...updates } : call
+      ),
+    })),
+  removeToolCall: (id) =>
+    set((s) => ({
+      toolCalls: s.toolCalls.filter((call) => call.id !== id),
+    })),
+  clearToolCalls: () => set({ toolCalls: [] }),
+
+  addBrowserSession: (session) =>
+    set((s) => ({
+      browserSessions: [...s.browserSessions, session],
+    })),
+  updateBrowserSession: (tabId, updates) =>
+    set((s) => ({
+      browserSessions: s.browserSessions.map((session) =>
+        session.tabId === tabId ? { ...session, ...updates } : session
+      ),
+    })),
+  removeBrowserSession: (tabId) =>
+    set((s) => ({
+      browserSessions: s.browserSessions.filter((session) => session.tabId !== tabId),
+    })),
+  setShowToolDock: (show) => set({ showToolDock: show }),
 }));

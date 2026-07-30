@@ -17,9 +17,15 @@ export class AnthropicAdapter extends BaseAdapter {
     super(options);
     this.validateConfiguration();
 
+    console.log("[DEBUG AnthropicAdapter] Initializing with:", {
+      hasApiKey: !!this.apiKey,
+      apiKeyStart: this.apiKey?.substring(0, 20),
+      model: this.model,
+      baseUrl: this.baseUrl,
+    });
+
     this.client = new Anthropic({
       apiKey: this.apiKey,
-      baseURL: this.baseUrl,
     });
   }
 

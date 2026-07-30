@@ -38,10 +38,16 @@ export const shellTool: ToolExecutor = {
     },
   },
   async execute(input: Record<string, unknown>): Promise<ToolResult> {
-    const command = input["command"] as string;
+    let command = input["command"] as string;
     const cwd = (input["cwd"] as string | undefined) ?? process.cwd();
     const timeout = (input["timeout"] as number | undefined) ?? 30000;
     const isWindows = process.platform === "win32";
+
+    // De-escape literal \n, \t, \r sequences that LLM might generate in shell commands
+    command = command
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\r/g, "\r");
 
     // Basic safety checks - block dangerous commands
     const dangerousPatterns = [

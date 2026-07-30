@@ -306,10 +306,22 @@ async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabas
 	}
 
 	if (providerName === "claude") {
+		const rawKey = readSettingValue(settingMap, "CLAUDE_API_KEY", "CLAUDE_API_KEY");
+		const normalizedKey = normalizeApiKey(rawKey);
+		console.log("[DEBUG loadProviderFromSettings] Claude config:", {
+			hasRawApiKey: !!rawKey,
+			rawKeyLength: rawKey?.length ?? 0,
+			hasNormalizedKey: !!normalizedKey,
+			normalizedKeyLength: normalizedKey?.length ?? 0,
+			normalizedKeyStart: normalizedKey?.substring(0, 20) ?? "none",
+			baseUrl: "https://api.anthropic.com/v1",
+			model: readSettingValue(settingMap, "CLAUDE_MODEL", "CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+		});
 		const provider = createProvider({
 			name: "claude",
+			baseUrl: readSettingValue(settingMap, "CLAUDE_BASE_URL", "CLAUDE_BASE_URL", "https://api.anthropic.com/v1"),
 			model: readSettingValue(settingMap, "CLAUDE_MODEL", "CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
-			apiKey: normalizeApiKey(readSettingValue(settingMap, "CLAUDE_API_KEY", "CLAUDE_API_KEY")),
+			apiKey: normalizedKey,
 		});
 		return { provider, providerName };
 	}

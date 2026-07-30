@@ -108,6 +108,15 @@ export function setupWebSocket(
             },
             onEvent: (event: AgentRunEvent) => {
               socket.emit("chat:event", { ...event, conversationId: resolvedConversationId });
+
+              // Emit tool call events separately for UI tracking
+              if (event.type === "tool_call") {
+                socket.emit("tool:call_started", {
+                  timestamp: event.timestamp,
+                  conversationId: resolvedConversationId,
+                  data: event.data,
+                });
+              }
             },
           }
         );

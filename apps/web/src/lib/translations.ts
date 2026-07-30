@@ -89,6 +89,7 @@ export const translations: Record<Language, TranslationTree> = {
       new: "Neu",
       cancel: "Abbrechen",
       tip: "Tipp",
+      goToChat: "Zu Chat",
     },
     layout: {
       connected: "Verbunden",
@@ -194,6 +195,8 @@ export const translations: Record<Language, TranslationTree> = {
       systemStatus: "System Status",
       websocket: "WebSocket",
       agent: "Agent",
+      agentChat: "Agent Chat",
+      recentTasks: "Aktuelle Aufgaben",
     },
     chat: {
       chats: "Chats",
@@ -238,6 +241,8 @@ export const translations: Record<Language, TranslationTree> = {
       noHtmlToExport: "Kein HTML-Inhalt zum Exportieren verfuegbar.",
       roleYou: "Du",
       roleAgent: "DucKI",
+      noMessages: "Noch keine Nachrichten. Starten Sie ein Gespraech, um sie hier zu sehen.",
+      loading: "Wird geladen...",
     },
     toolsPage: {
       noTools: "Keine Tools geladen",
@@ -584,6 +589,7 @@ export const translations: Record<Language, TranslationTree> = {
       new: "New",
       cancel: "Cancel",
       tip: "Tip",
+      goToChat: "Go to Chat",
     },
     layout: {
       connected: "Connected",
@@ -689,6 +695,8 @@ export const translations: Record<Language, TranslationTree> = {
       systemStatus: "System status",
       websocket: "WebSocket",
       agent: "Agent",
+      agentChat: "Agent Chat",
+      recentTasks: "Recent Tasks",
     },
     chat: {
       chats: "Chats",
@@ -733,6 +741,8 @@ export const translations: Record<Language, TranslationTree> = {
       noHtmlToExport: "No HTML content available to export.",
       roleYou: "You",
       roleAgent: "DucKI",
+      noMessages: "No messages yet. Start a conversation to see them here.",
+      loading: "Loading...",
     },
     toolsPage: {
       noTools: "No tools loaded",

@@ -183,6 +183,7 @@ export function Layout() {
       items: [
         { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard") },
         { to: "/chat", icon: MessageSquare, label: t("nav.chat") },
+        { to: "/coding", icon: Code2, label: "Agent Control" },
       ],
     },
     {
@@ -268,16 +269,14 @@ export function Layout() {
               ))}
             </div>
           </div>
-        </div>
 
-        {codingEnabled && (
-          <div className="px-2 pt-2">
+          <div className="mt-3 px-2">
             <SidebarModeSwitcher
               active={isCodingRoute ? "coding" : "standard"}
               onSelect={(mode) => navigate(mode === "coding" ? "/coding" : "/dashboard")}
             />
           </div>
-        )}
+        </div>
 
         {isCodingRoute ? (
           <CodingSidebarPanel />

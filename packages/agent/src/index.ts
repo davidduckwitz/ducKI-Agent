@@ -48,6 +48,66 @@ export type { ToolManifestEntry } from "./tools/tool-registry.js";
 export { createScriptTools, runScriptResultSubagent } from "./tools/script-tools.js";
 export { RESERVED_TOOL_NAMES } from "./tools/reserved-tool-names.js";
 export { TOOL_CALL_FORMAT_BLOCK } from "./agent.js";
+
+// Phase 1: Hooks & Granular Events
+export { HookRegistry, type AgentHook, type AgentHookResult } from "./hooks/agent-hooks.js";
+export { AGENT_HOOK_NAMES, type AgentHookContexts } from "./hooks/hook-names.js";
+export { EventEmitterV2, type EventEmitterV2Options } from "./events/event-emitter-v2.js";
+export { AGENT_EVENT_TYPES } from "./events/agent-events.js";
+export type { AgentRunEventSnapshot } from "./events/agent-events.js";
+
+// Phase 2: Tool Approval Policies & Input Normalization
+export {
+  ToolApprovalPolicy,
+  type ToolApprovalRule,
+  type ApprovalCheckResult,
+  DenyInputPattern,
+  DenyTool,
+  RequireConfirmation,
+  AllowedActions,
+} from "./tools/tool-approval-policy.js";
+export {
+  InputNormalizerPipeline,
+  AliasNormalizer,
+  TypeCoercer,
+  JSONRepairNormalizer,
+  type InputNormalizer,
+  type NormalizationResult,
+} from "./tools/input-normalizer.js";
+
+// Phase 3: Streaming & SDK Interfaces
+export { AgentRunnerV2, createAgentRunnerV2, type AgentRunFrame } from "./agent-runner-v2.js";
+export {
+  createCompletionTool,
+  createCodingCompletionTool,
+  createReviewCompletionTool,
+  type CompletionToolOptions,
+} from "./tools/completion-tool.js";
+export type {
+  SDKTool,
+  SDKToolRegistry,
+  SDKLLMGateway,
+  AgentIteration,
+  AgentSDK,
+  AgentHost,
+  AgentFactory,
+} from "./core/agent-sdk-interfaces.js";
+
+// Phase 3B: Browser & Edge Runtimes
+export {
+  BrowserAgentRuntime,
+  createBrowserAgentRuntime,
+  type BrowserRuntimeConfig,
+} from "./runtime/browser-sdk.js";
+export {
+  EdgeAgentSDK,
+  handleEdgeAgentRequest,
+  type EdgeRequest,
+  type EdgeResponse,
+} from "./runtime/edge-sdk.js";
+
+// Performance Benchmarks
+export { AgentBenchmark, type BenchmarkResult } from "./performance/benchmarks.js";
 export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
 // Context compression & memory optimization

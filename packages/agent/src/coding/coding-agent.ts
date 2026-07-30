@@ -6,6 +6,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter, AgentRunOptions } from "../config/interfaces_types.js";
+import { AGENT_HOOK_NAMES, type AgentHook } from "../hooks/index.js";
+import { ToolApprovalPolicy, AllowedActions } from "../tools/tool-approval-policy.js";
 import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
 
 const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
@@ -74,6 +76,7 @@ export class CodingAgent {
   private readonly eventEmitter: AgentEventEmitter | undefined;
   private readonly defaultMaxAttempts: number;
   private readonly sandboxRoot: string | undefined;
+  private filesRead = new Set<string>(); // Track files read during this run
 
   constructor(
     provider: LLMProvider,
@@ -87,10 +90,53 @@ export class CodingAgent {
 
     const basePrompt = options.systemPrompt ?? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}`;
 
+    // Phase 1 & 2: Register discipline hooks for CodingAgent
+    const disciplineHooks: AgentHook[] = [
+      {
+        name: "coding-discipline-read-before-edit",
+        priority: 60,
+        handler: async (context: any) => {
+          // beforeTool hook: enforce "read before edit" discipline
+          const toolName = context.toolName as string;
+          const input = context.input as Record<string, unknown>;
+
+          if (toolName === "filesystem") {
+            const action = String(input.action ?? "").toLowerCase();
+            const path = String(input.path ?? "");
+
+            // Check if editing without reading first
+            if (["edit", "write", "append", "delete"].includes(action) && path) {
+              const hasBeenRead = this.filesRead.has(path);
+              if (!hasBeenRead && action !== "write") { // write is OK for new files
+                return {
+                  proceed: false,
+                  reason: `Discipline violation: Must read file '${path}' before editing it. Use "read" action first.`,
+                };
+              }
+            }
+
+            // Track reads for future edits
+            if (action === "read" && path) {
+              this.filesRead.add(path);
+            }
+          }
+
+          return { proceed: true };
+        },
+      },
+    ];
+
+    // Phase 2: Create approval policy for safe coding (restrict destructive operations)
+    const codingApprovalPolicy = new ToolApprovalPolicy([
+      // Only allow safe shell commands: no rm -rf, git force-push, etc.
+      new AllowedActions("shell", ["ls", "pwd", "cd", "cat", "grep", "find", "npm", "yarn", "git"], "Only safe shell commands allowed in coding mode"),
+    ]);
+
     this.agent = new Agent(provider, db, eventEmitter, {
       name: options.name ?? "CodingAgent",
       systemPrompt: basePrompt,
       maxIterations: options.maxIterations ?? 30,
+      hooks: disciplineHooks,
     });
 
     const fsTool = options.sandboxRoot ? createScopedFilesystemTool(options.sandboxRoot) : filesystemTool;

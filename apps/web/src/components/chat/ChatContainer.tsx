@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Trash2, Paperclip, Square, Image as ImageIcon, X, PanelLeft } from "lucide-react";
+import { Send, Trash2, Paperclip, Square, Image as ImageIcon, X, PanelLeft, Settings } from "lucide-react";
 import { useAppStore, type ChatAttachment } from "../../lib/store";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { DuckyMascot } from "./DuckyMascot";
+import { MatrixDuck } from "./MatrixDuck";
+import { ToolResponseDock } from "./ToolResponseCard";
+import { BrowserSessionManager } from "./BrowserSessionManager";
 import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
 import { ToolSkillSelector } from "./ToolSkillSelector";
 import { PlanExecutionPanel, type Plan, type StepStatus } from "./PlanExecutionPanel";
@@ -75,6 +78,9 @@ export function ChatContainer() {
     connected,
     browserPreview,
     setBrowserPreviewModal,
+    toolCalls,
+    removeToolCall,
+    showToolDock,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -94,6 +100,7 @@ export function ChatContainer() {
   const [stepStatuses, setStepStatuses] = useState<Record<number, StepStatus>>({});
   const [searchParams, setSearchParams] = useSearchParams();
   const [totalTokens, setTotalTokens] = useState(0);
+  const [showSettings, setShowSettings] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
@@ -970,49 +977,108 @@ export function ChatContainer() {
             <Trash2 className="w-4 h-4" />
             {t("chat.clear")}
           </button>
+          <button
+            onClick={() => setShowSettings((prev) => !prev)}
+            className="btn-secondary flex items-center gap-2 text-sm"
+            title="Animation settings"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
-      {/* Messages */}
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="p-4 border-b border-gray-800 bg-gray-900/50 space-y-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold">⚙️ Settings</h3>
+            <button
+              onClick={() => setShowSettings(false)}
+              className="text-gray-400 hover:text-gray-200"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="max-w-4xl mx-auto space-y-4">
+            {/* Duck Animation */}
+            <div>
+              <p className="text-xs font-semibold mb-2">🦆 Duck Animation</p>
+              <div className="flex gap-2">
+                {(['matrix', 'neon', 'minimal'] as const).map((style) => (
+                  <button
+                    key={style}
+                    onClick={() => useAppStore.setState({ animationStyle: style })}
+                    className={`px-3 py-1.5 text-xs rounded-md border transition ${
+                      useAppStore.getState().animationStyle === style
+                        ? 'border-blue-500 bg-blue-500/20 text-blue-200'
+                        : 'border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600'
+                    }`}
+                  >
+                    {style.charAt(0).toUpperCase() + style.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Browser Sessions */}
+            <div className="border-t border-gray-700 pt-4">
+              <BrowserSessionManager />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Messages - Newest at bottom, oldest at top */}
       <div
         ref={messagesViewportRef}
         onScroll={handleMessagesScroll}
         className={`flex-1 min-h-0 overflow-y-auto ${compactMode ? "px-2 py-2 sm:px-3" : "px-3 py-4 sm:px-4"}`}
       >
         <div className={`mx-auto w-full ${compactMode ? "max-w-3xl space-y-2" : "max-w-4xl space-y-4"}`}>
-        {selectedConversationMessages.isFetchingNextPage && (
-          <div className="text-center text-xs text-gray-500">{t("chat.loadingOlderMessages")}</div>
-        )}
-        {messages.length === 0 && (
-          <div className="text-center text-gray-500 mt-20">
-            <DuckyMascot working={false} connected={connected} size={56} className="mx-auto mb-4 opacity-80" />
-            <p>{t("chat.startConversation")}</p>
-          </div>
-        )}
+          {selectedConversationMessages.isFetchingNextPage && (
+            <div className="text-center text-xs text-gray-500">{t("chat.loadingOlderMessages")}</div>
+          )}
 
-        {messages.map((msg) =>
-          msg.role === "event" ? (
-            <EventRow
-              key={msg.id}
-              msg={msg}
-              t={t}
-              expanded={expandedEvents[msg.id] ?? defaultExpandedForType(msg.eventType)}
-              onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
-            />
-          ) : (
-            <MessageRow key={msg.id} msg={msg} compactMode={compactMode} t={t} />
-          )
-        )}
+          {messages.length === 0 && (
+            <div className="text-center text-gray-500 py-20">
+              <MatrixDuck isWorking={false} size={56} />
+              <p className="mt-4">{t("chat.startConversation")}</p>
+            </div>
+          )}
 
-        {/* Streaming */}
-        {isLoading && <StreamingRow compactMode={compactMode} streamingContent={streamingContent} t={t} />}
+          {/* Messages in chronological order (oldest first, newest last) */}
+          {messages.map((msg) =>
+            msg.role === "event" ? (
+              <EventRow
+                key={msg.id}
+                msg={msg}
+                t={t}
+                expanded={expandedEvents[msg.id] ?? defaultExpandedForType(msg.eventType)}
+                onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
+              />
+            ) : (
+              <MessageRow key={msg.id} msg={msg} compactMode={compactMode} t={t} />
+            )
+          )}
 
-        <div ref={bottomRef} />
+          {/* Streaming with Matrix Duck at bottom */}
+          {isLoading && (
+            <div className="flex gap-3 items-end pt-2">
+              <div className="flex-1">
+                <StreamingRow compactMode={compactMode} streamingContent={streamingContent} t={t} />
+              </div>
+              <div className="shrink-0">
+                <MatrixDuck isWorking={true} size={64} />
+              </div>
+            </div>
+          )}
+
+          <div ref={bottomRef} />
         </div>
       </div>
 
       {/* Input */}
-      <div className={`${compactMode ? "p-2 sm:p-3" : "p-3 sm:p-4"} border-t border-gray-800`}>
+      <div className={`${compactMode ? "p-2 sm:p-3" : "p-3 sm:p-4"} border-t border-gray-800 bg-gray-950`}>
         <div className={`mx-auto w-full ${compactMode ? "max-w-3xl" : "max-w-4xl"}`}>
         {attachedFiles.length > 0 && (
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1106,6 +1172,14 @@ export function ChatContainer() {
         <BrowserPreviewModal
           data={browserPreview.currentPreview}
           onClose={() => setBrowserPreviewModal(false)}
+        />
+      )}
+
+      {/* Tool Response Dock */}
+      {showToolDock && toolCalls.length > 0 && (
+        <ToolResponseDock
+          toolCalls={toolCalls}
+          onRemove={removeToolCall}
         />
       )}
     </div>
