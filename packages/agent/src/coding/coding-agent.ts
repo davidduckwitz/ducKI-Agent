@@ -19,7 +19,12 @@ Discipline:
 4. After every change, verify it: re-read the file or run a build/test command via the shell tool.
 5. If a verification command fails, diagnose the ACTUAL error output before retrying - do not guess or repeat the same fix blindly.
 6. Use the git tool to inspect diffs/status when useful, but never push or force operations unless explicitly asked.
-7. Report concisely what changed and what you verified.`;
+7. Report concisely what changed and what you verified.
+
+IMPORTANT - Multiline Content:
+- When writing code with multiple lines, ALWAYS use actual line breaks (newlines), not \\n escape sequences.
+- Each statement/line should be on its own line with proper indentation.
+- This is CRITICAL for code to work correctly - improper formatting will break the code.`;
 
 export interface CodingAgentOptions {
   name?: string;

@@ -157,14 +157,21 @@ export const filesystemTool: ToolExecutor = {
         .replace(/\\t/g, "\t")
         .replace(/\\r/g, "\r");
 
-      // Fix common code pattern where LLM outputs 'n' instead of newline
-      // Look for common code boundaries followed by 'n' and spaces/indentation
-      // This handles: }n    , ;n    , )n    , ]n    , 'n    , "n    , etc.
-      content = content.replace(/([};)\]']|\/\/)n(\s)/g, "$1\n$2");
-      content = content.replace(/([};)\]'])n([a-zA-Z_/])/g, "$1\n$2");
+      // Smart fix for 'n' instead of newline: convert when clearly a line boundary
+      // Pattern 1: 'n' followed by 2+ spaces (indentation) - covers 2-space and 4-space indent
+      content = content.replace(/n(?=\s{2,})/g, "\n");
 
-      // Also handle the pattern: 'n' followed by multiple spaces (indentation)
-      content = content.replace(/n(?=\s{4,})/g, "\n");
+      // Pattern 2: 'n' followed by closing bracket/brace/paren (end of statement/block)
+      content = content.replace(/n(?=[}\])])/g, "\n");
+
+      // Pattern 3: 'n' followed by // or /* (comment start) - very safe
+      content = content.replace(/n(?=\/[\/\*])/g, "\n");
+
+      // Pattern 4: Double 'nn' (blank line)
+      content = content.replace(/nn/g, "\n\n");
+
+      // Pattern 5: 'n' at end of string
+      content = content.replace(/n$/gm, "\n");
     }
 
     try {
