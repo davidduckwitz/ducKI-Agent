@@ -9,3 +9,10 @@ coverage/
 apps/server/shared-workspace/llm-wiki/
 apps/server/shared-workspace/chat-uploads/
 apps/server/shared-workspace/btc-puzzle/
+
+# Tauri
+target/
+apps/tauri-desktop/target/
+apps/tauri-desktop/src-tauri/target/
+apps/tauri-desktop/dist/
+Cargo.lock

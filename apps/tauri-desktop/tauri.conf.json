@@ -1,0 +1,33 @@
+{
+  "productName": "DucKI Node",
+  "version": "0.1.0",
+  "identifier": "de.davidduckwitz.ducki-node",
+  "build": {
+    "beforeDevCommand": "pnpm build:prep",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DucKI Node",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "windows": {
+      "certificateThumbprint": null,
+      "wix": null
+    }
+  }
+}

@@ -27,6 +27,7 @@ import {
   Sun,
   Moon,
   LayoutGrid,
+  Wallet,
 } from "lucide-react";
 import { useAppStore } from "../../lib/store";
 import { api } from "../../lib/api";
@@ -167,6 +168,7 @@ export function Layout() {
     refetchInterval: 5000,
   });
   const codingEnabled = String(settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value ?? "false").trim().toLowerCase() === "true";
+  const cryptoEnabled = String(settingsQuery.data?.find((s) => s.key === "CRYPTO_PAYMENT_ENABLED")?.value ?? "false").trim().toLowerCase() === "true";
 
   useEffect(() => {
     if (firstRunCheckDone.current) return;
@@ -217,6 +219,7 @@ export function Layout() {
       title: t("nav.groups.system"),
       items: [
         { to: "/logs", icon: ScrollText, label: t("nav.logs") },
+        { to: "/crypto", icon: Wallet, label: "Crypto Payment" },
         { to: "/settings", icon: Settings, label: t("nav.settings") },
       ],
     },

@@ -1,8 +1,26 @@
-// Determine base URL: use /api for dev server, or localhost:3001 as fallback for Electron
+// Determine base URL: use configurable backend or default
 function getBaseUrl(): string {
-  // In Electron, use localhost fallback; in browser, try /api first
-  const isElectron = typeof window !== 'undefined' && (window as any).electron;
+  // Try to get configured backend URL from localStorage
+  try {
+    const config = localStorage.getItem('backend-config');
+    if (config) {
+      const parsed = JSON.parse(config);
+      if (parsed.type === 'remote' && parsed.url) {
+        return parsed.url.replace(/\/$/, ''); // Remove trailing slash
+      }
+      if (parsed.type === 'local' && parsed.port) {
+        const isElectron = typeof window !== 'undefined' && (window as any).electron;
+        if (isElectron) {
+          return `http://localhost:${parsed.port}/api`;
+        }
+      }
+    }
+  } catch {
+    // Fall through to defaults
+  }
 
+  // Default behavior: use /api for dev server, or localhost:3001 as fallback for Electron
+  const isElectron = typeof window !== 'undefined' && (window as any).electron;
   if (isElectron) {
     return 'http://localhost:3001/api';
   }
@@ -11,7 +29,14 @@ function getBaseUrl(): string {
   return '/api';
 }
 
-const BASE_URL = getBaseUrl();
+let BASE_URL = getBaseUrl();
+
+// Refresh BASE_URL when storage changes
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', () => {
+    BASE_URL = getBaseUrl();
+  });
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   let res: Response;

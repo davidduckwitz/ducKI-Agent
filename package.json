@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node dev.js",
-    "build": "pnpm -r run build",
+    "build": "pnpm -r --filter=!@ducki/tauri-desktop run build",
     "build:web": "pnpm --filter @ducki/web run build",
     "build:server": "pnpm --filter @ducki/server run build",
     "test": "vitest run",
@@ -16,10 +16,13 @@
     "clean": "pnpm -r run clean",
     "whisper:build": "node scripts/build-whisper.js",
     "electron:dev": "concurrently \"pnpm dev\" \"wait-on http://localhost:5173 && pnpm --filter @ducki/desktop run dev\"",
-    "electron:build": "pnpm build:web && pnpm build:server && pnpm --filter @ducki/desktop run dist"
+    "electron:build": "pnpm build:web && pnpm build:server && pnpm --filter @ducki/desktop run dist",
+    "tauri:dev": "pnpm --filter @ducki/tauri-desktop run dev",
+    "tauri:build": "pnpm --filter @ducki/tauri-desktop run dist"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "concurrently": "^8.2.2",
@@ -34,5 +37,17 @@
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
+  },
+  "dependencies": {
+    "bip32": "^5.0.1",
+    "bip39": "^3.1.0",
+    "bitcoinjs-lib": "^7.0.1",
+    "ethers": "^6.17.0",
+    "qrcode": "^1.5.4",
+    "recharts": "^3.10.1",
+    "solana": "^3.0.0",
+    "tiny-secp256k1": "^2.2.4",
+    "web3": "^4.16.0",
+    "xrpl": "^5.0.0"
   }
 }

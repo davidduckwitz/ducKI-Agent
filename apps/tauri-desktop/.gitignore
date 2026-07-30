@@ -1,0 +1,23 @@
+# Tauri
+src-tauri/target
+src-tauri/resources/web-dist
+src-tauri/resources/server-dist
+
+# Frontend
+dist
+node_modules
+.env.local
+.env.*.local
+
+# Vite
+.vite
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo

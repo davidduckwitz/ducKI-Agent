@@ -211,6 +211,117 @@ export const llmWikiEntries = sqliteTable("llm_wiki_entries", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// ============================================================
+// Crypto Payment System
+// ============================================================
+export const cryptoAddresses = sqliteTable("crypto_addresses", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  currency: text("currency").notNull(), // BTC, ETH, XRP
+  address: text("address").notNull().unique(),
+  publicKey: text("public_key"),
+  encryptedPrivateKey: text("encrypted_private_key"), // AES-256-GCM encrypted
+  label: text("label"),
+  balance: text("balance").default("0"), // BigInt as string
+  balanceUsd: real("balance_usd"),
+  isMaster: integer("is_master").default(0),
+  derivationPath: text("derivation_path"), // BIP44 path
+  lastBalanceSync: text("last_balance_sync"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const cryptoTransactions = sqliteTable("crypto_transactions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  addressId: integer("address_id").references(() => cryptoAddresses.id),
+  currency: text("currency").notNull(),
+  hash: text("hash").unique(),
+  fromAddress: text("from_address"),
+  toAddress: text("to_address"),
+  amount: text("amount").notNull(), // BigInt as string
+  fee: text("fee"),
+  status: text("status").default("pending"), // pending, confirmed, failed
+  confirmations: integer("confirmations").default(0),
+  timestamp: integer("timestamp"),
+  blockNumber: integer("block_number"),
+  note: text("note"),
+  syncedAt: text("synced_at"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const cryptoApiCredentials = sqliteTable("crypto_api_credentials", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  provider: text("provider").notNull(), // bitref, etherscan, xrpscan
+  encryptedApiKey: text("encrypted_api_key").notNull(), // AES-256-GCM encrypted
+  encryptedApiSecret: text("encrypted_api_secret"), // Optional, encrypted
+  isActive: integer("is_active").default(1),
+  rateLimitPerMin: integer("rate_limit_per_min"),
+  lastUsedAt: text("last_used_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const cryptoPortfolioSettings = sqliteTable("crypto_portfolio_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  currency: text("currency").default("USD"), // USD, EUR, etc.
+  refreshIntervalSeconds: integer("refresh_interval_seconds").default(300),
+  autoSyncEnabled: integer("auto_sync_enabled").default(1),
+  notificationsEnabled: integer("notifications_enabled").default(0),
+  exportFormat: text("export_format").default("json"), // json, csv
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+// Portfolio History for charting
+export const cryptoPortfolioHistory = sqliteTable("crypto_portfolio_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  totalValueUsd: real("total_value_usd").notNull(),
+  btcBalance: text("btc_balance"), // BigInt as string
+  btcValueUsd: real("btc_value_usd"),
+  ethBalance: text("eth_balance"),
+  ethValueUsd: real("eth_value_usd"),
+  xrpBalance: text("xrp_balance"),
+  xrpValueUsd: real("xrp_value_usd"),
+  timestamp: integer("timestamp").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+// Price snapshots for charting
+export const cryptoPriceHistory = sqliteTable("crypto_price_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  currency: text("currency").notNull(), // BTC, ETH, XRP
+  price: real("price").notNull(),
+  priceUsd: real("price_usd").notNull(),
+  change24h: real("change_24h"),
+  marketCap: real("market_cap"),
+  volume24h: real("volume_24h"),
+  timestamp: integer("timestamp").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+// Price & Balance Alerts
+export const cryptoPriceAlerts = sqliteTable("crypto_price_alerts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  currency: text("currency").notNull(), // BTC, ETH, XRP
+  alertType: text("alert_type").notNull(), // "price_above", "price_below", "change_percent"
+  triggerValue: real("trigger_value").notNull(),
+  isActive: integer("is_active").default(1),
+  lastTriggeredAt: text("last_triggered_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const cryptoBalanceAlerts = sqliteTable("crypto_balance_alerts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  addressId: integer("address_id").references(() => cryptoAddresses.id),
+  currency: text("currency").notNull(),
+  alertType: text("alert_type").notNull(), // "balance_above", "balance_below"
+  triggerValue: text("trigger_value").notNull(), // BigInt as string
+  isActive: integer("is_active").default(1),
+  lastTriggeredAt: text("last_triggered_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export type ConversationInsert = typeof conversations.$inferInsert;
 export type ConversationSelect = typeof conversations.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;
@@ -239,3 +350,19 @@ export type DynamicToolInsert = typeof dynamicTools.$inferInsert;
 export type DynamicToolSelect = typeof dynamicTools.$inferSelect;
 export type PlanInsert = typeof plans.$inferInsert;
 export type PlanSelect = typeof plans.$inferSelect;
+export type CryptoAddressInsert = typeof cryptoAddresses.$inferInsert;
+export type CryptoAddressSelect = typeof cryptoAddresses.$inferSelect;
+export type CryptoTransactionInsert = typeof cryptoTransactions.$inferInsert;
+export type CryptoTransactionSelect = typeof cryptoTransactions.$inferSelect;
+export type CryptoApiCredentialInsert = typeof cryptoApiCredentials.$inferInsert;
+export type CryptoApiCredentialSelect = typeof cryptoApiCredentials.$inferSelect;
+export type CryptoPortfolioSettingInsert = typeof cryptoPortfolioSettings.$inferInsert;
+export type CryptoPortfolioSettingSelect = typeof cryptoPortfolioSettings.$inferSelect;
+export type CryptoPortfolioHistoryInsert = typeof cryptoPortfolioHistory.$inferInsert;
+export type CryptoPortfolioHistorySelect = typeof cryptoPortfolioHistory.$inferSelect;
+export type CryptoPriceHistoryInsert = typeof cryptoPriceHistory.$inferInsert;
+export type CryptoPriceHistorySelect = typeof cryptoPriceHistory.$inferSelect;
+export type CryptoPriceAlertInsert = typeof cryptoPriceAlerts.$inferInsert;
+export type CryptoPriceAlertSelect = typeof cryptoPriceAlerts.$inferSelect;
+export type CryptoBalanceAlertInsert = typeof cryptoBalanceAlerts.$inferInsert;
+export type CryptoBalanceAlertSelect = typeof cryptoBalanceAlerts.$inferSelect;

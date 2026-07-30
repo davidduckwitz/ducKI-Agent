@@ -13,6 +13,7 @@ import {
   Database,
   BookOpen,
   HardDrive,
+  CreditCard,
   type LucideIcon,
 } from "lucide-react";
 
@@ -264,4 +265,5 @@ export const TAB_ICONS: Record<string, LucideIcon> = {
   Agent: Sparkles,
   Memory: BookOpen,
   Database: HardDrive,
+  Crypto: CreditCard,
 };

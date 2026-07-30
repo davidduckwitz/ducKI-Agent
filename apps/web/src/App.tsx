@@ -6,6 +6,7 @@ import { Dashboard } from "./components/dashboard/Dashboard";
 import { ChatContainer } from "./components/chat/ChatContainer";
 import { ProjectManager } from "./components/projects/ProjectManager";
 import { TaskManager } from "./components/tasks/TaskManager";
+import { ToastDisplay } from "./components/ui/toast-display";
 import { useI18n } from "./lib/i18n";
 import { api } from "./lib/api";
 import { initializeCharacterSystem } from "./components/chat/characters";
@@ -67,6 +68,11 @@ const McpManager = lazy(async () => {
 const CodingWorkspace = lazy(async () => {
   const module = await import("./components/coding/CodingWorkspace");
   return { default: module.CodingWorkspace };
+});
+
+const CryptoPaymentPage = lazy(async () => {
+  const module = await import("./pages/crypto/PaymentPage");
+  return { default: module.CryptoPaymentPage };
 });
 
 function LazyRoute({ children }: { children: ReactNode }) {
@@ -131,9 +137,11 @@ export default function App() {
           <Route path="workflow" element={<LazyRoute><WorkflowGraphEditor /></LazyRoute>} />
           <Route path="agents" element={<LazyRoute><AgentsLiveView /></LazyRoute>} />
           <Route path="logs" element={<LazyRoute><LogViewer /></LazyRoute>} />
+          <Route path="crypto" element={<LazyRoute><CryptoPaymentPage /></LazyRoute>} />
           <Route path="settings" element={<LazyRoute><Settings /></LazyRoute>} />
         </Route>
       </Routes>
+      <ToastDisplay />
     </BrowserRouter>
   );
 }

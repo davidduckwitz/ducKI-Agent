@@ -35,6 +35,7 @@ import type {
 } from "./schema.js";
 
 export type { LibSQLDatabase };
+export type Database = LibSQLDatabase<typeof schema>;
 export * from "./schema.js";
 export * from "./cron.js";
 

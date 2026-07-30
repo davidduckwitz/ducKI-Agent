@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, type LucideIcon } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, Wallet, Server, type LucideIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
@@ -12,6 +12,7 @@ import { ProviderConfigSettings } from "./ProviderConfigSettings";
 import { CredentialManagementSettings } from "./CredentialManagementSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
 import { AnimationSettings } from "./AnimationSettings";
+import { BackendSettings } from "./BackendSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -26,7 +27,7 @@ interface SettingField {
   label: string;
   description: string;
   type: SettingFieldType;
-  section: "Provider" | "API" | "Speech" | "Agent" | "Memory" | "Database";
+  section: "Provider" | "API" | "Speech" | "Agent" | "Memory" | "Database" | "Crypto";
   defaultValue: string;
   options?: { label: string; value: string }[];
 }
@@ -854,19 +855,53 @@ const PREDEFINED_FIELDS: SettingField[] = [
     section: "Database",
     defaultValue: "",
   },
+  {
+    key: "CRYPTO_PAYMENT_ENABLED",
+    label: "Crypto Payment modul",
+    description: "Aktiviert die Kryptowährungs-Verwaltung in der Sidebar",
+    type: "select",
+    section: "Crypto",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiviert", value: "true" },
+      { label: "Deaktiviert", value: "false" },
+    ],
+  },
+  {
+    key: "CRYPTO_AUTO_SYNC_ENABLED",
+    label: "Auto-Synchronisierung",
+    description: "Automatisches Synchronisieren von Transaktionen im Hintergrund",
+    type: "select",
+    section: "Crypto",
+    defaultValue: "true",
+    options: [
+      { label: "An", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
+    key: "CRYPTO_REFRESH_INTERVAL_SECONDS",
+    label: "Aktualisierungsintervall (Sekunden)",
+    description: "Wie oft die Portfolio-Daten aktualisiert werden (min. 60)",
+    type: "number",
+    section: "Crypto",
+    defaultValue: "300",
+  },
 ];
 
-const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character";
+const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database", "Crypto"];
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character" | "Backend";
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   ...TAB_ICONS,
   Theme: Palette,
   Character: Palette,
+  Backend: Server,
   "Chat Cleanup": Trash2,
   "LLM Provider Config": Sliders,
   Credentials: Lock,
   Skills: Sparkles,
+  Crypto: Wallet,
   Other: SettingsIcon,
 };
 
@@ -971,7 +1006,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "LLM Provider Config", "Credentials", "Chat Cleanup"];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1102,6 +1137,13 @@ export function Settings() {
 
       {activeTab === "LLM Provider Config" && <ProviderConfigSettings />}
 
+      {activeTab === "Backend" && (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">Backend-Verbindung</h2>
+          <BackendSettings />
+        </div>
+      )}
+
       {activeTab === "Database" && <DatabaseSettings />}
 
       {activeTab === "Credentials" && <CredentialManagementSettings />}
@@ -1160,7 +1202,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && (
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && (
         <div className="space-y-4">
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);

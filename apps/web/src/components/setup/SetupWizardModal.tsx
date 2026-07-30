@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronLeft, ChevronRight, Sparkles, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { BackendSettings } from "../settings/BackendSettings";
 
 interface SettingEntry {
   key: string;
@@ -76,6 +77,10 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [discordGuildId, setDiscordGuildId] = useState(discordGateway?.guildId ?? "");
   const [discordChannelId, setDiscordChannelId] = useState(discordGateway?.channelId ?? "");
   const [discordAllowedUserId, setDiscordAllowedUserId] = useState(discordGateway?.userId ?? "");
+
+  const [backendType, setBackendType] = useState<"local" | "remote">("local");
+  const [backendPort, setBackendPort] = useState("3001");
+  const [backendUrl, setBackendUrl] = useState("");
 
   const [codingEnabled, setCodingEnabled] = useState(toBool(settingsMap.get("CODING_ENABLED"), false));
   const [wikiEnabled, setWikiEnabled] = useState(toBool(settingsMap.get("WIKI_ENABLED"), false));
@@ -152,9 +157,10 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
   if (!open) return null;
 
-  const isLastStep = step === 4;
+  const isLastStep = step === 5;
   const steps = [
     t("setupWizard.steps.llm"),
+    "Backend",
     t("setupWizard.steps.gateway"),
     t("setupWizard.steps.features"),
     t("setupWizard.steps.agent"),
@@ -171,7 +177,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <Sparkles className="w-5 h-5 text-amber-300" />
                 {t("setupWizard.title")}
               </h2>
-              <p className="text-xs text-gray-400 mt-1">{t("setupWizard.step")} {step + 1} {t("setupWizard.of")} 5</p>
+              <p className="text-xs text-gray-400 mt-1">{t("setupWizard.step")} {step + 1} {t("setupWizard.of")} 6</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 mt-1">
@@ -262,6 +268,13 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
           {step === 1 && (
             <div className="space-y-3">
+              <h3 className="text-base font-semibold">Backend-Verbindung</h3>
+              <BackendSettings />
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.gateway")}</h3>
               <label className="flex items-center gap-2 text-sm text-gray-300">
                 <input type="checkbox" checked={gatewayEnabled} onChange={(e) => setGatewayEnabled(e.target.checked)} />
@@ -280,7 +293,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
             </div>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.features")}</h3>
               <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
@@ -294,7 +307,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
             </div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.agent")}</h3>
               <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
@@ -325,7 +338,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
             </div>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.summary")}</h3>
               <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm space-y-2">
@@ -359,7 +372,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
               {saveSetup.isPending ? t("setupWizard.saving") : t("setupWizard.finish")}
             </button>
           ) : (
-            <button className="btn-primary inline-flex items-center gap-2" onClick={() => setStep((s) => Math.min(4, s + 1))}>
+            <button className="btn-primary inline-flex items-center gap-2" onClick={() => setStep((s) => Math.min(5, s + 1))}>
               {t("setupWizard.next")} <ChevronRight className="w-4 h-4" />
             </button>
           )}
