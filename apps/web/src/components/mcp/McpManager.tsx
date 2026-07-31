@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PlugZap, RefreshCw, Plus, Trash2, Save, Play, Square } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { InternalMcpToolsShowcase } from "./InternalMcpToolsShowcase";
 
 interface MCPServerConfig {
   id: string;
@@ -278,6 +279,10 @@ export function McpManager() {
           </button>
         </div>
       </div>
+
+      <section className="card space-y-3">
+        <InternalMcpToolsShowcase />
+      </section>
 
       <section className="card space-y-3">
         <h2 className="font-semibold">{t("mcpPage.servers")}</h2>

@@ -5,6 +5,7 @@ import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
+import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
 
 const logger = getRootLogger().child("WebSocket");
 
@@ -106,8 +107,79 @@ export function setupWebSocket(
             onChunk: (chunk) => {
               socket.emit("chat:chunk", { content: chunk, conversationId: resolvedConversationId });
             },
-            onEvent: (event: AgentRunEvent) => {
-              socket.emit("chat:event", { ...event, conversationId: resolvedConversationId });
+            onEvent: async (event: AgentRunEvent) => {
+              const eventToEmit = { ...event };
+
+              // Auto-handle large screenshots: store to disk if > 150KB
+              if (event.type === "browser_preview" && event.data) {
+                // Try multiple possible keys for screenshot data
+                const screenshotBase64 =
+                  (event.data.screenshot as string | undefined) ||
+                  (event.data.image as string | undefined) ||
+                  (event.data.imageData as string | undefined) ||
+                  (event.data.buffer as string | undefined);
+
+                logger.debug("browser_preview event received", {
+                  hasScreenshot: !!screenshotBase64,
+                  screenshotSize: screenshotBase64 ? `${screenshotBase64.length}B` : "none",
+                  eventDataKeys: Object.keys(event.data),
+                  url: event.data.url,
+                });
+
+                if (screenshotBase64 && screenshotBase64.length > 100) { // Sanity check
+                  try {
+                    const manager = getScreenshotStorageManager();
+                    const result = await manager.handleScreenshot(screenshotBase64, "image/png");
+
+                    if (result.isStored) {
+                      // Add storage URL (keep original screenshot data for chat display)
+                      (eventToEmit.data ??= {}).screenshotUrl = result.url;
+                      (eventToEmit.data ??= {}).screenshotStorageUrl = result.url;
+                      (eventToEmit.data ??= {}).screenshotSize = result.size;
+
+                      logger.info("Screenshot auto-stored", {
+                        size: `${Math.round(result.size / 1024)}KB`,
+                        url: result.url,
+                      });
+                    }
+                  } catch (error) {
+                    logger.error("Screenshot storage failed", { error });
+                  }
+                }
+              }
+
+              socket.emit("chat:event", { ...eventToEmit, conversationId: resolvedConversationId });
+
+              // Emit browser_preview as tool events for ToolEventsDisplay
+              if (event.type === "browser_preview") {
+                logger.debug("Emitting browser_preview as tool events", {
+                  conversationId: resolvedConversationId,
+                  hasScreenshot: !!(eventToEmit.data as any)?.screenshotStorageUrl,
+                });
+
+                // Emit tool-start first (if not already started)
+                socket.emit("chat:tool-event", {
+                  type: "tool-start",
+                  toolName: "Browser",
+                  timestamp: event.timestamp,
+                  conversationId: resolvedConversationId,
+                });
+
+                // Then emit tool-complete with screenshot data
+                socket.emit("chat:tool-event", {
+                  type: "tool-complete",
+                  toolName: "Browser",
+                  timestamp: event.timestamp,
+                  conversationId: resolvedConversationId,
+                  data: {
+                    url: (eventToEmit.data as any)?.url,
+                    screenshotUrl: (eventToEmit.data as any)?.screenshotStorageUrl || (eventToEmit.data as any)?.screenshotUrl,
+                    screenshotSize: (eventToEmit.data as any)?.screenshotSize,
+                  },
+                });
+
+                logger.debug("Browser tool events emitted");
+              }
 
               // Emit tool call events separately for UI tracking
               if (event.type === "tool_call") {
@@ -116,6 +188,23 @@ export function setupWebSocket(
                   conversationId: resolvedConversationId,
                   data: event.data,
                 });
+              }
+
+              // Emit iteration metrics for real-time token tracking
+              if (event.type === "iteration" && event.data) {
+                const iterationData = event.data as Record<string, unknown>;
+                const llmTokens = iterationData.llmTokens as { input?: number; output?: number; total?: number } | undefined;
+
+                if (llmTokens) {
+                  socket.emit("agent:iteration-metrics", {
+                    timestamp: event.timestamp,
+                    conversationId: resolvedConversationId,
+                    iterationNumber: iterationData.iterationNumber,
+                    inputTokens: llmTokens.input,
+                    outputTokens: llmTokens.output,
+                    totalTokens: llmTokens.total,
+                  });
+                }
               }
             },
           }

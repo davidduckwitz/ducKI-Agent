@@ -34,6 +34,10 @@ import { setupDefaultCronjobs } from "./lib/default-cronjobs.js";
 import { LlmWikiService } from "./lib/llm-wiki-service.js";
 import { createWikiTool } from "./lib/wiki-tool.js";
 import { PromptManager } from "./lib/prompt-manager.js";
+import { initToolStagingManager, initToolResponseHandler } from "./lib/tool-staging/index.js";
+import { initChatToolEventBroadcaster } from "./lib/chat-tool-events.js";
+import { wrapTools } from "./lib/tool-wrapper.js";
+import { initScreenshotStorage } from "./lib/screenshot-storage.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
@@ -55,7 +59,13 @@ import { updatesRouter } from "./routes/updates.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { wikiRouter } from "./routes/wiki.js";
 import { createCryptoPaymentRouter } from "./routes/crypto-payment.js";
+import { createToolStagingRouter } from "./routes/tool-staging.js";
+import { screenshotRouter } from "./routes/screenshots.js";
 import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
+import { createBrowserControlMcpTool } from "./browser/mcp-browser-server.js";
+import { createTasksMcpTool } from "./tasks/mcp-tasks-server.js";
+import { createWorkflowMcpTool } from "./workflow/mcp-workflow-server.js";
+import { createCronjobsMcpTool } from "./cronjobs/mcp-cronjobs-server.js";
 import { setupWebSocket } from "./websocket/index.js";
 
 const logger = getRootLogger().child("Server");
@@ -390,7 +400,9 @@ function buildAgentFactory(
 ) {
 	return () => {
 		const agent = new Agent(providerRef.current, db);
-		for (const tool of runtimeTools) {
+		// Wrap tools to broadcast events and handle response staging
+		const wrappedTools = wrapTools(runtimeTools);
+		for (const tool of wrappedTools) {
 			agent.executor.registerTool(tool);
 		}
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
@@ -426,6 +438,8 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/workflows", workflowsRouter);
 	app.use("/api/gateway", gatewayRouter);
 	app.use("/api/mcp", mcpRouter);
+	app.use("/api/tool-staging", createToolStagingRouter());
+	app.use("/api/screenshots", screenshotRouter);
 	app.use("/api/wiki", wikiRouter);
 }
 
@@ -549,6 +563,14 @@ async function bootstrap(): Promise<void> {
 	app.use(express.urlencoded({ extended: true }));
 
 	const db = await getDatabase();
+
+	// Initialize tool staging (hybrid approach: large responses → files, summaries → messages)
+	const toolStagingManager = await initToolStagingManager(logger.child("ToolStaging"));
+	const toolResponseHandler = initToolResponseHandler(logger.child("ToolResponseHandler"), toolStagingManager);
+
+	// Initialize screenshot storage (large screenshots → files, summaries → inline)
+	const screenshotStorage = await initScreenshotStorage();
+
 	const discordGatewayStatus: DiscordGatewayRuntimeStatus = {
 		enabled: parseBoolean(process.env["DISCORD_GATEWAY_ENABLED"], true),
 		configured: false,
@@ -565,6 +587,10 @@ async function bootstrap(): Promise<void> {
 		...allTools,
 		createMcpTool(mcpRegistry),
 		createCryptoPaymentMcpTool(db),
+		createBrowserControlMcpTool(),
+		createTasksMcpTool(db),
+		createWorkflowMcpTool(db),
+		createCronjobsMcpTool(db),
 	];
 	const providerRef: { current: ReturnType<typeof createProvider> } = { current: provider };
 
@@ -572,7 +598,9 @@ async function bootstrap(): Promise<void> {
 	// through it directly), wired with the same DB-backed dynamic tool resolver used
 	// by every per-request Agent so dynamically registered tools resolve everywhere.
 	const workflowExecutor = new Executor(logger.child("WorkflowExecutor"), createDynamicToolResolver(db));
-	for (const tool of runtimeTools) {
+	// Wrap tools for event broadcasting and response staging
+	const wrappedRuntimeTools = wrapTools(runtimeTools);
+	for (const tool of wrappedRuntimeTools) {
 		workflowExecutor.registerTool(tool);
 	}
 	workflowExecutor.registerTool(createCronjobManagementTool(db));
@@ -647,6 +675,10 @@ async function bootstrap(): Promise<void> {
 	setupWebSocket(io, createAgent, db);
 	app.locals["io"] = io;
 
+	// Initialize chat tool event broadcaster for real-time progress updates
+	const toolEventBroadcaster = initChatToolEventBroadcaster(logger.child("ChatToolEvents"), io);
+	app.locals["toolEventBroadcaster"] = toolEventBroadcaster;
+
 	registerRoutes(app, db);
 
 	app.get("/health", (_req, res) => {
@@ -679,6 +711,7 @@ async function bootstrap(): Promise<void> {
 		cronjobManager.stop();
 		updateManager.stop();
 		wikiService.stop();
+		toolStagingManager.stop();
 		void mcpRegistry.shutdown();
 		io.close();
 		httpServer.close(() => {

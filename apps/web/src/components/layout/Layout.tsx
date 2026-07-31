@@ -123,7 +123,7 @@ export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const isCodingRoute = location.pathname.startsWith("/coding");
-  const { initSocket, disconnectSocket, connected, agentStatus, globalRunningAgents, setupModalOpen, setSetupModalOpen } = useAppStore();
+  const { initSocket, disconnectSocket, connected, agentStatus, globalRunningAgents, setupModalOpen, setSetupModalOpen, runningTools } = useAppStore();
   const firstRunCheckDone = useRef(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const liveAgents = useQuery({
@@ -238,10 +238,10 @@ export function Layout() {
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <DuckyMascot
-                working={runningCount > 0}
+                working={runningCount > 0 || runningTools.size > 0}
                 connected={connected}
                 size={28}
-                title={runningCount > 0 ? t("layout.duckyWorkingTitle") : t("layout.duckyIdleTitle")}
+                title={runningCount > 0 || runningTools.size > 0 ? t("layout.duckyWorkingTitle") : t("layout.duckyIdleTitle")}
               />
               <span className="font-bold text-lg">DucKI</span>
             </div>
@@ -332,6 +332,19 @@ export function Layout() {
                 {runningCount}
               </span>
             </div>
+            {runningTools.size > 0 && (
+              <div className="mt-2 flex items-start justify-between gap-2 text-[11px]">
+                <span className="text-muted-foreground">Live Tools:</span>
+                <div className="flex flex-col items-end gap-0.5 max-w-[100px]">
+                  {Array.from(runningTools).map((toolName) => (
+                    <span key={toolName} className="inline-flex items-center gap-1 text-yellow-300 truncate">
+                      <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                      {toolName}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="mt-2 flex items-center justify-between text-[11px]">
               <span className="text-muted-foreground">{t("layout.gateway")}</span>
               <span className={`inline-flex items-center gap-1 ${discordGatewayActive ? "text-green-300" : "text-red-300"}`}>

@@ -6,6 +6,8 @@ export type AgentEventType =
   | "reasoning"
   | "decision"
   | "guardrail"
+  | "skill_selection"
+  | "tool_retry"
   | "mode_selected"
   | "browser_preview";
 

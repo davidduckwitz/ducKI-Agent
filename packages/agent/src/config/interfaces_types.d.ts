@@ -27,7 +27,7 @@ export interface AgentRunOptions {
     onEvent?: (event: AgentRunEvent) => void;
     contextCaps?: AgentRunContextCaps;
 }
-export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail";
+export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | "skill_selection" | "tool_retry";
 export interface AgentRunEvent {
     type: AgentRunEventType;
     message: string;

@@ -8,6 +8,9 @@ export interface BrowserPreviewData {
   serverId?: string;
   url?: string;
   screenshot?: string;
+  screenshotUrl?: string;
+  screenshotStorageUrl?: string;
+  screenshotSize?: number;
   htmlContent?: string;
   isStreaming?: boolean;
 }
@@ -21,13 +24,35 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
   const data = msg.eventData as BrowserPreviewData | undefined;
   const containerRef = useRef<HTMLDivElement>(null);
 
-  if (!data || !data.screenshot) {
+  if (!data) {
+    console.warn("[BrowserPreview] No eventData found");
     return null;
   }
 
-  const screenshotSrc = data.screenshot.startsWith("data:")
-    ? data.screenshot
-    : `data:image/webp;base64,${data.screenshot}`;
+  // Debug: Log available data
+  const dataKeys = Object.keys(data);
+  console.debug("[BrowserPreview] Available data keys:", dataKeys);
+  console.debug("[BrowserPreview] Data:", {
+    url: data.url,
+    screenshotStorageUrl: data.screenshotStorageUrl,
+    screenshotUrl: data.screenshotUrl,
+    screenshot: data.screenshot ? `${(data.screenshot as string).substring(0, 50)}...` : undefined,
+  });
+
+  // Prefer storage URL for large screenshots, fall back to Base64, then fallback to just showing URL
+  const screenshotSource = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
+  if (!screenshotSource && !data.url) {
+    console.warn("[BrowserPreview] No screenshot or URL found in data", data);
+    return null;
+  }
+
+  const screenshotSrc = screenshotSource
+    ? screenshotSource.startsWith("data:")
+      ? screenshotSource
+      : screenshotSource.startsWith("/")
+        ? screenshotSource // Storage URL path
+        : `data:image/webp;base64,${screenshotSource}`
+    : undefined;
 
   const handleExportHtml = () => {
     if (!data.htmlContent) {
@@ -49,13 +74,22 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
   };
 
   const handleScreenshot = () => {
-    if (!data.screenshot) return;
+    const source = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
+    if (!source) return;
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `screenshot-${timestamp}.webp`;
+    const filename = `screenshot-${timestamp}.png`;
     const link = document.createElement("a");
-    link.href = data.screenshot.startsWith("data:")
-      ? data.screenshot
-      : `data:image/webp;base64,${data.screenshot}`;
+
+    if (source.startsWith("/")) {
+      // Storage URL - direct link
+      link.href = source;
+    } else if (source.startsWith("data:")) {
+      link.href = source;
+    } else {
+      link.href = `data:image/webp;base64,${source}`;
+    }
+
     link.download = filename;
     document.body.appendChild(link);
     link.click();
@@ -118,11 +152,20 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
 
       {/* Preview */}
       <div className="relative bg-black/40 aspect-video overflow-hidden">
-        <img
-          src={screenshotSrc}
-          alt="Browser preview"
-          className="w-full h-full object-contain"
-        />
+        {screenshotSrc ? (
+          <img
+            src={screenshotSrc}
+            alt="Browser preview"
+            className="w-full h-full object-contain"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-gray-500">
+            <div className="text-center">
+              <div className="text-sm mb-2">Browser: {data.url || "Loading..."}</div>
+              <div className="text-xs text-gray-600">Screenshot wird geladen...</div>
+            </div>
+          </div>
+        )}
         {data.isStreaming && (
           <div className="absolute inset-0 pointer-events-none border-2 border-cyan-400/50 animate-pulse" />
         )}
@@ -139,9 +182,14 @@ interface BrowserPreviewModalProps {
 export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps) {
   const { socket } = useAppStore();
 
-  const screenshotSrc = data.screenshot?.startsWith("data:")
-    ? data.screenshot
-    : `data:image/webp;base64,${data.screenshot}`;
+  const screenshotSource = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
+  const screenshotSrc = screenshotSource
+    ? screenshotSource.startsWith("data:")
+      ? screenshotSource
+      : screenshotSource.startsWith("/")
+        ? screenshotSource
+        : `data:image/webp;base64,${screenshotSource}`
+    : undefined;
 
   const handleExportHtml = () => {
     if (!data.htmlContent) {
@@ -163,13 +211,22 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
   };
 
   const handleScreenshot = () => {
-    if (!data.screenshot) return;
+    const source = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
+    if (!source) return;
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `screenshot-${timestamp}.webp`;
+    const filename = `screenshot-${timestamp}.png`;
     const link = document.createElement("a");
-    link.href = data.screenshot.startsWith("data:")
-      ? data.screenshot
-      : `data:image/webp;base64,${data.screenshot}`;
+
+    if (source.startsWith("/")) {
+      // Storage URL - direct link
+      link.href = source;
+    } else if (source.startsWith("data:")) {
+      link.href = source;
+    } else {
+      link.href = `data:image/webp;base64,${source}`;
+    }
+
     link.download = filename;
     document.body.appendChild(link);
     link.click();

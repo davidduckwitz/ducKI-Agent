@@ -317,7 +317,7 @@ export function CronjobManager() {
                 ))}
               </select>
               <textarea
-                className="input w-full min-h-[140px] font-mono text-xs"
+                className="input w-full min-h-[200px] font-mono text-xs resize-vertical"
                 placeholder='{"path":"/health"}'
                 value={form.toolInputJson}
                 onChange={(e) => setForm((f) => ({ ...f, toolInputJson: e.target.value }))}
@@ -338,7 +338,7 @@ export function CronjobManager() {
                 ))}
               </select>
               <textarea
-                className="input w-full min-h-[96px]"
+                className="input w-full min-h-[200px] resize-vertical"
                 placeholder={t("cronjobs.optionalSkillPrompt")}
                 value={form.promptText}
                 onChange={(e) => setForm((f) => ({ ...f, promptText: e.target.value }))}
@@ -348,7 +348,7 @@ export function CronjobManager() {
 
           {form.targetType === "prompt" && (
             <textarea
-              className="input w-full min-h-[120px]"
+              className="input w-full min-h-[200px] resize-vertical"
               placeholder={t("cronjobs.promptText")}
               value={form.promptText}
               onChange={(e) => setForm((f) => ({ ...f, promptText: e.target.value }))}
@@ -405,7 +405,7 @@ export function CronjobManager() {
                 {job.lastError && <p className="text-xs text-red-300">{t("cronjobs.error")}: {job.lastError}</p>}
                 {job.lastResult && (
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-xs text-gray-400 line-clamp-2">{t("cronjobs.result")}: {job.lastResult}</p>
+                    <p className="text-xs text-gray-400 break-words">{t("cronjobs.result")}: {job.lastResult}</p>
                     {job.conversationId && (
                       <button
                         onClick={() => navigate(`/chat?conversationId=${job.conversationId}`)}

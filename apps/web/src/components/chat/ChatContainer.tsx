@@ -13,7 +13,20 @@ import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
 import { ToolSkillSelector } from "./ToolSkillSelector";
 import { PlanExecutionPanel, type Plan, type StepStatus } from "./PlanExecutionPanel";
 import { BrowserPreviewModal } from "./BrowserPreview";
+import { ToolEventsDisplay } from "./ToolEventsDisplay";
+import { ToolEventSummary } from "./ToolEventSummary";
+import { IterationMetrics } from "./IterationMetrics";
 import type { AgentEventType, RenderedChatMessage } from "./chatTypes";
+
+interface ToolSummaryItem {
+  id: string;
+  events: Array<{
+    type: "tool-start" | "tool-progress" | "tool-complete" | "tool-error" | "tool-warning";
+    toolName: string;
+    timestamp: Date;
+    data?: Record<string, unknown>;
+  }>;
+}
 
 interface ConversationItem {
   id: number;
@@ -83,6 +96,7 @@ export function ChatContainer() {
     showToolDock,
     selectedCharacterId,
     characterCustomizations,
+    socket,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -103,6 +117,7 @@ export function ChatContainer() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [totalTokens, setTotalTokens] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [toolSummaries, setToolSummaries] = useState<ToolSummaryItem[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
@@ -1063,6 +1078,21 @@ export function ChatContainer() {
             )
           )}
 
+          {/* Iteration Metrics - Real-time token tracking */}
+          {conversationId && socket && <IterationMetrics conversationId={conversationId.toString()} socket={socket} />}
+
+          {/* Tool Execution Summaries - rendered as chat events when complete */}
+          {toolSummaries.map((summary) => (
+            <div key={summary.id} className="pt-2">
+              <ToolEventSummary
+                events={summary.events}
+                onDismiss={() => {
+                  setToolSummaries((prev) => prev.filter((s) => s.id !== summary.id));
+                }}
+              />
+            </div>
+          ))}
+
           {/* Streaming with Dynamic Character at bottom */}
           {isLoading && (
             <div className="flex gap-3 items-end pt-2">
@@ -1078,6 +1108,21 @@ export function ChatContainer() {
           <div ref={bottomRef} />
         </div>
       </div>
+
+      {/* Tool Events Display - Real-time progress at bottom */}
+      {conversationId && socket && (
+        <div className={`${compactMode ? "px-2 py-2 sm:px-3" : "px-3 py-3 sm:px-4"} border-t border-gray-800 bg-gray-900/50`}>
+          <div className={`mx-auto w-full ${compactMode ? "max-w-3xl" : "max-w-4xl"}`}>
+            <ToolEventsDisplay
+              conversationId={conversationId.toString()}
+              socket={socket}
+              onToolExecutionComplete={(summary) => {
+                setToolSummaries((prev) => [...prev, { id: summary.id, events: summary.events }]);
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Input */}
       <div className={`${compactMode ? "p-2 sm:p-3" : "p-3 sm:p-4"} border-t border-gray-800 bg-gray-950`}>

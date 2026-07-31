@@ -9,6 +9,13 @@ export interface ToolCallWithId {
 
 export type DynamicToolResolver = (name: string) => Promise<ToolExecutor | undefined>;
 
+export interface ToolEventCallbacks {
+  onToolStart?: (toolName: string, input: Record<string, unknown>) => void;
+  onToolProgress?: (toolName: string, progress: string) => void;
+  onToolComplete?: (toolName: string, summary: string, duration: number, outputSize?: number) => void;
+  onToolError?: (toolName: string, error: string) => void;
+}
+
 export class Executor {
   private tools = new Map<string, ToolExecutor>();
   private browserSessions = new Map<string, unknown>();
@@ -16,7 +23,8 @@ export class Executor {
 
   constructor(
     private readonly logger: Logger,
-    private readonly dynamicResolver?: DynamicToolResolver
+    private readonly dynamicResolver?: DynamicToolResolver,
+    private readonly eventCallbacks?: ToolEventCallbacks
   ) {}
 
   registerTool(tool: ToolExecutor): void {
@@ -101,6 +109,9 @@ export class Executor {
 
     this.logger.info("Executing tool", { toolName, input: executionInput });
 
+    // Broadcast tool start event
+    this.eventCallbacks?.onToolStart?.(toolName, executionInput);
+
     try {
       const result = await tool.execute(executionInput);
       const executionTime = Date.now() - startTime;
@@ -110,6 +121,17 @@ export class Executor {
         success: result.success,
         executionTime,
       });
+
+      // Broadcast tool complete event
+      if (result.success) {
+        const summary = typeof result.data === "string"
+          ? result.data.substring(0, 100)
+          : String(result.data ?? "completed");
+        const outputSize = typeof result.data === "string"
+          ? Buffer.byteLength(result.data, "utf-8")
+          : undefined;
+        this.eventCallbacks?.onToolComplete?.(toolName, summary, executionTime, outputSize);
+      }
 
       // Track browser sessions when launch succeeds or any action returns a sessionId
       if (toolName === "browser" && result.success) {
@@ -141,6 +163,9 @@ export class Executor {
       const message = error instanceof Error ? error.message : String(error);
 
       this.logger.error("Tool execution failed", { toolName, error: message });
+
+      // Broadcast tool error event
+      this.eventCallbacks?.onToolError?.(toolName, message);
 
       return {
         success: false,

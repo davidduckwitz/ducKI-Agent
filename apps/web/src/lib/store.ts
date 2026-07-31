@@ -133,6 +133,7 @@ interface AppState {
   toolCalls: ToolCallRecord[];
   browserSessions: BrowserSession[];
   showToolDock: boolean;
+  runningTools: Set<string>;
 
   // Actions
   initSocket: () => void;
@@ -166,6 +167,7 @@ interface AppState {
   clearToolCalls: () => void;
   addBrowserSession: (session: BrowserSession) => void;
   updateBrowserSession: (tabId: string, updates: Partial<BrowserSession>) => void;
+  setRunningTools: (tools: Set<string>) => void;
   removeBrowserSession: (tabId: string) => void;
   setShowToolDock: (show: boolean) => void;
 }
@@ -194,6 +196,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   toolCalls: [],
   browserSessions: [],
   showToolDock: true,
+  runningTools: new Set(),
 
   initSocket: () => {
     // Determine socket URL based on environment
@@ -276,9 +279,51 @@ export const useAppStore = create<AppState>((set, get) => ({
         eventType: event.type,
         eventData: event.data,
       };
-      set((s) => ({
-        messages: [...s.messages, msg],
-      }));
+
+      set((s) => {
+        // Update toolCalls if this is a tool_call or tool_result event
+        let updatedToolCalls = s.toolCalls;
+
+        if (event.type === "tool_call" && event.data) {
+          const toolName = event.data.toolName as string | undefined;
+          if (toolName) {
+            // Add new tool call
+            const newToolCall: ToolCallRecord = {
+              id: crypto.randomUUID(),
+              toolName,
+              timestamp: event.timestamp,
+              status: "executing",
+              input: event.data.input as Record<string, unknown>,
+            };
+            updatedToolCalls = [...s.toolCalls, newToolCall];
+          }
+        } else if (event.type === "tool_result" && event.data) {
+          // Update tool call with result
+          const toolName = event.data.toolName as string | undefined;
+          if (toolName) {
+            updatedToolCalls = s.toolCalls.map((call) => {
+              if (call.toolName === toolName && call.status === "executing") {
+                return {
+                  ...call,
+                  status: (event.data?.success === false ? "failed" : "completed") as "completed" | "failed",
+                  result: {
+                    success: (event.data?.success as boolean) ?? true,
+                    output: event.message,
+                    data: event.data?.data,
+                    error: event.data?.error as string | undefined,
+                  },
+                };
+              }
+              return call;
+            });
+          }
+        }
+
+        return {
+          messages: [...s.messages, msg],
+          toolCalls: updatedToolCalls,
+        };
+      });
     });
 
     socket.on("chat:chunk", (data: { content: string; conversationId?: number }) => {
@@ -472,6 +517,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       browserSessions: s.browserSessions.filter((session) => session.tabId !== tabId),
     })),
   setShowToolDock: (show) => set({ showToolDock: show }),
+  setRunningTools: (tools) => set({ runningTools: tools }),
 
   // Character System (NEW)
   setSelectedCharacterId: (id) => set({ selectedCharacterId: id }),

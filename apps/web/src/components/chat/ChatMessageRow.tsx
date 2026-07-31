@@ -80,6 +80,9 @@ export function EventRow({
   }
 
   const toolName = typeof msg.eventData?.["toolName"] === "string" ? (msg.eventData["toolName"] as string) : undefined;
+  const selectedSkills = msg.eventData?.["selectedSkills"] as Array<{ name: string; score?: number }> | undefined;
+  const retryCount = msg.eventData?.["retryCount"] as number | undefined;
+  const originalError = msg.eventData?.["originalError"] as string | undefined;
 
   return (
     <details

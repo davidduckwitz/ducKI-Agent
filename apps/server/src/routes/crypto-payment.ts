@@ -37,6 +37,9 @@ export function createCryptoPaymentRouter(db: DatabaseService): Router {
   router.get("/addresses/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ error: "ID is required" });
+      }
       const address = await cryptoService.getAddressById(parseInt(id));
       if (!address) {
         return res.status(404).json({ error: "Address not found" });
@@ -53,8 +56,8 @@ export function createCryptoPaymentRouter(db: DatabaseService): Router {
       const { id } = req.params;
       const { label } = req.body;
 
-      if (!label) {
-        return res.status(400).json({ error: "Label is required" });
+      if (!id || !label) {
+        return res.status(400).json({ error: "ID and label are required" });
       }
 
       await cryptoService.updateAddressLabel(parseInt(id), label);
@@ -68,6 +71,9 @@ export function createCryptoPaymentRouter(db: DatabaseService): Router {
   router.delete("/addresses/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ error: "ID is required" });
+      }
       await cryptoService.deleteAddress(parseInt(id));
       res.json({ data: { success: true } });
     } catch (error) {

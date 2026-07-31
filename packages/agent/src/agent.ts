@@ -353,14 +353,14 @@ export class Agent {
         // whether or not an eventEmitter is wired to this agent instance.
         options.onChunk?.(chunk);
       },
-      onEvent: (event) => {
+      onEvent: async (event) => {
         armTimeout();
         try {
           this.eventEmitter?.emitEvent(event);
         } catch (e) {
           console.error("Error emitting event:", e);
         }
-        options.onEvent?.(event);
+        await options.onEvent?.(event);
       },
     };
 
@@ -2702,6 +2702,38 @@ export class Agent {
     if (Buffer.isBuffer(data)) {
       // Legacy: direct buffer (for backwards compatibility)
       buffer = data;
+    } else if (typeof data.screenshotUrl === "string" && data.screenshotUrl.length > 0) {
+      // New format: Screenshot stored in server storage (from browser tool)
+      // Instead of downloading, pass URL directly to LLM which can load it
+      const analysisText = `Screenshot stored at: ${data.screenshotUrl}\n(Screenshot ID: ${data.screenshotId})\n\nAnalyze this screenshot from URL and describe:\n1. Page content and what you see\n2. Key text, buttons, and interactive elements\n3. Visual layout and design\n4. Any errors or status indicators\n5. Current state relative to expected result`;
+
+      const imageContent: LLMContent[] = [
+        {
+          type: "image_url",
+          image_url: { url: data.screenshotUrl, detail: "high" }
+        },
+        {
+          type: "text",
+          text: analysisText
+        }
+      ];
+
+      const screenshotMessage: LLMMessage = {
+        role: "user",
+        content: imageContent,
+        metadata: { source: "browser_screenshot", url: data.screenshotUrl, storedId: data.screenshotId },
+      };
+
+      this.currentScreenshotMessage = screenshotMessage;
+      this.history.add(screenshotMessage, "screenshot");
+
+      this.logger.info("Screenshot URL message stored for iterations", {
+        url: data.screenshotUrl,
+        size: data.screenshotSize,
+        id: data.screenshotId,
+        provider: this.provider.name,
+      });
+      return;
     } else if (typeof data.screenshot === "string" && data.screenshot.length > 0) {
       // New format: base64-encoded string in 'screenshot' field (from browser tool)
       try {
@@ -2727,15 +2759,15 @@ export class Agent {
     // Compress image for efficiency (WebP is already compressed)
     buffer = this.compressImageBuffer(buffer);
 
-    // Allow larger images for better vision analysis (200KB limit)
-    // Database can handle this, and LLM providers support it
-    const maxSizeForDb = 200000; // 200KB limit
-    if (buffer.length > maxSizeForDb) {
-      this.logger.warn("Screenshot exceeds maximum size, skipping", {
+    // Enforce strict LLM provider limit (200KB is the actual limit, not Database limit)
+    const MAX_IMAGE_SIZE = 150000; // 150KB - be conservative to stay under 200KB limit
+    if (buffer.length > MAX_IMAGE_SIZE) {
+      this.logger.warn("Screenshot exceeds LLM provider size limit after compression", {
         size: buffer.length,
-        max: maxSizeForDb,
-        recommendation: "Image is too large even after compression",
+        max: MAX_IMAGE_SIZE,
+        recommendation: "Image should have been stored in screenshot storage instead",
       });
+      // Skip sending this oversized image - better to skip than crash LLM call
       return;
     }
 
@@ -3240,6 +3272,29 @@ export class Agent {
         snapshot,
         timestamp,
       });
+
+      // Also emit via onEvent callback (WebSocket handler)
+      // For browser_preview, wait for storage operations; others fire-and-forget
+      const eventPayload = {
+        type: type as AgentRunEventType,
+        message,
+        data,
+        timestamp,
+      };
+
+      if (type === "browser_preview") {
+        // Wait for browser preview to complete (for screenshot storage)
+        void (async () => {
+          try {
+            await options.onEvent?.(eventPayload);
+          } catch (error) {
+            this.logger.error("Error emitting browser_preview event", { error });
+          }
+        })();
+      } else {
+        // Fire and forget for other events
+        void options.onEvent?.(eventPayload);
+      }
 
       // Persist event timeline so reloaded chats can render tool/reasoning history.
       if (this.conversation.id !== undefined) {
