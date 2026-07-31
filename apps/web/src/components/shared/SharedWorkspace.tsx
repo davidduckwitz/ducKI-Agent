@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import { FileText, FolderOpen, Upload, Trash2, Plus, RefreshCw, Save, ArrowRightLeft, Download } from "lucide-react";
+import { FileText, FolderOpen, Upload, Trash2, Plus, RefreshCw, Save, ArrowRightLeft, Download, ChevronRight, ChevronDown, Folder, X } from "lucide-react";
 import { CodePreview } from "../common/CodePreview";
 import { useI18n } from "../../lib/i18n";
 
@@ -25,6 +25,15 @@ interface SharedReadResponse {
   contentBase64?: string;
 }
 
+interface TreeNode {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  size?: number;
+  updatedAt?: string;
+  children?: TreeNode[];
+}
+
 export function SharedWorkspace() {
   const { t } = useI18n();
   const qc = useQueryClient();
@@ -35,6 +44,7 @@ export function SharedWorkspace() {
   const [newFileContent, setNewFileContent] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [moveToPath, setMoveToPath] = useState("");
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   const { data, isFetching } = useQuery({
     queryKey: ["shared", "files"],
@@ -128,6 +138,51 @@ export function SharedWorkspace() {
 
   const files = data?.files ?? [];
 
+  const buildTree = (items: SharedItem[]): TreeNode[] => {
+    const nodeMap = new Map<string, TreeNode>();
+    const roots: TreeNode[] = [];
+
+    // Create all nodes
+    items.forEach((item) => {
+      const node: TreeNode = {
+        name: item.path.split("/").pop() || item.path,
+        path: item.path,
+        type: item.type,
+        size: item.size,
+        updatedAt: item.updatedAt,
+        children: item.type === "directory" ? [] : undefined,
+      };
+      nodeMap.set(item.path, node);
+    });
+
+    // Build tree by finding parent for each item
+    items.forEach((item) => {
+      const pathParts = item.path.split("/");
+
+      if (pathParts.length === 1) {
+        // Root-level item
+        const node = nodeMap.get(item.path);
+        if (node) roots.push(node);
+      } else {
+        // Item with parent directory
+        const parentPath = pathParts.slice(0, -1).join("/");
+        const parentNode = nodeMap.get(parentPath);
+        const itemNode = nodeMap.get(item.path);
+
+        if (parentNode && itemNode && parentNode.children) {
+          // Only add if not already added
+          if (!parentNode.children.some((child) => child.path === item.path)) {
+            parentNode.children.push(itemNode);
+          }
+        }
+      }
+    });
+
+    return roots;
+  };
+
+  const fileTree = useMemo(() => buildTree(files), [files]);
+
   const imageDataUrl = useMemo(() => {
     if (!selectedItem || selectedItem.type !== "file") return undefined;
     if (!readSelected.data || readSelected.data.isText || !readSelected.data.contentBase64) return undefined;
@@ -183,6 +238,95 @@ export function SharedWorkspace() {
       if (!proceed) return;
     }
     setSelectedPath(path);
+  };
+
+  const toggleFolder = (path: string) => {
+    const newExpanded = new Set(expandedFolders);
+    if (newExpanded.has(path)) {
+      newExpanded.delete(path);
+    } else {
+      newExpanded.add(path);
+    }
+    setExpandedFolders(newExpanded);
+  };
+
+  const TreeNodeRenderer = ({ node, depth = 0 }: { node: TreeNode; depth?: number }) => {
+    const isExpanded = expandedFolders.has(node.path);
+    const isFolder = node.type === "directory";
+    const isSelected = selectedPath === node.path;
+    const [isHovering, setIsHovering] = useState(false);
+
+    const handleDelete = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const message = isFolder
+        ? `Ordner "${node.name}" und all seinen Inhalt löschen?`
+        : `Datei "${node.name}" löschen?`;
+      if (window.confirm(message)) {
+        deletePath.mutate(node.path);
+      }
+    };
+
+    return (
+      <div key={node.path}>
+        <button
+          onClick={() => {
+            if (isFolder) {
+              toggleFolder(node.path);
+            } else {
+              selectPath(node.path);
+            }
+          }}
+          onMouseEnter={() => setIsHovering(true)}
+          onMouseLeave={() => setIsHovering(false)}
+          className={`w-full text-left rounded px-2 py-1.5 transition flex items-center gap-1 group ${
+            isSelected ? "border border-blue-500 bg-blue-500/10" : "hover:bg-gray-800/50"
+          }`}
+          style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        >
+          {isFolder && (
+            <span className="text-gray-400 shrink-0 w-4 h-4 flex items-center justify-center">
+              {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+            </span>
+          )}
+          {!isFolder && <span className="w-4 h-4 shrink-0" />}
+
+          {isFolder ? (
+            <Folder className={`w-4 h-4 shrink-0 ${isExpanded ? "text-yellow-400" : "text-yellow-300"}`} />
+          ) : (
+            <FileText className="w-4 h-4 shrink-0 text-blue-300" />
+          )}
+
+          <span className="text-sm truncate flex-1">{node.name}</span>
+
+          {!isFolder && node.size !== undefined && (
+            <span className="text-[11px] text-gray-500 shrink-0">{node.size} B</span>
+          )}
+
+          {isHovering && (
+            <button
+              onClick={handleDelete}
+              className="shrink-0 p-1 text-red-400 hover:text-red-300 hover:bg-red-500/20 rounded transition"
+              title={`Löschen`}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </button>
+
+        {isFolder && isExpanded && node.children && (
+          <div>
+            {node.children.map((child) => (
+              <TreeNodeRenderer key={child.path} node={child} depth={depth + 1} />
+            ))}
+            {node.children.length === 0 && (
+              <div className="text-xs text-gray-600 py-1" style={{ paddingLeft: `${(depth + 1) * 16 + 8}px` }}>
+                (leer)
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -248,28 +392,10 @@ export function SharedWorkspace() {
             </button>
           </div>
 
-          <div className="space-y-1">
-            {files.map((item) => (
-              <button
-                key={item.path}
-                onClick={() => selectPath(item.path)}
-                className={`w-full text-left rounded-lg border px-3 py-2 transition ${
-                  selectedPath === item.path ? "border-blue-500 bg-blue-500/10" : "border-gray-800 bg-gray-900 hover:border-gray-700"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-2 min-w-0">
-                    {item.type === "directory" ? <FolderOpen className="w-4 h-4 text-yellow-300 shrink-0" /> : <FileText className="w-4 h-4 text-blue-300 shrink-0" />}
-                    <span className="text-sm truncate">{item.path}</span>
-                  </span>
-                  {item.type === "file" && (
-                    <span className="text-[11px] text-gray-500 shrink-0">{item.size ?? 0} B</span>
-                  )}
-                </div>
-              </button>
-            ))}
-
-            {files.length === 0 && (
+          <div className="space-y-0.5">
+            {fileTree.length > 0 ? (
+              fileTree.map((node) => <TreeNodeRenderer key={node.path} node={node} depth={0} />)
+            ) : (
               <div className="text-sm text-gray-500 py-4 text-center">{t("shared.noFiles")}</div>
             )}
           </div>
