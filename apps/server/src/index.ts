@@ -554,7 +554,7 @@ async function bootstrap(): Promise<void> {
 
 	app.use(
 		express.json({
-			limit: "10mb",
+			limit: "50mb",
 			verify: (req, _res, buf) => {
 				(req as RequestWithRawBody).rawBody = Buffer.from(buf).toString("utf8");
 			},

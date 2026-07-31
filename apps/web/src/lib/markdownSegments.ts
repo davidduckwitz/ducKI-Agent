@@ -9,32 +9,60 @@ export interface MarkdownSegment {
  *
  * An unterminated fence (the message is still streaming) is treated as code, so a block
  * does not visibly flip from prose to code the moment the closing fence arrives.
+ *
+ * Handles edge cases:
+ * - Streaming messages with incomplete code blocks
+ * - Multiple code blocks with mixed content
+ * - Language identifiers with +, #, -, alphanumerics
  */
 export function splitMarkdownSegments(input: string): MarkdownSegment[] {
-  if (!input) return [];
+  if (!input || input.trim().length === 0) return [];
 
   const segments: MarkdownSegment[] = [];
-  const fence = /```([a-zA-Z0-9+#-]*)\n?([\s\S]*?)(?:```|$)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
+  let pos = 0;
 
-  while ((match = fence.exec(input)) !== null) {
-    if (match.index > lastIndex) {
-      segments.push({ type: "text", content: input.slice(lastIndex, match.index) });
+  while (pos < input.length) {
+    // Find next fence
+    const fenceStart = input.indexOf("```", pos);
+
+    if (fenceStart === -1) {
+      // No more fences - rest is text
+      const remaining = input.slice(pos);
+      if (remaining.trim().length > 0) {
+        segments.push({ type: "text", content: remaining });
+      }
+      break;
     }
-    segments.push({
-      type: "code",
-      language: match[1] || "text",
-      content: match[2] ?? "",
-    });
-    lastIndex = fence.lastIndex;
-    // A zero-length match (empty trailing fence) would spin the loop forever.
-    if (match[0].length === 0) fence.lastIndex += 1;
+
+    // Add text before fence
+    const textBefore = input.slice(pos, fenceStart);
+    if (textBefore.trim().length > 0) {
+      segments.push({ type: "text", content: textBefore });
+    }
+
+    // Parse fence opening: ```language\n
+    const afterFence = input.slice(fenceStart + 3);
+    const langMatch = /^([a-zA-Z0-9+#-]*)\n?/.exec(afterFence);
+    const language = langMatch?.[1] || "text";
+    const contentStart = fenceStart + 3 + (langMatch?.[0].length ?? 0);
+
+    // Find closing fence
+    const fenceEnd = input.indexOf("```", contentStart);
+
+    if (fenceEnd === -1) {
+      // Unterminated fence (streaming) - treat rest as code
+      const codeContent = input.slice(contentStart);
+      segments.push({ type: "code", language, content: codeContent });
+      break;
+    }
+
+    // Extract code between fences
+    const codeContent = input.slice(contentStart, fenceEnd);
+    segments.push({ type: "code", language, content: codeContent });
+
+    pos = fenceEnd + 3;
   }
 
-  if (lastIndex < input.length) {
-    segments.push({ type: "text", content: input.slice(lastIndex) });
-  }
-
+  // Filter out empty text segments
   return segments.filter((segment) => segment.type === "code" || segment.content.trim().length > 0);
 }

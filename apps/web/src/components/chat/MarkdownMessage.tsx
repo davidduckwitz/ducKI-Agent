@@ -1,5 +1,5 @@
 import { Check, Copy } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { splitMarkdownSegments } from "../../lib/markdownSegments";
@@ -121,7 +121,9 @@ function TextSegment({ content, keyPrefix }: { content: string; keyPrefix: strin
 }
 
 export function MarkdownMessage({ content }: { content: string }) {
-  const segments = splitMarkdownSegments(content);
+  // Memoize markdown parsing to prevent re-parsing on every re-render during streaming.
+  // This fixes issues where incomplete/unterminated code blocks appear broken until refresh.
+  const segments = useMemo(() => splitMarkdownSegments(content), [content]);
 
   return (
     <div className="min-w-0 break-words">

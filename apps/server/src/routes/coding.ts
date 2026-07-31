@@ -189,6 +189,22 @@ codingRouter.post("/projects/:project/write", (req, res) => {
       return;
     }
     const content = String(req.body?.content ?? "");
+    const expectedSize = req.body?.expectedSize as number | undefined;
+
+    // Warn if content appears truncated (LLM response was cut off)
+    const warnings: string[] = [];
+    if (expectedSize && content.length < expectedSize * 0.95) {
+      warnings.push(`Content may be truncated: received ${content.length} bytes, expected ~${expectedSize} bytes`);
+    }
+
+    // Warn if file ends abruptly (incomplete code blocks, JSON, etc)
+    if (content.match(/```\s*$/)) warnings.push("File ends with unclosed code block");
+    if ((content.match(/\{/g) || []).length > (content.match(/\}/g) || []).length) {
+      warnings.push("Unbalanced braces - may be truncated JSON/object");
+    }
+    if ((content.match(/\[/g) || []).length > (content.match(/\]/g) || []).length) {
+      warnings.push("Unbalanced brackets - may be truncated array");
+    }
 
     const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
     if (!existsSync(absolute)) {
@@ -201,7 +217,13 @@ codingRouter.post("/projects/:project/write", (req, res) => {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
     writeFileSync(target, content, "utf8");
-    res.json(createApiResponse({ written: true, project: slug, path: sanitizeRelativePath(rel) }));
+    res.json(createApiResponse({
+      written: true,
+      project: slug,
+      path: sanitizeRelativePath(rel),
+      size: content.length,
+      warnings: warnings.length > 0 ? warnings : undefined
+    }));
   } catch (error) {
     res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
   }
