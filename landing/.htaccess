@@ -12,6 +12,11 @@
         Deny from all
     </FilesMatch>
 
+    # Handle CORS preflight requests
+    RewriteCond %{REQUEST_METHOD} OPTIONS
+    RewriteCond %{REQUEST_URI} ^/api/
+    RewriteRule ^ - [L]
+
     # Pass through existing files and directories - DO NOT rewrite them
     RewriteCond %{REQUEST_FILENAME} -f [OR]
     RewriteCond %{REQUEST_FILENAME} -d
@@ -83,6 +88,14 @@
 # ===== SECURITY HEADERS =====
 
 <IfModule mod_headers.c>
+    # ===== CORS for API endpoints (allow dev server + production) =====
+    <FilesMatch "^api/v1\.php$">
+        Header set Access-Control-Allow-Origin "*"
+        Header set Access-Control-Allow-Methods "GET, POST, OPTIONS"
+        Header set Access-Control-Allow-Headers "Content-Type, Authorization"
+        Header set Access-Control-Max-Age "3600"
+    </FilesMatch>
+
     # Prevent clickjacking
     Header always set X-Frame-Options "DENY"
 

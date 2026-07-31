@@ -139,7 +139,9 @@
             }
 
             noResults.style.display = 'none';
-            container.innerHTML = tools.map(tool => `
+            container.innerHTML = tools.map(tool => {
+                const useCases = Array.isArray(tool.useCase) ? tool.useCase.slice(0, 2) : [];
+                return `
                 <div class="bg-white dark:bg-slate-900 p-6 rounded-lg border border-slate-200 dark:border-slate-800 hover:shadow-lg dark:hover:shadow-2xl transition-shadow">
                     <div class="flex items-start justify-between mb-3">
                         <div>
@@ -150,17 +152,21 @@
                         </div>
                     </div>
                     <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">${tool.description}</p>
+                    ${useCases.length > 0 ? `
                     <div class="mb-4">
                         <p class="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">Use Cases:</p>
                         <ul class="text-sm text-slate-600 dark:text-slate-400 space-y-1">
-                            ${tool.useCase.slice(0, 2).map(uc => `<li>• ${uc}</li>`).join('')}
+                            ${useCases.map(uc => `<li>• ${uc}</li>`).join('')}
                         </ul>
                     </div>
+                    ` : ''}
+                    ${tool.version ? `<div class="text-xs text-slate-500 dark:text-slate-400 mb-3">v${tool.version}</div>` : ''}
                     <a href="detail.html?type=tool&id=${tool.id}" class="inline-block px-3 py-2 rounded text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors">
                         Details anschauen
                     </a>
                 </div>
-            `).join('');
+            `;
+            }).join('');
         }
 
         // Search functionality

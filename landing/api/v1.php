@@ -212,6 +212,39 @@ switch ($action) {
         ]);
         break;
 
+    case 'sync':
+        require_once(__DIR__ . '/controllers/SyncController.php');
+        $sync = new SyncController(__DIR__);
+        $result = $sync->fullSync();
+
+        if (isset($result['error'])) {
+            error_response($result['error'], 'SYNC_ERROR', 500);
+        }
+
+        json_response($result, true, 'Sync completed successfully');
+        break;
+
+    case 'audit':
+        $tools_data = load_json($tools_file);
+        $skills_data = load_json($skills_file);
+
+        $tools_count = count($tools_data['tools'] ?? []);
+        $skills_count = count($skills_data['skills'] ?? []);
+
+        json_response([
+            'tools' => [
+                'documented' => $tools_count,
+                'status' => $tools_count > 0 ? 'OK' : 'MISSING'
+            ],
+            'skills' => [
+                'documented' => $skills_count,
+                'status' => $skills_count > 0 ? 'OK' : 'MISSING'
+            ],
+            'last_sync' => file_exists($skills_file) ? date('c', filemtime($skills_file)) : 'Never',
+            'recommendation' => $skills_count < 25 ? 'Run /api/v1.php?action=sync to update skills' : 'System up to date'
+        ]);
+        break;
+
     default:
         error_response('Unknown action: ' . $action, 'UNKNOWN_ACTION', 400);
 }

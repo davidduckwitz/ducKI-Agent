@@ -1,16 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Eye, EyeOff, Play, Plus, Save, Search, Star, Trash2, UploadCloud, X, Sparkles } from "lucide-react";
+import { BookOpen, Check, Eye, EyeOff, Play, Plus, Save, Search, Star, Trash2, UploadCloud, X, Sparkles, Lock, Download, Settings } from "lucide-react";
 import { api } from "../../lib/api";
 import { CodePreview } from "../common/CodePreview";
 import { useI18n } from "../../lib/i18n";
 import { SkillsManagementSettings } from "../settings/SkillsManagementSettings";
+import { SkillsPrivacySettings } from "./SkillsPrivacySettings";
+import { SkillControlPanel } from "./SkillControlPanel";
+import { SkillDiscovery } from "./SkillDiscovery";
 import { cn } from "../../lib/utils";
 
 interface SkillItem {
   slug: string;
   name: string;
   description?: string;
+  isPrivate?: boolean;
+  isInstalled?: boolean;
 }
 
 interface SkillDetail {
@@ -193,7 +198,7 @@ const importedSkillTemplates: Array<{ name: string; description: string; content
 export function SkillManager() {
   const { t } = useI18n();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"skills" | "bundles">("skills");
+  const [activeTab, setActiveTab] = useState<"my-skills" | "discover" | "settings">("my-skills");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState("");
   const [draftSkill, setDraftSkill] = useState<DraftSkill>({ name: "", description: "" });
@@ -492,35 +497,50 @@ export function SkillManager() {
         </div>
       </div>
 
+      {/* Privacy Settings Panel */}
+      <SkillsPrivacySettings />
+
       {/* Tab Navigation */}
       <div className="card p-2 flex gap-2">
         <button
-          onClick={() => setActiveTab("skills")}
+          onClick={() => setActiveTab("my-skills")}
           className={cn(
-            "px-4 py-2 rounded-lg font-medium text-sm transition-colors",
-            activeTab === "skills"
+            "px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2",
+            activeTab === "my-skills"
               ? "bg-blue-600 text-white"
               : "bg-gray-800 text-gray-300 hover:bg-gray-700"
           )}
         >
-          <BookOpen className="w-4 h-4 inline mr-2" />
-          Skills
+          <BookOpen className="w-4 h-4" />
+          My Skills ({skills.length})
         </button>
         <button
-          onClick={() => setActiveTab("bundles")}
+          onClick={() => setActiveTab("discover")}
           className={cn(
-            "px-4 py-2 rounded-lg font-medium text-sm transition-colors",
-            activeTab === "bundles"
-              ? "bg-blue-600 text-white"
+            "px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2",
+            activeTab === "discover"
+              ? "bg-green-600 text-white"
               : "bg-gray-800 text-gray-300 hover:bg-gray-700"
           )}
         >
-          <Sparkles className="w-4 h-4 inline mr-2" />
-          Bundles
+          <Download className="w-4 h-4" />
+          Discover
+        </button>
+        <button
+          onClick={() => setActiveTab("settings")}
+          className={cn(
+            "px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2",
+            activeTab === "settings"
+              ? "bg-purple-600 text-white"
+              : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+          )}
+        >
+          <Settings className="w-4 h-4" />
+          Settings
         </button>
       </div>
 
-      {activeTab === "skills" ? (
+      {activeTab === "my-skills" ? (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             <div className="card">
@@ -547,7 +567,18 @@ export function SkillManager() {
         </>
       ) : null}
 
-      {activeTab === "skills" && (
+      {/* Discover Tab */}
+      {activeTab === "discover" && (
+        <SkillDiscovery installedSkills={skills.map((s) => s.slug)} />
+      )}
+
+      {/* Settings Tab */}
+      {activeTab === "settings" && (
+        <SkillsManagementSettings />
+      )}
+
+      {/* My Skills Tab */}
+      {activeTab === "my-skills" && (
       <div className="grid grid-cols-1 lg:grid-cols-[360px,minmax(0,1fr)] gap-4 h-[calc(100%-210px)] min-h-[560px]">
         <div className="card overflow-y-auto space-y-3">
           <div className="rounded-lg border border-gray-800 bg-gray-900/50 p-3 space-y-2 sticky top-0 z-10">
@@ -718,6 +749,37 @@ export function SkillManager() {
                 <p className="text-sm text-gray-300">{selectedDetail.data.description}</p>
               )}
 
+              {/* Skill Control Panel - Enable/Disable/Hide */}
+              <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-4">
+                <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
+                  <Lock className="w-4 h-4" />
+                  Skill Controls & Privacy
+                </h3>
+                <SkillControlPanel
+                  skillId={selectedDetail.data.slug}
+                  skillName={selectedDetail.data.name}
+                  isEnabled={enabledSet.has(selectedDetail.data.slug)}
+                  isInstalled={true}
+                  isHidden={false}
+                  onToggleEnabled={async (enabled) => {
+                    const next = new Set(enabledSet);
+                    if (enabled) {
+                      next.add(selectedDetail.data.slug);
+                    } else {
+                      next.delete(selectedDetail.data.slug);
+                    }
+                    return saveEnabledSkills.mutateAsync(Array.from(next).sort());
+                  }}
+                  onToggleHidden={async (hidden) => {
+                    // TODO: Implement hide functionality
+                    console.log("Toggle hidden:", hidden);
+                  }}
+                  onDelete={async () => {
+                    return deleteSkill.mutateAsync(selectedDetail.data.slug);
+                  }}
+                />
+              </div>
+
               <textarea
                 className="input w-full min-h-[60vh] font-mono text-sm leading-6"
                 value={editorContent}
@@ -870,10 +932,6 @@ export function SkillManager() {
             </div>
           </div>
         </div>
-      )}
-
-      {activeTab === "bundles" && (
-        <SkillsManagementSettings />
       )}
     </div>
   );
