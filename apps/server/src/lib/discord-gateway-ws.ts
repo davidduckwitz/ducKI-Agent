@@ -55,9 +55,34 @@ interface GatewayPayload {
   t: string | null;
 }
 
+/**
+ * Close codes that reconnecting cannot fix - they all need a config change. Bare
+ * "closed with fatal code 4004" left the operator to look the number up themselves,
+ * so each one carries the concrete remedy instead.
+ */
+const FATAL_CLOSE_CODES: Record<number, string> = {
+  4004:
+    "Authentication failed - the Discord bot token is invalid, expired or was regenerated. " +
+    "Check DISCORD_BOT_TOKEN (or the gateway config's authToken) and copy a fresh token from " +
+    "Discord Developer Portal > Your App > Bot > Reset Token. Note: this is the BOT token, not the client secret or application id.",
+  4010: "Invalid shard sent in the identify payload.",
+  4011: "Sharding required - this bot is in too many guilds for a single connection.",
+  4012: "Invalid API version requested by the gateway client.",
+  4013:
+    "Invalid intents - the requested intent bits are not valid. " +
+    "See DISCORD_INTENTS in discord-gateway-ws.ts.",
+  4014:
+    "Disallowed intents - the bot requests the privileged MESSAGE_CONTENT intent but it is not enabled. " +
+    "Enable it under Discord Developer Portal > Your App > Bot > Privileged Gateway Intents " +
+    "(MESSAGE CONTENT INTENT, and SERVER MEMBERS INTENT if you need it), then restart.",
+};
+
 export class DiscordGatewayClient {
   private ws: WebSocket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** Separate from reconnectTimer: the initial jittered heartbeat used to share that
+   *  field, so the two unrelated lifecycles could overwrite each other's handle. */
+  private heartbeatStartTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sequence: number | null = null;
   private sessionId: string | null = null;
@@ -95,10 +120,14 @@ export class DiscordGatewayClient {
       this.clearTimers();
       if (this.stopped) return;
 
-      // Fatal close codes — do not reconnect.
-      const fatal = [4004, 4010, 4011, 4012, 4013, 4014];
-      if (fatal.includes(code)) {
-        this.options.onError?.(new Error(`Discord Gateway closed with fatal code ${code}`));
+      // Fatal close codes — do not reconnect, and say what has to be fixed.
+      const remedy = FATAL_CLOSE_CODES[code];
+      if (remedy) {
+        // Latch it: without this the client looks merely disconnected and a later
+        // start()/reconnect path could keep hammering the gateway with a bad token.
+        this.stopped = true;
+        this.ws = null;
+        this.options.onError?.(new Error(`Discord Gateway stopped — close code ${code}: ${remedy}`));
         return;
       }
 
@@ -261,9 +290,11 @@ export class DiscordGatewayClient {
 
   private startHeartbeat(intervalMs: number): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.heartbeatStartTimer) clearTimeout(this.heartbeatStartTimer);
     // Jitter the first heartbeat as recommended by Discord.
     const jitter = Math.random() * intervalMs;
-    this.reconnectTimer = setTimeout(() => {
+    this.heartbeatStartTimer = setTimeout(() => {
+      this.heartbeatStartTimer = null;
       this.sendHeartbeat();
       this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), intervalMs);
     }, jitter);
@@ -283,6 +314,10 @@ export class DiscordGatewayClient {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.heartbeatStartTimer) {
+      clearTimeout(this.heartbeatStartTimer);
+      this.heartbeatStartTimer = null;
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

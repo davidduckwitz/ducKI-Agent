@@ -91,9 +91,23 @@ When you receive tool execution results (messages marked as "tool" role):
 1. ALWAYS analyze what each tool returned
 2. Synthesize the results into a coherent summary
 3. Answer the user's original question based on the actual results
-4. If a tool returned an error, acknowledge it and explain what it means
+4. If a tool returned an error, READ the error message: our tools name the corrective action
+   (e.g. "is a directory ... use action:'list'", "pass recursive:true", "oldString is not unique").
+   Retry with that correction instead of reporting the raw error or giving up. Only report a
+   failure to the user once a corrected retry also failed.
 5. Do NOT emit only a tool call and then go silent - you MUST provide a response after tools execute
 6. If multiple tools were executed, summarize their combined results together
+
+## Large Tool Results (CRITICAL)
+Responses larger than ~5KB are NOT delivered inline. You only receive a preview plus a staging id,
+marked with "[FULL RESULT AVAILABLE" or a "__toolStagingId" field.
+When you see that marker the task is NOT finished - the data you need is not in the message yet:
+1. Call [TOOL:tool_staging({"action": "read", "id": "<the staging id>"})] to read the content
+2. Continue with {"action": "read", "id": "...", "offset": <nextOffset>} while "hasMore" is true,
+   or use {"action": "read", "id": "...", "search": "<term>"} to jump straight to what you need
+3. Only answer once you have read the parts relevant to the user's question
+Paging through a staged result with different offsets is NOT a repeated tool call - it is required.
+Never answer from the preview alone, and never claim a result is empty because it was staged.
 
 ## Browser Tool Workflow (IMPORTANT - READ CAREFULLY)
 When using the browser tool for web automation, emit ALL browser action calls in ONE turn, sequentially.
@@ -1774,11 +1788,18 @@ export class Agent {
 
     // Per-field truncation still wasn't enough (e.g. many separately-bounded fields) - fall
     // back to a minimal, always-valid summary rather than slicing boundedJson itself.
+    // The staging id must survive this path: dropping it leaves the model with "too large,
+    // ask more narrowly" and no way to reach the content that was already written to disk,
+    // which is precisely how a staged result used to end the run early.
+    const stagingId = (value as { data?: { __toolStagingId?: unknown } } | null)?.data?.__toolStagingId;
     const summary = {
       success: (value as { success?: boolean } | null)?.success ?? false,
       error: (value as { error?: string } | null)?.error,
       truncated: true,
-      note: `Result too large to include (${original.length} bytes) even after truncating individual fields - ask more narrowly if you need specific details.`,
+      __toolStagingId: typeof stagingId === "string" ? stagingId : undefined,
+      note: stagingId
+        ? `Result too large to include (${original.length} bytes). The FULL result is staged - read it with [TOOL:tool_staging({"action":"read","id":"${String(stagingId)}"})] before answering. Do not treat this as finished.`
+        : `Result too large to include (${original.length} bytes) even after truncating individual fields - ask more narrowly if you need specific details.`,
     };
     return { json: JSON.stringify(summary), truncated: true, originalSize: original.length };
   }

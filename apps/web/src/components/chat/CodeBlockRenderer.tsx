@@ -28,32 +28,32 @@ export function CodeBlockRenderer({ content, language, title }: CodeBlockRendere
   const detectedLang: string = language || detectLanguage(content);
 
   const bgColorMap: Record<string, string> = {
-    json: "bg-slate-950",
-    markdown: "bg-slate-900",
+    json: "bg-background",
+    markdown: "bg-card",
     html: "bg-orange-950",
     javascript: "bg-yellow-950",
     typescript: "bg-blue-950",
     python: "bg-blue-900",
-    bash: "bg-gray-950",
-    yaml: "bg-slate-950",
+    bash: "bg-background",
+    yaml: "bg-background",
     xml: "bg-orange-950",
-    plaintext: "bg-gray-950",
+    plaintext: "bg-background",
   };
-  const bgColor = bgColorMap[detectedLang] || "bg-gray-950";
+  const bgColor = bgColorMap[detectedLang] || "bg-background";
 
   const borderColorMap: Record<string, string> = {
-    json: "border-slate-700",
-    markdown: "border-slate-700",
+    json: "border-border",
+    markdown: "border-border",
     html: "border-orange-700",
     javascript: "border-yellow-700",
     typescript: "border-blue-700",
     python: "border-blue-700",
-    bash: "border-gray-700",
-    yaml: "border-slate-700",
+    bash: "border-border",
+    yaml: "border-border",
     xml: "border-orange-700",
-    plaintext: "border-gray-700",
+    plaintext: "border-border",
   };
-  const borderColor = borderColorMap[detectedLang] || "border-gray-700";
+  const borderColor = borderColorMap[detectedLang] || "border-border";
 
   const handleCopy = async () => {
     try {
@@ -67,20 +67,20 @@ export function CodeBlockRenderer({ content, language, title }: CodeBlockRendere
 
   return (
     <div className={`border ${borderColor} rounded-lg overflow-hidden ${bgColor}`}>
-      <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700 bg-gray-900/50">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-card/50">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono text-gray-400">{detectedLang.toUpperCase()}</span>
-          {title && <span className="text-xs text-gray-500">{title}</span>}
+          <span className="text-xs font-mono text-muted-foreground">{detectedLang.toUpperCase()}</span>
+          {title && <span className="text-xs text-muted-foreground">{title}</span>}
         </div>
         <button
           onClick={handleCopy}
-          className="text-xs text-gray-400 hover:text-white transition p-1"
+          className="text-xs text-muted-foreground hover:text-foreground transition p-1"
           title="Copy to clipboard"
         >
           {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
         </button>
       </div>
-      <pre className="overflow-x-auto p-4 text-sm text-gray-200 font-mono">
+      <pre className="overflow-x-auto p-4 text-sm text-foreground font-mono">
         <code>{content}</code>
       </pre>
     </div>

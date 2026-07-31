@@ -1,34 +1,47 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, FolderOpen, Plus } from "lucide-react";
+import { Check, FolderPlus, Search, Upload, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useCodingSession } from "../../lib/codingSessionStore";
+import { useUiStore } from "../../lib/uiStore";
+import { CollapsibleSection } from "../ui/collapsible-section";
+import { CodingFileTree, type CodingFileItem } from "./CodingFileTree";
 
 interface CodingProject {
   slug: string;
   name: string;
 }
 
-interface CodingFileItem {
-  path: string;
-  type: "file" | "directory";
-  size?: number;
-  updatedAt?: string;
-}
-
 export function CodingSidebarPanel() {
   const { t } = useI18n();
   const qc = useQueryClient();
-  const { selectedProject, setSelectedProject, selectedPath, setSelectedPath } = useCodingSession();
+  const {
+    selectedProject,
+    setSelectedProject,
+    selectedPath,
+    openFile,
+    drafts,
+    command,
+    runCommand,
+  } = useCodingSession();
+  const { filesOpen, toggleSection, setSection } = useUiStore();
+
+  const [filter, setFilter] = useState("");
   const [newFilePath, setNewFilePath] = useState("");
+  const [newFileOpen, setNewFileOpen] = useState(false);
+  const newFileRef = useRef<HTMLInputElement>(null);
+  // See CodingWorkspace: -1 so a command dispatched right before mount still lands.
+  const handledCommandNonce = useRef(-1);
 
   const settingsQuery = useQuery({
     queryKey: ["settings", "coding-sidebar"],
     queryFn: () => api.settings.list() as Promise<Array<{ key: string; value: string }>>,
     refetchInterval: 5000,
   });
-  const codingEnabled = String(settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value ?? "false").trim().toLowerCase() === "true";
+  const codingEnabled =
+    String(settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value ?? "false").trim().toLowerCase() ===
+    "true";
   const codingSettingReady = !settingsQuery.isLoading && Boolean(settingsQuery.data);
 
   const projectsQuery = useQuery({
@@ -39,11 +52,10 @@ export function CodingSidebarPanel() {
 
   useEffect(() => {
     if (!codingSettingReady || !codingEnabled) return;
-    if (!selectedProject && (projectsQuery.data?.length ?? 0) > 0) {
-      setSelectedProject(projectsQuery.data?.[0]?.slug ?? "");
-    }
-    if (selectedProject && !(projectsQuery.data ?? []).some((p) => p.slug === selectedProject)) {
-      setSelectedProject(projectsQuery.data?.[0]?.slug ?? "");
+    const projects = projectsQuery.data ?? [];
+    if (projects.length === 0) return;
+    if (!selectedProject || !projects.some((p) => p.slug === selectedProject)) {
+      setSelectedProject(projects[0]?.slug ?? "");
     }
   }, [codingSettingReady, codingEnabled, projectsQuery.data, selectedProject, setSelectedProject]);
 
@@ -53,103 +65,170 @@ export function CodingSidebarPanel() {
     enabled: codingSettingReady && codingEnabled && Boolean(selectedProject),
   });
 
-  const sortedFiles = useMemo(() => {
-    const list = [...(filesQuery.data?.files ?? [])];
-    return list.sort((a, b) => {
-      if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
-      return a.path.localeCompare(b.path);
-    });
-  }, [filesQuery.data?.files]);
-
   const writeFile = useMutation({
-    mutationFn: (payload: { path: string; content: string }) => api.coding.writeFile(selectedProject, payload.path, payload.content),
+    mutationFn: (payload: { path: string; content: string }) =>
+      api.coding.writeFile(selectedProject, payload.path, payload.content),
     onSuccess: async (_data, vars) => {
-      setSelectedPath(vars.path);
+      openFile(vars.path);
       setNewFilePath("");
+      setNewFileOpen(false);
       await qc.invalidateQueries({ queryKey: ["coding", "files", selectedProject] });
     },
   });
 
+  // "Neue Datei" from the sidebar's Neu-menu opens and focuses the inline input.
+  useEffect(() => {
+    if (command.nonce === handledCommandNonce.current) return;
+    handledCommandNonce.current = command.nonce;
+    if (command.action !== "new-file") return;
+    setSection("files", true);
+    setNewFileOpen(true);
+    window.setTimeout(() => newFileRef.current?.focus(), 0);
+  }, [command, setSection]);
+
+  const dirtyPaths = useMemo(() => new Set(Object.keys(drafts)), [drafts]);
+  const files = filesQuery.data?.files ?? [];
+
   if (!codingSettingReady || !codingEnabled) return null;
 
-  return (
-    <div className="flex-1 min-h-0 flex flex-col p-2 gap-3 overflow-y-auto">
-      <div className="space-y-1.5">
-        <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-          {t("codingPage.project")}
-        </p>
-        <select
-          className="input w-full text-sm"
-          value={selectedProject}
-          onChange={(e) => setSelectedProject(e.target.value)}
-        >
-          {(projectsQuery.data ?? []).length === 0 && <option value="">{t("codingPage.noProjects")}</option>}
-          {(projectsQuery.data ?? []).map((project) => (
-            <option key={project.slug} value={project.slug}>
-              {project.slug}
-            </option>
-          ))}
-        </select>
-      </div>
+  const submitNewFile = () => {
+    const path = newFilePath.trim();
+    if (!path) return;
+    writeFile.mutate({ path, content: "" });
+  };
 
-      {selectedProject ? (
+  return (
+    <CollapsibleSection
+      title={t("layout.sidebar.files")}
+      open={filesOpen}
+      onToggle={() => toggleSection("files")}
+      count={files.filter((f) => f.type === "file").length}
+      bodyClassName="flex flex-col gap-1.5 px-1 pb-2"
+      actions={
         <>
-          <div className="space-y-1.5">
-            <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-              {t("codingPage.newFilePath")}
-            </p>
-            <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => runCommand("new-project")}
+            title={t("codingPage.newProject")}
+            className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+          >
+            <FolderPlus className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => runCommand("upload")}
+            title={t("codingPage.uploadTitle")}
+            disabled={!selectedProject}
+            className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-40"
+          >
+            <Upload className="h-3.5 w-3.5" />
+          </button>
+        </>
+      }
+    >
+      <select
+        className="input w-full px-2 py-1 text-xs"
+        value={selectedProject}
+        onChange={(e) => setSelectedProject(e.target.value)}
+      >
+        {(projectsQuery.data ?? []).length === 0 && <option value="">{t("codingPage.noProjects")}</option>}
+        {(projectsQuery.data ?? []).map((project) => (
+          <option key={project.slug} value={project.slug}>
+            {project.slug}
+          </option>
+        ))}
+      </select>
+
+      {selectedProject && (
+        <>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+            <input
+              className="input w-full py-1 pl-7 pr-6 text-xs"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder={t("codingPage.searchFiles")}
+            />
+            {filter && (
+              <button
+                type="button"
+                onClick={() => setFilter("")}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+
+          {newFileOpen && (
+            <div className="flex gap-1">
               <input
-                className="input flex-1 text-sm"
+                ref={newFileRef}
+                className="input w-full py-1 text-xs"
                 value={newFilePath}
                 onChange={(e) => setNewFilePath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitNewFile();
+                  if (e.key === "Escape") setNewFileOpen(false);
+                }}
                 placeholder={t("codingPage.newFilePath")}
               />
               <button
-                className="btn-secondary px-2"
-                onClick={() => writeFile.mutate({ path: newFilePath, content: "" })}
+                type="button"
+                className="shrink-0 rounded-md border border-border px-1.5 text-primary transition hover:bg-accent disabled:opacity-40"
+                onClick={submitNewFile}
                 disabled={!newFilePath.trim() || writeFile.isPending}
                 title={t("common.create")}
               >
-                <Plus className="w-4 h-4" />
+                <Check className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                className="shrink-0 rounded-md border border-border px-1.5 text-muted-foreground transition hover:bg-accent"
+                onClick={() => setNewFileOpen(false)}
+                title={t("common.cancel")}
+              >
+                <X className="h-3.5 w-3.5" />
               </button>
             </div>
+          )}
+
+          {/* Capped instead of flex-1: the sidebar column scrolls as a whole, and a
+              flexible tree would collapse to a few rows once the chat list is open. */}
+          <div className="max-h-[45vh] min-h-[140px] overflow-y-auto">
+            <CodingFileTree
+              files={files}
+              project={selectedProject}
+              selectedPath={selectedPath}
+              dirtyPaths={dirtyPaths}
+              filter={filter}
+              onSelect={openFile}
+              onFolderAction={(folderPath) => {
+                setNewFilePath(`${folderPath}/`);
+                setNewFileOpen(true);
+                window.setTimeout(() => newFileRef.current?.focus(), 0);
+              }}
+              emptyLabel={t("codingPage.noFiles")}
+              noMatchLabel={t("codingPage.noMatchingFiles")}
+            />
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto space-y-1">
-            {sortedFiles.map((file) =>
-              file.type === "directory" ? (
-                <div
-                  key={file.path}
-                  className="w-full text-left rounded-lg border border-border/70 bg-muted/40 px-2.5 py-1.5 opacity-80"
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <FolderOpen className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span className="truncate text-xs">{file.path}</span>
-                  </span>
-                </div>
-              ) : (
-                <button
-                  key={file.path}
-                  onClick={() => setSelectedPath(file.path)}
-                  className={`w-full text-left rounded-lg border px-2.5 py-1.5 transition ${
-                    selectedPath === file.path
-                      ? "border-primary bg-primary/10"
-                      : "border-transparent hover:border-border hover:bg-accent"
-                  }`}
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <FileText className="w-3.5 h-3.5 text-primary shrink-0" />
-                    <span className="truncate text-xs">{file.path}</span>
-                  </span>
-                </button>
-              )
-            )}
-          </div>
+          {!newFileOpen && (
+            <button
+              type="button"
+              onClick={() => {
+                setNewFileOpen(true);
+                window.setTimeout(() => newFileRef.current?.focus(), 0);
+              }}
+              className="rounded-md border border-dashed border-border px-2 py-1 text-[11px] text-muted-foreground transition hover:border-foreground/40 hover:text-foreground"
+            >
+              + {t("codingPage.newFileHere")}
+            </button>
+          )}
         </>
-      ) : (
-        <p className="px-1 text-xs text-muted-foreground">{t("codingPage.noProjects")}</p>
       )}
-    </div>
+
+      {!selectedProject && <p className="px-1 text-[11px] text-muted-foreground">{t("codingPage.noProjects")}</p>}
+    </CollapsibleSection>
   );
 }

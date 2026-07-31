@@ -1,4 +1,5 @@
-import { FileText, User } from "lucide-react";
+import { useState } from "react";
+import { Check, Copy, FileText, RotateCcw, User } from "lucide-react";
 import { DuckyMascot } from "./DuckyMascot";
 import { eventDataWithoutInternalText, eventIcon, eventLabel, eventTone, extractInternalLlmText } from "./eventMeta";
 import type { RenderedChatMessage } from "./chatTypes";
@@ -171,12 +172,63 @@ export function EventRow({
   );
 }
 
+/** Copy / resend actions that fade in on hover, the way chat agents surface them. */
+function MessageActions({
+  content,
+  onResend,
+  t,
+  align,
+}: {
+  content: string;
+  onResend?: () => void;
+  t: (key: string) => string;
+  align: "start" | "end";
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard is unavailable in insecure contexts - nothing useful to show here.
+    }
+  };
+
+  return (
+    <div
+      className={`flex gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 ${
+        align === "end" ? "justify-end" : ""
+      }`}
+    >
+      <button
+        onClick={() => void copy()}
+        title={copied ? t("chat.copied") : t("chat.copy")}
+        className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+      </button>
+      {onResend && (
+        <button
+          onClick={onResend}
+          title={t("chat.resend")}
+          className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function MessageRow({
   msg,
   compactMode,
   dense,
+  onResend,
   t,
-}: RowCommonProps & { msg: RenderedChatMessage; t: (key: string) => string }) {
+}: RowCommonProps & { msg: RenderedChatMessage; onResend?: () => void; t: (key: string) => string }) {
   const metadata = msg.metadata as
     | {
         portal?: string;
@@ -187,120 +239,130 @@ export function MessageRow({
       }
     | undefined;
 
+  const isUser = msg.role === "user";
+
+  const badges = metadata && (metadata.portal || metadata.mode || metadata.agentEmoji) && (
+    <div className="mb-2 flex flex-wrap gap-1">
+      {typeof metadata.portal === "string" && <span className="chip uppercase tracking-wide">{metadata.portal}</span>}
+      {typeof metadata.mode === "string" && <span className="chip capitalize">{metadata.mode}</span>}
+      {typeof metadata.agentEmoji === "string" && <span className="chip">{metadata.agentEmoji}</span>}
+    </div>
+  );
+
+  const extras = (
+    <>
+      {metadata?.attachments && metadata.attachments.length > 0 && (() => {
+        const images = metadata.attachments.filter(isImageAttachment);
+        const documents = metadata.attachments.filter((a) => !isImageAttachment(a));
+        return (
+          <div className="mt-2 space-y-2">
+            {images.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {images.map((attachment, index) => {
+                  const src = attachmentViewSrc(attachment);
+                  const name = String(attachment.name ?? `${t("chat.fileLabel")} ${index + 1}`);
+                  if (!src) return null;
+                  return (
+                    <a key={index} href={src} target="_blank" rel="noreferrer">
+                      <img
+                        src={src}
+                        alt={name}
+                        className="max-h-[220px] max-w-[220px] rounded-lg border border-border object-cover"
+                      />
+                    </a>
+                  );
+                })}
+              </div>
+            )}
+            {documents.length > 0 && (
+              <div className="space-y-1 text-[11px]">
+                {documents.map((attachment, index) => {
+                  const name = String(attachment.name ?? `${t("chat.fileLabel")} ${index + 1}`);
+                  const href = attachmentDownloadHref(attachment);
+                  return (
+                    <div key={index} className="rounded border border-border bg-background/50 px-2 py-1">
+                      {href ? (
+                        <a
+                          href={href}
+                          className="inline-flex items-center gap-1 font-medium underline decoration-dotted hover:text-primary"
+                        >
+                          <FileText className="h-3 w-3" />
+                          {name}
+                        </a>
+                      ) : (
+                        <div className="font-medium">{name}</div>
+                      )}
+                      <div className="break-all text-muted-foreground">
+                        {String(attachment.path ?? attachment.url ?? attachment.mimeType ?? t("chat.noAttachmentLabel"))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+      {metadata?.voice && (
+        <div className="mt-2 rounded border border-border bg-background/50 px-2 py-1 text-[11px]">
+          <div className="font-medium">{t("chat.voiceInput")}</div>
+          <div className="text-muted-foreground">{String(metadata.voice.transcript ?? "")}</div>
+        </div>
+      )}
+    </>
+  );
+
   if (dense) {
     return (
       <div className={`${ANIMATE_IN} min-w-0`}>
-        <div className="mb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-gray-500">
-          {msg.role === "user" ? <User className="h-3 w-3" /> : <DuckyMascot working={false} size={14} />}
-          <span>{msg.role === "user" ? t("chat.roleYou") : t("chat.roleAgent")}</span>
+        <div className="mb-0.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+          {isUser ? <User className="h-3 w-3" /> : <DuckyMascot working={false} size={14} />}
+          <span>{isUser ? t("chat.roleYou") : t("chat.roleAgent")}</span>
         </div>
         <div
-          className={`rounded-lg border px-3 py-2 text-[13px] ${
-            msg.role === "user"
-              ? "whitespace-pre-wrap border-blue-500/40 bg-blue-500/10 text-blue-50"
-              : "border-gray-700 bg-gray-800/70 text-gray-100"
+          className={`rounded-lg px-3 py-2 text-[13px] ${
+            isUser ? "whitespace-pre-wrap bg-muted text-foreground" : "border border-border bg-card text-foreground"
           }`}
         >
-          {msg.role === "user" ? msg.content : <MarkdownMessage content={msg.content} />}
+          {isUser ? msg.content : <MarkdownMessage content={msg.content} />}
         </div>
       </div>
     );
   }
 
-  return (
-    <div className={`${ANIMATE_IN} flex gap-3 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
-      <div
-        className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-          msg.role === "user" ? "bg-blue-600" : "bg-gray-700"
-        }`}
-      >
-        {msg.role === "user" ? <User className="w-4 h-4" /> : <DuckyMascot working={false} size={24} />}
+  // The user's own turn stays a compact bubble; the agent's answer runs full width with
+  // no container, so long markdown (code fences, tables) is not squeezed into 72%.
+  if (isUser) {
+    return (
+      <div className={`${ANIMATE_IN} group flex flex-col items-end gap-1`}>
+        <div
+          className={`max-w-[85%] rounded-2xl bg-muted text-foreground ${
+            compactMode ? "px-3.5 py-2 text-[13px]" : "px-4 py-2.5 text-sm"
+          }`}
+        >
+          {badges}
+          {/* The user's text is not markdown - reinterpreting it would mangle what they typed. */}
+          <div className="whitespace-pre-wrap break-words leading-relaxed">{msg.content}</div>
+          {extras}
+        </div>
+        <MessageActions content={msg.content} onResend={onResend} t={t} align="end" />
       </div>
-      <div
-        className={`${
-          compactMode
-            ? "max-w-[94%] sm:max-w-[82%] lg:max-w-[74%] rounded-lg px-3 py-2 text-[13px]"
-            : "max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-xl px-4 py-3 text-sm"
-        } ${msg.role === "user" ? "whitespace-pre-wrap bg-blue-600 text-white" : "bg-gray-800 text-gray-100"}`}
-      >
-        {metadata && (metadata.portal || metadata.mode || metadata.agentEmoji) && (
-          <div className="mb-2 flex flex-wrap gap-1 text-[10px]">
-            {typeof metadata.portal === "string" && (
-              <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 uppercase tracking-wide">
-                {metadata.portal}
-              </span>
-            )}
-            {typeof metadata.mode === "string" && (
-              <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 capitalize">
-                {metadata.mode}
-              </span>
-            )}
-            {typeof metadata.agentEmoji === "string" && (
-              <span className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5">{metadata.agentEmoji}</span>
-            )}
-          </div>
-        )}
-        {/* Agent replies are markdown (code fences, lists, headings); the user's own text
-            is not, and reinterpreting it would mangle whatever they typed. */}
-        {msg.role === "user" ? msg.content : <MarkdownMessage content={msg.content} />}
-        {metadata?.attachments && metadata.attachments.length > 0 && (() => {
-          const images = metadata.attachments.filter(isImageAttachment);
-          const documents = metadata.attachments.filter((a) => !isImageAttachment(a));
-          return (
-            <div className="mt-2 space-y-2">
-              {images.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {images.map((attachment, index) => {
-                    const src = attachmentViewSrc(attachment);
-                    const name = String(attachment.name ?? `${t("chat.fileLabel")} ${index + 1}`);
-                    if (!src) return null;
-                    return (
-                      <a key={index} href={src} target="_blank" rel="noreferrer">
-                        <img
-                          src={src}
-                          alt={name}
-                          className="max-w-[220px] max-h-[220px] rounded-lg border border-white/10 object-cover"
-                        />
-                      </a>
-                    );
-                  })}
-                </div>
-              )}
-              {documents.length > 0 && (
-                <div className="space-y-1 text-[11px] opacity-90">
-                  {documents.map((attachment, index) => {
-                    const name = String(attachment.name ?? `${t("chat.fileLabel")} ${index + 1}`);
-                    const href = attachmentDownloadHref(attachment);
-                    return (
-                      <div key={index} className="rounded border border-white/10 bg-black/20 px-2 py-1">
-                        {href ? (
-                          <a
-                            href={href}
-                            className="font-medium inline-flex items-center gap-1 underline decoration-dotted hover:text-white"
-                          >
-                            <FileText className="w-3 h-3" />
-                            {name}
-                          </a>
-                        ) : (
-                          <div className="font-medium">{name}</div>
-                        )}
-                        <div className="opacity-80 break-all">
-                          {String(attachment.path ?? attachment.url ?? attachment.mimeType ?? t("chat.noAttachmentLabel"))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-        {metadata?.voice && (
-          <div className="mt-2 rounded border border-white/10 bg-black/20 px-2 py-1 text-[11px] opacity-90">
-            <div className="font-medium">{t("chat.voiceInput")}</div>
-            <div className="opacity-80">{String(metadata.voice.transcript ?? "")}</div>
-          </div>
-        )}
+    );
+  }
+
+  return (
+    <div className={`${ANIMATE_IN} group`}>
+      <div className="mb-1.5 flex items-center gap-2">
+        <DuckyMascot working={false} size={20} />
+        <span className="text-xs font-semibold text-muted-foreground">{t("chat.roleAgent")}</span>
+      </div>
+      <div className={`min-w-0 text-foreground ${compactMode ? "text-[13px]" : "text-sm"} leading-relaxed`}>
+        {badges}
+        <MarkdownMessage content={msg.content} />
+        {extras}
+      </div>
+      <div className="mt-1">
+        <MessageActions content={msg.content} t={t} align="start" />
       </div>
     </div>
   );
@@ -312,21 +374,24 @@ export function StreamingRow({
   t,
 }: RowCommonProps & { streamingContent: string; t: (key: string) => string }) {
   return (
-    <div className={`${ANIMATE_IN} flex gap-3`}>
-      <div className="w-8 h-8 rounded-full bg-gray-700 flex items-center justify-center shrink-0">
-        <DuckyMascot working size={26} title={t("chat.duckyWorkingTitle")} />
+    <div className={ANIMATE_IN}>
+      <div className="mb-1.5 flex items-center gap-2">
+        <DuckyMascot working size={20} title={t("chat.duckyWorkingTitle")} />
+        <span className="text-xs font-semibold text-muted-foreground">{t("chat.roleAgent")}</span>
       </div>
-      <div
-        className={`${
-          compactMode
-            ? "max-w-[94%] sm:max-w-[82%] lg:max-w-[74%] rounded-lg px-3 py-2 text-[13px]"
-            : "max-w-[90%] sm:max-w-[80%] lg:max-w-[72%] rounded-xl px-4 py-3 text-sm"
-        } bg-gray-800 text-gray-100`}
-      >
+      <div className={`min-w-0 text-foreground ${compactMode ? "text-[13px]" : "text-sm"} leading-relaxed`}>
         {streamingContent ? (
-          <MarkdownMessage content={streamingContent} />
+          <>
+            <MarkdownMessage content={streamingContent} />
+            <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-primary align-text-bottom" />
+          </>
         ) : (
-          <span className="text-gray-400 animate-pulse">{t("chat.workingLabel")}</span>
+          <span className="inline-flex items-center gap-1 text-muted-foreground">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+            <span className="ml-1.5">{t("chat.workingLabel")}</span>
+          </span>
         )}
       </div>
     </div>

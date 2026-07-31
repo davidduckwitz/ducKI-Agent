@@ -34,7 +34,12 @@ import { setupDefaultCronjobs } from "./lib/default-cronjobs.js";
 import { LlmWikiService } from "./lib/llm-wiki-service.js";
 import { createWikiTool } from "./lib/wiki-tool.js";
 import { PromptManager } from "./lib/prompt-manager.js";
-import { initToolStagingManager, initToolResponseHandler } from "./lib/tool-staging/index.js";
+import {
+	initToolStagingManager,
+	initToolResponseHandler,
+	getToolStagingManager,
+	createToolStagingTool,
+} from "./lib/tool-staging/index.js";
 import { initChatToolEventBroadcaster } from "./lib/chat-tool-events.js";
 import { wrapTools } from "./lib/tool-wrapper.js";
 import { initScreenshotStorage } from "./lib/screenshot-storage.js";
@@ -410,6 +415,8 @@ function buildAgentFactory(
 		agent.executor.registerTool(createCronjobManagementTool(db));
 		agent.executor.registerTool(createToolFactoryTool(db, agent.executor));
 		agent.executor.registerTool(createWikiTool(() => wikiServiceRef.current));
+		// Registered unwrapped on purpose: wrapTools would stage this tool's own chunks.
+		agent.executor.registerTool(createToolStagingTool(() => getToolStagingManager()));
 		for (const tool of createWorkflowTools(db)) {
 			agent.executor.registerTool(tool);
 		}
@@ -497,7 +504,13 @@ async function bootstrapDiscordGatewayBridge(
 			status.active = false;
 			status.lastError = err.message;
 			status.updatedAt = new Date().toISOString();
-			logger.warn("Discord Gateway error", { message: err.message });
+			// A fatal close needs a config change and will not heal on its own - a WARN
+			// among reconnect noise is too quiet for something that stays broken.
+			if (err.message.includes("Discord Gateway stopped")) {
+				logger.error("Discord Gateway stopped and will not reconnect", { message: err.message });
+			} else {
+				logger.warn("Discord Gateway error", { message: err.message });
+			}
 		},
 		onMessage: async (msg) => {
 			const payload = {
@@ -607,6 +620,8 @@ async function bootstrap(): Promise<void> {
 	}
 	workflowExecutor.registerTool(createCronjobManagementTool(db));
 	workflowExecutor.registerTool(createToolFactoryTool(db, workflowExecutor));
+	// Registered unwrapped on purpose: wrapTools would stage this tool's own chunks.
+	workflowExecutor.registerTool(createToolStagingTool(() => getToolStagingManager()));
 	// Boot-time only: a script-backed tools/<name>/TOOL.md added later reaches workflow/cronjob
 	// dispatch after a restart, same trade-off already accepted for MCP_SERVERS in this bootstrap.
 	for (const tool of createScriptTools(() => providerRef.current, logger.child("ScriptTools"))) {

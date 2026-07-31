@@ -40,6 +40,33 @@ function isInsideBase(basePath: string, candidatePath: string): boolean {
   return candidate === base || candidate.startsWith(`${base}/`);
 }
 
+/**
+ * Type of a path, without throwing for a missing one.
+ *
+ * Several actions used to check only `existsSync` and then hand the path straight to a
+ * file-only fs call, so pointing them at a directory surfaced a raw Node errno
+ * ("EISDIR: illegal operation on a directory, read") that tells the agent nothing about
+ * what to do instead.
+ */
+function pathKind(candidate: string): "file" | "directory" | "other" | "missing" {
+  try {
+    const stats = statSync(candidate);
+    if (stats.isDirectory()) return "directory";
+    if (stats.isFile()) return "file";
+    return "other";
+  } catch {
+    return "missing";
+  }
+}
+
+function listDirectory(dirPath: string): Array<{ name: string; type: string; path: string }> {
+  return readdirSync(dirPath, { withFileTypes: true }).map((entry) => ({
+    name: entry.name,
+    type: entry.isDirectory() ? "directory" : "file",
+    path: join(dirPath, entry.name),
+  }));
+}
+
 function validateContent(filePath: string, content: string): string | undefined {
   if (extname(filePath).toLowerCase() === ".json") {
     try {
@@ -102,21 +129,35 @@ function resolvePath(inputPath: string, options: PathOptions): string {
 
 export const filesystemTool: ToolExecutor = {
   name: "filesystem",
-  description: "Read, write, delete, list files and directories. REQUIRED: Always provide 'action' and 'path' parameters.",
+  description:
+    "Read, write, delete, list files and directories. REQUIRED: Always provide 'action' and 'path'. " +
+    "Use 'list' for directories and 'read' for files - if you are unsure what a path is, call 'stat' or 'list' first.",
   definition: {
     name: "filesystem",
-    description: "File system operations. Required parameters: action (the operation), path (file/directory path). All paths are scoped to shared-workspace for safety.",
+    description:
+      "File system operations. Required parameters: action (the operation), path (file/directory path). " +
+      "All paths are scoped to shared-workspace for safety. " +
+      "Directories and files take different actions: list/mkdir operate on directories, read/write/append/edit/copy operate on files.",
     parameters: {
       type: "object",
       properties: {
         action: {
           type: "string",
           enum: ["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy", "glob", "grep"],
-          description: "Operation to perform: read (file content), write (create/overwrite file), append (add to file), edit (replace an exact substring in an existing file - PREFER this over write for changes to existing files), delete (remove), list (directory contents), mkdir (create directory), exists (check if exists), stat (file info), move (rename/move), copy (duplicate), glob (find files by pattern under path), grep (search file contents by regex under path)",
+          description:
+            "Operation to perform: read (content of a SINGLE FILE - for a directory use list instead), " +
+            "write (create/overwrite file), append (add to file), " +
+            "edit (replace an exact substring in an existing file - PREFER this over write for changes to existing files), " +
+            "delete (remove; needs recursive:true for a directory), " +
+            "list (contents of a DIRECTORY - use this for paths like ./shared-workspace), mkdir (create directory), " +
+            "exists (check if exists), stat (file info incl. isDirectory - use when unsure), move (rename/move), " +
+            "copy (duplicate a single file), glob (find files by pattern under path), grep (search file contents by regex under path)",
         },
         path: {
           type: "string",
-          description: "REQUIRED: Full file or directory path. Examples: /shared-workspace/config.json, ./data/file.txt, data/subfolder/. Must be provided.",
+          description:
+            "REQUIRED: Full file or directory path. Examples: /shared-workspace/config.json, ./data/file.txt, data/subfolder/. " +
+            "A path without a file extension is usually a directory - use action:'list' for it. Must be provided.",
         },
         content: { type: "string", description: "Content to write (for write/append). Use actual line breaks (newlines) in multiline content - each line should be on a separate line, not escaped as \\n." },
         offset: { type: "number", description: "For read: first line to return (0-indexed, default 0)" },
@@ -182,8 +223,24 @@ export const filesystemTool: ToolExecutor = {
 
       switch (action) {
         case "read": {
-          if (!existsSync(filePath)) {
+          const kind = pathKind(filePath);
+          if (kind === "missing") {
             return { success: false, data: null, error: `File not found: ${filePath}` };
+          }
+          // Reading a directory is a plausible thing for an agent to try. Answer with the
+          // listing it was after instead of failing the turn, and name the right action.
+          if (kind === "directory") {
+            const entries = listDirectory(filePath);
+            return {
+              success: true,
+              data: {
+                path: filePath,
+                isDirectory: true,
+                entries,
+                count: entries.length,
+                note: `'${filePath}' is a directory, not a file - its contents are listed above. Use action:"list" for directories, or action:"read" on one of the entry paths.`,
+              },
+            };
           }
           const offset = (input["offset"] as number | undefined) ?? 0;
           const limit = input["limit"] as number | undefined;
@@ -246,6 +303,9 @@ export const filesystemTool: ToolExecutor = {
           if (!existsSync(dir) && !createDirs) {
             return { success: false, data: null, error: `Parent directory does not exist: ${dir}` };
           }
+          if (pathKind(filePath) === "directory") {
+            return { success: false, data: null, error: `Cannot append: '${filePath}' is a directory, not a file.` };
+          }
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, bytes: content.length } };
           }
@@ -277,8 +337,16 @@ export const filesystemTool: ToolExecutor = {
           }
           if (!oldString) return { success: false, data: null, error: "oldString required for edit" };
           if (newString === undefined) return { success: false, data: null, error: "newString required for edit" };
-          if (!existsSync(filePath)) {
+          const editKind = pathKind(filePath);
+          if (editKind === "missing") {
             return { success: false, data: null, error: `File not found: ${filePath}` };
+          }
+          if (editKind === "directory") {
+            return {
+              success: false,
+              data: null,
+              error: `Cannot edit: '${filePath}' is a directory, not a file. Use action:"list" to see its contents and edit a file inside it.`,
+            };
           }
           const original = readFileSync(filePath, "utf8");
           const occurrences = original.split(oldString).length - 1;
@@ -308,6 +376,13 @@ export const filesystemTool: ToolExecutor = {
           if (!existsSync(filePath)) {
             return { success: false, data: null, error: `Path not found: ${filePath}` };
           }
+          if (!recursive && pathKind(filePath) === "directory") {
+            return {
+              success: false,
+              data: null,
+              error: `'${filePath}' is a directory. Pass recursive:true to delete it and everything inside.`,
+            };
+          }
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, recursive } };
           }
@@ -316,16 +391,19 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "list": {
-          if (!existsSync(filePath)) {
+          const listKind = pathKind(filePath);
+          if (listKind === "missing") {
             return { success: false, data: null, error: `Directory not found: ${filePath}` };
           }
-          const entries = readdirSync(filePath, { withFileTypes: true });
-          const items = entries.map((e) => ({
-            name: e.name,
-            type: e.isDirectory() ? "directory" : "file",
-            path: join(filePath, e.name),
-          }));
-          return { success: true, data: items };
+          // The mirror image of read-on-a-directory: readdirSync would throw ENOTDIR.
+          if (listKind === "file") {
+            return {
+              success: false,
+              data: null,
+              error: `'${filePath}' is a file, not a directory. Use action:"read" to read its contents.`,
+            };
+          }
+          return { success: true, data: listDirectory(filePath) };
         }
 
         case "mkdir": {
@@ -389,8 +467,16 @@ export const filesystemTool: ToolExecutor = {
           if (!existsSync(destDir) && !createDirs) {
             return { success: false, data: null, error: `Destination directory does not exist: ${destDir}` };
           }
-          if (!existsSync(filePath)) {
+          const copyKind = pathKind(filePath);
+          if (copyKind === "missing") {
             return { success: false, data: null, error: `Source file not found: ${filePath}` };
+          }
+          if (copyKind === "directory") {
+            return {
+              success: false,
+              data: null,
+              error: `Cannot copy: '${filePath}' is a directory. Copy individual files, or use the shell tool for a recursive copy.`,
+            };
           }
           if (!overwrite && existsSync(destPath)) {
             return { success: false, data: null, error: `Destination already exists: ${destPath}` };

@@ -1,0 +1,270 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Activity, FileCode2, ListChecks, MessageSquare, PanelRightClose, Send, Sparkles } from "lucide-react";
+import { useI18n } from "../../lib/i18n";
+import { useUiStore, type CodingAgentTab } from "../../lib/uiStore";
+import { DuckyMascot } from "../chat/DuckyMascot";
+import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
+import { ToolSkillSelector } from "../chat/ToolSkillSelector";
+import type { RenderedChatMessage } from "../chat/chatTypes";
+import { PanelEmpty } from "../ui/panel";
+import { CodingPlanPanel } from "./CodingPlanPanel";
+
+export function CodingAgentPanel({
+  messages,
+  isLoading,
+  streamingContent,
+  conversationId,
+  activeFilePath,
+  disabled,
+  onSend,
+}: {
+  messages: RenderedChatMessage[];
+  isLoading: boolean;
+  streamingContent: string;
+  conversationId?: number;
+  activeFilePath: string;
+  disabled: boolean;
+  onSend: (text: string, options: { planMode: boolean; includeFile: string | null }) => void;
+}) {
+  const { t } = useI18n();
+  const { codingAgentTab, setCodingAgentTab, setCodingAgentOpen } = useUiStore();
+
+  const [input, setInput] = useState("");
+  const [planMode, setPlanMode] = useState(false);
+  const [includeFile, setIncludeFile] = useState(true);
+  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+  const [showSelector, setShowSelector] = useState(false);
+  const [selectorQuery, setSelectorQuery] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const activityBottomRef = useRef<HTMLDivElement>(null);
+
+  // Conversation and tool noise are separated so a run with 40 tool calls does not
+  // bury the two sentences the agent actually said.
+  const conversation = useMemo(() => messages.filter((msg) => msg.role !== "event"), [messages]);
+  const events = useMemo(() => messages.filter((msg) => msg.role === "event"), [messages]);
+
+  useEffect(() => {
+    setExpandedEvents({});
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (codingAgentTab === "chat") chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (codingAgentTab === "activity") activityBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streamingContent, codingAgentTab]);
+
+  const autoGrow = (element: HTMLTextAreaElement | null) => {
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
+  };
+
+  const handleInputChange = (value: string) => {
+    setInput(value);
+    autoGrow(textareaRef.current);
+    const trimmedStart = value.trimStart();
+    if (trimmedStart.startsWith("/")) {
+      const afterSlash = trimmedStart.slice(1);
+      if (!/\s/.test(afterSlash)) {
+        setSelectorQuery(afterSlash);
+        setShowSelector(true);
+        return;
+      }
+    }
+    setShowSelector(false);
+  };
+
+  const submit = () => {
+    const text = input.trim();
+    if (!text || disabled || isLoading) return;
+    onSend(text, { planMode, includeFile: includeFile && activeFilePath ? activeFilePath : null });
+    setInput("");
+    setShowSelector(false);
+    window.requestAnimationFrame(() => autoGrow(textareaRef.current));
+  };
+
+  const tabs: Array<{ key: CodingAgentTab; label: string; icon: typeof MessageSquare; count?: number }> = [
+    { key: "chat", label: t("codingPage.tabChat"), icon: MessageSquare },
+    { key: "plan", label: t("codingPage.tabPlan"), icon: ListChecks },
+    { key: "activity", label: t("codingPage.tabActivity"), icon: Activity, count: events.length },
+  ];
+
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-2 py-1.5">
+        <div className="flex min-w-0 items-center gap-1">
+          {tabs.map(({ key, label, icon: Icon, count }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setCodingAgentTab(key)}
+              className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                codingAgentTab === key
+                  ? "bg-primary/15 text-foreground ring-1 ring-primary/40"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+              {typeof count === "number" && count > 0 && (
+                <span className="rounded-full bg-muted px-1 text-[10px]">{count}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <DuckyMascot
+            working={isLoading}
+            size={22}
+            title={isLoading ? t("chat.duckyWorkingTitle") : t("chat.duckyIdleTitle")}
+          />
+          <button
+            type="button"
+            onClick={() => setCodingAgentOpen(false)}
+            title={t("codingPage.hideAgentPanel")}
+            className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+          >
+            <PanelRightClose className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {codingAgentTab === "chat" && (
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+          {conversation.length === 0 && !isLoading ? (
+            <PanelEmpty icon={<MessageSquare className="h-8 w-8" />} title={t("codingPage.noAgentOutput")} />
+          ) : (
+            conversation.map((msg) => <MessageRow key={msg.id} msg={msg} compactMode dense t={t} />)
+          )}
+          {isLoading && <StreamingRow compactMode streamingContent={streamingContent} t={t} />}
+          <div ref={chatBottomRef} />
+        </div>
+      )}
+
+      {codingAgentTab === "plan" && (
+        <CodingPlanPanel
+          messages={messages}
+          conversationId={conversationId}
+          isLoading={isLoading}
+          onRefine={(prompt) => {
+            setCodingAgentTab("chat");
+            setPlanMode(true);
+            setInput(prompt);
+            window.requestAnimationFrame(() => {
+              autoGrow(textareaRef.current);
+              textareaRef.current?.focus();
+            });
+          }}
+        />
+      )}
+
+      {codingAgentTab === "activity" && (
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
+          {events.length === 0 ? (
+            <PanelEmpty icon={<Activity className="h-8 w-8" />} title={t("codingPage.noActivity")} />
+          ) : (
+            events.map((msg) => (
+              <EventRow
+                key={msg.id}
+                msg={msg}
+                t={t}
+                expanded={expandedEvents[msg.id] ?? false}
+                onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
+              />
+            ))
+          )}
+          <div ref={activityBottomRef} />
+        </div>
+      )}
+
+      {/* Composer stays mounted on every tab - the plan tab needs it for "Verfeinern". */}
+      <div className="shrink-0 space-y-1.5 border-t border-border p-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex rounded-md border border-border p-0.5">
+            <button
+              type="button"
+              onClick={() => setPlanMode(false)}
+              className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                !planMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t("codingPage.modeAgent")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPlanMode(true)}
+              title={t("codingPage.modePlanHint")}
+              className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                planMode ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="h-3 w-3" />
+              {t("codingPage.modePlan")}
+            </button>
+          </div>
+
+          {activeFilePath && (
+            <button
+              type="button"
+              onClick={() => setIncludeFile((prev) => !prev)}
+              title={t("codingPage.contextFileHint")}
+              className={`chip max-w-[60%] transition-colors ${
+                includeFile ? "border-primary/50 bg-primary/10 text-primary" : ""
+              }`}
+            >
+              <FileCode2 className="h-3 w-3 shrink-0" />
+              <span className="truncate">{activeFilePath.split("/").pop()}</span>
+            </button>
+          )}
+        </div>
+
+        <div className="relative">
+          <textarea
+            ref={textareaRef}
+            rows={2}
+            className="input max-h-[180px] w-full resize-none py-1.5 text-sm"
+            value={input}
+            onChange={(e) => handleInputChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !showSelector) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            disabled={disabled}
+            placeholder={t("codingPage.chatPlaceholder")}
+          />
+          {showSelector && (
+            <ToolSkillSelector
+              query={selectorQuery}
+              conversationId={conversationId}
+              onInsertSkill={(slug) => {
+                setInput(`/${slug} `);
+                setShowSelector(false);
+                textareaRef.current?.focus();
+              }}
+              onToolExecuted={() => {
+                setInput("");
+                setShowSelector(false);
+              }}
+              onClose={() => setShowSelector(false)}
+            />
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate text-[10px] text-muted-foreground">{t("codingPage.sendHint")}</span>
+          <button
+            type="button"
+            className="btn-primary shrink-0 px-3 py-1 text-xs"
+            onClick={submit}
+            disabled={!input.trim() || isLoading || disabled}
+          >
+            <Send className="mr-1 inline h-3.5 w-3.5" />
+            {t("codingPage.send")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

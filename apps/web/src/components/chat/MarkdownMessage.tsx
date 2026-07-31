@@ -25,12 +25,12 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   };
 
   return (
-    <div className="group relative my-2 overflow-hidden rounded-lg border border-gray-700 bg-[#282c34]">
-      <div className="flex items-center justify-between border-b border-gray-700/70 px-3 py-1">
-        <span className="text-[10px] uppercase tracking-wide text-gray-400">{language}</span>
+    <div className="group relative my-2 overflow-hidden rounded-lg border border-border bg-[#282c34]">
+      <div className="flex items-center justify-between border-b border-border px-3 py-1">
+        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{language}</span>
         <button
           onClick={copy}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-gray-400 transition hover:bg-white/10 hover:text-gray-100"
+          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition hover:bg-white/10 hover:text-foreground"
           title="Code kopieren"
         >
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -97,7 +97,7 @@ function TextSegment({ content, keyPrefix }: { content: string; keyPrefix: strin
         if (bullet) {
           return (
             <div key={key} className="flex gap-2 pl-1">
-              <span className="select-none text-gray-500">•</span>
+              <span className="select-none text-muted-foreground">•</span>
               <span className="min-w-0 flex-1">{renderInline(bullet[1] ?? "", key)}</span>
             </div>
           );
@@ -107,7 +107,7 @@ function TextSegment({ content, keyPrefix }: { content: string; keyPrefix: strin
         if (numbered) {
           return (
             <div key={key} className="flex gap-2 pl-1">
-              <span className="select-none text-gray-500">{numbered[1]}.</span>
+              <span className="select-none text-muted-foreground">{numbered[1]}.</span>
               <span className="min-w-0 flex-1">{renderInline(numbered[2] ?? "", key)}</span>
             </div>
           );

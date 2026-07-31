@@ -33,7 +33,7 @@ export function eventTone(eventType?: AgentEventType, eventData?: Record<string,
   if (eventType === "tool_call") return "border-amber-500/30 bg-amber-500/[0.07] text-amber-100";
   if (eventType === "tool_result") return "border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-100";
   if (eventType === "plan") return "border-indigo-500/30 bg-indigo-500/10 text-indigo-100";
-  return "border-gray-600/40 bg-gray-500/[0.07] text-gray-300";
+  return "border-border bg-muted-foreground/[0.07] text-foreground/80";
 }
 
 export function eventLabel(t: (key: string) => string, eventType?: AgentEventType) {

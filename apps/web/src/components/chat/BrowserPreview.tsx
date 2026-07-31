@@ -159,10 +159,10 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
             className="w-full h-full object-contain"
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-gray-500">
+          <div className="w-full h-full flex items-center justify-center text-muted-foreground">
             <div className="text-center">
               <div className="text-sm mb-2">Browser: {data.url || "Loading..."}</div>
-              <div className="text-xs text-gray-600">Screenshot wird geladen...</div>
+              <div className="text-xs text-muted-foreground/70">Screenshot wird geladen...</div>
             </div>
           </div>
         )}
@@ -244,19 +244,19 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
       <div className="flex flex-col max-w-6xl max-h-screen w-full mx-4">
         {/* Modal Header */}
-        <div className="flex items-center justify-between gap-2 bg-gray-900 px-4 py-3 border-b border-gray-800 rounded-t-lg">
+        <div className="flex items-center justify-between gap-2 bg-card px-4 py-3 border-b border-border rounded-t-lg">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
             <span className="text-sm font-medium text-cyan-200">
               Browser {data.isStreaming ? "Live Stream" : "Preview"}
             </span>
             {data.url && (
-              <span className="text-sm text-gray-400 truncate">{data.url}</span>
+              <span className="text-sm text-muted-foreground truncate">{data.url}</span>
             )}
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded hover:bg-gray-800 text-gray-400 transition"
+            className="p-2 rounded hover:bg-accent text-muted-foreground transition"
           >
             <X className="w-5 h-5" />
           </button>
@@ -271,24 +271,24 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
               className="w-full h-full object-contain"
             />
           ) : (
-            <div className="flex items-center justify-center h-full text-gray-500">
+            <div className="flex items-center justify-center h-full text-muted-foreground">
               No screenshot available
             </div>
           )}
         </div>
 
         {/* Modal Footer */}
-        <div className="flex items-center justify-end gap-2 bg-gray-900 px-4 py-3 border-t border-gray-800 rounded-b-lg">
+        <div className="flex items-center justify-end gap-2 bg-card px-4 py-3 border-t border-border rounded-b-lg">
           <button
             onClick={handleScreenshot}
-            className="flex items-center gap-2 px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-sm text-gray-200 transition"
+            className="flex items-center gap-2 px-3 py-1.5 rounded bg-muted hover:bg-accent text-sm text-foreground transition"
           >
             <Download className="w-4 h-4" />
             Screenshot
           </button>
           <button
             onClick={handleExportHtml}
-            className="flex items-center gap-2 px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-sm text-gray-200 transition"
+            className="flex items-center gap-2 px-3 py-1.5 rounded bg-muted hover:bg-accent text-sm text-foreground transition"
           >
             <Code2 className="w-4 h-4" />
             Export HTML

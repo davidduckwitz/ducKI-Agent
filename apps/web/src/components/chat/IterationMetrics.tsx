@@ -59,26 +59,26 @@ export function IterationMetrics({
         <div className="flex items-center gap-4 flex-1">
           <div className="flex items-center gap-1">
             <Zap className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-gray-400">Iteration</span>
+            <span className="text-muted-foreground">Iteration</span>
             <span className="font-semibold text-amber-300">{latestMetric.iterationNumber}</span>
           </div>
 
           {latestMetric.inputTokens && (
-            <div className="flex items-center gap-1 text-gray-400">
+            <div className="flex items-center gap-1 text-muted-foreground">
               <span>In:</span>
               <span className="font-mono text-amber-300">{latestMetric.inputTokens}</span>
             </div>
           )}
 
           {latestMetric.outputTokens && (
-            <div className="flex items-center gap-1 text-gray-400">
+            <div className="flex items-center gap-1 text-muted-foreground">
               <span>Out:</span>
               <span className="font-mono text-amber-300">{latestMetric.outputTokens}</span>
             </div>
           )}
 
           {latestMetric.totalTokens && (
-            <div className="flex items-center gap-1 text-gray-400 font-semibold">
+            <div className="flex items-center gap-1 text-muted-foreground font-semibold">
               <span>Total:</span>
               <span className="text-amber-300">{latestMetric.totalTokens}</span>
             </div>
@@ -86,15 +86,15 @@ export function IterationMetrics({
         </div>
 
         {/* Summary stats */}
-        <div className="flex items-center gap-3 text-gray-500 border-l border-amber-800/40 pl-3">
+        <div className="flex items-center gap-3 text-muted-foreground border-l border-amber-800/40 pl-3">
           <div className="flex items-center gap-1">
             <TrendingUp className="w-3 h-3" />
             <span className="text-[11px]">{totalTokensUsed} total</span>
           </div>
           <div className="text-[11px]">
-            <span className="text-gray-600">avg:</span>
+            <span className="text-muted-foreground/70">avg:</span>
             <span className="text-amber-300 ml-1 font-mono">{avgTokensPerIteration}</span>
-            <span className="text-gray-600">/iter</span>
+            <span className="text-muted-foreground/70">/iter</span>
           </div>
         </div>
       </div>

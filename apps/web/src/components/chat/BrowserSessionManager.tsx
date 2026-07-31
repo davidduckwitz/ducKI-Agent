@@ -29,7 +29,7 @@ export function BrowserSessionManager({ onSessionSelect }: BrowserSessionManager
   }
 
   return (
-    <div className="space-y-2 bg-gray-900/30 rounded-lg p-3 border border-blue-500/20">
+    <div className="space-y-2 bg-card/30 rounded-lg p-3 border border-blue-500/20">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-blue-300 flex items-center gap-2">
           🌐 Browser Sessions ({browserSessions.length})
@@ -52,18 +52,18 @@ export function BrowserSessionManager({ onSessionSelect }: BrowserSessionManager
                 <span className={`inline-flex px-2 py-0.5 rounded text-xs ${
                   session.isActive
                     ? "bg-green-500/20 text-green-300"
-                    : "bg-gray-500/20 text-gray-300"
+                    : "bg-muted text-foreground/80"
                 }`}>
                   {session.isActive ? "● Active" : "○ Inactive"}
                 </span>
               </div>
-              <div className="text-xs text-gray-400">
+              <div className="text-xs text-muted-foreground">
                 {new Date(session.lastUsed).toLocaleTimeString()}
               </div>
             </button>
 
             {/* Session URL Preview */}
-            <div className="px-2 py-1 flex items-center gap-1 bg-black/20 text-xs text-gray-300 truncate">
+            <div className="px-2 py-1 flex items-center gap-1 bg-black/20 text-xs text-foreground/80 truncate">
               <span className="truncate">{session.url}</span>
             </div>
 
@@ -74,12 +74,12 @@ export function BrowserSessionManager({ onSessionSelect }: BrowserSessionManager
                 {session.cookies && session.cookies.length > 0 && (
                   <div>
                     <div className="text-xs font-semibold text-blue-200 mb-1">Cookies ({session.cookies.length}):</div>
-                    <div className="max-h-20 overflow-y-auto bg-black/30 rounded p-1 text-xs font-mono text-gray-400 space-y-0.5">
+                    <div className="max-h-20 overflow-y-auto bg-black/30 rounded p-1 text-xs font-mono text-muted-foreground space-y-0.5">
                       {session.cookies.slice(0, 5).map((cookie, idx) => (
                         <div key={idx} className="truncate">{cookie}</div>
                       ))}
                       {session.cookies.length > 5 && (
-                        <div className="text-gray-500">+{session.cookies.length - 5} more</div>
+                        <div className="text-muted-foreground">+{session.cookies.length - 5} more</div>
                       )}
                     </div>
                   </div>
@@ -130,7 +130,7 @@ export function BrowserSessionManager({ onSessionSelect }: BrowserSessionManager
       </div>
 
       {/* Info */}
-      <div className="text-xs text-gray-400 pt-2 border-t border-blue-500/10">
+      <div className="text-xs text-muted-foreground pt-2 border-t border-blue-500/10">
         💡 Agent can use these persistent sessions to continue research without reopening
       </div>
     </div>

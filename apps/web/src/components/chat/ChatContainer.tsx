@@ -1,16 +1,18 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Trash2, Paperclip, Square, Image as ImageIcon, X, PanelLeft, Settings } from "lucide-react";
+import { ArrowDown, Plus, Trash2, X } from "lucide-react";
 import { useAppStore, type ChatAttachment } from "../../lib/store";
+import { useUiStore } from "../../lib/uiStore";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
-import { DuckyMascot } from "./DuckyMascot";
 import { DynamicCharacter } from "./characters/DynamicCharacter";
 import { ToolResponseDock } from "./ToolResponseCard";
 import { BrowserSessionManager } from "./BrowserSessionManager";
 import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
-import { ToolSkillSelector } from "./ToolSkillSelector";
+import { ChatHeader } from "./ChatHeader";
+import { ChatComposer } from "./ChatComposer";
+import { ChatWelcome } from "./ChatWelcome";
 import { PlanExecutionPanel, type Plan, type StepStatus } from "./PlanExecutionPanel";
 import { BrowserPreviewModal } from "./BrowserPreview";
 import { ToolEventsDisplay } from "./ToolEventsDisplay";
@@ -96,17 +98,19 @@ export function ChatContainer() {
     showToolDock,
     selectedCharacterId,
     characterCustomizations,
+    animationStyle,
     socket,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [analyzeImages, setAnalyzeImages] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [showConversationList, setShowConversationList] = useState(false);
+  // The sidebar now carries the recent + pinned chats, so this column starts folded
+  // away on every breakpoint. It stays available for search / infinite scroll / delete.
+  const { chatListOpen, toggleChatList } = useUiStore();
   const [compactMode, setCompactMode] = useState(false);
   const [planMode, setPlanMode] = useState(false);
-  const [showSelector, setShowSelector] = useState(false);
-  const [selectorQuery, setSelectorQuery] = useState("");
+  const [showScrollDown, setShowScrollDown] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [showPlanPanel, setShowPlanPanel] = useState(false);
   const [currentPlan, setCurrentPlan] = useState<Plan | null | undefined>(null);
@@ -119,7 +123,6 @@ export function ChatContainer() {
   const [showSettings, setShowSettings] = useState(false);
   const [toolSummaries, setToolSummaries] = useState<ToolSummaryItem[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
   const conversationsViewportRef = useRef<HTMLElement>(null);
   const pendingPrependHeightRef = useRef<number | null>(null);
@@ -344,6 +347,7 @@ export function ChatContainer() {
 
     const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     stickToBottomRef.current = distanceToBottom < 120;
+    setShowScrollDown(distanceToBottom > 400);
 
     if (viewport.scrollTop > 120) return;
     if (!selectedConversationMessages.hasNextPage || selectedConversationMessages.isFetchingNextPage) return;
@@ -413,37 +417,8 @@ export function ChatContainer() {
     setAnalyzeImages(false);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape" && showSelector) {
-      setShowSelector(false);
-      return;
-    }
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
-  // "/" triggers the tool/skill selector dropdown while the leading token (before the
-  // first whitespace) is still being typed - mirrors how the agent itself only treats a
-  // leading "/slug" as a skill request (extractRequestedSkillSlugs in agent.ts).
-  const handleInputChange = (value: string) => {
-    setInput(value);
-    const trimmedStart = value.trimStart();
-    if (trimmedStart.startsWith("/")) {
-      const afterSlash = trimmedStart.slice(1);
-      if (!/\s/.test(afterSlash)) {
-        setSelectorQuery(afterSlash);
-        setShowSelector(true);
-        return;
-      }
-    }
-    setShowSelector(false);
-  };
-
   const handleInsertSkill = (slug: string) => {
     setInput(`/${slug} `);
-    setShowSelector(false);
   };
 
   const handleToolExecuted = (result: { toolName: string; success: boolean; data: unknown; error?: string }) => {
@@ -462,7 +437,6 @@ export function ChatContainer() {
       },
     ]);
     setInput("");
-    setShowSelector(false);
   };
 
   const handlePlanRefinement = async () => {
@@ -863,15 +837,17 @@ export function ChatContainer() {
     },
   });
 
+  const contentWidth = compactMode ? "max-w-3xl" : "max-w-4xl";
+
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
       <aside
         ref={conversationsViewportRef}
         onScroll={handleConversationsScroll}
-        className={`${showConversationList ? "block" : "hidden"} lg:block ${compactMode ? "lg:w-72" : "lg:w-80"} w-full border-b lg:border-b-0 lg:border-r border-gray-800 p-3 overflow-y-auto space-y-2 max-h-[42vh] lg:max-h-none shrink-0`}
+        className={`${chatListOpen ? "block" : "hidden"} ${compactMode ? "lg:w-72" : "lg:w-80"} w-full shrink-0 space-y-1 overflow-y-auto border-b border-border bg-card/40 p-2 max-h-[42vh] lg:max-h-none lg:border-b-0 lg:border-r`}
       >
-        <div className="flex items-center justify-between mb-2">
-          <h2 className="text-sm font-semibold">{t("chat.chats")}</h2>
+        <div className="flex items-center justify-between gap-2 px-1 py-1">
+          <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{t("chat.chats")}</h2>
           <button
             onClick={() => {
               // Not clearChat(): that only wipes the visible messages and leaves the old
@@ -880,8 +856,9 @@ export function ChatContainer() {
               // a fresh one.
               setConversationId(undefined);
             }}
-            className="text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
           >
+            <Plus className="h-3 w-3" />
             {t("chat.new")}
           </button>
         </div>
@@ -890,314 +867,212 @@ export function ChatContainer() {
           <div
             key={conv.id}
             ref={conversationId === conv.id ? activeConversationRef : null}
-            className={`w-full rounded-lg border px-3 py-2 transition ${
+            className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 transition ${
               conversationId === conv.id
-                ? "border-blue-500 bg-blue-500/10"
-                : "border-gray-800 bg-gray-900 hover:border-gray-700"
+                ? "bg-primary/15 ring-1 ring-primary/40"
+                : "hover:bg-accent"
             }`}
           >
-            <div className="flex items-start justify-between gap-2">
-              <button
-                onClick={() => {
-                  setConversationId(conv.id);
-                }}
-                className="min-w-0 text-left flex-1"
-              >
-                <div className="text-sm font-medium truncate">{conv.name}</div>
-                <div className="text-xs text-gray-400 mt-1">
-                  {new Date(conv.updatedAt).toLocaleString()}
-                </div>
-              </button>
-              <button
-                className="text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-red-300"
-                onClick={() => {
-                  const confirmed = window.confirm(`Chat '${conv.name}' loeschen?`);
-                  if (!confirmed) return;
-                  deleteConversation.mutate(conv.id);
-                }}
-                disabled={deleteConversation.isPending}
-                title={t("common.delete")}
-              >
-                {t("common.delete")}
-              </button>
-            </div>
+            <button onClick={() => setConversationId(conv.id)} className="min-w-0 flex-1 text-left" title={conv.name}>
+              <div className="truncate text-xs font-medium">{conv.name}</div>
+              <div className="text-[10px] text-muted-foreground">{new Date(conv.updatedAt).toLocaleString()}</div>
+            </button>
+            <button
+              className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:bg-background hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+              onClick={() => {
+                if (!window.confirm(`${t("layout.sidebar.deleteChatConfirm")}\n\n${conv.name}`)) return;
+                deleteConversation.mutate(conv.id);
+              }}
+              disabled={deleteConversation.isPending}
+              title={t("common.delete")}
+            >
+              <Trash2 className="h-3 w-3" />
+            </button>
           </div>
         ))}
 
-        {conversations.length === 0 && (
-          <div className="text-xs text-gray-500 py-4">{t("chat.noSaved")}</div>
-        )}
+        {conversations.length === 0 && <div className="px-2 py-4 text-xs text-muted-foreground">{t("chat.noSaved")}</div>}
         {conversationsQuery.isFetchingNextPage && (
-          <div className="text-xs text-gray-500 py-2">{t("chat.loadingMoreConversations")}</div>
+          <div className="px-2 py-2 text-xs text-muted-foreground">{t("chat.loadingMoreConversations")}</div>
         )}
       </aside>
 
-      <div className="flex flex-col h-full min-h-0 flex-1 min-w-0">
-      {/* Header */}
-      <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <button
-            onClick={() => setShowConversationList((prev) => !prev)}
-            className="btn-secondary lg:hidden flex items-center gap-2"
-          >
-            <PanelLeft className="w-4 h-4" />
-            {t("chat.chats")}
-          </button>
-          <h1 className="font-semibold truncate">Chat</h1>
-          <DuckyMascot
-            working={isLoading}
-            connected={connected}
-            size={28}
-            title={isLoading ? t("chat.duckyWorkingTitle") : t("chat.duckyIdleTitle")}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          {totalTokens > 0 && (
-            <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
-              <span className="text-base">⚡</span>
-              <span>{totalTokens.toLocaleString()}</span>
-            </div>
-          )}
-          <button
-            onClick={() => setPlanMode((prev) => !prev)}
-            className={`text-sm px-3 py-1.5 rounded-lg border transition ${
-              planMode
-                ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-200"
-                : "bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-600"
-            }`}
-            title="Plan-Modus: nur einen Plan erstellen, nichts ausfuehren"
-          >
-            {planMode ? "Plan (aktiv)" : "Plan"}
-          </button>
-          <button
-            onClick={() => setCompactMode((prev) => !prev)}
-            className="btn-secondary text-sm"
-          >
-            {compactMode ? t("chat.comfort") : t("chat.compact")}
-          </button>
-          {isLoading && (
-            <button onClick={stopMessage} className="btn-secondary flex items-center gap-2 text-sm">
-              <Square className="w-4 h-4" />
-              Stop
-            </button>
-          )}
-          <button
-            onClick={() => {
-              if (conversationId) {
-                clearMessages.mutate(conversationId);
-              } else {
-                clearChat();
-              }
-            }}
-            className="btn-secondary flex items-center gap-2 text-sm"
-          >
-            <Trash2 className="w-4 h-4" />
-            {t("chat.clear")}
-          </button>
-          <button
-            onClick={() => setShowSettings((prev) => !prev)}
-            className="btn-secondary flex items-center gap-2 text-sm"
-            title="Animation settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        <ChatHeader
+          title={conversations.find((c) => c.id === conversationId)?.name}
+          conversationId={conversationId}
+          chatListOpen={chatListOpen}
+          onToggleChatList={toggleChatList}
+          compactMode={compactMode}
+          onToggleCompact={() => setCompactMode((prev) => !prev)}
+          onClear={() => {
+            if (conversationId) clearMessages.mutate(conversationId);
+            else clearChat();
+          }}
+          onOpenSettings={() => setShowSettings((prev) => !prev)}
+          isLoading={isLoading}
+          connected={connected}
+        />
 
-      {/* Settings Panel */}
-      {showSettings && (
-        <div className="p-4 border-b border-gray-800 bg-gray-900/50 space-y-4">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold">⚙️ Settings</h3>
-            <button
-              onClick={() => setShowSettings(false)}
-              className="text-gray-400 hover:text-gray-200"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="max-w-4xl mx-auto space-y-4">
-            {/* Duck Animation */}
-            <div>
-              <p className="text-xs font-semibold mb-2">🦆 Duck Animation</p>
-              <div className="flex gap-2">
-                {(['matrix', 'neon', 'minimal'] as const).map((style) => (
-                  <button
-                    key={style}
-                    onClick={() => useAppStore.setState({ animationStyle: style })}
-                    className={`px-3 py-1.5 text-xs rounded-md border transition ${
-                      useAppStore.getState().animationStyle === style
-                        ? 'border-blue-500 bg-blue-500/20 text-blue-200'
-                        : 'border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600'
-                    }`}
-                  >
-                    {style.charAt(0).toUpperCase() + style.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Browser Sessions */}
-            <div className="border-t border-gray-700 pt-4">
-              <BrowserSessionManager />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Messages - Newest at bottom, oldest at top */}
-      <div
-        ref={messagesViewportRef}
-        onScroll={handleMessagesScroll}
-        className={`flex-1 min-h-0 overflow-y-auto ${compactMode ? "px-2 py-2 sm:px-3" : "px-3 py-4 sm:px-4"}`}
-      >
-        <div className={`mx-auto w-full ${compactMode ? "max-w-3xl space-y-2" : "max-w-4xl space-y-4"}`}>
-          {selectedConversationMessages.isFetchingNextPage && (
-            <div className="text-center text-xs text-gray-500">{t("chat.loadingOlderMessages")}</div>
-          )}
-
-          {messages.length === 0 && (
-            <div className="text-center text-gray-500 py-20">
-              <DynamicCharacter isWorking={false} size={56} characterId={selectedCharacterId} customConfig={characterCustomizations} />
-              <p className="mt-4">{t("chat.startConversation")}</p>
-            </div>
-          )}
-
-          {/* Messages in chronological order (oldest first, newest last) */}
-          {messages.map((msg) =>
-            msg.role === "event" ? (
-              <EventRow
-                key={msg.id}
-                msg={msg}
-                t={t}
-                expanded={expandedEvents[msg.id] ?? defaultExpandedForType(msg.eventType)}
-                onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
-              />
-            ) : (
-              <MessageRow key={msg.id} msg={msg} compactMode={compactMode} t={t} />
-            )
-          )}
-
-          {/* Iteration Metrics - Real-time token tracking */}
-          {conversationId && socket && <IterationMetrics conversationId={conversationId.toString()} socket={socket} />}
-
-          {/* Tool Execution Summaries - rendered as chat events when complete */}
-          {toolSummaries.map((summary) => (
-            <div key={summary.id} className="pt-2">
-              <ToolEventSummary
-                events={summary.events}
-                onDismiss={() => {
-                  setToolSummaries((prev) => prev.filter((s) => s.id !== summary.id));
-                }}
-              />
-            </div>
-          ))}
-
-          {/* Streaming with Dynamic Character at bottom */}
-          {isLoading && (
-            <div className="flex gap-3 items-end pt-2">
-              <div className="flex-1">
-                <StreamingRow compactMode={compactMode} streamingContent={streamingContent} t={t} />
-              </div>
-              <div className="shrink-0">
-                <DynamicCharacter isWorking={true} size={64} characterId={selectedCharacterId} customConfig={characterCustomizations} />
-              </div>
-            </div>
-          )}
-
-          <div ref={bottomRef} />
-        </div>
-      </div>
-
-      {/* Tool Events Display - Real-time progress at bottom */}
-      {conversationId && socket && (
-        <div className={`${compactMode ? "px-2 py-2 sm:px-3" : "px-3 py-3 sm:px-4"} border-t border-gray-800 bg-gray-900/50`}>
-          <div className={`mx-auto w-full ${compactMode ? "max-w-3xl" : "max-w-4xl"}`}>
-            <ToolEventsDisplay
-              conversationId={conversationId.toString()}
-              socket={socket}
-              onToolExecutionComplete={(summary) => {
-                setToolSummaries((prev) => [...prev, { id: summary.id, events: summary.events }]);
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Input */}
-      <div className={`${compactMode ? "p-2 sm:p-3" : "p-3 sm:p-4"} border-t border-gray-800 bg-gray-950`}>
-        <div className={`mx-auto w-full ${compactMode ? "max-w-3xl" : "max-w-4xl"}`}>
-        {attachedFiles.length > 0 && (
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            {attachedFiles.map((file, idx) => (
-              <span key={`${file.name}-${idx}`} className="inline-flex items-center gap-2 px-2 py-1 rounded bg-gray-800 text-xs text-gray-200 border border-gray-700">
-                {file.name}
+        {showSettings && (
+          <div className="shrink-0 border-b border-border bg-card/50 px-4 py-3">
+            <div className={`mx-auto w-full ${contentWidth} space-y-4`}>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">{t("chat.chatSettings")}</h3>
                 <button
-                  onClick={() => setAttachedFiles((prev) => prev.filter((_, i) => i !== idx))}
-                  className="text-gray-400 hover:text-white"
+                  onClick={() => setShowSettings(false)}
+                  className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="h-4 w-4" />
                 </button>
-              </span>
-            ))}
-            <button
-              onClick={() => setAnalyzeImages((v) => !v)}
-              className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs border ${analyzeImages ? "bg-blue-500/20 border-blue-500/40 text-blue-200" : "bg-gray-800 border-gray-700 text-gray-300"}`}
-            >
-              <ImageIcon className="w-3 h-3" />
-              {analyzeImages ? t("chat.imageAnalysisOn") : t("chat.imageAnalysisOff")}
-            </button>
+              </div>
+
+              <div>
+                <p className="mb-2 text-xs font-medium text-muted-foreground">{t("settings.duckaAnimation")}</p>
+                <div className="flex gap-1.5">
+                  {(["matrix", "neon", "minimal"] as const).map((style) => (
+                    <button
+                      key={style}
+                      onClick={() => useAppStore.setState({ animationStyle: style })}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${
+                        animationStyle === style
+                          ? "bg-primary text-primary-foreground"
+                          : "border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                      }`}
+                    >
+                      {style}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="border-t border-border pt-4">
+                <BrowserSessionManager />
+              </div>
+            </div>
           </div>
         )}
 
-        <div className="relative flex gap-2">
-          {showSelector && (
-            <ToolSkillSelector
-              query={selectorQuery}
+        {/* Messages - oldest at top, newest at bottom */}
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={messagesViewportRef}
+            onScroll={handleMessagesScroll}
+            className="h-full overflow-y-auto px-3 py-4 sm:px-6"
+          >
+            <div className={`mx-auto w-full ${contentWidth} ${compactMode ? "space-y-4" : "space-y-6"}`}>
+              {selectedConversationMessages.isFetchingNextPage && (
+                <div className="text-center text-xs text-muted-foreground">{t("chat.loadingOlderMessages")}</div>
+              )}
+
+              {messages.length === 0 && !isLoading && (
+                <ChatWelcome
+                  characterId={selectedCharacterId}
+                  characterCustomizations={characterCustomizations}
+                  onPick={(prompt) => setInput(prompt)}
+                />
+              )}
+
+              {messages.map((msg) =>
+                msg.role === "event" ? (
+                  <EventRow
+                    key={msg.id}
+                    msg={msg}
+                    t={t}
+                    expanded={expandedEvents[msg.id] ?? defaultExpandedForType(msg.eventType)}
+                    onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
+                  />
+                ) : (
+                  <MessageRow
+                    key={msg.id}
+                    msg={msg}
+                    compactMode={compactMode}
+                    onResend={msg.role === "user" ? () => setInput(msg.content) : undefined}
+                    t={t}
+                  />
+                )
+              )}
+
+              {/* Real-time token tracking */}
+              {conversationId && socket && <IterationMetrics conversationId={conversationId.toString()} socket={socket} />}
+
+              {/* Tool execution summaries, rendered as chat events once complete */}
+              {toolSummaries.map((summary) => (
+                <ToolEventSummary
+                  key={summary.id}
+                  events={summary.events}
+                  onDismiss={() => setToolSummaries((prev) => prev.filter((s) => s.id !== summary.id))}
+                />
+              ))}
+
+              {isLoading && (
+                <div className="flex items-end gap-3">
+                  <div className="min-w-0 flex-1">
+                    <StreamingRow compactMode={compactMode} streamingContent={streamingContent} t={t} />
+                  </div>
+                  <div className="hidden shrink-0 sm:block">
+                    <DynamicCharacter
+                      isWorking
+                      size={56}
+                      characterId={selectedCharacterId}
+                      customConfig={characterCustomizations}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div ref={bottomRef} />
+            </div>
+          </div>
+
+          {showScrollDown && (
+            <button
+              onClick={() => {
+                stickToBottomRef.current = true;
+                bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+              }}
+              title={t("chat.scrollToBottom")}
+              className="absolute bottom-3 left-1/2 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-card shadow-lg transition hover:bg-accent"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Composer area - live tool progress sits directly above the input */}
+        <div className="shrink-0 px-3 pb-3 sm:px-6">
+          <div className={`mx-auto w-full ${contentWidth} space-y-2`}>
+            {conversationId && socket && (
+              <ToolEventsDisplay
+                conversationId={conversationId.toString()}
+                socket={socket}
+                onToolExecutionComplete={(summary) => {
+                  setToolSummaries((prev) => [...prev, { id: summary.id, events: summary.events }]);
+                }}
+              />
+            )}
+
+            <ChatComposer
+              value={input}
+              onChange={setInput}
+              onSend={() => void handleSend()}
+              onStop={stopMessage}
+              isLoading={isLoading}
+              uploading={uploading}
+              attachedFiles={attachedFiles}
+              onAttachFiles={(files) => setAttachedFiles((prev) => [...prev, ...files])}
+              onRemoveFile={(index) => setAttachedFiles((prev) => prev.filter((_, i) => i !== index))}
+              analyzeImages={analyzeImages}
+              onToggleAnalyzeImages={() => setAnalyzeImages((v) => !v)}
+              planMode={planMode}
+              onTogglePlanMode={() => setPlanMode((prev) => !prev)}
               conversationId={conversationId}
               onInsertSkill={handleInsertSkill}
               onToolExecuted={handleToolExecuted}
-              onClose={() => setShowSelector(false)}
+              totalTokens={totalTokens}
             />
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              const files = Array.from(e.target.files ?? []);
-              if (files.length > 0) setAttachedFiles((prev) => [...prev, ...files]);
-              e.currentTarget.value = "";
-            }}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="btn-secondary flex items-center gap-2"
-            title={t("chat.attachFile")}
-          >
-            <Paperclip className="w-4 h-4" />
-          </button>
-
-          <textarea
-            value={input}
-            onChange={(e) => handleInputChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={t("chat.inputPlaceholder")}
-            rows={1}
-            className={`input flex-1 resize-none min-h-[40px] ${compactMode ? "max-h-24 sm:max-h-32" : "max-h-28 sm:max-h-40"}`}
-            style={{ height: "auto" }}
-          />
-          <button
-            onClick={handleSend}
-            disabled={(!input.trim() && attachedFiles.length === 0) || isLoading || uploading}
-            className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+          </div>
         </div>
-        </div>
-      </div>
       </div>
 
       {/* Plan Execution Panel */}

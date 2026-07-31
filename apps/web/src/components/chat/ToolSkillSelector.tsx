@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, CornerDownLeft, Loader2, Play, Search, Sparkles, Wrench, X } from "lucide-react";
 import { api } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 
 interface ToolItem {
   kind: "tool";
@@ -16,6 +18,7 @@ interface SkillItem {
 }
 
 type SelectorItem = ToolItem | SkillItem;
+export type SelectorMode = "all" | "skills" | "tools";
 
 interface PropertySchema {
   type?: string;
@@ -34,7 +37,9 @@ function requiredOf(parameters?: Record<string, unknown>): string[] {
 }
 
 interface ToolSkillSelectorProps {
-  query: string;
+  /** Seeds the search box - e.g. whatever was typed after "/" in the composer. */
+  query?: string;
+  mode?: SelectorMode;
   conversationId?: number;
   onInsertSkill: (slug: string) => void;
   onToolExecuted: (result: { toolName: string; success: boolean; data: unknown; error?: string }) => void;
@@ -42,41 +47,81 @@ interface ToolSkillSelectorProps {
 }
 
 /**
- * "/" chat selector: lets the user pick a skill (inserted as the "/slug " prefix the
- * agent already parses via extractRequestedSkillSlugs) or a tool (run immediately via
- * POST /tools/execute -> Agent.executeToolDirect, bypassing the LLM). Tools/skills are
- * the same lists shown in Settings, just filtered live against the typed query.
+ * Command palette for skills and tools. A skill is inserted as the "/slug " prefix the
+ * agent already parses (extractRequestedSkillSlugs); a tool runs immediately via
+ * POST /tools/execute -> Agent.executeToolDirect, bypassing the LLM.
+ *
+ * The palette owns its own search field and keyboard focus. Syncing a second input with
+ * the composer's textarea was the alternative and it desynchronises the moment the user
+ * edits either side.
  */
-export function ToolSkillSelector({ query, conversationId, onInsertSkill, onToolExecuted, onClose }: ToolSkillSelectorProps) {
+export function ToolSkillSelector({
+  query = "",
+  mode = "all",
+  conversationId,
+  onInsertSkill,
+  onToolExecuted,
+  onClose,
+}: ToolSkillSelectorProps) {
+  const { t } = useI18n();
   const toolsQuery = useQuery({ queryKey: ["selector", "tools"], queryFn: api.tools.list, staleTime: 60_000 });
   const skillsQuery = useQuery({ queryKey: ["selector", "skills"], queryFn: api.skills.list, staleTime: 60_000 });
+
+  const [search, setSearch] = useState(query);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [activeTool, setActiveTool] = useState<ToolItem | null>(null);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | undefined>();
+  const [useFreetextMode, setUseFreetextMode] = useState(false);
+  const [freetextInput, setFreetextInput] = useState("");
+
+  const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
 
   const items: SelectorItem[] = useMemo(() => {
-    const tools: ToolItem[] = (toolsQuery.data ?? [])
-      .filter((tool) => tool.enabled)
-      .map((tool) => ({ kind: "tool", name: tool.name, description: tool.description, parameters: tool.parameters }));
-    const skills: SkillItem[] = (skillsQuery.data ?? []).map((skill) => ({
-      kind: "skill",
-      name: skill.slug,
-      description: skill.description ?? skill.name,
-    }));
-    return [...tools, ...skills];
-  }, [toolsQuery.data, skillsQuery.data]);
+    const tools: ToolItem[] =
+      mode === "skills"
+        ? []
+        : (toolsQuery.data ?? [])
+            .filter((tool) => tool.enabled)
+            .map((tool) => ({
+              kind: "tool",
+              name: tool.name,
+              description: tool.description,
+              parameters: tool.parameters,
+            }));
+    const skills: SkillItem[] =
+      mode === "tools"
+        ? []
+        : (skillsQuery.data ?? []).map((skill) => ({
+            kind: "skill",
+            name: skill.slug,
+            description: skill.description ?? skill.name,
+          }));
+    return [...skills, ...tools];
+  }, [toolsQuery.data, skillsQuery.data, mode]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = search.trim().toLowerCase();
     const matches = q
       ? items.filter((item) => item.name.toLowerCase().includes(q) || item.description.toLowerCase().includes(q))
       : items;
-    return matches.slice(0, 30);
-  }, [items, query]);
+    return matches.slice(0, 40);
+  }, [items, search]);
 
-  const [useFreetextMode, setUseFreetextMode] = useState(false);
-  const [freetextInput, setFreetextInput] = useState("");
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [search, mode]);
+
+  // Keep the highlighted row inside the scroll box while arrowing through the list.
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
 
   const handleSelect = (item: SelectorItem) => {
     if (item.kind === "skill") {
@@ -99,7 +144,7 @@ export function ToolSkillSelector({ query, conversationId, onInsertSkill, onTool
 
       if (useFreetextMode) {
         if (!freetextInput.trim()) {
-          setRunError("Bitte geben Sie eine Anweisung ein");
+          setRunError(t("chat.palette.instructionRequired"));
           setRunning(false);
           return;
         }
@@ -135,127 +180,248 @@ export function ToolSkillSelector({ query, conversationId, onInsertSkill, onTool
     }
   };
 
+  const shell =
+    "absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-border bg-popover shadow-2xl";
+
   if (activeTool) {
     const schema = propertiesOf(activeTool.parameters);
     const required = requiredOf(activeTool.parameters);
     const fields = Object.entries(schema);
 
     return (
-      <div className="absolute bottom-full left-0 mb-2 w-full max-w-md rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-20 p-3 space-y-2 max-h-96 overflow-y-auto">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold text-gray-100">/{activeTool.name}</div>
-          <button type="button" className="text-xs text-gray-400 hover:text-white" onClick={() => setActiveTool(null)}>
-            ← Zurück
+      <div className={shell}>
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setActiveTool(null)}
+            className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+            title={t("chat.palette.back")}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <Wrench className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <span className="min-w-0 flex-1 truncate text-sm font-semibold">{activeTool.name}</span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="text-xs text-gray-400">{activeTool.description}</div>
 
-        {fields.length > 0 && (
-          <div className="flex gap-2 border-b border-gray-700 pb-2">
-            <button
-              type="button"
-              className={`text-xs px-2 py-1 rounded ${!useFreetextMode ? "bg-gray-700 text-white" : "text-gray-400 hover:text-white"}`}
-              onClick={() => setUseFreetextMode(false)}
-            >
-              Formular
-            </button>
-            <button
-              type="button"
-              className={`text-xs px-2 py-1 rounded ${useFreetextMode ? "bg-gray-700 text-white" : "text-gray-400 hover:text-white"}`}
-              onClick={() => setUseFreetextMode(true)}
-            >
-              Anweisung
-            </button>
-          </div>
-        )}
+        <div className="max-h-[22rem] space-y-3 overflow-y-auto p-3">
+          <p className="text-xs text-muted-foreground">{activeTool.description}</p>
 
-        {useFreetextMode ? (
-          <>
+          {fields.length > 0 && (
+            <div className="flex gap-1 rounded-lg border border-border p-0.5">
+              {[
+                { key: false, label: t("chat.palette.form") },
+                { key: true, label: t("chat.palette.instruction") },
+              ].map(({ key, label }) => (
+                <button
+                  key={String(key)}
+                  type="button"
+                  className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition ${
+                    useFreetextMode === key
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setUseFreetextMode(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {useFreetextMode ? (
             <div className="space-y-1">
-              <label className="text-xs text-gray-300 block">Anweisung (Freitext)</label>
+              <label className="block text-xs font-medium text-muted-foreground">
+                {t("chat.palette.instructionLabel")}
+              </label>
               <textarea
-                className="input w-full text-xs resize-none"
+                autoFocus
+                className="input w-full resize-none text-xs"
                 rows={4}
                 value={freetextInput}
                 onChange={(e) => setFreetextInput(e.target.value)}
-                placeholder={`z.B. "Erstelle ein Projekt namens 'Blog' mit Beschreibung 'WordPress Clone'"`}
+                placeholder={t("chat.palette.instructionPlaceholder")}
               />
             </div>
-          </>
-        ) : (
-          <>
-            {fields.length === 0 && <div className="text-xs text-gray-500">Keine Parameter erforderlich.</div>}
+          ) : (
+            <>
+              {fields.length === 0 && <p className="text-xs text-muted-foreground">{t("chat.palette.noParams")}</p>}
+              {fields.map(([key, def]) => (
+                <div key={key} className="space-y-1">
+                  <label className="block text-xs font-medium">
+                    {key}
+                    {required.includes(key) ? <span className="text-destructive"> *</span> : null}
+                    {def.description ? (
+                      <span className="font-normal text-muted-foreground"> — {def.description}</span>
+                    ) : null}
+                  </label>
+                  {def.enum ? (
+                    <select
+                      className="input w-full text-xs"
+                      value={formValues[key] ?? ""}
+                      onChange={(e) => setFormValues((prev) => ({ ...prev, [key]: e.target.value }))}
+                    >
+                      <option value="">—</option>
+                      {def.enum.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      className="input w-full text-xs"
+                      value={formValues[key] ?? ""}
+                      onChange={(e) => setFormValues((prev) => ({ ...prev, [key]: e.target.value }))}
+                      placeholder={def.type ?? "string"}
+                    />
+                  )}
+                </div>
+              ))}
+            </>
+          )}
 
-            {fields.map(([key, def]) => (
-              <div key={key} className="space-y-1">
-                <label className="text-xs text-gray-300 block">
-                  {key}
-                  {required.includes(key) ? " *" : ""}
-                  {def.description ? <span className="text-gray-500"> — {def.description}</span> : null}
-                </label>
-                {def.enum ? (
-                  <select
-                    className="input w-full text-xs"
-                    value={formValues[key] ?? ""}
-                    onChange={(e) => setFormValues((prev) => ({ ...prev, [key]: e.target.value }))}
-                  >
-                    <option value="">—</option>
-                    {def.enum.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    className="input w-full text-xs"
-                    value={formValues[key] ?? ""}
-                    onChange={(e) => setFormValues((prev) => ({ ...prev, [key]: e.target.value }))}
-                    placeholder={def.type ?? "string"}
-                  />
-                )}
-              </div>
-            ))}
-          </>
-        )}
+          {runError && <p className="text-xs text-destructive">{runError}</p>}
+        </div>
 
-        {runError && <div className="text-xs text-red-400">{runError}</div>}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button type="button" className="btn-secondary text-xs" onClick={onClose}>
-            Abbrechen
+        <div className="flex justify-end gap-2 border-t border-border px-3 py-2">
+          <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onClose}>
+            {t("common.cancel")}
           </button>
-          <button type="button" className="btn-primary text-xs" onClick={handleRunTool} disabled={running}>
-            {running ? "Läuft…" : "Jetzt ausführen"}
+          <button
+            type="button"
+            className="btn-primary px-3 py-1.5 text-xs"
+            onClick={() => void handleRunTool()}
+            disabled={running}
+          >
+            {running ? (
+              <Loader2 className="mr-1 inline h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Play className="mr-1 inline h-3.5 w-3.5" />
+            )}
+            {running ? t("chat.palette.running") : t("chat.palette.runNow")}
           </button>
         </div>
       </div>
     );
   }
 
+  const skillCount = filtered.filter((i) => i.kind === "skill").length;
+  let renderedSkillHeader = false;
+  let renderedToolHeader = false;
+
   return (
-    <div className="absolute bottom-full left-0 mb-2 w-full max-w-md rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-20 max-h-80 overflow-y-auto">
-      {filtered.length === 0 && <div className="px-3 py-2 text-xs text-gray-500">Keine Treffer</div>}
-      {filtered.map((item) => (
+    <div className={shell}>
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <input
+          ref={searchRef}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              e.preventDefault();
+              setActiveIndex((prev) => Math.min(prev + 1, filtered.length - 1));
+            } else if (e.key === "ArrowUp") {
+              e.preventDefault();
+              setActiveIndex((prev) => Math.max(prev - 1, 0));
+            } else if (e.key === "Enter") {
+              e.preventDefault();
+              const item = filtered[activeIndex];
+              if (item) handleSelect(item);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              onClose();
+            }
+          }}
+          placeholder={t("chat.palette.search")}
+          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+        />
         <button
-          key={`${item.kind}-${item.name}`}
           type="button"
-          className="w-full text-left px-3 py-2 hover:bg-gray-800 border-b border-gray-800 last:border-0"
-          onClick={() => handleSelect(item)}
+          onClick={onClose}
+          className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
         >
-          <div className="flex items-center gap-2">
-            <span
-              className={`text-[10px] uppercase px-1.5 py-0.5 rounded ${
-                item.kind === "tool" ? "bg-amber-500/20 text-amber-300" : "bg-indigo-500/20 text-indigo-300"
-              }`}
-            >
-              {item.kind === "tool" ? "Tool" : "Skill"}
-            </span>
-            <span className="text-sm font-medium text-gray-100">/{item.name}</span>
-          </div>
-          <div className="text-xs text-gray-400 truncate">{item.description}</div>
+          <X className="h-3.5 w-3.5" />
         </button>
-      ))}
+      </div>
+
+      <div ref={listRef} className="max-h-[20rem] overflow-y-auto py-1">
+        {filtered.length === 0 && (
+          <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+            {toolsQuery.isLoading || skillsQuery.isLoading ? t("app.loadingPage") : t("chat.palette.noResults")}
+          </p>
+        )}
+
+        {filtered.map((item, index) => {
+          const active = index === activeIndex;
+          let header: string | null = null;
+          if (item.kind === "skill" && !renderedSkillHeader) {
+            renderedSkillHeader = true;
+            header = t("chat.palette.skills");
+          } else if (item.kind === "tool" && !renderedToolHeader) {
+            renderedToolHeader = true;
+            header = t("chat.palette.tools");
+          }
+
+          return (
+            <div key={`${item.kind}-${item.name}`}>
+              {header && (
+                <div className={`px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 ${index === 0 ? "pt-1" : "pt-2"}`}>
+                  {header}
+                  {header === t("chat.palette.skills") && skillCount > 0 ? ` · ${skillCount}` : ""}
+                </div>
+              )}
+              <button
+                type="button"
+                data-index={index}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => handleSelect(item)}
+                className={`flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors ${
+                  active ? "bg-accent" : ""
+                }`}
+              >
+                <span
+                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded ${
+                    item.kind === "tool" ? "bg-amber-500/15 text-amber-500" : "bg-primary/15 text-primary"
+                  }`}
+                >
+                  {item.kind === "tool" ? <Wrench className="h-3 w-3" /> : <Sparkles className="h-3 w-3" />}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">
+                    {item.kind === "skill" ? `/${item.name}` : item.name}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">{item.description}</span>
+                </span>
+                {active && <CornerDownLeft className="mt-1 h-3 w-3 shrink-0 text-muted-foreground" />}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-3 border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1">
+          <kbd className="rounded border border-border px-1">↑</kbd>
+          <kbd className="rounded border border-border px-1">↓</kbd>
+          {t("chat.palette.hintNavigate")}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className="rounded border border-border px-1">↵</kbd>
+          {t("chat.palette.hintSelect")}
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <kbd className="rounded border border-border px-1">esc</kbd>
+          {t("chat.palette.hintClose")}
+        </span>
+      </div>
     </div>
   );
 }

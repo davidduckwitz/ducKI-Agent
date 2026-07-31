@@ -56,9 +56,53 @@ export class DatabaseService {
 
     this.client = createClient({ url: `file:${this.dbPath}` });
     this.db = drizzle(this.client, { schema });
+    const journalMode = await this.applyConnectionPragmas();
     await this.runMigrations();
 
-    this.logger.info("Database initialized", { path: this.dbPath });
+    this.logger.info("Database initialized", { path: this.dbPath, journalMode });
+  }
+
+  /**
+   * SQLite's defaults are the wrong ones for a server process.
+   *
+   * With the default rollback journal a writer takes an exclusive lock on the whole
+   * database, so any concurrent read turns a write into "database is locked" - and
+   * without a busy timeout that failure is immediate instead of waiting for the lock
+   * to clear. Both bit us on ordinary traffic (gateway writing a message while a
+   * request read conversations).
+   *
+   * Returns the journal mode actually in effect, which is logged so a failed WAL
+   * switch (e.g. database on a network share, where WAL is unsupported) is visible
+   * rather than silent.
+   */
+  private async applyConnectionPragmas(): Promise<string> {
+    let journalMode = "unknown";
+    try {
+      // WAL persists in the file header, so this only has to succeed once, and it lets
+      // readers and the writer work concurrently.
+      const result = await this.client.execute("PRAGMA journal_mode = WAL");
+      journalMode = String(result.rows[0]?.["journal_mode"] ?? "unknown");
+
+      // Wait up to 5s for a contended lock instead of failing straight away.
+      await this.client.execute("PRAGMA busy_timeout = 5000");
+
+      // The documented safe companion to WAL: fsync at checkpoints rather than on
+      // every commit.
+      await this.client.execute("PRAGMA synchronous = NORMAL");
+    } catch (error) {
+      this.logger.warn("Could not apply SQLite connection pragmas", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (journalMode.toLowerCase() !== "wal") {
+      this.logger.warn(
+        "SQLite is not running in WAL mode - concurrent access may fail with 'database is locked'",
+        { journalMode, path: this.dbPath }
+      );
+    }
+
+    return journalMode;
   }
 
   private async runMigrations(): Promise<void> {

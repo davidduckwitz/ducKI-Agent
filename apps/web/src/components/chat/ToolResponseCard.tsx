@@ -48,7 +48,7 @@ export function ToolResponseCard({ toolCall, onClose }: ToolResponseCardProps) {
       case "failed":
         return "bg-red-500/10 border-red-500/30 text-red-200";
       default:
-        return "bg-gray-500/10 border-gray-500/30";
+        return "bg-muted/60 border-border";
     }
   };
 
@@ -126,7 +126,7 @@ export function ToolResponseCard({ toolCall, onClose }: ToolResponseCardProps) {
           {toolCall.status === "executing" ? "⟳ Executing..." : toolCall.status === "completed" ? "✓ Done" : "✗ Failed"}
         </span>
         {toolCall.tabId && (
-          <span className="px-2 py-0.5 rounded text-xs bg-white/10 text-gray-300 font-mono">
+          <span className="px-2 py-0.5 rounded text-xs bg-white/10 text-foreground/80 font-mono">
             Tab: {toolCall.tabId}
           </span>
         )}

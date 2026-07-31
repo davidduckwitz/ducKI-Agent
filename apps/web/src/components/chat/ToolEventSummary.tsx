@@ -68,7 +68,7 @@ export function ToolEventSummary({ events, onDismiss }: ToolEventSummaryProps) {
         {onDismiss && (
           <button
             onClick={onDismiss}
-            className="text-gray-500 hover:text-gray-300 transition text-xs"
+            className="text-muted-foreground hover:text-foreground/80 transition text-xs"
           >
             ✕
           </button>
@@ -96,7 +96,7 @@ export function ToolEventSummary({ events, onDismiss }: ToolEventSummaryProps) {
 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-gray-300">{tool.toolName}</span>
+                      <span className="font-mono text-foreground/80">{tool.toolName}</span>
                       {tool.status === "complete" && (
                         <span className="text-green-400 text-[10px]">✓ completed</span>
                       )}
@@ -107,7 +107,7 @@ export function ToolEventSummary({ events, onDismiss }: ToolEventSummaryProps) {
 
                     {/* Summary or error */}
                     {tool.summary && (
-                      <div className="text-gray-400 text-[11px] mt-0.5 line-clamp-2">{tool.summary}</div>
+                      <div className="text-muted-foreground text-[11px] mt-0.5 line-clamp-2">{tool.summary}</div>
                     )}
                     {tool.error && (
                       <div className="text-red-300 text-[11px] mt-0.5">{tool.error}</div>
@@ -115,7 +115,7 @@ export function ToolEventSummary({ events, onDismiss }: ToolEventSummaryProps) {
 
                     {/* Metadata */}
                     {(tool.duration || tool.outputSize) && (
-                      <div className="flex items-center gap-3 mt-1 text-gray-500 text-[10px]">
+                      <div className="flex items-center gap-3 mt-1 text-muted-foreground text-[10px]">
                         {tool.duration && (
                           <span className="flex items-center gap-1">
                             <Clock className="w-2.5 h-2.5" />
@@ -156,7 +156,7 @@ export function ToolEventSummary({ events, onDismiss }: ToolEventSummaryProps) {
       </div>
 
       {/* Footer Stats */}
-      <div className="flex items-center gap-3 text-[10px] text-gray-500 border-t border-blue-800/30 pt-2 mt-2">
+      <div className="flex items-center gap-3 text-[10px] text-muted-foreground border-t border-blue-800/30 pt-2 mt-2">
         <span>
           <span className="text-green-400 font-semibold">{completeCount}</span> completed
         </span>
@@ -165,7 +165,7 @@ export function ToolEventSummary({ events, onDismiss }: ToolEventSummaryProps) {
             <span className="text-red-400 font-semibold">{errorCount}</span> failed
           </span>
         )}
-        <span className="ml-auto text-gray-600">
+        <span className="ml-auto text-muted-foreground/70">
           {toolStatuses.length} total
         </span>
       </div>

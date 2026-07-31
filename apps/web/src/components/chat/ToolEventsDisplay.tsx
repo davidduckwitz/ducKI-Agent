@@ -132,7 +132,7 @@ export function ToolEventsDisplay({
           </div>
           <div className="space-y-1">
             {Array.from(activeTools).map((toolName) => (
-              <div key={toolName} className="flex items-center gap-2 text-gray-300 ml-4">
+              <div key={toolName} className="flex items-center gap-2 text-foreground/80 ml-4">
                 <Loader className="w-3 h-3 animate-spin text-blue-400" />
                 <span className="font-mono">{toolName}</span>
               </div>
@@ -143,9 +143,9 @@ export function ToolEventsDisplay({
 
       {/* Event history - only while running */}
       {isRunning && events.length > 0 && (
-        <div className="rounded bg-gray-900/40 border border-gray-800/30 p-2 max-h-40 overflow-y-auto">
+        <div className="rounded bg-card/40 border border-border/40 p-2 max-h-40 overflow-y-auto">
           {events.map((event, idx) => (
-            <div key={idx} className="flex items-start gap-2 text-gray-400 mb-1 last:mb-0">
+            <div key={idx} className="flex items-start gap-2 text-muted-foreground mb-1 last:mb-0">
               {event.type === "tool-start" && (
                 <Loader className="w-3 h-3 flex-shrink-0 mt-0.5 text-blue-400 animate-spin" />
               )}
@@ -175,8 +175,8 @@ export function ToolEventsDisplay({
                   return (
                     <>
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-gray-300">{event.toolName}</span>
-                        <span className={`${event.type === "tool-warning" ? "text-yellow-400" : "text-gray-500"}`}>
+                        <span className="font-mono text-foreground/80">{event.toolName}</span>
+                        <span className={`${event.type === "tool-warning" ? "text-yellow-400" : "text-muted-foreground"}`}>
                           {event.type === "tool-start" && "🔄 started"}
                           {event.type === "tool-progress" && `⏳ ${progress}`}
                           {event.type === "tool-complete" && `✓ ${summary}`}
@@ -185,7 +185,7 @@ export function ToolEventsDisplay({
                         </span>
                       </div>
                       {(duration || elapsedTime) !== undefined && (
-                        <div className={`text-[10px] ${event.type === "tool-warning" ? "text-yellow-600" : "text-gray-600"}`}>
+                        <div className={`text-[10px] ${event.type === "tool-warning" ? "text-yellow-600" : "text-muted-foreground/70"}`}>
                           {Math.round(duration || elapsedTime || 0)}ms
                           {outputSize !== undefined && ` • ${Math.round(outputSize / 1024)}KB`}
                         </div>
@@ -219,7 +219,7 @@ export function ToolEventsDisplay({
                 className="w-full h-full object-contain"
               />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-500 text-xs">
+              <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
                 Screenshot wird geladen...
               </div>
             )}

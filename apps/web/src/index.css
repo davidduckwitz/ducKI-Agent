@@ -292,4 +292,67 @@
   .input {
     @apply bg-background border border-input rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent;
   }
+
+  /* --- Layout-Bausteine -------------------------------------------------- */
+
+  /* Seiten-Shell: zentriert, gedeckelt, damit Inhalte auf breiten Monitoren
+     nicht auseinanderreissen. */
+  .page {
+    @apply mx-auto w-full max-w-[1600px] p-4 md:p-6 space-y-4;
+  }
+
+  /* Panel = .card ohne Innenabstand, damit Kopfzeile und scrollender Body
+     eigene Paddings bekommen. min-h-0 ist Pflicht, sonst sprengt ein langer
+     Body jeden Flex-Container. */
+  .panel {
+    @apply flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card text-card-foreground;
+  }
+  .panel-head {
+    @apply flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5;
+  }
+  .panel-title {
+    @apply truncate text-sm font-semibold;
+  }
+  .panel-body {
+    @apply min-h-0 flex-1 overflow-auto p-4;
+  }
+
+  /* Kacheln fliessen selbst um - kein Breakpoint-Pflegeaufwand pro Seite. */
+  .grid-auto {
+    @apply grid gap-4;
+    grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  }
+  .grid-auto-sm {
+    @apply grid gap-3;
+    grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-border bg-background/60 px-2 py-0.5 text-[11px] text-muted-foreground;
+  }
+
+  /* Trennbalken mit zentriertem Label ("Mehr"). */
+  .divider-label {
+    @apply flex w-full items-center gap-2 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 transition-colors hover:text-foreground;
+  }
+  .divider-label::before,
+  .divider-label::after {
+    @apply h-px flex-1 bg-border content-[''];
+  }
+
+  .sidebar-item {
+    @apply flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground;
+  }
+  .sidebar-item-active {
+    @apply bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground;
+  }
+  .rail-item {
+    @apply flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground;
+  }
+
+  /* Ziehbare Trennlinie zwischen zwei Panels. */
+  .split-handle {
+    @apply relative w-1.5 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40 active:bg-primary/60;
+    touch-action: none;
+  }
 }

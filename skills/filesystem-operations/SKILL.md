@@ -1,213 +1,159 @@
 # Skill: Filesystem Operations
 
 ## Zusammenfassung
-Sicheres und effizientes Arbeiten mit dem Dateisystem. Erstelle, lese, bearbeite und lösche Dateien/Ordner mit Best Practices für Sicherheit und Struktur.
+Sicheres und effizientes Arbeiten mit dem Dateisystem über das `filesystem`-Tool.
+Alle Pfade sind auf `shared-workspace` beschränkt (ausser `basePath`/`safeMode:false` ist gesetzt).
+
+## Verzeichnis oder Datei? (WICHTIG — häufigste Fehlerquelle)
+
+Verzeichnisse und Dateien brauchen **unterschiedliche Actions**:
+
+| Ziel | Richtig | Falsch |
+|---|---|---|
+| Ordnerinhalt sehen (`./shared-workspace`) | `list` | ~~`read`~~ |
+| Dateiinhalt lesen (`./shared-workspace/notes.md`) | `read` | ~~`list`~~ |
+| Unklar, was der Pfad ist | `stat` (liefert `isDirectory`) | raten |
+
+Faustregel: **Pfad ohne Dateiendung → zuerst `list` oder `stat`.**
+
+```
+# Ordner erkunden
+[TOOL:filesystem({"action": "list", "path": "./shared-workspace"})]
+# dann gezielt eine Datei daraus lesen
+[TOOL:filesystem({"action": "read", "path": "./shared-workspace/report.md"})]
+```
+
+`read` auf einem Verzeichnis liefert seit Kurzem hilfsweise die Ordnerliste plus einen
+Hinweis — verlasse dich aber nicht darauf, nimm gleich `list`.
+
+## Alle Actions
+
+| Action | Zweck | Pflichtfelder |
+|---|---|---|
+| `read` | Dateiinhalt lesen | `path` |
+| `write` | Datei anlegen/komplett überschreiben | `path`, `content` |
+| `append` | Inhalt anhängen | `path`, `content` |
+| `edit` | Exakten Textabschnitt ersetzen | `path`, `oldString`, `newString` |
+| `delete` | Datei/Ordner löschen | `path` (Ordner: `recursive:true`) |
+| `list` | Ordnerinhalt auflisten | `path` |
+| `mkdir` | Ordner anlegen (rekursiv) | `path` |
+| `exists` | Existenz prüfen | `path` |
+| `stat` | Grösse, Zeitstempel, `isDirectory` | `path` |
+| `move` | Verschieben/umbenennen | `path`, `destination` |
+| `copy` | Einzelne Datei kopieren | `path`, `destination` |
+| `glob` | Dateien per Muster finden | `path`, `pattern` |
+| `grep` | Dateiinhalte per Regex durchsuchen | `path`, `pattern` |
 
 ## Kernfunktionen
 
-### 1. Datei lesen
+### Lesen — auch teilweise
 ```
-[TOOL:filesystem({"action": "read", "path": "/path/to/file.txt"})]
-```
-
-**Wann nutzen:**
-- Datei-Inhalt laden und analysieren
-- Konfigurationsdateien auslesen
-- Vor Änderungen bestehende Inhalte checken
-
-**Best Practice:**
-```
-# Immer vor edit/write die aktuelle Datei lesen!
 [TOOL:filesystem({"action": "read", "path": "config.json"})]
-# ... Änderungen planen ...
-[TOOL:filesystem({"action": "write", "path": "config.json", "content": "[neue Version]"})]
 ```
-
-### 2. Datei schreiben/erstellen
+Grosse Dateien abschnittsweise lesen statt alles auf einmal:
 ```
-[TOOL:filesystem({"action": "write", "path": "/path/to/new-file.txt", "content": "Datei-Inhalt"})]
+[TOOL:filesystem({"action": "read", "path": "server.log", "offset": 200, "limit": 100})]
 ```
+- `offset` = erste Zeile (0-basiert), `limit` = Anzahl Zeilen
+- `maxBytes` (Default 262144) kappt die Ausgabe; die Antwort sagt dir, wenn gekürzt wurde
 
-**Wann nutzen:**
-- Neue Dateien erstellen
-- Bestehende Dateien vollständig überschreiben
-- Konfigurationen speichern
-
-⚠️ **WARNUNG:**
-- `write` überschreibt bestehende Dateien KOMPLETT
-- Immer vorher lesen wenn Datei existiert!
-- Backups erwägen für wichtige Dateien
-
-### 3. Verzeichnis erstellen
+### Ändern — `edit` statt `write` bevorzugen
 ```
-[TOOL:filesystem({"action": "mkdir", "path": "/path/to/new-dir"})]
+[TOOL:filesystem({"action": "edit", "path": "src/main.ts", "oldString": "const port = 3000", "newString": "const port = 8080"})]
 ```
+- `oldString` muss **exakt einmal** vorkommen, sonst kommt ein Fehler mit der Trefferzahl
+  → mehr Kontext mitgeben oder `replaceAll:true` setzen
+- `write` überschreibt die **ganze** Datei — nur für neue Dateien oder Vollersatz
+- `write`/`append` legen ein `.bak` an und schreiben atomar; JSON wird vor dem Schreiben validiert
 
-**Wann nutzen:**
-- Neue Projekt-Strukturen aufbauen
-- Organisierte Ordner-Hierarchie erstellen
-
-### 4. Datei löschen
+### Anlegen
 ```
-[TOOL:filesystem({"action": "delete", "path": "/path/to/file.txt"})]
+[TOOL:filesystem({"action": "write", "path": "my-project/README.md", "content": "# My Project"})]
 ```
+Übergeordnete Ordner entstehen automatisch (`createDirs`, Default true) — separates `mkdir`
+ist nur nötig, wenn du einen leeren Ordner brauchst.
 
-**Wann nutzen:**
-- Alte/temporäre Dateien aufräumen
-- Veraltete Konfigurationen entfernen
-
-⚠️ **VORSICHT:**
-- Löschen ist permanent!
-- Immer Pfad doppelt überprüfen
-- Kritische Dateien vorher lesen!
-
-### 5. Datei kopieren
+### Suchen statt raten
 ```
-[TOOL:filesystem({"action": "copy", "from": "/old/path", "to": "/new/path"})]
+[TOOL:filesystem({"action": "glob", "path": "./shared-workspace", "pattern": "**/*.ts"})]
+[TOOL:filesystem({"action": "grep", "path": "./shared-workspace", "pattern": "TODO|FIXME", "filePattern": "**/*.ts"})]
 ```
+Nutze das, statt Ordner für Ordner mit `list` durchzugehen.
 
-**Wann nutzen:**
-- Backups erstellen
-- Template-Dateien duplizieren
-- Sichere Duplikate vor Änderungen
-
-### 6. Datei verschieben
+### Verschieben, kopieren, löschen
 ```
-[TOOL:filesystem({"action": "move", "from": "/old/path", "to": "/new/path"})]
+[TOOL:filesystem({"action": "move", "path": "alt.txt", "destination": "neu.txt"})]
+[TOOL:filesystem({"action": "copy", "path": "config.json", "destination": "config.json.bak"})]
+[TOOL:filesystem({"action": "delete", "path": "tmp", "recursive": true})]
 ```
+- `move`/`copy` brauchen `path` **und** `destination` (nicht `from`/`to`)
+- `copy` kopiert nur einzelne Dateien — für Ordner das `shell`-Tool nehmen
+- `delete` auf einem Ordner ohne `recursive:true` wird abgelehnt
 
-**Wann nutzen:**
-- Dateien reorganisieren
-- Umstrukturierung von Projekten
-
-### 7. Datei-Info (Metadaten)
-```
-[TOOL:filesystem({"action": "info", "path": "/path/to/file"})]
-```
-
-**Wann nutzen:**
-- Größe einer Datei überprüfen
-- Letzten Änderungszeitpunkt sehen
-- Existenz verifizieren vor Operationen
+### Trockenlauf
+Fast alle schreibenden Actions akzeptieren `dryRun:true` — prüft und meldet, ohne etwas zu ändern.
 
 ## Sichere Workflows
 
-### Workflow 1: Sichere Bearbeitung
+### Bestehende Datei ändern
 ```
 1. [TOOL:filesystem({"action": "read", "path": "important.conf"})]
-   └─ Aktuellen Inhalt laden
+2. [TOOL:filesystem({"action": "edit", "path": "important.conf", "oldString": "[exakter alter Abschnitt]", "newString": "[neuer Abschnitt]"})]
+```
+Das `.bak` legt das Tool selbst an — ein extra `copy` ist nicht nötig.
 
-2. [TOOL:filesystem({"action": "copy", "from": "important.conf", "to": "important.conf.backup"})]
-   └─ Backup erstellen
-
-3. [TOOL:filesystem({"action": "write", "path": "important.conf", "content": "[neue Version]"})]
-   └─ Sichere Änderung durchführen
+### Unbekanntes Verzeichnis erkunden
+```
+1. [TOOL:filesystem({"action": "list", "path": "./shared-workspace"})]
+2. [TOOL:filesystem({"action": "glob", "path": "./shared-workspace", "pattern": "**/*.md"})]
+3. [TOOL:filesystem({"action": "read", "path": "[konkrete Datei aus Schritt 1/2]"})]
 ```
 
-### Workflow 2: Projekt-Struktur aufbauen
-```
-[TOOL:filesystem({"action": "mkdir", "path": "my-project/src"})]
-[TOOL:filesystem({"action": "mkdir", "path": "my-project/tests"})]
-[TOOL:filesystem({"action": "mkdir", "path": "my-project/docs"})]
-[TOOL:filesystem({"action": "write", "path": "my-project/README.md", "content": "# My Project"})]
-```
+## Fehler richtig lesen
 
-## Pfad-Konventionen
+Das Tool antwortet mit klaren, handlungsfähigen Meldungen — folge ihnen, statt aufzugeben:
 
-### Absolute Pfade (empfohlen)
-```
-/home/user/project/src/file.ts
-```
-- Eindeutig und zuverlässig
-- Funktionieren überall
-- Verwende diese im Production-Code
+| Meldung | Was zu tun ist |
+|---|---|
+| `'…' is a file, not a directory` | `read` statt `list` |
+| `'…' is a directory, not a file` | `list` statt `read`/`edit`/`append` |
+| `oldString is not unique (N matches)` | mehr Kontext in `oldString`, oder `replaceAll:true` |
+| `oldString not found in file` | Datei erst `read`, exakten Text übernehmen |
+| `Path is outside shared workspace` | Pfad unter `shared-workspace` legen oder `basePath` setzen |
+| `is a directory. Pass recursive:true` | `recursive:true` ergänzen |
 
-### Relative Pfade (nur für Klarheit)
-```
-./src/file.ts
-../utils/helper.ts
-```
-- Nur verwenden wenn Kontext klar ist
-- Im Agent-Output für Lesbarkeit ok
-- Im Automation-Code: absolute Pfade!
+## Grössen-Guidelines
 
-## Sicherheits-Best-Practices
-
-✅ **TUN:**
-- Pfade validieren vor Operationen
-- Backups für kritische Dateien
-- Lesbar strukturierte Verzeichnisse
-- Consistent file naming conventions
-- Logs für Audit-Trail
-
-❌ **NICHT TUN:**
-- Pfade from untrusted input direkt nutzen
-- Kritische Dateien ohne Backup löschen
-- Wild verschachtelte Verzeichnisse
-- Sensitive Daten in Klartext speichern
-- Permissions ignorieren
-
-## Größen-Guidelines
-
-- **Kleine Dateien** (<1MB): direkt mit `read` laden
-- **Mittlere Dateien** (1-10MB): in Chunks bearbeiten
-- **Große Dateien** (>10MB): Streaming oder git nutzen
-- **Binäre Dateien**: Nicht mit `read`/`write` - nutze spezielle Tools
-
-## File-Type Spezifisches
-
-### JSON Dateien
-```javascript
-[TOOL:filesystem({"action": "read", "path": "config.json"})]
-// Parse JSON, modify, stringify
-[TOOL:filesystem({"action": "write", "path": "config.json", "content": JSON.stringify(modified, null, 2)})]
-```
-
-### Markdown Dateien
-```
-[TOOL:filesystem({"action": "read", "path": "README.md"})]
-// Edit markdown, maintain formatting
-[TOOL:filesystem({"action": "write", "path": "README.md", "content": "# Updated\n..."})]
-```
-
-### Code Dateien
-```
-[TOOL:filesystem({"action": "read", "path": "src/main.ts"})]
-// IMMER: lesen vor edit
-// IMMER: strukturelle Änderungen planen
-// IMMER: Tests nach Änderungen
-[TOOL:filesystem({"action": "write", "path": "src/main.ts", "content": "[neuer Code]"})]
-```
+- **Klein** (<256KB): direkt `read`
+- **Gross**: `read` mit `offset`/`limit` abschnittsweise, oder vorher `grep` zum Eingrenzen
+- **Schreiben grosser Dateien**: erst `write`, dann `append` in Teilen (siehe Skill `large-file-writing`)
+- **Binärdateien**: nicht mit `read`/`write` bearbeiten
 
 ## Häufige Fehler
 
-❌ **Problem:** Datei überschreiben ohne Backup
+❌ `read` auf einen Ordner
 ```
-[TOOL:filesystem({"action": "write", "path": "important.json", "content": "..."})]
-// Oops! Alte Daten weg!
+[TOOL:filesystem({"action": "read", "path": "./shared-workspace"})]
+```
+✅ `list` benutzen
+```
+[TOOL:filesystem({"action": "list", "path": "./shared-workspace"})]
 ```
 
-✅ **Lösung:**
+❌ Ganze Datei überschreiben für eine Zeile
 ```
-[TOOL:filesystem({"action": "read", "path": "important.json"})]      // Backup im Kopf
-[TOOL:filesystem({"action": "copy", "from": "important.json", "to": "important.json.bak"})]  // Sichern
-[TOOL:filesystem({"action": "write", "path": "important.json", "content": "..."})]  // Update
+[TOOL:filesystem({"action": "write", "path": "config.json", "content": "[komplette Datei]"})]
 ```
+✅ Gezielt ersetzen
+```
+[TOOL:filesystem({"action": "edit", "path": "config.json", "oldString": "\"port\": 3000", "newString": "\"port\": 8080"})]
+```
+
+❌ `from`/`to` bei move/copy — diese Felder gibt es nicht
+✅ `path` + `destination`
 
 ## Integration mit anderen Tools
 
-- **Mit git:** Dateien ändern, dann `git add` + `git commit`
-- **Mit shell:** Script-Dateien erstellen, dann `shell` tool zum Ausführen
-- **Mit skill_manage:** Skills sind auch nur Dateien in `skills/`-Ordner
-
-## Performance-Tipps
-
-⚡ **Schnell:**
-- Kleine, fokussierte Dateien
-- Keine unnötigen Lese-Operationen
-- Batching: mehrere Dateien zusammen verarbeiten
-
-🐌 **Langsam:**
-- Große Dateien komplett laden
-- Wiederholte reads der gleichen Datei
-- Deep nesting ohne Grund
+- **git:** Dateien ändern, dann `git add` + `git commit`
+- **shell:** Skripte erzeugen und ausführen, rekursives Kopieren
+- **http:** Heruntergeladene Inhalte in `shared-workspace` ablegen

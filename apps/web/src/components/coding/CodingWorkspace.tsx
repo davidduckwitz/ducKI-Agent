@@ -1,22 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, Eye, Plus, Save, Send, Trash2, Upload, X } from "lucide-react";
+import {
+  Columns2,
+  FileCode2,
+  Maximize2,
+  PanelRightOpen,
+  Pencil,
+  Plus,
+  Save,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useCodingSession } from "../../lib/codingSessionStore";
-import { DuckyMascot } from "../chat/DuckyMascot";
-import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
-import { ToolSkillSelector } from "../chat/ToolSkillSelector";
+import { useUiStore, CODING_AGENT_MIN_WIDTH, CODING_AGENT_MAX_WIDTH } from "../../lib/uiStore";
+import { useTheme } from "../theme/ThemeProvider";
+import { PanelEmpty } from "../ui/panel";
+import { SplitHandle } from "../ui/split-handle";
+import { CodingEditorTabs } from "./CodingEditorTabs";
+import { CodingAgentPanel } from "./CodingAgentPanel";
+import type { CodingFileItem } from "./CodingFileTree";
 import type { AgentEventType, RenderedChatMessage } from "../chat/chatTypes";
-
-interface CodingFileItem {
-  path: string;
-  type: "file" | "directory";
-  size?: number;
-  updatedAt?: string;
-}
 
 interface PersistedMessage {
   id: number;
@@ -26,8 +34,6 @@ interface PersistedMessage {
   toolResult?: string | null;
   createdAt: string;
 }
-
-type StoreChatMessage = RenderedChatMessage;
 
 const PROJECT_CONVERSATION_MAP_KEY = "coding.project.conversations.v1";
 
@@ -78,25 +84,45 @@ function isImageFile(path: string): boolean {
 export function CodingWorkspace() {
   const { t } = useI18n();
   const qc = useQueryClient();
+  const { resolvedMode } = useTheme();
   const { messages, sendMessage, isLoading, streamingContent, setConversationId, setMessages } = useAppStore();
   const creatingConversationRef = useRef<Record<string, boolean>>({});
-  const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
-  const chatBottomRef = useRef<HTMLDivElement>(null);
-  const chatViewportRef = useRef<HTMLDivElement>(null);
 
-  const { selectedProject, setSelectedProject, selectedPath, setSelectedPath } = useCodingSession();
+  const {
+    selectedProject,
+    setSelectedProject,
+    selectedPath,
+    openPaths,
+    openFile,
+    closeFile,
+    drafts,
+    setDraft,
+    clearDraft,
+    renamePath,
+    command,
+  } = useCodingSession();
+  const {
+    codingAgentOpen,
+    codingAgentWidth,
+    codingSplitPreview,
+    setCodingAgentOpen,
+    setCodingAgentWidth,
+    setCodingSplitPreview,
+  } = useUiStore();
+
   const [newProjectName, setNewProjectName] = useState("");
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [editorContent, setEditorContent] = useState("");
-  const [moveTarget, setMoveTarget] = useState("");
-  const [chatInput, setChatInput] = useState("");
-  const [isEnsuringConversation, setIsEnsuringConversation] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameTarget, setRenameTarget] = useState("");
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  const [planMode, setPlanMode] = useState(false);
-  const [showSelector, setShowSelector] = useState(false);
-  const [selectorQuery, setSelectorQuery] = useState("");
+  const [isEnsuringConversation, setIsEnsuringConversation] = useState(false);
+  // -1, not the current nonce: the sidebar fires its command and navigates here in the
+  // same tick, so this lazily-loaded view mounts *after* the command already exists.
+  // Seeding with the current nonce would swallow exactly that first command.
+  const handledCommandNonce = useRef(-1);
+
   const [projectConversationMap, setProjectConversationMap] = useState<Record<string, number>>(() => {
     try {
       const raw = localStorage.getItem(PROJECT_CONVERSATION_MAP_KEY);
@@ -187,7 +213,7 @@ export function CodingWorkspace() {
     const persisted = conversationMessagesQuery.data;
     if (!persisted) return;
 
-    const mapped: StoreChatMessage[] = persisted.map((msg) => {
+    const mapped: RenderedChatMessage[] = persisted.map((msg) => {
       const metadata = parseMessageMetadata(msg.metadata);
       if (msg.role === "event") {
         let eventType: AgentEventType | undefined;
@@ -239,14 +265,6 @@ export function CodingWorkspace() {
   }, [conversationMessagesQuery.data, setMessages]);
 
   useEffect(() => {
-    setExpandedEvents({});
-  }, [activeConversationId]);
-
-  useEffect(() => {
-    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
-
-  useEffect(() => {
     if (codingSettingReady && !codingEnabled) {
       setSelectedProject("");
     }
@@ -259,6 +277,12 @@ export function CodingWorkspace() {
     refetchInterval: selectedProject && isLoading ? 1500 : false,
   });
 
+  const projectsQuery = useQuery({
+    queryKey: ["coding", "projects"],
+    queryFn: () => api.coding.listProjects() as Promise<Array<{ slug: string; name: string }>>,
+    enabled: codingSettingReady && codingEnabled,
+  });
+
   useEffect(() => {
     if (!selectedProject) return;
     const last = messages[messages.length - 1];
@@ -266,7 +290,6 @@ export function CodingWorkspace() {
     if (last.role === "user") return;
     // Reload files list when agent responds
     void qc.invalidateQueries({ queryKey: ["coding", "files", selectedProject] });
-    // Also reload current file if selected
     if (selectedPath) {
       void qc.invalidateQueries({ queryKey: ["coding", "read", selectedProject, selectedPath] });
     }
@@ -280,23 +303,21 @@ export function CodingWorkspace() {
   const readFileQuery = useQuery({
     queryKey: ["coding", "read", selectedProject, selectedPath],
     queryFn: () => api.coding.readFile(selectedProject, selectedPath),
-    enabled: codingSettingReady && codingEnabled && Boolean(selectedProject && selectedPath && selectedItem?.type === "file"),
+    enabled: codingSettingReady && codingEnabled && Boolean(selectedProject && selectedPath),
   });
 
-  useEffect(() => {
-    if (readFileQuery.data?.isText) {
-      setEditorContent(readFileQuery.data.content ?? "");
-    } else {
-      setEditorContent("");
-    }
-  }, [readFileQuery.data]);
+  const savedContent = readFileQuery.data?.isText ? (readFileQuery.data.content ?? "") : "";
+  const draft = drafts[selectedPath];
+  const editorContent = draft ?? savedContent;
+  const hasChanges = draft !== undefined && draft !== savedContent;
+  const dirtyPaths = useMemo(
+    () => new Set(Object.entries(drafts).filter(([, value]) => value !== undefined).map(([key]) => key)),
+    [drafts]
+  );
 
   useEffect(() => {
-    if (!selectedPath) {
-      setMoveTarget("");
-      return;
-    }
-    setMoveTarget(selectedPath);
+    setRenaming(false);
+    setRenameTarget(selectedPath);
   }, [selectedPath]);
 
   const createProject = useMutation({
@@ -311,18 +332,22 @@ export function CodingWorkspace() {
   });
 
   const writeFile = useMutation({
-    mutationFn: (payload: { path: string; content: string }) => api.coding.writeFile(selectedProject, payload.path, payload.content),
+    mutationFn: (payload: { path: string; content: string }) =>
+      api.coding.writeFile(selectedProject, payload.path, payload.content),
     onSuccess: async (_data, vars) => {
-      setSelectedPath(vars.path);
+      clearDraft(vars.path);
+      openFile(vars.path);
       await qc.invalidateQueries({ queryKey: ["coding", "files", selectedProject] });
       await qc.invalidateQueries({ queryKey: ["coding", "read", selectedProject, vars.path] });
     },
   });
 
   const moveFile = useMutation({
-    mutationFn: (payload: { fromPath: string; toPath: string }) => api.coding.moveFile(selectedProject, payload.fromPath, payload.toPath),
-    onSuccess: async (result) => {
-      setSelectedPath(result.toPath);
+    mutationFn: (payload: { fromPath: string; toPath: string }) =>
+      api.coding.moveFile(selectedProject, payload.fromPath, payload.toPath),
+    onSuccess: async (result, vars) => {
+      renamePath(vars.fromPath, result.toPath);
+      setRenaming(false);
       await qc.invalidateQueries({ queryKey: ["coding", "files", selectedProject] });
       await qc.invalidateQueries({ queryKey: ["coding", "read", selectedProject, result.toPath] });
     },
@@ -330,9 +355,8 @@ export function CodingWorkspace() {
 
   const deleteFile = useMutation({
     mutationFn: (path: string) => api.coding.deleteFile(selectedProject, path),
-    onSuccess: async () => {
-      setSelectedPath("");
-      setEditorContent("");
+    onSuccess: async (_data, path) => {
+      closeFile(path);
       await qc.invalidateQueries({ queryKey: ["coding", "files", selectedProject] });
     },
   });
@@ -355,17 +379,46 @@ export function CodingWorkspace() {
     },
   });
 
-  const hasChanges = Boolean(
-    selectedItem?.type === "file" &&
-      readFileQuery.data?.isText &&
-      (readFileQuery.data.content ?? "") !== editorContent
-  );
+  const saveActiveFile = useCallback(() => {
+    if (!selectedPath || !hasChanges || writeFile.isPending) return;
+    writeFile.mutate({ path: selectedPath, content: editorContent });
+  }, [editorContent, hasChanges, selectedPath, writeFile]);
 
-  const createProjectFromModal = () => {
-    const name = newProjectName.trim();
-    if (!name) return;
-    createProject.mutate(name);
-  };
+  // Ctrl/Cmd+S anywhere in the workspace saves the active tab.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "s") return;
+      event.preventDefault();
+      saveActiveFile();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [saveActiveFile]);
+
+  // Commands from the sidebar's "Neu" menu / explorer header.
+  useEffect(() => {
+    if (command.nonce === handledCommandNonce.current) return;
+    handledCommandNonce.current = command.nonce;
+    if (command.action === "new-project") setShowCreateProjectModal(true);
+    if (command.action === "upload") setShowUploadModal(true);
+  }, [command]);
+
+  const previewType = useMemo<"html" | "image" | "markdown" | "text" | "none">(() => {
+    if (!selectedPath) return "none";
+    if (isHtmlFile(selectedPath) && readFileQuery.data?.isText) return "html";
+    if (isImageFile(selectedPath) && !readFileQuery.data?.isText && Boolean(readFileQuery.data?.contentBase64))
+      return "image";
+    if (getFileExtension(selectedPath) === "md" && readFileQuery.data?.isText) return "markdown";
+    if (readFileQuery.data?.isText) return "text";
+    return "none";
+  }, [readFileQuery.data?.contentBase64, readFileQuery.data?.isText, selectedPath]);
+
+  const imagePreviewSrc = useMemo(() => {
+    if (previewType !== "image" || !selectedPath || !readFileQuery.data?.contentBase64) return "";
+    const ext = getFileExtension(selectedPath);
+    const mime = ext === "jpg" ? "jpeg" : ext;
+    return `data:image/${mime};base64,${readFileQuery.data.contentBase64}`;
+  }, [previewType, readFileQuery.data?.contentBase64, selectedPath]);
 
   const handleUploadFromModal = async () => {
     if (!selectedProject || uploadFiles.length === 0) return;
@@ -376,61 +429,7 @@ export function CodingWorkspace() {
     setShowUploadModal(false);
   };
 
-  const previewType = useMemo<"html" | "image" | "text" | "none">(() => {
-    if (!selectedPath || selectedItem?.type !== "file") return "none";
-    if (isHtmlFile(selectedPath) && readFileQuery.data?.isText) return "html";
-    if (isImageFile(selectedPath) && !readFileQuery.data?.isText && Boolean(readFileQuery.data?.contentBase64)) return "image";
-    if (readFileQuery.data?.isText) return "text";
-    return "none";
-  }, [readFileQuery.data?.contentBase64, readFileQuery.data?.isText, selectedItem?.type, selectedPath]);
-
-  const imagePreviewSrc = useMemo(() => {
-    if (previewType !== "image" || !selectedPath || !readFileQuery.data?.contentBase64) return "";
-    const ext = getFileExtension(selectedPath);
-    const mime = ext === "jpg" ? "jpeg" : ext;
-    return `data:image/${mime};base64,${readFileQuery.data.contentBase64}`;
-  }, [previewType, readFileQuery.data?.contentBase64, selectedPath]);
-
-  const handleInputChange = (value: string) => {
-    setChatInput(value);
-    const trimmedStart = value.trimStart();
-    if (trimmedStart.startsWith("/")) {
-      const afterSlash = trimmedStart.slice(1);
-      if (!/\s/.test(afterSlash)) {
-        setSelectorQuery(afterSlash);
-        setShowSelector(true);
-        return;
-      }
-    }
-    setShowSelector(false);
-  };
-
-  const handleInsertSkill = (slug: string) => {
-    setChatInput(`/${slug} `);
-    setShowSelector(false);
-  };
-
-  const handleToolExecuted = (result: { toolName: string; success: boolean; data: unknown; error?: string }) => {
-    const summary = result.success
-      ? `Tool "${result.toolName}" erfolgreich ausgefuehrt`
-      : `Tool "${result.toolName}" fehlgeschlagen${result.error ? `: ${result.error}` : ""}`;
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        role: "event",
-        content: summary,
-        timestamp: new Date().toISOString(),
-        eventType: "tool_result",
-        eventData: { toolName: result.toolName, success: result.success, data: result.data, error: result.error },
-      },
-    ]);
-    setChatInput("");
-    setShowSelector(false);
-  };
-
-  const sendCodingPrompt = async () => {
-    const text = chatInput.trim();
+  const sendCodingPrompt = async (text: string, options: { planMode: boolean; includeFile: string | null }) => {
     if (!text || !selectedProject) return;
 
     setIsEnsuringConversation(true);
@@ -474,240 +473,266 @@ export function CodingWorkspace() {
       "[CODING_CONTEXT]",
       `project=${selectedProject || "none"}`,
       `workspaceRoot=shared-workspace/coding/${selectedProject || ""}`,
+      ...(options.includeFile ? [`activeFile=${options.includeFile}`] : []),
       "Use files only inside this coding project.",
       "",
       text,
     ].join("\n");
 
-    sendMessage(contextPrefix, undefined, planMode ? "plan" : undefined, text);
-    setChatInput("");
-    setShowSelector(false);
+    sendMessage(contextPrefix, undefined, options.planMode ? "plan" : undefined, text);
     setIsEnsuringConversation(false);
   };
 
   if (!codingSettingReady) {
     return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold mb-2">{t("codingPage.title")}</h1>
-        <p className="text-sm text-gray-400">{t("app.loadingPage")}</p>
+      <div className="page">
+        <h1 className="text-2xl font-bold">{t("codingPage.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("app.loadingPage")}</p>
       </div>
     );
   }
 
   if (!codingEnabled) {
     return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold mb-2">{t("codingPage.title")}</h1>
-        <p className="text-sm text-gray-400">{t("codingPage.disabled")}</p>
+      <div className="page">
+        <h1 className="text-2xl font-bold">{t("codingPage.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("codingPage.disabled")}</p>
       </div>
     );
   }
 
+  const showEditor = Boolean(selectedPath);
+  const isTextFile = readFileQuery.data?.isText ?? false;
+
   return (
-    <div className="p-6 space-y-4 h-full">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">{t("codingPage.title")}</h1>
-          <p className="text-sm text-gray-400">{t("codingPage.subtitle")}</p>
-          <p className="text-xs text-gray-500 mt-1">{t("codingPage.sharedHint")}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            className="btn-secondary flex items-center gap-2"
-            onClick={() => setShowUploadModal(true)}
-            disabled={!selectedProject}
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Toolbar */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card/50 px-3 py-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <FileCode2 className="h-4 w-4 shrink-0 text-primary" />
+          <select
+            className="input max-w-[180px] shrink-0 px-2 py-1 text-xs"
+            value={selectedProject}
+            onChange={(e) => setSelectedProject(e.target.value)}
           >
-            <Upload className="w-4 h-4" />
-            Upload
-          </button>
-          <button
-            className="btn-primary flex items-center gap-2"
-            onClick={() => setShowCreateProjectModal(true)}
-          >
-            <Plus className="w-4 h-4" />
-            {t("codingPage.createProject")}
-          </button>
-        </div>
-      </div>
+            {(projectsQuery.data ?? []).length === 0 && <option value="">{t("codingPage.noProjects")}</option>}
+            {(projectsQuery.data ?? []).map((project) => (
+              <option key={project.slug} value={project.slug}>
+                {project.slug}
+              </option>
+            ))}
+          </select>
 
-      {/* 320px left almost no room for the agent's code output once padding and the
-          message frame were subtracted; 420px fits a typical code line without wrapping. */}
-      <div className="grid grid-cols-1 xl:grid-cols-[420px,1fr] gap-4 h-[calc(100%-108px)] min-h-[620px]">
-        <section className="card overflow-hidden flex flex-col">
-          {selectedProject ? (
-            <div className="min-h-0 flex-1 flex flex-col space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-semibold">{t("codingPage.chatTitle")}</h2>
-                <DuckyMascot
-                  working={isLoading}
-                  size={24}
-                  title={isLoading ? t("chat.duckyWorkingTitle") : t("chat.duckyIdleTitle")}
-                />
-              </div>
-              <div
-                ref={chatViewportRef}
-                className="rounded-lg border border-gray-800 bg-gray-900 p-2 min-h-[160px] flex-1 overflow-y-auto space-y-2"
-              >
-                {messages.length === 0 && !isLoading && (
-                  <p className="text-sm text-gray-500 p-1">{t("chat.noOutputYet")}</p>
-                )}
-                {messages.map((msg) =>
-                  msg.role === "event" ? (
-                    <EventRow
-                      key={msg.id}
-                      msg={msg}
-                      t={t}
-                      expanded={expandedEvents[msg.id] ?? false}
-                      onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
-                    />
-                  ) : (
-                    <MessageRow key={msg.id} msg={msg} compactMode dense t={t} />
-                  )
-                )}
-                {isLoading && <StreamingRow compactMode streamingContent={streamingContent} t={t} />}
-                <div ref={chatBottomRef} />
-              </div>
-
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs text-gray-400">Plan</div>
-                <button
-                  className={`text-xs px-2 py-1 rounded transition ${planMode ? "bg-blue-600 text-white" : "bg-gray-700 text-gray-300 hover:text-white"}`}
-                  onClick={() => setPlanMode(!planMode)}
-                  title="Plan-Modus: nur einen Plan erstellen, nichts ausfuehren"
-                >
-                  {planMode ? "Plan (aktiv)" : "Plan"}
-                </button>
-              </div>
-              <div className="relative">
-                <textarea
-                  className="input w-full min-h-20"
-                  value={chatInput}
-                  onChange={(e) => handleInputChange(e.target.value)}
-                  placeholder={t("codingPage.chatPlaceholder")}
-                />
-                {showSelector && (
-                  <ToolSkillSelector
-                    query={selectorQuery}
-                    conversationId={activeConversationId}
-                    onInsertSkill={handleInsertSkill}
-                    onToolExecuted={handleToolExecuted}
-                    onClose={() => setShowSelector(false)}
-                  />
-                )}
-              </div>
-              <button
-                className="btn-primary w-full"
-                onClick={() => {
-                  void sendCodingPrompt();
+          {renaming ? (
+            <div className="flex min-w-0 flex-1 items-center gap-1">
+              <input
+                autoFocus
+                className="input min-w-0 flex-1 py-1 text-xs"
+                value={renameTarget}
+                onChange={(e) => setRenameTarget(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && renameTarget.trim() && renameTarget.trim() !== selectedPath) {
+                    moveFile.mutate({ fromPath: selectedPath, toPath: renameTarget.trim() });
+                  }
+                  if (e.key === "Escape") setRenaming(false);
                 }}
-                disabled={!chatInput.trim() || isLoading || isEnsuringConversation}
-              >
-                <Send className="w-4 h-4 inline mr-1" />
-                {t("codingPage.send")}
+                placeholder={t("codingPage.renamePlaceholder")}
+              />
+              <button className="btn-secondary px-2 py-1 text-xs" onClick={() => setRenaming(false)}>
+                {t("common.cancel")}
               </button>
             </div>
           ) : (
-            <p className="text-sm text-gray-500">{t("codingPage.noProjects")}</p>
+            selectedPath && (
+              <button
+                type="button"
+                onClick={() => setRenaming(true)}
+                title={t("codingPage.rename")}
+                className="group flex min-w-0 items-center gap-1.5 rounded px-1.5 py-1 text-xs text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              >
+                <span className="truncate">{selectedPath}</span>
+                <Pencil className="h-3 w-3 shrink-0 opacity-0 transition group-hover:opacity-100" />
+              </button>
+            )
           )}
-        </section>
+        </div>
 
-        <section className="min-h-0 flex flex-col">
-          <div className="card flex-1 min-h-0 flex flex-col">
-            {!selectedPath && <p className="text-gray-500">{t("codingPage.selectFile")}</p>}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            className={`rounded-md border border-border p-1.5 transition hover:bg-accent ${
+              codingSplitPreview ? "border-primary/50 bg-primary/10 text-primary" : "text-muted-foreground"
+            }`}
+            onClick={() => setCodingSplitPreview(!codingSplitPreview)}
+            disabled={previewType === "none"}
+            title={t("codingPage.splitPreview")}
+          >
+            <Columns2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-accent disabled:opacity-40"
+            onClick={() => setShowPreviewModal(true)}
+            disabled={previewType === "none"}
+            title={t("codingPage.fullscreenPreview")}
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-accent disabled:opacity-40"
+            onClick={() => setShowUploadModal(true)}
+            disabled={!selectedProject}
+            title={t("codingPage.uploadTitle")}
+          >
+            <Upload className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-accent hover:text-destructive disabled:opacity-40"
+            onClick={() => {
+              if (!selectedPath) return;
+              if (!window.confirm(`${t("codingPage.deleteFileConfirm")}\n\n${selectedPath}`)) return;
+              deleteFile.mutate(selectedPath);
+            }}
+            disabled={!selectedPath || deleteFile.isPending}
+            title={t("codingPage.deleteFile")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            className="btn-primary px-2.5 py-1.5 text-xs"
+            onClick={saveActiveFile}
+            disabled={!hasChanges || writeFile.isPending}
+            title={`${t("codingPage.saveFile")} (Ctrl+S)`}
+          >
+            <Save className="mr-1 inline h-3.5 w-3.5" />
+            {t("codingPage.saveFile")}
+          </button>
+          {!codingAgentOpen && (
+            <button
+              className="rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-accent"
+              onClick={() => setCodingAgentOpen(true)}
+              title={t("codingPage.showAgentPanel")}
+            >
+              <PanelRightOpen className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
 
-            {selectedPath && selectedItem?.type === "file" && (
-              <>
-                <div className="flex items-center justify-between gap-2 mb-3">
-                  <h2 className="text-lg font-semibold truncate">{selectedPath}</h2>
-                  <div className="flex items-center gap-2">
-                    <button
-                      className="btn-secondary"
-                      onClick={() => moveFile.mutate({ fromPath: selectedPath, toPath: moveTarget.trim() })}
-                      disabled={!moveTarget.trim() || moveTarget.trim() === selectedPath || moveFile.isPending}
-                      title={t("codingPage.moveFile")}
-                    >
-                      <ArrowRightLeft className="w-4 h-4" />
-                    </button>
-                    <button
-                      className="btn-secondary"
-                      onClick={() => setShowPreviewModal(true)}
-                      disabled={previewType === "none"}
-                      title={t("codingPage.previewFile")}
-                    >
-                      <Eye className="w-4 h-4 inline mr-1" />
-                      {t("codingPage.previewFile")}
-                    </button>
-                    <button
-                      className="btn-secondary text-red-300"
-                      onClick={() => deleteFile.mutate(selectedPath)}
-                      disabled={deleteFile.isPending}
-                    >
-                      <Trash2 className="w-4 h-4 inline mr-1" />
-                      {t("codingPage.deleteFile")}
-                    </button>
-                    <button
-                      className="btn-primary"
-                      onClick={() => writeFile.mutate({ path: selectedPath, content: editorContent })}
-                      disabled={!hasChanges || writeFile.isPending}
-                    >
-                      <Save className="w-4 h-4 inline mr-1" />
-                      {t("codingPage.saveFile")}
-                    </button>
-                  </div>
-                </div>
+      {/* Editor + agent panel */}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <CodingEditorTabs
+            openPaths={openPaths}
+            activePath={selectedPath}
+            dirtyPaths={dirtyPaths}
+            onSelect={openFile}
+            onClose={closeFile}
+          />
 
-                <div className="mb-3">
-                  <input
-                    className="input w-full"
-                    value={moveTarget}
-                    onChange={(e) => setMoveTarget(e.target.value)}
-                    placeholder={t("codingPage.moveFile")}
+          {!showEditor ? (
+            <PanelEmpty
+              icon={<FileCode2 className="h-10 w-10" />}
+              title={t("codingPage.noFileOpen")}
+              hint={selectedProject ? t("codingPage.noFileOpenHint") : t("codingPage.noProjects")}
+            />
+          ) : (
+            <div className="flex min-h-0 flex-1">
+              <div className="min-h-0 min-w-0 flex-1">
+                {isTextFile ? (
+                  <Editor
+                    height="100%"
+                    path={`${selectedProject}/${selectedPath}`}
+                    language={detectLanguage(selectedPath)}
+                    value={editorContent}
+                    onChange={(value) => setDraft(selectedPath, value ?? "")}
+                    options={{
+                      minimap: { enabled: true },
+                      fontSize: 13,
+                      wordWrap: "on",
+                      automaticLayout: true,
+                      tabSize: 2,
+                      smoothScrolling: true,
+                      scrollBeyondLastLine: false,
+                    }}
+                    theme={resolvedMode === "dark" ? "vs-dark" : "light"}
                   />
-                </div>
-
-                {readFileQuery.data?.isText ? (
-                  <div className="border border-gray-800 rounded-lg overflow-hidden flex-1 min-h-[520px]">
-                    <Editor
-                      height="100%"
-                      language={detectLanguage(selectedPath)}
-                      value={editorContent}
-                      onChange={(value) => setEditorContent(value ?? "")}
-                      options={{
-                        minimap: { enabled: true },
-                        fontSize: 13,
-                        wordWrap: "on",
-                        automaticLayout: true,
-                        tabSize: 2,
-                        smoothScrolling: true,
-                        scrollBeyondLastLine: false,
-                      }}
-                      theme="vs-dark"
-                    />
-                  </div>
                 ) : (
-                  <p className="text-sm text-gray-400">Binary file preview not available.</p>
+                  <PanelEmpty icon={<FileCode2 className="h-10 w-10" />} title={t("codingPage.binaryFile")} />
                 )}
-              </>
-            )}
-          </div>
+              </div>
 
-        </section>
+              {codingSplitPreview && previewType !== "none" && (
+                <div className="flex min-h-0 w-1/2 min-w-0 flex-col border-l border-border">
+                  <div className="shrink-0 border-b border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+                    {t("codingPage.previewFile")}
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto bg-background/40">
+                    {previewType === "html" && (
+                      <iframe title="coding-html-preview" srcDoc={editorContent} className="h-full w-full bg-white" />
+                    )}
+                    {previewType === "image" && (
+                      <div className="flex h-full items-center justify-center p-3">
+                        <img src={imagePreviewSrc} alt={selectedPath} className="max-h-full max-w-full object-contain" />
+                      </div>
+                    )}
+                    {(previewType === "text" || previewType === "markdown") && (
+                      <pre className="whitespace-pre-wrap p-3 text-xs leading-relaxed">{editorContent}</pre>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {codingAgentOpen && (
+          <>
+            <SplitHandle
+              value={codingAgentWidth}
+              onChange={setCodingAgentWidth}
+              ariaLabel={t("codingPage.agentPanel")}
+            />
+            <div
+              className="flex min-h-0 shrink-0 flex-col border-l border-border bg-card/40"
+              style={{
+                width: `${codingAgentWidth}px`,
+                minWidth: `${CODING_AGENT_MIN_WIDTH}px`,
+                maxWidth: `${CODING_AGENT_MAX_WIDTH}px`,
+              }}
+            >
+              <CodingAgentPanel
+                messages={messages as RenderedChatMessage[]}
+                isLoading={isLoading || isEnsuringConversation}
+                streamingContent={streamingContent}
+                conversationId={activeConversationId}
+                activeFilePath={selectedPath}
+                disabled={!selectedProject}
+                onSend={(text, options) => {
+                  void sendCodingPrompt(text, options);
+                }}
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {showCreateProjectModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-xl border border-gray-800 bg-gray-950 shadow-2xl">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <h2 className="text-lg font-semibold">{t("codingPage.createProject")}</h2>
-              <button className="text-gray-400 hover:text-white" onClick={() => setShowCreateProjectModal(false)}>
-                <X className="w-4 h-4" />
+              <button className="rounded p-1 hover:bg-accent" onClick={() => setShowCreateProjectModal(false)}>
+                <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="space-y-4 p-5">
               <input
+                autoFocus
                 className="input w-full"
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newProjectName.trim()) createProject.mutate(newProjectName.trim());
+                }}
                 placeholder={t("codingPage.projectPlaceholder")}
               />
               <div className="flex justify-end gap-2">
@@ -716,9 +741,10 @@ export function CodingWorkspace() {
                 </button>
                 <button
                   className="btn-primary"
-                  onClick={createProjectFromModal}
+                  onClick={() => createProject.mutate(newProjectName.trim())}
                   disabled={!newProjectName.trim() || createProject.isPending}
                 >
+                  <Plus className="mr-1 inline h-4 w-4" />
                   {t("common.create")}
                 </button>
               </div>
@@ -728,23 +754,27 @@ export function CodingWorkspace() {
       )}
 
       {showUploadModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-xl rounded-xl border border-gray-800 bg-gray-950 shadow-2xl">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-              <h2 className="text-lg font-semibold">Upload</h2>
-              <button className="text-gray-400 hover:text-white" onClick={() => setShowUploadModal(false)}>
-                <X className="w-4 h-4" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl rounded-xl border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <h2 className="text-lg font-semibold">{t("codingPage.uploadTitle")}</h2>
+              <button className="rounded p-1 hover:bg-accent" onClick={() => setShowUploadModal(false)}>
+                <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="p-5 space-y-4">
-              <p className="text-sm text-gray-400">Projekt: {selectedProject || "-"}</p>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-muted-foreground">
+                {t("codingPage.project")}: {selectedProject || "-"}
+              </p>
               <input
                 type="file"
                 multiple
                 className="input w-full"
                 onChange={(e) => setUploadFiles(Array.from(e.target.files ?? []))}
               />
-              <p className="text-xs text-gray-500">{uploadFiles.length} Datei(en) ausgewaehlt</p>
+              <p className="text-xs text-muted-foreground">
+                {uploadFiles.length} {t("codingPage.filesSelected")}
+              </p>
               <div className="flex justify-end gap-2">
                 <button className="btn-secondary" onClick={() => setShowUploadModal(false)}>
                   {t("common.cancel")}
@@ -756,6 +786,7 @@ export function CodingWorkspace() {
                   }}
                   disabled={uploadFiles.length === 0 || uploadFile.isPending || !selectedProject}
                 >
+                  <Upload className="mr-1 inline h-4 w-4" />
                   Upload
                 </button>
               </div>
@@ -765,38 +796,37 @@ export function CodingWorkspace() {
       )}
 
       {showPreviewModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-6xl h-[85vh] rounded-xl border border-gray-800 bg-gray-950 shadow-2xl flex flex-col">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
-              <h2 className="text-lg font-semibold truncate">{t("codingPage.previewFile")}: {selectedPath}</h2>
-              <button className="text-gray-400 hover:text-white" onClick={() => setShowPreviewModal(false)}>
-                <X className="w-4 h-4" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="flex h-[85vh] w-full max-w-6xl flex-col rounded-xl border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <h2 className="truncate text-lg font-semibold">
+                {t("codingPage.previewFile")}: {selectedPath}
+              </h2>
+              <button className="rounded p-1 hover:bg-accent" onClick={() => setShowPreviewModal(false)}>
+                <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="p-4 flex-1 min-h-0 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden p-4">
               {previewType === "html" && (
                 <iframe
-                  title="coding-html-preview"
-                  srcDoc={readFileQuery.data?.content ?? ""}
-                  className="w-full h-full rounded-lg border border-gray-800 bg-white"
+                  title="coding-html-preview-full"
+                  srcDoc={editorContent}
+                  className="h-full w-full rounded-lg border border-border bg-white"
                 />
               )}
-
               {previewType === "image" && (
-                <div className="w-full h-full flex items-center justify-center rounded-lg border border-gray-800 bg-gray-900">
-                  <img src={imagePreviewSrc} alt={selectedPath} className="max-w-full max-h-full object-contain" />
+                <div className="flex h-full w-full items-center justify-center rounded-lg border border-border bg-background/50">
+                  <img src={imagePreviewSrc} alt={selectedPath} className="max-h-full max-w-full object-contain" />
                 </div>
               )}
-
-              {previewType === "text" && (
-                <pre className="w-full h-full overflow-auto rounded-lg border border-gray-800 bg-gray-900 p-4 text-sm text-gray-100 whitespace-pre-wrap">
-                  {readFileQuery.data?.content ?? ""}
+              {(previewType === "text" || previewType === "markdown") && (
+                <pre className="h-full w-full overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-background/50 p-4 text-sm">
+                  {editorContent}
                 </pre>
               )}
-
               {previewType === "none" && (
-                <div className="w-full h-full flex items-center justify-center rounded-lg border border-gray-800 bg-gray-900">
-                  <p className="text-sm text-gray-400">{t("codingPage.previewUnavailable")}</p>
+                <div className="flex h-full w-full items-center justify-center rounded-lg border border-border bg-background/50">
+                  <p className="text-sm text-muted-foreground">{t("codingPage.previewUnavailable")}</p>
                 </div>
               )}
             </div>

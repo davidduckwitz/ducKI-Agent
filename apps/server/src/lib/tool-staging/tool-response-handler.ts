@@ -128,27 +128,9 @@ export class ToolResponseHandler {
     return response.summary;
   }
 
-  /**
-   * Format response for agent analysis (full content)
-   */
-  async formatForAgent(
-    response: HandledToolResponse
-  ): Promise<string> {
-    if (response.isStaged && response.stagingId) {
-      // Return reference + instruction to read
-      return [
-        `Tool response staged in: \`tool-staging://${response.stagingId}\``,
-        "",
-        "To analyze this response:",
-        "1. Read the full content from the staged file",
-        "2. Analyze as needed",
-        "3. After analysis, delete: `tool-staging://delete/${response.stagingId}`",
-      ].join("\n");
-    }
-
-    // Return inline content
-    return response.content ?? response.summary;
-  }
+  // The agent-facing text for a staged response is built in tool-wrapper.ts
+  // (stagingNotice), so the instruction the model reads and the tool it is told to
+  // call cannot drift apart. A second, unused formatter used to live here.
 }
 
 // Global handler
