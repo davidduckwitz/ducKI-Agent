@@ -33,8 +33,10 @@ export function useBackendConfig() {
   };
 
   const getBackendUrl = (): string => {
-    // Check if running in Tauri or Electron (desktop apps need absolute URLs)
-    const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI__;
+    // Check if running in Tauri or Electron (desktop apps need absolute URLs).
+    // Tauri v2 always injects __TAURI_INTERNALS__, regardless of the
+    // `withGlobalTauri` config (which only controls window.__TAURI__).
+    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
     const isElectron = typeof window !== "undefined" && (window as any).electron;
     const isDesktop = isTauri || isElectron;
 

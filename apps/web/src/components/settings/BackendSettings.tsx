@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useBackendConfig } from "../../hooks/useBackendConfig";
+import { useAppStore } from "../../lib/store";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -10,6 +11,7 @@ import { Alert, AlertDescription } from "../ui/alert";
 
 export function BackendSettings() {
   const { config, saveConfig, getBackendUrl } = useBackendConfig();
+  const { disconnectSocket, initSocket } = useAppStore();
   const [type, setType] = useState<"local" | "remote">(config.type);
   const [url, setUrl] = useState(config.url || "");
   const [port, setPort] = useState(String(config.port || 3001));
@@ -26,6 +28,12 @@ export function BackendSettings() {
     setSaveSuccess(true);
     setTestResult(null);
     setTimeout(() => setSaveSuccess(false), 3000);
+
+    // The socket connection was opened against the previous backend URL and
+    // won't pick up the change on its own — force a reconnect so the rest
+    // of the app (chat, agent status, ...) actually talks to the new backend.
+    disconnectSocket();
+    initSocket();
   };
 
   const testBackendConnection = async () => {

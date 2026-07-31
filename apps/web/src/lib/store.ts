@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { io, type Socket } from "socket.io-client";
 import { translations, type Language, type TranslationTree } from "./translations";
 import type { AgentEventType } from "../components/chat/chatTypes";
+import { getBaseUrl } from "./api";
 
 const LANGUAGE_STORAGE_KEY = "ducki.language";
 
@@ -202,18 +203,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Determine socket URL based on environment
     let socketUrl: string | undefined;
 
-    // In dev, always try localhost:3001 (works for both browser and Tauri)
-    if (import.meta.env.DEV) {
+    // Tauri v2 always injects __TAURI_INTERNALS__, regardless of the
+    // `withGlobalTauri` config (which only controls window.__TAURI__).
+    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+    const isElectron = typeof window !== "undefined" && (window as any).electron;
+    const isDesktop = isTauri || isElectron;
+
+    if (isDesktop) {
+      // Respect the backend URL/port configured in Settings (local or remote)
+      const base = getBaseUrl();
+      socketUrl = base.startsWith("http") ? base : "http://localhost:3001";
+    } else if (import.meta.env.DEV) {
       socketUrl = import.meta.env.VITE_SOCKET_URL ?? "http://localhost:3001";
-    } else {
-      // In production, check if we're in Tauri/Electron (desktop)
-      const isTauri = typeof window !== "undefined" && !!(window as any).__TAURI__;
-      const isElectron = typeof window !== "undefined" && (window as any).electron;
-      if (isTauri || isElectron) {
-        socketUrl = "http://localhost:3001";
-      }
-      // Otherwise undefined - browser production will use current URL
     }
+    // Otherwise (browser production): undefined - use current origin
     const socket = io(socketUrl, {
       path: "/socket.io",
       transports: ["websocket"],

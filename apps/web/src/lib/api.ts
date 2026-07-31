@@ -1,9 +1,18 @@
-// Determine base URL: use configurable backend or default
-function getBaseUrl(): string {
-  // Check if running in Tauri or Electron (desktop apps need absolute URLs)
-  const isTauri = typeof window !== 'undefined' && !!(window as any).__TAURI__;
-  const isElectron = typeof window !== 'undefined' && (window as any).electron;
-  const isDesktop = isTauri || isElectron;
+// Tauri v2 always injects window.__TAURI_INTERNALS__, regardless of the
+// `withGlobalTauri` setting (which only controls window.__TAURI__). Detect
+// desktop mode via that, so it works both in `tauri dev` and packaged builds.
+function isDesktopApp(): boolean {
+  if (typeof window === 'undefined') return false;
+  const isTauri = '__TAURI_INTERNALS__' in window;
+  const isElectron = !!(window as any).electron;
+  return isTauri || isElectron;
+}
+
+// Determine base URL: use configurable backend or default.
+// Recomputed on every call (not cached) so a config change made via the
+// Settings UI takes effect immediately, even within the same tab.
+export function getBaseUrl(): string {
+  const isDesktop = isDesktopApp();
 
   // Try to get configured backend URL from localStorage
   try {
@@ -30,26 +39,18 @@ function getBaseUrl(): string {
   return '/api';
 }
 
-let BASE_URL = getBaseUrl();
-
-// Refresh BASE_URL when storage changes
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', () => {
-    BASE_URL = getBaseUrl();
-  });
-}
-
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const baseUrl = getBaseUrl();
   let res: Response;
 
   try {
-    res = await fetch(`${BASE_URL}${path}`, {
+    res = await fetch(`${baseUrl}${path}`, {
       headers: { "Content-Type": "application/json" },
       ...options,
     });
   } catch (error) {
     // If /api fails, try localhost fallback
-    if (!BASE_URL.includes('localhost')) {
+    if (!baseUrl.includes('localhost')) {
       try {
         res = await fetch(`http://localhost:3001${path}`, {
           headers: { "Content-Type": "application/json" },
@@ -354,8 +355,8 @@ export const api = {
       request<{ root: string; files: Array<{ path: string; type: "file" | "directory"; size?: number; updatedAt?: string }> }>("/shared/files"),
     readFile: (path: string) =>
       request<{ path: string; size: number; isText: boolean; content?: string; contentBase64?: string }>(`/shared/read?path=${encodeURIComponent(path)}`),
-    downloadUrl: (path: string) => `${BASE_URL}/shared/download?path=${encodeURIComponent(path)}`,
-    viewUrl: (path: string) => `${BASE_URL}/shared/view?path=${encodeURIComponent(path)}`,
+    downloadUrl: (path: string) => `${getBaseUrl()}/shared/download?path=${encodeURIComponent(path)}`,
+    viewUrl: (path: string) => `${getBaseUrl()}/shared/view?path=${encodeURIComponent(path)}`,
     writeFile: (path: string, content: string) =>
       request<{ written: boolean; path: string }>("/shared/write", {
         method: "POST",

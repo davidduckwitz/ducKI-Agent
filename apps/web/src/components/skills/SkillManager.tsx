@@ -768,14 +768,14 @@ export function SkillManager() {
                     } else {
                       next.delete(selectedDetail.data.slug);
                     }
-                    return saveEnabledSkills.mutateAsync(Array.from(next).sort());
+                    await saveEnabledSkills.mutateAsync(Array.from(next).sort());
                   }}
                   onToggleHidden={async (hidden) => {
                     // TODO: Implement hide functionality
                     console.log("Toggle hidden:", hidden);
                   }}
                   onDelete={async () => {
-                    return deleteSkill.mutateAsync(selectedDetail.data.slug);
+                    await deleteSkill.mutateAsync(selectedDetail.data.slug);
                   }}
                 />
               </div>

@@ -13,7 +13,7 @@ export function SkillsPrivacySettings() {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState(false);
 
-  const { data: settings = {} } = useQuery({
+  const { data: settings = [] } = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.settings.list(),
   });
