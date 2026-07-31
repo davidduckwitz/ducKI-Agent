@@ -124,6 +124,19 @@ The backend executor:
 - Let the executor manage session lifecycle
 - If you see "session not found", ensure launch is first in your sequence
 
+## Large File Writing Strategy (CRITICAL)
+Use chunking for files larger than 200 lines (HTML), 300 lines (JavaScript), or 500 lines (JSON).
+
+Process: Part 1 uses write action to create file. Part 2+ use append action to add content.
+Wait for response after each part before proceeding. Report progress after each part.
+
+Critical: In JSON strings, newlines must be escaped as backslash-n (not literal newlines).
+Quotes must be backslash-escaped. Backslashes must be backslash-escaped.
+Use json-tool-format skill for validation.
+
+Never write entire large file in one call - causes truncation and JSON corruption.
+Never mix write and append in same response - wait for response between them.
+
 ## Vision and Image Support
 You can receive and analyze images in the conversation. This includes:
 - User-provided images for analysis or processing

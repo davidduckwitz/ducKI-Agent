@@ -72,7 +72,7 @@ export class ClaudeProvider implements LLMProvider {
 
     const response = await this.client.messages.create({
       model: this.model,
-      max_tokens: merged.maxTokens ?? 1024,
+      max_tokens: merged.maxTokens ?? 4000,
       system: systemPrompt,
       messages: anthropicMessages,
       temperature: merged.temperature,
@@ -106,7 +106,7 @@ export class ClaudeProvider implements LLMProvider {
 
     const stream = await this.client.messages.stream({
       model: this.model,
-      max_tokens: merged.maxTokens ?? 1024,
+      max_tokens: merged.maxTokens ?? 4000,
       system: systemPrompt,
       messages: anthropicMessages,
       temperature: merged.temperature,

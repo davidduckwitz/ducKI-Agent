@@ -143,20 +143,74 @@ Full call:
 [TOOL:memory({"action": "add", "content": "User prefers dark mode"})]
 ```
 
-## Escape Sequences in JSON
+## Escape Sequences in JSON (CRITICAL)
 
-If you need special characters in strings:
+**Every special character MUST be escaped in JSON strings.** This is REQUIRED for tool calls with multi-line content.
 
-| Character | Escape | Example |
-|-----------|--------|---------|
-| Quote | `\"` | `"He said \"hello\""` |
-| Backslash | `\\` | `"Path: C:\\Users"` |
-| Newline | `\n` | `"Line1\nLine2"` |
-| Tab | `\t` | `"Col1\tCol2"` |
+| Character | Escape | Example | Usage |
+|-----------|--------|---------|-------|
+| Newline | `\n` | `"Line1\nLine2"` | Multi-line content (HTML, code, files) |
+| Quote | `\"` | `"He said \"hello\""` | Quotes in strings |
+| Backslash | `\\` | `"Path: C:\\Users"` | Windows paths, regex |
+| Tab | `\t` | `"Col1\tCol2"` | Indentation in code |
+| Carriage Return | `\r` | `"Line\r\n"` | Windows line endings |
 
-Example:
+### ⚠️ CRITICAL: Multi-Line Content (Files, HTML, Code)
+
+When writing files with multiple lines, **EVERY newline must be `\n`**:
+
+**WRONG - literal newlines break JSON:**
+```json
+{
+  "path": "index.html",
+  "content": "<!DOCTYPE html>
+<html>
+<head>
+  <title>Page</title>
+</head>
+</html>"
+}
 ```
-[TOOL:task({"action": "create", "title": "Task: \"Important\" work", "description": "Line1\nLine2"})]
+❌ This breaks JSON - the literal newlines are invalid!
+
+**CORRECT - escaped newlines:**
+```json
+{
+  "path": "index.html",
+  "content": "<!DOCTYPE html>\n<html>\n<head>\n  <title>Page</title>\n</head>\n</html>"
+}
+```
+✅ This is valid JSON - all newlines are escaped
+
+### Full File Writing Example
+
+```
+[TOOL:filesystem({
+  "action": "write",
+  "path": "src/index.html",
+  "content": "<!DOCTYPE html>\n<html>\n<head>\n  <title>My Page</title>\n  <style>\n    body { margin: 0; }\n  </style>\n</head>\n<body>\n  <h1>Hello</h1>\n</body>\n</html>"
+})]
+```
+
+Or using the coding tool for large files:
+
+```
+[TOOL:coding({
+  "action": "write",
+  "project": "my-project",
+  "path": "index.html",
+  "content": "<!DOCTYPE html>\n<html lang=\"de\">\n<head>\n    <meta charset=\"UTF-8\">\n    <title>Page</title>\n</head>\n<body>\n</body>\n</html>"
+})]
+```
+
+### Memory Operations with Newlines
+```
+[TOOL:task({"action": "create", "title": "Task", "description": "Line1\nLine2\nLine3"})]
+```
+
+Example task description with tool call:
+```
+[TOOL:task({"action": "create", "title": "Implement Feature", "description": "Requirements:\n- Add button\n- Show modal\n- Save data"})]
 ```
 
 ## Validation Checklist
@@ -246,6 +300,31 @@ Before emitting a tool call, verify:
 **Fix**: Keep tool call clean:
 ```
 [TOOL:task({"action": "create"})]  ← CORRECT
+```
+
+### ❌ CRITICAL WRONG: Literal newlines instead of `\n`
+```
+[TOOL:filesystem({"action": "write", "path": "file.html", "content": "<!DOCTYPE html>
+<html>
+</html>"})]  ← WRONG - destroys JSON!
+```
+
+**Result**: File gets written as:
+```
+<!DOCTYPE html>n<html>n</html>
+```
+The `n` is literal text, not a newline!
+
+**Fix**: Escape every newline with `\n`:
+```
+[TOOL:filesystem({"action": "write", "path": "file.html", "content": "<!DOCTYPE html>\n<html>\n</html>"})]  ← CORRECT
+```
+
+**Result**: File written correctly:
+```
+<!DOCTYPE html>
+<html>
+</html>
 ```
 
 ## Testing Your Tool Call

@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 
 export const codingRouter: IRouter = Router();
@@ -191,19 +192,45 @@ codingRouter.post("/projects/:project/write", (req, res) => {
     const content = String(req.body?.content ?? "");
     const expectedSize = req.body?.expectedSize as number | undefined;
 
-    // Warn if content appears truncated (LLM response was cut off)
+    // Detect truncation from LLM token limits
     const warnings: string[] = [];
-    if (expectedSize && content.length < expectedSize * 0.95) {
-      warnings.push(`Content may be truncated: received ${content.length} bytes, expected ~${expectedSize} bytes`);
+
+    // Check for obvious truncation indicators
+    const truncationIndicators = [
+      { pattern: /```\s*$/, msg: "Unclosed code block - likely truncated" },
+      { pattern: /<[^>]*$/, msg: "Unclosed HTML tag - likely truncated" },
+      { pattern: /[\{\[\(]\s*$/, msg: "Unclosed bracket/brace - likely truncated" },
+      { pattern: /"[^"]*$/, msg: "Unclosed string quote - likely truncated" },
+    ];
+
+    for (const indicator of truncationIndicators) {
+      if (indicator.pattern.test(content)) {
+        warnings.push(`⚠️ ${indicator.msg}`);
+      }
     }
 
-    // Warn if file ends abruptly (incomplete code blocks, JSON, etc)
-    if (content.match(/```\s*$/)) warnings.push("File ends with unclosed code block");
-    if ((content.match(/\{/g) || []).length > (content.match(/\}/g) || []).length) {
-      warnings.push("Unbalanced braces - may be truncated JSON/object");
+    // Check for unbalanced brackets
+    const openBraces = (content.match(/\{/g) || []).length;
+    const closeBraces = (content.match(/\}/g) || []).length;
+    if (openBraces > closeBraces) {
+      warnings.push(`Unbalanced braces: ${openBraces} open, ${closeBraces} close - likely truncated`);
     }
-    if ((content.match(/\[/g) || []).length > (content.match(/\]/g) || []).length) {
-      warnings.push("Unbalanced brackets - may be truncated array");
+
+    const openBrackets = (content.match(/\[/g) || []).length;
+    const closeBrackets = (content.match(/\]/g) || []).length;
+    if (openBrackets > closeBrackets) {
+      warnings.push(`Unbalanced brackets: ${openBrackets} open, ${closeBrackets} close - likely truncated`);
+    }
+
+    // Check for unclosed HTML
+    const openTags = (content.match(/<[^/>]+>/g) || []).length;
+    const closeTags = (content.match(/<\/[^>]+>/g) || []).length;
+    if (openTags > closeTags + 5) { // Allow some self-closing tags
+      warnings.push(`Unclosed HTML tags: ~${openTags - closeTags} more opens than closes - likely truncated`);
+    }
+
+    if (expectedSize && content.length < expectedSize * 0.9) {
+      warnings.push(`Size mismatch: received ${content.length} bytes, expected ~${expectedSize} bytes`);
     }
 
     const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
@@ -223,6 +250,43 @@ codingRouter.post("/projects/:project/write", (req, res) => {
       path: sanitizeRelativePath(rel),
       size: content.length,
       warnings: warnings.length > 0 ? warnings : undefined
+    }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+// Append content to existing file (for large file chunked writing)
+codingRouter.post("/projects/:project/append", async (req, res) => {
+  try {
+    ensureCodingRoot();
+    const rel = String(req.body?.path ?? "");
+    if (!rel) {
+      res.status(400).json(createApiError("path is required"));
+      return;
+    }
+    const content = String(req.body?.content ?? "");
+
+    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+
+    const target = absoluteFromProjectRelative(absolute, rel);
+    if (!existsSync(target)) {
+      res.status(404).json(createApiError("File not found - use write action to create new file"));
+      return;
+    }
+
+    // Append content to existing file (MUST await to prevent race condition)
+    await appendFile(target, content, "utf8");
+
+    res.json(createApiResponse({
+      appended: true,
+      project: slug,
+      path: sanitizeRelativePath(rel),
+      appendedSize: content.length
     }));
   } catch (error) {
     res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
