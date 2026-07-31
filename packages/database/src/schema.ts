@@ -322,6 +322,32 @@ export const cryptoBalanceAlerts = sqliteTable("crypto_balance_alerts", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// ============================================================
+// Bitcoin Puzzle Solver Persistence
+// ============================================================
+export const bitcoinPuzzles = sqliteTable("bitcoin_puzzles", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  targetAddress: text("target_address").notNull(),
+  infoUrl: text("info_url"),
+  status: text("status").notNull().default("pending"), // pending, running, paused, completed, error
+  triedCombinationsCount: integer("tried_combinations_count").notNull().default(0),
+  generatedCount: integer("generated_count").notNull().default(0),
+  currentCombinationMode: text("current_combination_mode").notNull().default("random"),
+  foundAddress: text("found_address"),
+  foundMnemonic: text("found_mnemonic"),
+  errorMessage: text("error_message"),
+  attemptsFilePath: text("attempts_file_path"), // Path to CSV with mnemonic/address pairs
+  startedAt: text("started_at").notNull(),
+  lastCheckAt: text("last_check_at").notNull(),
+  lastSaveAt: text("last_save_at").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export type BitcoinPuzzleInsert = typeof bitcoinPuzzles.$inferInsert;
+export type BitcoinPuzzleSelect = typeof bitcoinPuzzles.$inferSelect;
+
 export type ConversationInsert = typeof conversations.$inferInsert;
 export type ConversationSelect = typeof conversations.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;

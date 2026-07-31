@@ -69,8 +69,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(error.error ?? `HTTP ${res.status}`);
   }
 
-  const data = (await res.json()) as { data: T };
-  return data.data;
+  const response = (await res.json()) as { success?: boolean; data: T } | { data: T };
+  return response.data;
 }
 
 export const api = {
@@ -569,6 +569,109 @@ export const api = {
       request<{ conversationId: number; replyText: string; result: unknown; portal: string; configId: string; reaction: string }>("/gateway/inbound", {
         method: "POST",
         body: JSON.stringify(payload),
+      }),
+  },
+
+  bitcoinPuzzle: {
+    list: () =>
+      request<{
+        puzzles: Array<{
+          id: string;
+          name: string;
+          targetAddress: string;
+          infoUrl?: string;
+          createdAt: string;
+          status: string;
+          generatedAddresses: number;
+          found: boolean;
+        }>;
+      }>("/bitcoin-puzzle"),
+    create: (data: { targetAddress: string; startMnemonic?: string; name?: string; infoUrl?: string }) =>
+      request<{ success: boolean; id: string; status: string; target: string; startedAt: string }>("/bitcoin-puzzle", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    get: (puzzleId: string) =>
+      request<{
+        id: string;
+        name: string;
+        targetAddress: string;
+        infoUrl?: string;
+        createdAt: string;
+        status: string;
+        generatedAddresses: number;
+        elapsedSeconds: number;
+        addressesPerSecond: number;
+        isRunning: boolean;
+        foundAddress: string | null;
+        foundMnemonic: string | null;
+        error: string | null;
+        lastUpdate: string;
+      }>(`/bitcoin-puzzle/${puzzleId}`),
+    pause: (puzzleId: string) =>
+      request<{ success: boolean; status: string }>(`/bitcoin-puzzle/${puzzleId}/pause`, {
+        method: "POST",
+      }),
+    resume: (puzzleId: string) =>
+      request<{ success: boolean; status: string }>(`/bitcoin-puzzle/${puzzleId}/resume`, {
+        method: "POST",
+      }),
+    stop: (puzzleId: string) =>
+      request<{ success: boolean; status: string; generatedAddresses?: number }>(`/bitcoin-puzzle/${puzzleId}/stop`, {
+        method: "POST",
+      }),
+    update: (puzzleId: string, data: { name?: string; infoUrl?: string }) =>
+      request<{ success: boolean; metadata: { id: string; name: string; targetAddress: string; infoUrl?: string } }>(`/bitcoin-puzzle/${puzzleId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    search: (puzzleId: string, query: string) =>
+      request<{
+        puzzleId: string;
+        query: string;
+        matchCount: number;
+        matches: Array<{ mnemonic: string; address: string }>;
+      }>(`/bitcoin-puzzle/${puzzleId}/search`, {
+        method: "POST",
+        body: JSON.stringify({ query }),
+      }),
+    searchAll: (query: string) =>
+      request<{
+        query: string;
+        resultCount: number;
+        totalMatches: number;
+        results: Array<{
+          puzzleId: string;
+          puzzleName: string;
+          targetAddress: string;
+          matches: Array<{ mnemonic: string; address: string }>;
+        }>;
+      }>(`/bitcoin-puzzle/search/all`, {
+        method: "POST",
+        body: JSON.stringify({ query }),
+      }),
+    checkPhrase: (phrase: string) =>
+      request<{
+        phrase: string;
+        exists: boolean;
+        puzzleId: string | null;
+      }>(`/bitcoin-puzzle/check-phrase`, {
+        method: "POST",
+        body: JSON.stringify({ phrase }),
+      }),
+    markPhrase: (puzzleId: string, phrase: string, address: string = "") =>
+      request<{
+        success: boolean;
+        message: string;
+        generatedCount: number;
+        isPartial: boolean;
+      }>(`/bitcoin-puzzle/${puzzleId}/mark-phrase`, {
+        method: "POST",
+        body: JSON.stringify({ phrase, address }),
+      }),
+    delete: (puzzleId: string) =>
+      request<{ success: boolean; message: string }>(`/bitcoin-puzzle/${puzzleId}`, {
+        method: "DELETE",
       }),
   },
 };

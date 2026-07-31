@@ -739,6 +739,36 @@ export class DatabaseService {
     await this.db.delete(schema.archivedConversations).where(eq(schema.archivedConversations.id, id)).run();
   }
 
+  // ============================================================
+  // Crypto Addresses
+  // ============================================================
+  async addCryptoAddress(data: Omit<schema.CryptoAddressInsert, "createdAt" | "updatedAt">): Promise<schema.CryptoAddressSelect | undefined> {
+    const now = new Date().toISOString();
+    try {
+      const result = await this.db
+        .insert(schema.cryptoAddresses)
+        .values({ ...data, createdAt: now, updatedAt: now })
+        .returning()
+        .get();
+      return result;
+    } catch (error) {
+      // Return undefined if insertion fails (e.g., unique constraint)
+      this.logger.warn("Failed to add crypto address", { error: error instanceof Error ? error.message : String(error) });
+      return undefined;
+    }
+  }
+
+  async getCryptoAddresses(currency?: string): Promise<schema.CryptoAddressSelect[]> {
+    if (currency) {
+      return this.db.select().from(schema.cryptoAddresses).where(eq(schema.cryptoAddresses.currency, currency)).all();
+    }
+    return this.db.select().from(schema.cryptoAddresses).all();
+  }
+
+  async getCryptoAddressById(id: number): Promise<schema.CryptoAddressSelect | undefined> {
+    return this.db.select().from(schema.cryptoAddresses).where(eq(schema.cryptoAddresses.id, id)).get();
+  }
+
   get raw(): LibSQLDatabase<typeof schema> {
     return this.db;
   }

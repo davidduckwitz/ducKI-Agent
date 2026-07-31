@@ -1,12 +1,19 @@
 import { Router, type IRouter } from "express";
 import { createApiResponse } from "@ducki/shared";
 import { agentRegistry } from "../lib/agent-registry.js";
+import { BitcoinPuzzleService } from "@ducki/agent";
 
 export const agentsRouter: IRouter = Router();
 
 agentsRouter.get("/live", (req, res) => {
   const snapshot = agentRegistry.snapshot();
   const snapshotAt = new Date().toISOString();
+
+  // Bitcoin Puzzle Info
+  const bitcoinPuzzleService = BitcoinPuzzleService.getInstance();
+  const runningPuzzlesCount = bitcoinPuzzleService.getRunningPuzzlesCount();
+  const allPuzzles = bitcoinPuzzleService.getAllPuzzlesInfo();
+
   const sourceMap = {
     chat_http: snapshot.agents.filter((entry) => entry.source === "chat_http").length,
     chat_ws: snapshot.agents.filter((entry) => entry.source === "chat_ws").length,
@@ -19,6 +26,7 @@ agentsRouter.get("/live", (req, res) => {
     tasks: snapshot.agents.filter((entry) => entry.source === "task_run").length,
     workflows: snapshot.agents.filter((entry) => entry.source === "workflow_run").length,
     gateway: snapshot.agents.filter((entry) => entry.source === "gateway_inbound").length,
+    bitcoinPuzzles: runningPuzzlesCount,
   };
 
   const discordStatus = (req.app.locals["discordGatewayStatus"] as {
@@ -42,6 +50,11 @@ agentsRouter.get("/live", (req, res) => {
     summary,
     gateway: {
       discord: discordStatus,
+    },
+    bitcoinPuzzles: {
+      running: runningPuzzlesCount,
+      total: allPuzzles.length,
+      puzzles: allPuzzles,
     },
   }));
 });

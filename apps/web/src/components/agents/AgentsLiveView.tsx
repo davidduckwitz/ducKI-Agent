@@ -15,6 +15,16 @@ interface LiveAgentItem {
   label?: string;
 }
 
+interface BitcoinPuzzleInfo {
+  id: string;
+  name: string;
+  targetAddress: string;
+  status: string;
+  generatedCount: number;
+  triedCombinationsCount: number;
+  found: boolean;
+}
+
 function sourceLabel(source: LiveAgentItem["source"]): string {
   if (source === "chat_ws") return "Chat (WebSocket)";
   if (source === "chat_http") return "Chat (HTTP)";
@@ -65,6 +75,8 @@ export function AgentsLiveView() {
   const taskCount = summary?.tasks ?? agents.filter((entry) => entry.source === "task_run").length;
   const workflowCount = summary?.workflows ?? agents.filter((entry) => entry.source === "workflow_run").length;
   const gatewayCount = summary?.gateway ?? agents.filter((entry) => entry.source === "gateway_inbound").length;
+  const bitcoinPuzzleCount = (live.data as any)?.summary?.bitcoinPuzzles ?? 0;
+  const bitcoinPuzzles = ((live.data as any)?.bitcoinPuzzles?.puzzles ?? []) as BitcoinPuzzleInfo[];
 
   return (
     <div className="p-6 space-y-5">
@@ -79,7 +91,7 @@ export function AgentsLiveView() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="card">
           <p className="text-xs text-gray-400">Agents gesamt</p>
           <p className="text-xl font-semibold text-emerald-200">{runningCount}</p>
@@ -96,6 +108,11 @@ export function AgentsLiveView() {
           <p className="text-xs text-gray-400">Workflows aktiv</p>
           <p className="text-xl font-semibold text-violet-200">{workflowCount}</p>
           {gatewayCount > 0 && <p className="text-[11px] text-gray-500 mt-1">Gateway: {gatewayCount}</p>}
+        </div>
+        <div className="card">
+          <p className="text-xs text-gray-400">Bitcoin Puzzles</p>
+          <p className="text-xl font-semibold text-yellow-200">{bitcoinPuzzleCount}</p>
+          {bitcoinPuzzleCount > 0 && <p className="text-[11px] text-gray-500 mt-1">laufen jetzt</p>}
         </div>
       </div>
 
@@ -147,6 +164,55 @@ export function AgentsLiveView() {
       {agents.length === 0 && (
         <div className="card text-sm text-gray-400">
           Derzeit laufen keine Agenten.
+        </div>
+      )}
+
+      {/* Bitcoin Puzzles Section */}
+      {bitcoinPuzzles.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold">Bitcoin Puzzle Solver</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {bitcoinPuzzles.map((puzzle) => (
+              <a
+                key={puzzle.id}
+                href={`/crypto?puzzle=${puzzle.id}`}
+                className="card hover:border-yellow-500/50 transition cursor-pointer space-y-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-white truncate">{puzzle.name}</p>
+                    <p className="text-xs text-gray-400 truncate">{puzzle.targetAddress}</p>
+                  </div>
+                  <div
+                    className={`text-xs px-2 py-1 rounded whitespace-nowrap ${
+                      puzzle.status === "running"
+                        ? "bg-green-500/20 text-green-300"
+                        : puzzle.status === "paused"
+                          ? "bg-yellow-500/20 text-yellow-300"
+                          : puzzle.status === "completed"
+                            ? "bg-blue-500/20 text-blue-300"
+                            : puzzle.found
+                              ? "bg-purple-500/20 text-purple-300"
+                              : "bg-gray-700/20 text-gray-300"
+                    }`}
+                  >
+                    {puzzle.found ? "✓ Found" : puzzle.status}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <p className="text-gray-400">Kombinationen</p>
+                    <p className="font-mono text-white">{puzzle.generatedCount.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-400">Versucht</p>
+                    <p className="font-mono text-white">{puzzle.triedCombinationsCount.toLocaleString()}</p>
+                  </div>
+                </div>
+              </a>
+            ))}
+          </div>
         </div>
       )}
     </div>

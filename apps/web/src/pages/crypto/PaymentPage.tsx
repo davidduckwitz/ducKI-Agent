@@ -1,15 +1,29 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { PortfolioOverview } from "../../components/crypto/PortfolioOverview";
 import { AddressesList } from "../../components/crypto/AddressesList";
 import { TransactionsList } from "../../components/crypto/TransactionsList";
 import { CryptoSettingsPanel } from "../../components/crypto/CryptoSettingsPanel";
+import { BitcoinPuzzleManager } from "../../components/crypto/BitcoinPuzzleManager";
 import { useAddresses } from "../../hooks/useCrypto";
-import { Wallet, History, Settings, BarChart3 } from "lucide-react";
+import { Wallet, History, Settings, BarChart3, Target } from "lucide-react";
 
 export function CryptoPaymentPage() {
+  const [searchParams] = useSearchParams();
   const { data: addresses } = useAddresses();
   const [selectedAddressId, setSelectedAddressId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState("portfolio");
+  const [selectedPuzzleId, setSelectedPuzzleId] = useState<string | null>(null);
+
+  // Lese Query-Parameter beim Mount
+  useEffect(() => {
+    const puzzleId = searchParams.get("puzzle");
+    if (puzzleId) {
+      setActiveTab("puzzle");
+      setSelectedPuzzleId(puzzleId);
+    }
+  }, [searchParams]);
 
   // Select first address by default
   const displayAddressId = selectedAddressId || addresses?.[0]?.id;
@@ -25,8 +39,8 @@ export function CryptoPaymentPage() {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="portfolio" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="portfolio" className="gap-2">
             <BarChart3 className="h-4 w-4" />
             <span className="hidden sm:inline">Portfolio</span>
@@ -38,6 +52,10 @@ export function CryptoPaymentPage() {
           <TabsTrigger value="transactions" className="gap-2">
             <History className="h-4 w-4" />
             <span className="hidden sm:inline">Transaktionen</span>
+          </TabsTrigger>
+          <TabsTrigger value="puzzle" className="gap-2">
+            <Target className="h-4 w-4" />
+            <span className="hidden sm:inline">BTC Puzzle</span>
           </TabsTrigger>
           <TabsTrigger value="settings" className="gap-2">
             <Settings className="h-4 w-4" />
@@ -64,6 +82,11 @@ export function CryptoPaymentPage() {
               Generieren Sie zunächst eine Adresse
             </div>
           )}
+        </TabsContent>
+
+        {/* Bitcoin Puzzle Solver Tab */}
+        <TabsContent value="puzzle" className="space-y-4">
+          <BitcoinPuzzleManager initialSelectedPuzzleId={selectedPuzzleId} />
         </TabsContent>
 
         {/* Settings Tab */}

@@ -61,6 +61,7 @@ import { wikiRouter } from "./routes/wiki.js";
 import { createCryptoPaymentRouter } from "./routes/crypto-payment.js";
 import { createToolStagingRouter } from "./routes/tool-staging.js";
 import { screenshotRouter } from "./routes/screenshots.js";
+import { bitcoinPuzzleRouter } from "./routes/bitcoin-puzzle.js";
 import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
 import { createBrowserControlMcpTool } from "./browser/mcp-browser-server.js";
 import { createTasksMcpTool } from "./tasks/mcp-tasks-server.js";
@@ -425,6 +426,7 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);
 	app.use("/api/crypto", createCryptoPaymentRouter(database));
+	app.use("/api/bitcoin-puzzle", bitcoinPuzzleRouter);
 	setupCredentialRoutes(database);
 	app.use("/api/credentials", credentialRouter);
 	app.use("/api/logs", logsRouter);

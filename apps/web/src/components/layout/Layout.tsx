@@ -134,6 +134,7 @@ export function Layout() {
   const runningCount = liveAgents.data?.runningCount ?? globalRunningAgents;
   const discordGateway = liveAgents.data?.gateway?.discord;
   const discordGatewayActive = Boolean(discordGateway?.active);
+  const bitcoinPuzzlesCount = (liveAgents.data as any)?.bitcoinPuzzles?.running ?? 0;
 
   const updateStatus = useQuery({
     queryKey: ["updates", "status"],
@@ -247,7 +248,7 @@ export function Layout() {
             </div>
             <ThemeModeSwitcher />
           </div>
-          <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground flex-wrap">
             {connected ? (
               <><Wifi className="w-3 h-3 text-green-400" /><span className="text-green-400">{t("layout.connected")}</span></>
             ) : (
@@ -352,6 +353,15 @@ export function Layout() {
                 {discordGatewayActive ? t("common.active") : t("common.inactive")}
               </span>
             </div>
+            {bitcoinPuzzlesCount > 0 && (
+              <div className="mt-2 flex items-center justify-between text-[11px]">
+                <span className="text-muted-foreground">Bitcoin Puzzle</span>
+                <span className="inline-flex items-center gap-1 text-yellow-300">
+                  <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                  running {bitcoinPuzzlesCount}
+                </span>
+              </div>
+            )}
             <p className="text-[11px] text-muted-foreground/70 mt-1">{t("layout.clickForLiveChats")}</p>
           </NavLink>
         </div>
