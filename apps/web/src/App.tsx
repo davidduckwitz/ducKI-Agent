@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useSettings, readFlag } from "./lib/useSettings";
+import { startConnectionGate } from "./lib/useServerQuery";
 import { Layout } from "./components/layout/Layout";
 import { Dashboard } from "./components/dashboard/Dashboard";
 import { ChatContainer } from "./components/chat/ChatContainer";
@@ -8,7 +9,6 @@ import { ProjectManager } from "./components/projects/ProjectManager";
 import { TaskManager } from "./components/tasks/TaskManager";
 import { ToastDisplay } from "./components/ui/toast-display";
 import { useI18n } from "./lib/i18n";
-import { api } from "./lib/api";
 import { initializeCharacterSystem } from "./components/chat/characters";
 
 const ToolRegistry = lazy(async () => {
@@ -82,20 +82,14 @@ function LazyRoute({ children }: { children: ReactNode }) {
 
 function CodingGate() {
   const { t } = useI18n();
-  const settingsQuery = useQuery({
-    queryKey: ["settings", "coding-gate"],
-    queryFn: () => api.settings.list() as Promise<Array<{ key: string; value: string }>>,
-    refetchInterval: 5000,
-  });
+  // Shares the one cached settings query instead of running a fourth 5s poll.
+  const settingsQuery = useSettings();
 
   if (settingsQuery.isLoading || !settingsQuery.data) {
-    return <div className="p-6 text-sm text-gray-400">{t("app.loadingPage")}</div>;
+    return <div className="p-6 text-sm text-muted-foreground">{t("app.loadingPage")}</div>;
   }
 
-  const rawValue = settingsQuery.data.find((s) => s.key === "CODING_ENABLED")?.value;
-  const codingEnabled = String(rawValue ?? "false").trim().toLowerCase() === "true";
-
-  if (!codingEnabled) {
+  if (!readFlag(settingsQuery.data, "CODING_ENABLED")) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -109,6 +103,11 @@ export default function App() {
   useEffect(() => {
     initializeCharacterSystem();
   }, []);
+
+  // Ties React Query's online state to the handshake, so every query in the app pauses
+  // while the server is unreachable and resumes on reconnect - without each component
+  // having to opt in.
+  useEffect(() => startConnectionGate(), []);
 
   return (
     <BrowserRouter>

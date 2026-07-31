@@ -20,8 +20,9 @@ import {
   Wallet,
 } from "lucide-react";
 import { useAppStore } from "../../lib/store";
-import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { useSettings, readFlag } from "../../lib/useSettings";
+import { useSettingsChangeListener } from "../../lib/useServerQuery";
 import { SetupWizardModal } from "../setup/SetupWizardModal";
 import { PetLayer } from "../pet/PetLayer";
 import { Sidebar } from "./Sidebar";
@@ -39,31 +40,29 @@ export function Layout() {
     setupModalOpen,
     setSetupModalOpen,
     runningTools,
+    gatewayStatus,
+    agentMetrics,
   } = useAppStore();
   const firstRunCheckDone = useRef(false);
 
-  const liveAgents = useQuery({
-    queryKey: ["agents", "live", "sidebar"],
-    queryFn: () => api.agents.live(),
-    refetchInterval: 1500,
-  });
-  const runningCount = liveAgents.data?.runningCount ?? globalRunningAgents;
-  const gatewayActive = Boolean(liveAgents.data?.gateway?.discord?.active);
-  const bitcoinPuzzles = (liveAgents.data as any)?.bitcoinPuzzles?.running ?? 0;
+  // Invalidate the shared settings cache when the server announces a change.
+  useSettingsChangeListener();
 
-  const settingsQuery = useQuery({
-    queryKey: ["settings", "layout-nav"],
-    queryFn: () => api.settings.list() as Promise<Array<{ key: string; value: string }>>,
-    refetchInterval: 5000,
-  });
-  const readFlag = (key: string) =>
-    String(settingsQuery.data?.find((s) => s.key === key)?.value ?? "false").trim().toLowerCase() === "true";
-  const codingEnabled = readFlag("CODING_ENABLED");
+  // Agent metrics arrive via socket push (agent:metrics). This used to be a 1.5s poll
+  // of /agents/live on every single page - 40 requests a minute on its own.
+  const runningCount = globalRunningAgents;
+  const gatewayActive = Boolean((gatewayStatus as { discord?: { active?: boolean } } | undefined)?.discord?.active);
+  const bitcoinPuzzles = Number(
+    (agentMetrics as { bitcoinPuzzles?: number } | undefined)?.bitcoinPuzzles ?? 0
+  );
+
+  const settingsQuery = useSettings();
+  const codingEnabled = readFlag(settingsQuery.data, "CODING_ENABLED");
 
   useEffect(() => {
     if (firstRunCheckDone.current) return;
     if (!settingsQuery.data) return;
-    if (!readFlag("SETUP_COMPLETED")) setSetupModalOpen(true);
+    if (!readFlag(settingsQuery.data, "SETUP_COMPLETED")) setSetupModalOpen(true);
     firstRunCheckDone.current = true;
   }, [setSetupModalOpen, settingsQuery.data]);
 

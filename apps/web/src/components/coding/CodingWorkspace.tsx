@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerQuery } from "../../lib/useServerQuery";
+import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
 import {
   Columns2,
   FileCode2,
@@ -145,14 +147,9 @@ export function CodingWorkspace() {
     localStorage.setItem(PROJECT_CONVERSATION_MAP_KEY, JSON.stringify(projectConversationMap));
   }, [projectConversationMap]);
 
-  const settingsQuery = useQuery({
-    queryKey: ["settings", "coding-workspace"],
-    queryFn: () => api.settings.list() as Promise<Array<{ key: string; value: string }>>,
-    refetchInterval: 5000,
-  });
-  const codingSettingRaw = settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value;
-  const codingEnabled = String(codingSettingRaw ?? "false").trim().toLowerCase() === "true";
-  const codingSettingReady = !settingsQuery.isLoading && Boolean(settingsQuery.data);
+  const settingsQuery = useSettings();
+  const codingEnabled = readFlag(settingsQuery.data, "CODING_ENABLED");
+  const codingSettingReady = settingsReady(settingsQuery);
 
   const activeConversationId = selectedProject ? projectConversationMap[selectedProject] : undefined;
 

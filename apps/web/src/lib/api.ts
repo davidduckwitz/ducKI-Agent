@@ -1,68 +1,17 @@
-// Tauri v2 always injects window.__TAURI_INTERNALS__, regardless of the
-// `withGlobalTauri` setting (which only controls window.__TAURI__). Detect
-// desktop mode via that, so it works both in `tauri dev` and packaged builds.
-function isDesktopApp(): boolean {
-  if (typeof window === 'undefined') return false;
-  const isTauri = '__TAURI_INTERNALS__' in window;
-  const isElectron = !!(window as any).electron;
-  return isTauri || isElectron;
-}
+import { getApiBaseUrl } from "./backendUrl";
 
-// Determine base URL: use configurable backend or default.
-// Recomputed on every call (not cached) so a config change made via the
-// Settings UI takes effect immediately, even within the same tab.
-export function getBaseUrl(): string {
-  const isDesktop = isDesktopApp();
-
-  // Try to get configured backend URL from localStorage
-  try {
-    const config = localStorage.getItem('backend-config');
-    if (config) {
-      const parsed = JSON.parse(config);
-      if (parsed.type === 'remote' && parsed.url) {
-        return parsed.url.replace(/\/$/, ''); // Remove trailing slash
-      }
-      if (parsed.type === 'local' && parsed.port && isDesktop) {
-        return `http://localhost:${parsed.port}`;
-      }
-    }
-  } catch {
-    // Fall through to defaults
-  }
-
-  // Default behavior: desktop apps need absolute localhost URLs
-  if (isDesktop) {
-    return 'http://localhost:3001';
-  }
-
-  // In browser, use relative /api path (proxy will handle it)
-  return '/api';
-}
+/** @deprecated Use getApiBaseUrl from ./backendUrl - kept as a named re-export so
+ *  existing importers keep working. */
+export const getBaseUrl = getApiBaseUrl;
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const baseUrl = getBaseUrl();
-  let res: Response;
-
-  try {
-    res = await fetch(`${baseUrl}${path}`, {
-      headers: { "Content-Type": "application/json" },
-      ...options,
-    });
-  } catch (error) {
-    // If /api fails, try localhost fallback
-    if (!baseUrl.includes('localhost')) {
-      try {
-        res = await fetch(`http://localhost:3001${path}`, {
-          headers: { "Content-Type": "application/json" },
-          ...options,
-        });
-      } catch {
-        throw error;
-      }
-    } else {
-      throw error;
-    }
-  }
+  // No localhost fallback: it used to retry every failed request against
+  // http://localhost:3001, which silently queried the wrong machine in remote mode and
+  // doubled the request count whenever the backend was down.
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
 
   if (!res.ok) {
     const error = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };

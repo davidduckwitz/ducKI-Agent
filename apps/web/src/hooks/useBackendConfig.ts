@@ -1,56 +1,36 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import {
+  getApiBaseUrl,
+  getHealthUrl,
+  readBackendConfig,
+  writeBackendConfig,
+  type BackendConfig,
+} from "../lib/backendUrl";
 
-interface BackendConfig {
-  type: "local" | "remote";
-  url?: string;
-  port?: number;
-}
+export type { BackendConfig };
 
-const STORAGE_KEY = "backend-config";
-const DEFAULT_CONFIG: BackendConfig = { type: "local", port: 3001 };
-
+/**
+ * Thin React wrapper around the shared backend-URL resolution in lib/backendUrl.ts.
+ *
+ * The config is read synchronously in the state initializer: reading it in an effect
+ * meant the first render always used the default, so a configured remote backend was
+ * briefly ignored on every page load. It also duplicated the URL logic that api.ts had
+ * its own copy of, and the two could disagree.
+ */
 export function useBackendConfig() {
-  const [config, setConfig] = useState<BackendConfig>(DEFAULT_CONFIG);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Load config from localStorage
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        setConfig(JSON.parse(stored));
-      }
-    } catch (error) {
-      console.error("Failed to load backend config:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const [config, setConfig] = useState<BackendConfig>(() => readBackendConfig());
 
   const saveConfig = (newConfig: BackendConfig) => {
     setConfig(newConfig);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
+    writeBackendConfig(newConfig);
   };
 
-  const getBackendUrl = (): string => {
-    // Check if running in Tauri or Electron (desktop apps need absolute URLs).
-    // Tauri v2 always injects __TAURI_INTERNALS__, regardless of the
-    // `withGlobalTauri` config (which only controls window.__TAURI__).
-    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-    const isElectron = typeof window !== "undefined" && (window as any).electron;
-    const isDesktop = isTauri || isElectron;
-
-    if (config.type === "remote" && config.url) {
-      return config.url.replace(/\/$/, "");
-    }
-
-    // Local: use absolute localhost URL on desktop, /api on web
-    if (isDesktop) {
-      const port = config.port || 3001;
-      return `http://localhost:${port}`;
-    }
-    return "/api";
+  return {
+    config,
+    saveConfig,
+    getBackendUrl: () => getApiBaseUrl(config),
+    getHealthUrl: () => getHealthUrl(config),
+    /** Kept so callers that guarded on the old async read keep compiling. */
+    isLoading: false,
   };
-
-  return { config, saveConfig, getBackendUrl, isLoading };
 }

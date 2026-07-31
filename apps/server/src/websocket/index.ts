@@ -3,22 +3,86 @@ import type { Agent, AgentRunEvent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "../lib/agent-registry.js";
+import { BitcoinPuzzleService } from "@ducki/agent";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
 
 const logger = getRootLogger().child("WebSocket");
 
+/** Bumped when the client/server event contract changes in an incompatible way. */
+export const SERVER_PROTOCOL_VERSION = 1;
+
+/**
+ * Sockets that completed the handshake. A raw Socket.IO connection is not enough to
+ * count as a client - a port scanner or a stale build opens one too - and telemetry
+ * used to be broadcast unconditionally, including when nobody was listening.
+ */
+const readyClients = new Set<string>();
+
+/**
+ * The sidebar needs the running-puzzle count alongside the agent metrics; it used to get
+ * it from /agents/live, which is the poll this push replaces.
+ */
+function runningPuzzleCount(): number {
+  try {
+    return BitcoinPuzzleService.getInstance().getRunningPuzzlesCount();
+  } catch {
+    return 0;
+  }
+}
+
+/** Snapshot every freshly handshaken client receives, so it does not have to poll for it. */
+function buildHelloSnapshot(gatewayStatus: unknown) {
+  return {
+    agents: { ...agentRegistry.snapshot(), bitcoinPuzzles: runningPuzzleCount() },
+    gateway: gatewayStatus,
+  };
+}
+
 export function setupWebSocket(
   io: SocketIOServer,
   createAgent: () => Agent,
-  db: DatabaseService
+  db: DatabaseService,
+  getGatewayStatus: () => unknown = () => undefined
 ): void {
   const activeAgentsBySocket = new Map<string, Set<Agent>>();
 
-  agentRegistry.subscribe((snapshot) => {
-    io.emit("agent:metrics", snapshot);
+  const emitMetrics = (): void => {
+    if (readyClients.size === 0) return;
+    io.emit("agent:metrics", {
+      ...agentRegistry.snapshot(),
+      bitcoinPuzzles: runningPuzzleCount(),
+      gateway: getGatewayStatus(),
+    });
+  };
+
+  agentRegistry.subscribe(() => {
+    // No listeners, no broadcast.
+    emitMetrics();
   });
+
+  /**
+   * Gateway status and puzzle counts change outside the agent registry, so a pure
+   * event-driven push would let them go stale. A slow tick covers them - but only while
+   * somebody is actually listening: it starts on the first handshake and is torn down
+   * when the last client leaves, so an idle server does no periodic work at all.
+   * At 10s this is 6 messages/min against the 40 requests/min the client used to poll.
+   */
+  let metricsTicker: ReturnType<typeof setInterval> | null = null;
+
+  const startMetricsTicker = (): void => {
+    if (metricsTicker) return;
+    metricsTicker = setInterval(emitMetrics, 10_000);
+    logger.debug("Telemetry ticker started");
+  };
+
+  const stopMetricsTicker = (): void => {
+    if (!metricsTicker) return;
+    clearInterval(metricsTicker);
+    metricsTicker = null;
+    logger.debug("Telemetry ticker stopped");
+  };
 
   const registerActiveAgent = (socketId: string, agent: Agent): void => {
     const bucket = activeAgentsBySocket.get(socketId) ?? new Set<Agent>();
@@ -43,10 +107,29 @@ export function setupWebSocket(
   };
 
   io.on("connection", (socket) => {
-    logger.info("Client connected", { id: socket.id });
+    logger.debug("Socket opened", { id: socket.id });
 
-    // Send initial agent metrics snapshot when client connects
-    socket.emit("agent:metrics", agentRegistry.snapshot());
+    /**
+     * Handshake. The client is only considered usable once it has announced itself and
+     * received `server:hello`; until then it must not start issuing requests. The reply
+     * carries the first snapshot, which replaces the burst of polls the client used to
+     * fire on startup.
+     */
+    socket.on("client:hello", (data?: { clientId?: string; appVersion?: string }) => {
+      readyClients.add(socket.id);
+      startMetricsTicker();
+      logger.info("Client ready", {
+        id: socket.id,
+        clientId: data?.clientId,
+        appVersion: data?.appVersion,
+        readyClients: readyClients.size,
+      });
+      socket.emit("server:hello", {
+        protocolVersion: SERVER_PROTOCOL_VERSION,
+        serverTime: new Date().toISOString(),
+        snapshot: buildHelloSnapshot(getGatewayStatus()),
+      });
+    });
 
     // Chat with streaming
     socket.on("chat:message", async (data: {
@@ -263,11 +346,37 @@ export function setupWebSocket(
     socket.on("disconnect", () => {
       stopSocketAgents(socket.id);
       activeAgentsBySocket.delete(socket.id);
-      logger.info("Client disconnected", { id: socket.id });
+      const wasReady = readyClients.delete(socket.id);
+      if (wasReady) {
+        logger.info("Client disconnected", { id: socket.id, readyClients: readyClients.size });
+        if (readyClients.size === 0) {
+          stopMetricsTicker();
+          logger.info("No clients left - telemetry broadcasts paused until the next handshake");
+        }
+      } else {
+        logger.debug("Socket closed without handshake", { id: socket.id });
+      }
     });
   });
 }
 
+/** Number of clients that completed the handshake - used to gate broadcast work. */
+export function readyClientCount(): number {
+  return readyClients.size;
+}
+
+/** Tells connected clients to stop immediately instead of waiting for a socket timeout. */
+export function broadcastServerShutdown(io: SocketIOServer): void {
+  if (readyClients.size === 0) return;
+  io.emit("server:bye", { reason: "shutdown", timestamp: new Date().toISOString() });
+}
+
 export function broadcastTaskUpdate(io: SocketIOServer, task: unknown): void {
   io.to("tasks").emit("task:updated", task);
+}
+
+/** Broadcast a settings change so clients can invalidate instead of polling for it. */
+export function broadcastSettingsChanged(io: SocketIOServer, keys?: string[]): void {
+  if (readyClients.size === 0) return;
+  io.emit("settings:changed", { keys, timestamp: new Date().toISOString() });
 }

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useServerQuery } from "../../lib/useServerQuery";
+import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
 import { Check, FolderPlus, Search, Upload, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
@@ -34,17 +36,11 @@ export function CodingSidebarPanel() {
   // See CodingWorkspace: -1 so a command dispatched right before mount still lands.
   const handledCommandNonce = useRef(-1);
 
-  const settingsQuery = useQuery({
-    queryKey: ["settings", "coding-sidebar"],
-    queryFn: () => api.settings.list() as Promise<Array<{ key: string; value: string }>>,
-    refetchInterval: 5000,
-  });
-  const codingEnabled =
-    String(settingsQuery.data?.find((s) => s.key === "CODING_ENABLED")?.value ?? "false").trim().toLowerCase() ===
-    "true";
-  const codingSettingReady = !settingsQuery.isLoading && Boolean(settingsQuery.data);
+  const settingsQuery = useSettings();
+  const codingEnabled = readFlag(settingsQuery.data, "CODING_ENABLED");
+  const codingSettingReady = settingsReady(settingsQuery);
 
-  const projectsQuery = useQuery({
+  const projectsQuery = useServerQuery({
     queryKey: ["coding", "projects"],
     queryFn: () => api.coding.listProjects() as Promise<CodingProject[]>,
     enabled: codingSettingReady && codingEnabled,
@@ -59,7 +55,7 @@ export function CodingSidebarPanel() {
     }
   }, [codingSettingReady, codingEnabled, projectsQuery.data, selectedProject, setSelectedProject]);
 
-  const filesQuery = useQuery({
+  const filesQuery = useServerQuery({
     queryKey: ["coding", "files", selectedProject],
     queryFn: () => api.coding.listFiles(selectedProject) as Promise<{ project: string; files: CodingFileItem[] }>,
     enabled: codingSettingReady && codingEnabled && Boolean(selectedProject),

@@ -1,7 +1,19 @@
 import { Router, type IRouter } from "express";
+import type { Request } from "express";
+import type { Server as SocketIOServer } from "socket.io";
 import type { DatabaseService } from "@ducki/database";
 import { createApiResponse } from "@ducki/shared";
 import { ProviderSettingsService } from "../lib/provider-settings-service.js";
+import { broadcastSettingsChanged } from "../websocket/index.js";
+
+/**
+ * Push the change instead of making every client poll for it. Four separate components
+ * used to re-fetch the whole settings list every 5 seconds just to notice edits.
+ */
+function notifySettingsChanged(req: Request, keys?: string[]): void {
+  const io = req.app.locals["io"] as SocketIOServer | undefined;
+  if (io) broadcastSettingsChanged(io, keys);
+}
 
 export const settingsRouter: IRouter = Router();
 
@@ -50,6 +62,7 @@ settingsRouter.put("/:key", async (req, res, next) => {
       }
     }
 
+    notifySettingsChanged(req, [key]);
     res.json(createApiResponse({ updated: true, providerReloaded }));
   } catch (e) { next(e); }
 });
@@ -82,6 +95,7 @@ settingsRouter.post("/agent-provider", async (req, res, next) => {
     const service = new ProviderSettingsService(db);
     const partial = req.body;
     const updated = await service.updateSettings(partial);
+    notifySettingsChanged(req);
     res.status(201).json(createApiResponse({ data: updated, message: "Provider settings updated" }));
   } catch (e) { next(e); }
 });
@@ -97,6 +111,7 @@ settingsRouter.patch("/agent-provider", async (req, res, next) => {
     }
 
     const updated = await service.updateSetting(path, value);
+    notifySettingsChanged(req, [String(path)]);
     res.json(createApiResponse({ data: updated, message: `Updated ${path}` }));
   } catch (e) { next(e); }
 });
@@ -106,6 +121,7 @@ settingsRouter.delete("/agent-provider", async (req, res, next) => {
     const db = req.app.locals["db"] as DatabaseService;
     const service = new ProviderSettingsService(db);
     const defaults = await service.resetToDefaults();
+    notifySettingsChanged(req);
     res.json(createApiResponse({ data: defaults, message: "Settings reset to defaults" }));
   } catch (e) { next(e); }
 });
@@ -136,6 +152,7 @@ settingsRouter.post("/agent-provider/import", async (req, res, next) => {
     }
 
     const imported = await service.importSettings(json);
+    notifySettingsChanged(req);
     res.json(createApiResponse({ data: imported, message: "Settings imported" }));
   } catch (e) { next(e); }
 });

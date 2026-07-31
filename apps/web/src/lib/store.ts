@@ -2,9 +2,33 @@ import { create } from "zustand";
 import { io, type Socket } from "socket.io-client";
 import { translations, type Language, type TranslationTree } from "./translations";
 import type { AgentEventType } from "../components/chat/chatTypes";
-import { getBaseUrl } from "./api";
+import { getSocketUrl } from "./backendUrl";
+import { useConnectionStore } from "./connectionStore";
 
 const LANGUAGE_STORAGE_KEY = "ducki.language";
+const CLIENT_ID_KEY = "ducki.clientId";
+
+/** Payload of the server's handshake reply. */
+export interface ServerHelloSnapshot {
+  agents?: { runningCount?: number; agents?: unknown[] };
+  gateway?: unknown;
+}
+
+/** Counts consecutive socket connect failures so the console logging can be throttled. */
+let connectErrorCount = 0;
+
+/** Stable per-browser id, so the server log can tell reconnects from new clients apart. */
+function getClientId(): string {
+  try {
+    const existing = window.localStorage.getItem(CLIENT_ID_KEY);
+    if (existing) return existing;
+    const generated = crypto.randomUUID();
+    window.localStorage.setItem(CLIENT_ID_KEY, generated);
+    return generated;
+  } catch {
+    return "anonymous";
+  }
+}
 
 function getNestedValue(tree: TranslationTree, key: string): string | undefined {
   const segments = key.split(".");
@@ -120,6 +144,10 @@ interface AppState {
   // Socket
   socket: Socket | null;
   connected: boolean;
+  /** Pushed by the server on every change - replaces the 1.5s agents.live() poll. */
+  agentMetrics?: ServerHelloSnapshot["agents"];
+  /** Travels with the handshake and with agent:metrics. */
+  gatewayStatus?: unknown;
 
   // UI
   setupModalOpen: boolean;
@@ -200,34 +228,50 @@ export const useAppStore = create<AppState>((set, get) => ({
   runningTools: new Set(),
 
   initSocket: () => {
-    // Determine socket URL based on environment
-    let socketUrl: string | undefined;
+    // getSocketUrl honours a "remote" backend in the browser too. Previously that was
+    // only applied on desktop, so a browser pointed at a remote backend sent its HTTP
+    // requests there but kept the socket on its own origin.
+    const socketUrl = getSocketUrl();
 
-    // Tauri v2 always injects __TAURI_INTERNALS__, regardless of the
-    // `withGlobalTauri` config (which only controls window.__TAURI__).
-    const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-    const isElectron = typeof window !== "undefined" && (window as any).electron;
-    const isDesktop = isTauri || isElectron;
+    useConnectionStore.getState().markConnecting();
 
-    if (isDesktop) {
-      // Respect the backend URL/port configured in Settings (local or remote)
-      const base = getBaseUrl();
-      socketUrl = base.startsWith("http") ? base : "http://localhost:3001";
-    } else if (import.meta.env.DEV) {
-      socketUrl = import.meta.env.VITE_SOCKET_URL ?? "http://localhost:3001";
-    }
-    // Otherwise (browser production): undefined - use current origin
     const socket = io(socketUrl, {
       path: "/socket.io",
       transports: ["websocket"],
+      // Bounded, jittered backoff instead of the default tight retry loop - a server
+      // that is down should cost a handful of attempts per minute, not a stream.
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 15000,
+      randomizationFactor: 0.5,
+      timeout: 8000,
     });
 
+    // The socket being open is not the same as the server being usable: announce
+    // ourselves and wait for the reply before anything starts issuing requests.
     socket.on("connect", () => {
-      set({ connected: true });
-      socket.emit("agent:status");
+      socket.emit("client:hello", {
+        clientId: getClientId(),
+        appVersion: import.meta.env["VITE_APP_VERSION"] ?? "dev",
+      });
     });
 
-    socket.on("disconnect", () => {
+    socket.on("server:hello", (data: { protocolVersion?: number; snapshot?: ServerHelloSnapshot }) => {
+      useConnectionStore.getState().markReady(data?.protocolVersion);
+      connectErrorCount = 0;
+      // The handshake snapshot replaces the burst of requests the client used to fire
+      // on startup just to learn the agent and gateway state.
+      const snapshot = data?.snapshot;
+      set({
+        connected: true,
+        globalRunningAgents: snapshot?.agents?.runningCount ?? 0,
+        agentMetrics: snapshot?.agents,
+        gatewayStatus: snapshot?.gateway,
+      });
+    });
+
+    const handleLost = (reason: string) => {
+      useConnectionStore.getState().markLost(reason);
       const disconnectMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "event",
@@ -241,14 +285,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         streamingContent: "",
         messages: s.isLoading ? [...s.messages, disconnectMsg] : s.messages,
       }));
-    });
+    };
 
-    socket.on("connect_error", () => {
-      set((s) => ({
-        connected: false,
-        isLoading: false,
-        streamingContent: "",
-      }));
+    socket.on("server:bye", () => handleLost("server shutdown"));
+    socket.on("disconnect", (reason: string) => handleLost(reason));
+
+    socket.on("connect_error", (error: Error) => {
+      connectErrorCount += 1;
+      // Every single attempt used to write to the console. Report the first failure and
+      // then only occasionally, so a backend that is simply not running stays readable.
+      if (connectErrorCount === 1 || connectErrorCount % 10 === 0) {
+        console.warn(
+          `[socket] connection failed (attempt ${connectErrorCount}): ${error.message}`
+        );
+      }
+      useConnectionStore.getState().markLost(error.message);
+      set({ connected: false, isLoading: false, streamingContent: "" });
     });
 
     // A run's events belong to the currently displayed chat only if their conversationId
@@ -384,8 +436,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ agentStatus: data.status });
     });
 
-    socket.on("agent:metrics", (data: { runningCount?: number }) => {
-      set({ globalRunningAgents: Number(data?.runningCount ?? 0) });
+    // Pushed on every registry change. Consumers read this from the store instead of
+    // polling /agents/live, which is where most of the idle request load came from.
+    socket.on("agent:metrics", (data: { runningCount?: number; agents?: unknown[]; gateway?: unknown }) => {
+      set({
+        globalRunningAgents: Number(data?.runningCount ?? 0),
+        agentMetrics: { runningCount: Number(data?.runningCount ?? 0), agents: data?.agents },
+        ...(data?.gateway !== undefined ? { gatewayStatus: data.gateway } : {}),
+      });
+    });
+
+    // A settings write is announced instead of polled for; the query layer listens.
+    socket.on("settings:changed", (data: { keys?: string[] }) => {
+      window.dispatchEvent(new CustomEvent("ducki:settings-changed", { detail: data }));
     });
 
     socket.on("browser:preview", (data: { tabId?: string; serverId?: string; url?: string; screenshot?: string; htmlContent?: string; conversationId?: number }) => {

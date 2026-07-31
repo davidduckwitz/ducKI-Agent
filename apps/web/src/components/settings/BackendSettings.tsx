@@ -10,7 +10,7 @@ import { AlertCircle, CheckCircle, Info } from "lucide-react";
 import { Alert, AlertDescription } from "../ui/alert";
 
 export function BackendSettings() {
-  const { config, saveConfig, getBackendUrl } = useBackendConfig();
+  const { config, saveConfig, getHealthUrl } = useBackendConfig();
   const { disconnectSocket, initSocket } = useAppStore();
   const [type, setType] = useState<"local" | "remote">(config.type);
   const [url, setUrl] = useState(config.url || "");
@@ -39,9 +39,21 @@ export function BackendSettings() {
   const testBackendConnection = async () => {
     setIsTesting(true);
     try {
-      const baseUrl = getBackendUrl();
-      const response = await fetch(`${baseUrl}/settings`);
-      setTestResult(response.ok ? "success" : "error");
+      // /health instead of /settings: it is the endpoint meant for this, it needs no
+      // data, and it reports the protocol version so a mismatch is visible here rather
+      // than as odd behaviour later. It also times out instead of hanging on a wrong
+      // host - a dead remote address used to leave the button spinning indefinitely.
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 5000);
+      const response = await fetch(getHealthUrl(), { signal: controller.signal });
+      window.clearTimeout(timeout);
+
+      if (!response.ok) {
+        setTestResult("error");
+        return;
+      }
+      const body = (await response.json().catch(() => null)) as { status?: string; version?: number } | null;
+      setTestResult(body?.status === "ok" ? "success" : "error");
     } catch {
       setTestResult("error");
     } finally {

@@ -72,7 +72,12 @@ import { createBrowserControlMcpTool } from "./browser/mcp-browser-server.js";
 import { createTasksMcpTool } from "./tasks/mcp-tasks-server.js";
 import { createWorkflowMcpTool } from "./workflow/mcp-workflow-server.js";
 import { createCronjobsMcpTool } from "./cronjobs/mcp-cronjobs-server.js";
-import { setupWebSocket } from "./websocket/index.js";
+import {
+	setupWebSocket,
+	broadcastServerShutdown,
+	broadcastSettingsChanged,
+	SERVER_PROTOCOL_VERSION,
+} from "./websocket/index.js";
 
 const logger = getRootLogger().child("Server");
 
@@ -689,7 +694,9 @@ async function bootstrap(): Promise<void> {
 	const io = new SocketIOServer(httpServer, {
 		cors: { origin: process.env["CORS_ORIGIN"] ?? "*" },
 	});
-	setupWebSocket(io, createAgent, db);
+	// The gateway status travels in the handshake snapshot and in agent:metrics, so the
+	// client no longer has to poll /agents/live for it.
+	setupWebSocket(io, createAgent, db, () => ({ discord: discordGatewayStatus }));
 	app.locals["io"] = io;
 
 	// Initialize chat tool event broadcaster for real-time progress updates
@@ -698,13 +705,18 @@ async function bootstrap(): Promise<void> {
 
 	registerRoutes(app, db);
 
-	app.get("/health", (_req, res) => {
+	// Also mounted under /api because that is the only prefix the web client's dev proxy
+	// forwards - a bare /health from the browser would hit Vite and return index.html.
+	const healthHandler: express.RequestHandler = (_req, res) => {
 		res.json({
 			status: "ok",
+			version: SERVER_PROTOCOL_VERSION,
 			timestamp: new Date().toISOString(),
 			runningAgents: agentRegistry.snapshot().runningCount,
 		});
-	});
+	};
+	app.get("/health", healthHandler);
+	app.get("/api/health", healthHandler);
 
 	app.use(errorHandler);
 
@@ -722,6 +734,8 @@ async function bootstrap(): Promise<void> {
 
 	const shutdown = (signal: string) => {
 		logger.info("Shutting down", { signal });
+		// Let clients switch to "lost" right away instead of waiting for a socket timeout.
+		broadcastServerShutdown(io);
 		discordGatewayStatus.active = false;
 		discordGatewayStatus.updatedAt = new Date().toISOString();
 		discordGateway?.stop();
