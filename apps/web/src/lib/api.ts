@@ -623,4 +623,27 @@ export const api = {
         method: "DELETE",
       }),
   },
+
+  providerModels: {
+    listProviders: () =>
+      request<
+        Array<{
+          id: string;
+          name: string;
+        }>
+      >("/provider-models"),
+    getModels: (provider: string) =>
+      request<
+        {
+          success: boolean;
+          provider: string;
+          models?: Array<{
+            id: string;
+            name: string;
+          }>;
+          error?: string;
+          timestamp: string;
+        }
+      >(`/provider-models/${provider}`),
+  },
 };

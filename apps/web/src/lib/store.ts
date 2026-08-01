@@ -140,6 +140,10 @@ interface AppState {
   isLoading: boolean;
   streamingContent: string;
   globalRunningAgents: number;
+  chatProvider?: string;
+  chatModel?: string;
+  availableModels: string[];
+  loadingModels: boolean;
 
   // Socket
   socket: Socket | null;
@@ -172,7 +176,9 @@ interface AppState {
     attachments?: ChatAttachment[],
     agentMode?: AgentMode,
     /** What to show in the chat when `content` carries extra machine-facing context. */
-    displayContent?: string
+    displayContent?: string,
+    provider?: string,
+    model?: string
   ) => void;
   stopMessage: () => void;
   clearChat: () => void;
@@ -183,6 +189,10 @@ interface AppState {
   setSetupModalOpen: (open: boolean) => void;
   setBrowserPreviewModal: (show: boolean, preview?: BrowserPreviewState["currentPreview"]) => void;
   setAnimationStyle: (style: "matrix" | "neon" | "minimal") => void;
+  setChatProvider: (provider: string | undefined) => void;
+  setChatModel: (model: string | undefined) => void;
+  setAvailableModels: (models: string[]) => void;
+  setLoadingModels: (loading: boolean) => void;
 
   // Character System (NEW)
   setSelectedCharacterId: (id: string) => void;
@@ -215,6 +225,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   connected: false,
   setupModalOpen: false,
   animationStyle: "matrix",
+  chatProvider: undefined,
+  chatModel: undefined,
+  availableModels: [],
+  loadingModels: false,
   browserPreview: {
     showModal: false,
     currentPreview: undefined,
@@ -496,7 +510,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ socket: null, connected: false });
   },
 
-  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string) => {
+  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string, provider?: string, model?: string) => {
     const { socket, conversationId, isLoading } = get();
     if (!socket || !content.trim() || isLoading) return;
 
@@ -524,7 +538,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // chat:conversation handler recognize the id is stale and ignore it.
       awaitingNewConversation: conversationId === undefined,
     }));
-    socket.emit("chat:message", { message: content, conversationId, attachments, agentMode });
+    socket.emit("chat:message", { message: content, conversationId, attachments, agentMode, provider, model });
   },
 
   stopMessage: () => {
@@ -550,6 +564,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     }),
   setAnimationStyle: (style) => set({ animationStyle: style }),
+
+  // Chat Provider & Model Selection
+  setChatProvider: (provider) => set({ chatProvider: provider }),
+  setChatModel: (model) => set({ chatModel: model }),
+  setAvailableModels: (models) => set({ availableModels: models }),
+  setLoadingModels: (loading) => set({ loadingModels: loading }),
 
   // Tool Management
   addToolCall: (toolCall) =>

@@ -6,6 +6,7 @@ import type { RenderedChatMessage } from "./chatTypes";
 import { api } from "../../lib/api";
 import { BrowserPreview } from "./BrowserPreview";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { ReasoningDisplay } from "./ReasoningDisplay";
 
 interface RowCommonProps {
   compactMode?: boolean;
@@ -350,6 +351,8 @@ export function MessageRow({
     );
   }
 
+  const thinking = msg.eventData?.thinking as string | undefined;
+
   return (
     <div className={`${ANIMATE_IN} group`}>
       <div className="mb-1.5 flex items-center gap-2">
@@ -360,6 +363,7 @@ export function MessageRow({
         {badges}
         <MarkdownMessage content={msg.content} />
         {extras}
+        <ReasoningDisplay thinking={thinking} compact={compactMode} />
       </div>
       <div className="mt-1">
         <MessageActions content={msg.content} t={t} align="start" />

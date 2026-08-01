@@ -44,6 +44,7 @@ export interface ToolCall {
 
 export interface LLMResponse {
   content: string;
+  thinking?: string;
   toolCalls?: ToolCall[];
   usage: {
     promptTokens: number;

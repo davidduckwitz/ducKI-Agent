@@ -4002,6 +4002,11 @@ export class Agent {
       const buildConversationWindow = (messageLimit: number, charLimit: number): LLMMessage[] => {
         let allMessages = this.conversation.getMessages();
 
+        // Filter out any system messages from the conversation history
+        // System messages are reconstructed fresh in buildMessages() at call time
+        // Including them here would break Claude API's constraint: "System message must be at the beginning"
+        allMessages = allMessages.filter((m) => m.role !== "system");
+
         // Add current screenshot message if one exists (it needs to be in every iteration)
         if (this.currentScreenshotMessage) {
           this.logger.debug("[BUILDMSGS] Adding stored screenshot message to conversation window");

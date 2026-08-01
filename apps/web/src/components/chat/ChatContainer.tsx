@@ -100,6 +100,8 @@ export function ChatContainer() {
     characterCustomizations,
     animationStyle,
     socket,
+    chatProvider,
+    chatModel,
   } = useAppStore();
   const [input, setInput] = useState("");
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -411,7 +413,14 @@ export function ChatContainer() {
     const finalInput = `${input.trim()}${uploadSummary}`.trim();
     if (!finalInput) return;
 
-    sendMessage(finalInput, attachments.length > 0 ? attachments : undefined, planMode ? "plan" : undefined);
+    sendMessage(
+      finalInput,
+      attachments.length > 0 ? attachments : undefined,
+      planMode ? "plan" : undefined,
+      undefined,
+      chatProvider,
+      chatModel
+    );
     setInput("");
     setAttachedFiles([]);
     setAnalyzeImages(false);

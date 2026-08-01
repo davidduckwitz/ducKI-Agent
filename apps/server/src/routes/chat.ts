@@ -176,10 +176,12 @@ chatRouter.post("/", async (req, res, next) => {
       register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
       unregister: (id: string) => void;
     };
-    const { message, conversationId, stream } = req.body as {
+    const { message, conversationId, stream, provider, model } = req.body as {
       message: string;
       conversationId?: number;
       stream?: boolean;
+      provider?: string;
+      model?: string;
     };
 
     if (!message || typeof message !== "string") {

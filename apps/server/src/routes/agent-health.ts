@@ -61,7 +61,7 @@ export function setupAgentHealthRoutes(
    * Returns detailed health information for a specific tool
    */
   router.get("/api/agent-health/tools/:toolName", (req: Request, res: Response) => {
-    const { toolName } = req.params;
+    const toolName = req.params.toolName as string;
     const health = toolHealthMonitor.getHealth(toolName);
 
     if (!health) {

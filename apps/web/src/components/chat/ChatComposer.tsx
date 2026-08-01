@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Image as ImageIcon, Loader2, Paperclip, Sparkles, Square, Wrench, X } from "lucide-react";
+import { ArrowUp, Image as ImageIcon, Loader2, Paperclip, Sparkles, Square, Wrench, X, Zap } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
+import { useAppStore } from "../../lib/store";
 import { ToolSkillSelector, type SelectorMode } from "./ToolSkillSelector";
 
 const MAX_TEXTAREA_HEIGHT = 220;
@@ -43,10 +44,12 @@ export function ChatComposer({
   totalTokens: number;
 }) {
   const { t } = useI18n();
+  const { chatProvider, chatModel, setChatProvider, setChatModel } = useAppStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selector, setSelector] = useState<{ mode: SelectorMode; query: string } | null>(null);
   const [focused, setFocused] = useState(false);
+  const [showLLMSelector, setShowLLMSelector] = useState(false);
 
   useEffect(() => {
     const element = textareaRef.current;
@@ -89,6 +92,83 @@ export function ChatComposer({
             focusInput();
           }}
         />
+      )}
+
+      {showLLMSelector && (
+        <div className="mb-2 rounded-lg bg-accent/20 border border-border p-3 space-y-2">
+          <p className="text-xs text-muted-foreground mb-2">
+            Standardwerte aus Settings werden genutzt wenn nichts gewählt ist
+          </p>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Provider {!chatProvider && "(Standard aus Settings)"}
+            </label>
+            <select
+              value={chatProvider || ""}
+              onChange={(e) => setChatProvider(e.target.value || undefined)}
+              className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="">Standard aus Settings</option>
+              <option value="lmstudio">LM Studio (lokal)</option>
+              <option value="openai">OpenAI</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="claude">Claude (Anthropic)</option>
+              <option value="ollama">Ollama (lokal)</option>
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Model {!chatModel && "(Standard aus Settings)"}
+            </label>
+            <select
+              value={chatModel || ""}
+              onChange={(e) => setChatModel(e.target.value || undefined)}
+              className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="">Standard aus Settings</option>
+              {chatProvider === "lmstudio" && (
+                <option value="custom">Von LM Studio API</option>
+              )}
+              {chatProvider === "openai" && (
+                <>
+                  <option value="gpt-4o">GPT-4o</option>
+                  <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                  <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                </>
+              )}
+              {chatProvider === "claude" && (
+                <>
+                  <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                  <option value="claude-3-opus-20250219">Claude 3 Opus</option>
+                  <option value="claude-3-haiku-20250307">Claude 3 Haiku</option>
+                </>
+              )}
+              {chatProvider === "openrouter" && (
+                <option value="auto">Auto (OpenRouter)</option>
+              )}
+            </select>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setChatProvider(undefined);
+                setChatModel(undefined);
+              }}
+              className="flex-1 px-3 py-1.5 text-xs rounded bg-muted hover:bg-muted/80 transition-colors"
+            >
+              Zurücksetzen
+            </button>
+            <button
+              onClick={() => setShowLLMSelector(false)}
+              className="flex-1 px-3 py-1.5 text-xs rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Fertig
+            </button>
+          </div>
+        </div>
       )}
 
       <div
@@ -191,6 +271,14 @@ export function ChatComposer({
             showLabel
             active={planMode}
             onClick={onTogglePlanMode}
+          />
+          <ComposerButton
+            icon={<Zap className="h-4 w-4" />}
+            label="LLM"
+            title="LLM Provider und Model auswählen"
+            showLabel
+            active={showLLMSelector}
+            onClick={() => setShowLLMSelector(!showLLMSelector)}
           />
 
           <div className="ml-auto flex items-center gap-2 pr-1">
