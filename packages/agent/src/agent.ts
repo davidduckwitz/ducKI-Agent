@@ -32,6 +32,13 @@ import { EventEmitterV2, AGENT_EVENT_TYPES } from "./events/index.js";
 import { InputNormalizerPipeline, AliasNormalizer, TypeCoercer, JSONRepairNormalizer } from "./tools/input-normalizer.js";
 import type { ToolApprovalPolicy } from "./tools/tool-approval-policy.js";
 import { createCompletionTool } from "./tools/completion-tool.js";
+import { retryWithBackoff, DEFAULT_RETRY_CONFIG, adjustTimeoutForCompression } from "./utils/retry-utils.js";
+import { ToolErrorTracker } from "./tool-error-tracking/tool-error-tracker.js";
+import { FallbackResponseGenerator } from "./response/fallback-response-generator.js";
+import { ToolCircuitBreaker } from "./tool-strategy/circuit-breaker.js";
+import { FallbackToolExecutor } from "./tool-strategy/fallback-executor.js";
+import { ToolHealthMonitor } from "./tool-health/tool-health-monitor.js";
+import { ToolDependencyChecker } from "./tool-strategy/tool-dependencies.js";
 
 import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
@@ -216,6 +223,18 @@ export class Agent {
   private toolApprovalPolicy: ToolApprovalPolicy | undefined;
   private inputNormalizer: InputNormalizerPipeline;
 
+  // Phase 1 Resilience: Error tracking and fallback response generation
+  private toolErrorTracker: ToolErrorTracker;
+  private fallbackResponseGenerator: FallbackResponseGenerator;
+
+  // Phase 2 Resilience: Circuit breaker and fallback executor
+  private circuitBreaker: ToolCircuitBreaker;
+  private fallbackExecutor: FallbackToolExecutor;
+
+  // Phase 4 Monitoring: Tool health and dependencies
+  private toolHealthMonitor: ToolHealthMonitor;
+  private toolDependencyChecker: ToolDependencyChecker;
+
   constructor(
     private readonly provider: LLMProvider,
     private readonly db: DatabaseService,
@@ -264,10 +283,32 @@ export class Agent {
     this.inputNormalizer.addNormalizer(new TypeCoercer());
     this.inputNormalizer.addNormalizer(new JSONRepairNormalizer());
 
+    // Phase 1 Resilience: Initialize error tracking and fallback response
+    this.toolErrorTracker = new ToolErrorTracker(this.logger);
+    this.fallbackResponseGenerator = new FallbackResponseGenerator(this.logger);
+
+    // Phase 2 Resilience: Initialize circuit breaker and fallback executor
+    this.circuitBreaker = new ToolCircuitBreaker(this.logger);
+
+    // Phase 4 Monitoring: Initialize tool health monitor and dependency checker
+    this.toolHealthMonitor = new ToolHealthMonitor(this.logger);
+    this.toolDependencyChecker = new ToolDependencyChecker(
+      this.logger,
+      new Set(),
+      new Set()
+    );
+
     this.conversation = new ConversationManager(db, this.logger);
     this.memory = new MemorySystem(db, this.logger);
     this.planner = new Planner(provider, this.logger);
     this.executor = new Executor(this.logger, createDynamicToolResolver(db));
+
+    // Phase 2 Resilience: Initialize fallback executor with the executor instance
+    this.fallbackExecutor = new FallbackToolExecutor(
+      this.executor,
+      this.logger,
+      this.eventEmitterV2
+    );
 
     // Phase 3B: Register completion tools
     this.executor.registerTool(createCompletionTool({ name: "submit_solution", completesRun: true }));
@@ -356,6 +397,12 @@ export class Agent {
     const toolsUsed: string[] = [];
     let iterations = 0;
     const controls = await this.loadRuntimeControls();
+
+    // Phase 1: Clear tool error tracking for new conversation
+    this.toolErrorTracker.clear();
+
+    // Phase 2: Reset circuit breakers for new conversation
+    this.circuitBreaker.resetAll();
 
     // === PRE-FLIGHT TOOLS: Execute real-time data queries before LLM inference ===
     // This prevents hallucination about current state (time, date, system status, etc.)
@@ -3043,6 +3090,37 @@ export class Agent {
           continue;
         }
 
+        // Phase 1: Check if this tool call has already failed and should not be retried
+        if (!this.toolErrorTracker.shouldRetry(call.toolName, call.input as Record<string, unknown>)) {
+          const failureInfo = this.toolErrorTracker.getToolFailureInfo(call.toolName);
+          const skipReason = failureInfo
+            ? `Previously failed: ${failureInfo.error} (error type: ${failureInfo.errorType}, ${failureInfo.retryCount} attempts)`
+            : "Previously failed and max retries exceeded";
+
+          this.logger.warn("[TOOL-CALLS] Skipping tool call due to previous failures", {
+            callId,
+            toolName: call.toolName,
+            skipReason,
+          });
+          resultMap.set(callId, { success: false, data: null, error: skipReason });
+          continue;
+        }
+
+        // Phase 2: Check circuit breaker status
+        if (!this.circuitBreaker.canExecute(call.toolName)) {
+          const circuitStatus = this.circuitBreaker.getStatus(call.toolName);
+          const skipReason = `Tool circuit breaker is ${circuitStatus.status} after ${circuitStatus.failureCount} failures`;
+
+          this.logger.warn("[TOOL-CALLS] Skipping tool call due to circuit breaker", {
+            callId,
+            toolName: call.toolName,
+            status: circuitStatus.status,
+            failureCount: circuitStatus.failureCount,
+          });
+          resultMap.set(callId, { success: false, data: null, error: skipReason });
+          continue;
+        }
+
         const preflight = await this.preflightToolInput(call.toolName, call.input, controls);
         if (!preflight.ok) {
           this.logger.warn("[TOOL-CALLS] Preflight validation failed", {
@@ -3104,6 +3182,21 @@ export class Agent {
           error: executed.result.error,
           resultSize: JSON.stringify(executed.result.data).length,
         });
+
+        // Phase 1: Track tool failures for error deduplication
+        if (!executed.result.success && toolCall && executed.result.error) {
+          const error = new Error(executed.result.error);
+          this.toolErrorTracker.track(
+            toolCall.toolName,
+            toolCall.input as Record<string, unknown>,
+            error
+          );
+        }
+
+        // Phase 2: Record result in circuit breaker
+        if (toolCall) {
+          this.circuitBreaker.recordResult(toolCall.toolName, executed.result.success);
+        }
 
         // A successful browser screenshot carries the actual image as base64 in
         // data.screenshot. Remove it from the tool result to save tokens (the actual
@@ -4106,11 +4199,19 @@ export class Agent {
         return result.content;
       };
 
-      // Generate response
+      // Generate response with exponential backoff retry
       let response: string;
       let messages = buildMessages("full");
+      let skillMode: "full" | "compact" | "minimal" = "full";
+
       try {
-        response = await generateFromMessages(messages);
+        response = await retryWithBackoff(
+          async () => {
+            return await generateFromMessages(messages);
+          },
+          DEFAULT_RETRY_CONFIG,
+          { logger: this.logger, eventEmitter: this.eventEmitterV2 }
+        );
       } catch (error) {
         const providerError = error instanceof Error ? error.message : String(error);
         // Shrinking the prompt cannot help when nothing is listening at the endpoint -
@@ -4130,9 +4231,16 @@ export class Agent {
           compactSkills: compactSkillManifests.map((skill) => skill.slug),
         });
 
+        skillMode = "compact";
         messages = buildMessages("compact");
         try {
-          response = await generateFromMessages(messages);
+          response = await retryWithBackoff(
+            async () => {
+              return await generateFromMessages(messages);
+            },
+            DEFAULT_RETRY_CONFIG,
+            { logger: this.logger, eventEmitter: this.eventEmitterV2 }
+          );
         } catch (compactError) {
           const compactProviderError = compactError instanceof Error ? compactError.message : String(compactError);
           if (!isProviderLoadError(compactProviderError)) {
@@ -4144,9 +4252,16 @@ export class Agent {
             droppedSkillContents: activeSkillSlugs,
           });
 
+          skillMode = "minimal";
           messages = buildMessages("minimal");
           try {
-            response = await generateFromMessages(messages);
+            response = await retryWithBackoff(
+              async () => {
+                return await generateFromMessages(messages);
+              },
+              DEFAULT_RETRY_CONFIG,
+              { logger: this.logger, eventEmitter: this.eventEmitterV2 }
+            );
           } catch (minimalError) {
             const minimalProviderError = minimalError instanceof Error ? minimalError.message : String(minimalError);
             if (!isContextOverflowError(minimalProviderError)) {
@@ -4157,13 +4272,20 @@ export class Agent {
               error: minimalProviderError,
             });
 
+            skillMode = "minimal";
             messages = buildMessages("minimal", {
               messageLimit: 12,
               charLimit: 24000,
               dynamicMemoryLimit: 0,
               includeDynamicMemory: false,
             });
-            response = await generateFromMessages(messages);
+            response = await retryWithBackoff(
+              async () => {
+                return await generateFromMessages(messages);
+              },
+              DEFAULT_RETRY_CONFIG,
+              { logger: this.logger, eventEmitter: this.eventEmitterV2 }
+            );
           }
         }
       }
@@ -4375,6 +4497,42 @@ export class Agent {
         cleanedResponseLength: cleanedResponse.length,
       });
       continue; // Go to next iteration with tool results in conversation
+    }
+
+    // Phase 3: Ensure agent always responds - generate fallback if needed
+    if (finalResponse.trim().length === 0) {
+      this.logger.warn("[PHASE3] Final response is empty, generating fallback response", {
+        iterations,
+        maxIterations: adjustedControls.maxIterations,
+        toolsUsedCount: toolsUsed.length,
+      });
+
+      const toolResults: Array<{ toolName: string; success: boolean; error?: string }> = toolsUsed.map(
+        (toolName) => ({
+          toolName,
+          success: true, // We don't track individual success here, assume success
+        })
+      );
+
+      finalResponse = await this.fallbackResponseGenerator.generateResponse({
+        userInput: effectiveInput,
+        attemptsSoFar: iterations,
+        toolsExecuted: toolResults,
+        errors: [],
+        conversationHistory: this.conversation.getMessages(),
+        state: { maxIterationsReached: iterations >= adjustedControls.maxIterations },
+      });
+
+      emit("guardrail", "Fallback response generated (no response after all iterations)", {
+        iterations,
+        maxIterations: adjustedControls.maxIterations,
+        fallbackResponseLength: finalResponse.length,
+      });
+
+      this.logger.info("[PHASE3] Fallback response generated successfully", {
+        length: finalResponse.length,
+        preview: finalResponse.substring(0, 100),
+      });
     }
 
     let reflectionQuality: string | undefined;

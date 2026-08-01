@@ -718,6 +718,12 @@ async function bootstrap(): Promise<void> {
 	app.get("/health", healthHandler);
 	app.get("/api/health", healthHandler);
 
+	// Serve Health Dashboard UI
+	app.use(express.static("src/public", { extensions: ["html"] }));
+	app.get("/dashboard", (req, res) => {
+		res.sendFile(new URL("./public/health-dashboard.html", import.meta.url).pathname);
+	});
+
 	app.use(errorHandler);
 
 	const port = Number.parseInt(process.env["PORT"] ?? "3001", 10);
