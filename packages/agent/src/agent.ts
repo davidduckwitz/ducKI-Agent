@@ -3758,6 +3758,24 @@ export class Agent {
 
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);
+
+    // Persist the user turn before any decision/reasoning events are emitted so
+    // timeline ordering is stable in both live and persisted chat views.
+    const userMetadata: Record<string, unknown> = {};
+    if (options.attachments?.length) {
+      userMetadata.attachments = options.attachments;
+    }
+    if (options.localMessageId) {
+      userMetadata.localMessageId = options.localMessageId;
+    }
+    const userMessage: LLMMessage = {
+      role: "user",
+      content: effectiveInput,
+      metadata: Object.keys(userMetadata).length > 0 ? userMetadata : undefined,
+    };
+    await this.conversation.addMessage(userMessage);
+    this.history.add(userMessage);
+
     const enabledAllowlist = new Set(controls.enabledSkillAllowlist);
     const allowlistCandidates = installedSkillManifests.filter((skill) => enabledAllowlist.has(skill.slug));
     const dateSkillFallback = installedSkillManifests.find((skill) => skill.slug === "datum-uhrzeit-tag");
@@ -3917,22 +3935,6 @@ export class Agent {
         alsoLoaded: activeSkills.filter((s) => s.slug !== "workflow-orchestrator").map((s) => s.slug),
       });
     }
-
-    // Add user message
-    const userMetadata: Record<string, unknown> = {};
-    if (options.attachments?.length) {
-      userMetadata.attachments = options.attachments;
-    }
-    if (options.localMessageId) {
-      userMetadata.localMessageId = options.localMessageId;
-    }
-    const userMessage: LLMMessage = {
-      role: "user",
-      content: effectiveInput,
-      metadata: Object.keys(userMetadata).length > 0 ? userMetadata : undefined,
-    };
-    await this.conversation.addMessage(userMessage);
-    this.history.add(userMessage);
 
     let memoryContext = "";
     try {
