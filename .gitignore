@@ -17,4 +17,8 @@ target/
 apps/tauri-desktop/target/
 apps/tauri-desktop/src-tauri/target/
 apps/tauri-desktop/dist/
+apps/tauri-server/target/
+apps/tauri-server/src-tauri/target/
+apps/tauri-server/dist/
 Cargo.lock
+server.exe

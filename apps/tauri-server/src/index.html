@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DucKI Node</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+          "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      #app {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+
+      .loading {
+        text-align: center;
+        color: white;
+      }
+
+      .loading h1 {
+        font-size: 2.5em;
+        margin: 0 0 0.5em 0;
+      }
+
+      .loading p {
+        font-size: 1.2em;
+        margin: 0;
+        opacity: 0.9;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="loading">
+        <h1>🦆 DucKI Server</h1>
+        <p id="status">Starting server...</p>
+        <p style="font-size: 0.9em; opacity: 0.7; margin-top: 1em;" id="port"></p>
+      </div>
+    </div>
+    <script type="module">
+      import { appDataDir } from 'https://cdn.skypack.dev/@tauri-apps/api/path';
+      import { invoke } from 'https://cdn.skypack.dev/@tauri-apps/api/tauri';
+
+      // Fallback for offline mode
+      const statusEl = document.getElementById('status');
+      const portEl = document.getElementById('port');
+
+      // Update status periodically
+      setInterval(async () => {
+        try {
+          const port = await invoke('get_backend_port');
+          portEl.textContent = `Running on localhost:${port}`;
+          statusEl.textContent = '✓ Backend ready!';
+        } catch (e) {
+          statusEl.textContent = 'Starting backend...';
+        }
+      }, 500);
+    </script>
+  </body>
+</html>

@@ -47,7 +47,7 @@ function startOtherPackages() {
 
   devProcess = spawn(
     'pnpm',
-    ['-r', '--parallel', '--filter=!@ducki/cli', '--filter=!@ducki/shared', '--filter=!@ducki/desktop', '--filter=!@ducki/tauri-desktop', 'run', 'dev'],
+    ['-r', '--parallel', '--filter=!@ducki/cli', '--filter=!@ducki/shared', '--filter=!@ducki/desktop', '--filter=!@ducki/tauri-desktop', '--filter=!@ducki/tauri-server', 'run', 'dev'],
     { stdio: 'inherit', shell: true }
   );
 

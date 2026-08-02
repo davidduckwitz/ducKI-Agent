@@ -1,0 +1,41 @@
+{
+  "productName": "DucKI Server",
+  "version": "0.1.0",
+  "identifier": "de.davidduckwitz.ducki-server",
+  "build": {
+    "beforeBuildCommand": "echo 'Server App Build'",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DucKI Server",
+        "label": "server-logs",
+        "width": 300,
+        "height": 200,
+        "visible": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": false,
+        "resizable": false,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/server-dist"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "wix": null
+    }
+  }
+}

@@ -133,11 +133,134 @@ skills/        User and system skill folders (SKILL.md per skill)
 storage/       Runtime storage (DB, logs)
 ```
 
+## Desktop Applications
+
+DucKI includes two separate Tauri apps for Windows:
+
+### tauri-desktop (Frontend App)
+- Standalone web UI application
+- Connects to backend (local or remote)
+- Settings: Local/Remote toggle in `/settings`
+- Starts with: `pnpm tauri:dev`
+- Build: `pnpm tauri:build`
+
+### tauri-server (Backend Server App)
+- Separate backend application with system tray integration
+- Manages Node.js server process
+- Auto-detects available port (3001-3010 fallback)
+- Windows Autostart support
+- Starts with: `pnpm tauri:server:dev`
+- Build: `pnpm tauri:server:build`
+
+### Running Both Together
+
+Start everything (web server + both Tauri apps) with one command:
+
+```bash
+pnpm tauri:all:dev
+```
+
+This will automatically start in parallel:
+1. `pnpm dev` → Vite dev server (5173) + Node API server (3001)
+2. `pnpm tauri:server:dev` → Backend Wrapper (system tray)
+3. `pnpm tauri:dev` → Frontend (waits for Vite to be ready)
+
+**All three start together - just use one terminal!**
+
+### Separate Usage
+
+If you only need the frontend (connecting to remote server):
+```bash
+pnpm tauri:dev
+```
+
+If you only need the backend server:
+```bash
+pnpm tauri:server:dev
+```
+
+### Port Management
+
+**tauri-server** implements smart port detection:
+- Tries port 3001 first
+- Falls back to 3002-3010 if ports are in use
+- Displays actual port in system tray tooltip
+- Logs port on startup
+
+The frontend automatically detects the backend port, or you can set it manually in Settings.
+
+### System Tray Integration
+
+When **tauri-server** starts, it creates a system tray icon that shows:
+- 🟢 Status indicator (green = running)
+- Tooltip with port information: `DucKI Server - Running on localhost:3001`
+- Hover to see full details and port number
+
+The tray icon persists in the Windows system tray even when the app window is closed, allowing the server to run in the background.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│   tauri-desktop (Frontend App)          │
+│   - Windows desktop wrapper for web UI  │
+│   - Vite dev server on :5173            │
+│   - Settings: Local/Remote backend      │
+└─────────────────────────────────────────┘
+                    ↓ connects to ↓
+┌─────────────────────────────────────────┐
+│   tauri-server (Backend Server App)     │
+│   - System tray with port indicator     │
+│   - Manages Node.js server process      │
+│   - Auto-detects free port (3001+)      │
+│   - Windows Autostart support           │
+│   - tsx compiles TypeScript on-the-fly  │
+└─────────────────────────────────────────┘
+                    ↓ runs ↓
+┌─────────────────────────────────────────┐
+│   Node.js Server (apps/server/)         │
+│   - Express API on detected port        │
+│   - Socket.IO WebSocket events          │
+│   - Agent/Memory/Skill systems          │
+└─────────────────────────────────────────┘
+```
+
+### Troubleshooting Tauri Apps
+
+**"Waiting for your frontend dev server to start..."**
+- The frontend needs Vite dev server on :5173
+- This is normal; wait or check that Vite is running
+- Vite auto-increments port if 5173 is in use
+
+**Backend not starting**
+- Check if ports 3001-3010 are available
+- Run `pnpm build:server` to ensure Node server is built
+- Check console for port binding errors
+
+**Frontend can't connect to backend**
+- Verify tauri-server is running (check system tray)
+- Check Settings: Local/Remote toggle
+- If using Remote: verify URL and port are correct
+- Frontend will auto-detect localhost port if using Local
+
 ## CLI and Scripts
 
 ```bash
-pnpm dev
-pnpm build
+# Development
+pnpm dev                      # Start web + server (Vite + Node + shared watch)
+pnpm tauri:dev               # Start tauri-desktop only
+pnpm tauri:server:dev        # Start tauri-server only
+pnpm tauri:all:dev           # Start everything (web + server + both tauri apps)
+pnpm tauri:dev:no-server     # Start tauri apps without dev server (uses built web)
+
+# Building
+pnpm tauri:build             # Build tauri-desktop .exe
+pnpm tauri:server:build      # Build tauri-server .exe
+pnpm build                   # Build all packages
+pnpm build:web               # Build web frontend only
+pnpm build:server            # Build Node server only
+
+# Utilities
 pnpm typecheck
 pnpm test
 pnpm lint

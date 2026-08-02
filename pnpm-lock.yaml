@@ -248,6 +248,31 @@ importers:
         specifier: ^5.0.0
         version: 5.4.21(@types/node@22.20.1)
 
+  apps/tauri-server:
+    dependencies:
+      '@tauri-apps/api':
+        specifier: ^2.0.0
+        version: 2.11.1
+      tsx:
+        specifier: ^4.23.1
+        version: 4.23.1
+    devDependencies:
+      '@tauri-apps/cli':
+        specifier: ^2.0.0
+        version: 2.11.4
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      pkg:
+        specifier: ^5.8.1
+        version: 5.8.1(encoding@0.1.13)
+      typescript:
+        specifier: ^5.5.0
+        version: 5.9.3
+      vite:
+        specifier: ^5.0.0
+        version: 5.4.21(@types/node@22.20.1)
+
   apps/web:
     dependencies:
       '@monaco-editor/react':
