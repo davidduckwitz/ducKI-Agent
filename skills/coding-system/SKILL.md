@@ -1,6 +1,10 @@
 ---
 name: coding-system
 description: "Use the coding area for AI/Vibe coding with project-bound chat and file editor in shared-workspace/coding."
+category: development
+tags: [coding, development, project-management, editor, ai-assisted]
+priority: high
+dependencies: [shared-workspace-ops, filesystem-operations]
 related_skills: [shared-workspace-ops, browser-control, test-driven-development, code-review, security-skill]
 primary_skills: [shared-workspace-ops, test-driven-development, code-review, security-skill]
 fallback_skills: [shared-workspace-api-first, code-review, workflow-orchestrator, security-skill]

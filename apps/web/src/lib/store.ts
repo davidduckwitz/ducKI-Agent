@@ -493,16 +493,43 @@ export const useAppStore = create<AppState>((set, get) => ({
     socket.on("tool:call_started", (data: { timestamp: string; conversationId?: number; data?: Record<string, unknown> }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
       const toolData = data.data as { count?: number; tools?: string[]; summaries?: string[] } | undefined;
-      const callId = crypto.randomUUID();
-      const toolCall: ToolCallRecord = {
-        id: callId,
-        toolName: toolData?.tools?.[0] ?? "unknown",
-        timestamp: data.timestamp,
-        status: "executing",
-        input: toolData,
-        conversationId: data.conversationId, // Link to conversation
-      };
-      get().addToolCall(toolCall);
+      const tools = toolData?.tools ?? [];
+      const summaries = toolData?.summaries ?? [];
+
+      // Create tool calls for each tool (tools and summaries arrays have same length)
+      for (let i = 0; i < tools.length; i++) {
+        const callId = `${tools[i]}_${data.timestamp}_${i}`;
+        const toolCall: ToolCallRecord = {
+          id: callId,
+          toolName: tools[i] ?? "unknown",
+          timestamp: data.timestamp,
+          status: "executing",
+          input: { summary: summaries[i], toolName: tools[i] },
+          conversationId: data.conversationId,
+        };
+        get().addToolCall(toolCall);
+      }
+    });
+
+    socket.on("tool:call_completed", (data: { timestamp: string; conversationId?: number; data?: Record<string, unknown> }) => {
+      if (!belongsToActiveConversation(data.conversationId)) return;
+      const toolData = data.data as { toolName?: string; callId?: string; success?: boolean; error?: string; summary?: string } | undefined;
+      const toolName = toolData?.toolName ?? "unknown";
+
+      // Find the tool call by toolName (they're added in same order)
+      const toolCalls = get().toolCalls;
+      const toolCall = toolCalls.find(
+        (tc) => tc.toolName === toolName && tc.status === "executing"
+      );
+
+      if (toolCall) {
+        get().updateToolCall(toolCall.id, {
+          status: toolData?.success ? "completed" : "failed",
+          result: toolData?.success
+            ? { success: true, output: toolData.summary }
+            : { success: false, error: toolData?.error ?? "Unknown error" },
+        });
+      }
     });
 
     set({ socket });

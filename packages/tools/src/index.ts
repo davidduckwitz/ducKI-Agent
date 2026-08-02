@@ -15,6 +15,15 @@ export { runScriptInSandbox, sanitizeRuntimeValue } from "./sandbox.js";
 export type { SandboxRuntime, SandboxVarNames, SandboxExecutionResult } from "./sandbox.js";
 export { safeRelativePath, frontmatterScript, extractInlineScript, resolveScriptSource } from "./script-source.js";
 export type { ResolveScriptSourceOptions, ResolveScriptSourceResult } from "./script-source.js";
+export {
+  SKILL_SCRIPT_MAPPINGS,
+  getScriptPath,
+  buildScriptMappingFromManifest,
+  registerScriptMapping,
+  listScriptMappings,
+  getSkillScripts,
+} from "./script-mappings.js";
+export type { ScriptMapping } from "./script-mappings.js";
 
 export const allTools: ToolExecutor[] = [filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool];
 

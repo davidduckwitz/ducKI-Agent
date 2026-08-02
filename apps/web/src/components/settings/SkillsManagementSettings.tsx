@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { ChevronDown, Sparkles, Activity, Zap, Search, AlertCircle, CheckCircle2, Clock, type LucideIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
+import { SkillDependencyGraph } from "../skills/SkillDependencyGraph";
 
 interface SkillManifest {
   slug: string;
@@ -8,6 +9,7 @@ interface SkillManifest {
   description: string;
   category?: string;
   tags?: string[];
+  dependencies?: string[];
 }
 
 interface SkillBundle {
@@ -319,6 +321,8 @@ export function SkillsManagementSettings() {
   const [expandedBundles, setExpandedBundles] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [filterCategory, setFilterCategory] = useState<string | null>(null);
+  const [filterTags, setFilterTags] = useState<Set<string>>(new Set());
+  const [filterPriority, setFilterPriority] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingBundleId, setEditingBundleId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<SkillBundle>>({
@@ -341,9 +345,18 @@ export function SkillsManagementSettings() {
 
       const matchesCategory = !filterCategory || bundle.category === filterCategory;
 
-      return matchesSearch && matchesCategory;
+      const matchesTags =
+        filterTags.size === 0 ||
+        bundle.skills.some((skill) =>
+          skill.tags?.some((tag) => filterTags.has(tag))
+        );
+
+      const matchesPriority =
+        filterPriority.size === 0 || filterPriority.has(bundle.priority);
+
+      return matchesSearch && matchesCategory && matchesTags && matchesPriority;
     });
-  }, [bundles, searchQuery, filterCategory]);
+  }, [bundles, searchQuery, filterCategory, filterTags, filterPriority]);
 
   const toggleBundleSelection = (bundleId: string) => {
     const newSelected = new Set(selectedBundles);
@@ -375,6 +388,70 @@ export function SkillsManagementSettings() {
       .map((id) => bundles.find((b) => b.id === id)?.maxConcurrent ?? 0)
       .reduce((sum, max) => sum + max, 0),
   };
+
+  // Hermes Pattern #2: Get all available tags from skills
+  const uniqueTags = useMemo(() => {
+    const tags = new Set<string>();
+    bundles.forEach((bundle) => {
+      bundle.skills.forEach((skill) => {
+        skill.tags?.forEach((tag) => tags.add(tag));
+      });
+    });
+    return Array.from(tags).sort();
+  }, [bundles]);
+
+  const allPriorities = ["critical", "high", "medium", "low"] as const;
+
+  // Hermes Pattern #2: Prepare data for dependency graph visualization
+  const selectedSkills = useMemo(() => {
+    const skills: SkillManifest[] = [];
+    const skillMap = new Map<string, SkillManifest>();
+
+    // Collect all skills from selected bundles
+    Array.from(selectedBundles).forEach((bundleId) => {
+      const bundle = bundles.find((b) => b.id === bundleId);
+      if (bundle) {
+        bundle.skills.forEach((skill) => {
+          if (!skillMap.has(skill.slug)) {
+            skills.push(skill);
+            skillMap.set(skill.slug, skill);
+          }
+        });
+      }
+    });
+
+    return skills;
+  }, [selectedBundles, bundles]);
+
+  // Hermes Pattern #2: Build dependency graph map
+  const dependencyGraph = useMemo(() => {
+    const graph = new Map<string, string[]>();
+
+    // Collect all skills (both selected and dependencies)
+    const allSkills = new Map<string, SkillManifest>();
+    bundles.forEach((bundle) => {
+      bundle.skills.forEach((skill) => {
+        allSkills.set(skill.slug, skill);
+      });
+    });
+
+    // Build dependency edges
+    allSkills.forEach((skill) => {
+      graph.set(skill.slug, skill.dependencies || []);
+    });
+
+    return graph;
+  }, [bundles]);
+
+  const allSkillsMap = useMemo(() => {
+    const map = new Map<string, SkillManifest>();
+    bundles.forEach((bundle) => {
+      bundle.skills.forEach((skill) => {
+        map.set(skill.slug, skill);
+      });
+    });
+    return map;
+  }, [bundles]);
 
   const handleCreateBundle = () => {
     if (!formData.name?.trim()) return;
@@ -534,6 +611,59 @@ export function SkillsManagementSettings() {
             </button>
           ))}
         </div>
+
+        {/* Hermes Pattern #2: Tag Filtering */}
+        {uniqueTags.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-muted-foreground">Filter by Tags</p>
+            <div className="flex flex-wrap gap-2">
+              {uniqueTags.map((tag) => (
+                <button
+                  key={tag}
+                  onClick={() => {
+                    const newTags = new Set(filterTags);
+                    newTags.has(tag) ? newTags.delete(tag) : newTags.add(tag);
+                    setFilterTags(newTags);
+                  }}
+                  className={cn(
+                    "px-2.5 py-1 rounded-full text-xs font-medium transition-colors",
+                    filterTags.has(tag)
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                  )}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Hermes Pattern #2: Priority Filtering */}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground">Filter by Priority</p>
+          <div className="flex flex-wrap gap-3">
+            {allPriorities.map((priority) => (
+              <label key={priority} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={filterPriority.has(priority)}
+                  onChange={() => {
+                    const newPriority = new Set(filterPriority);
+                    newPriority.has(priority)
+                      ? newPriority.delete(priority)
+                      : newPriority.add(priority);
+                    setFilterPriority(newPriority);
+                  }}
+                  className="w-4 h-4 rounded border-border bg-background"
+                />
+                <span className="text-xs capitalize">
+                  {priority}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Bundles Grid */}
@@ -561,7 +691,7 @@ export function SkillsManagementSettings() {
 
       {/* Selection Summary */}
       {selectedBundles.size > 0 && (
-        <div className="border-t border-border pt-4 space-y-2">
+        <div className="border-t border-border pt-4 space-y-4">
           <p className="text-sm font-semibold">Selected Bundles ({selectedBundles.size})</p>
           <div className="flex flex-wrap gap-2">
             {Array.from(selectedBundles).map((bundleId) => {
@@ -582,6 +712,18 @@ export function SkillsManagementSettings() {
               ) : null;
             })}
           </div>
+
+          {/* Hermes Pattern #2: Skill Dependency Graph */}
+          {selectedSkills.length > 0 && (
+            <div className="border-t border-border pt-4">
+              <h3 className="text-sm font-semibold mb-3">Skill Dependencies</h3>
+              <SkillDependencyGraph
+                selectedSkills={selectedSkills}
+                allSkills={allSkillsMap}
+                dependencyGraph={dependencyGraph}
+              />
+            </div>
+          )}
         </div>
       )}
 

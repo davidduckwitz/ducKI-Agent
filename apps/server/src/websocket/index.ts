@@ -47,6 +47,8 @@ export function setupWebSocket(
   getGatewayStatus: () => unknown = () => undefined
 ): void {
   const activeAgentsBySocket = new Map<string, Set<Agent>>();
+  // Prevent concurrent execution on the same conversation
+  const runningConversations = new Map<number, Promise<void>>();
 
   const emitMetrics = (): void => {
     if (readyClients.size === 0) return;
@@ -143,6 +145,7 @@ export function setupWebSocket(
       // Tracked separately from the resolved id below so the catch block can still report
       // a conversationId even if the failure happened before resolution completed.
       let conversationId: number | undefined = data.conversationId;
+      let resolveRun: (() => void) | undefined;
       try {
         // Determine the conversation directly via the database instead of spinning up a
         // throwaway Agent instance just to call startConversation()/loadConversation() -
@@ -159,6 +162,19 @@ export function setupWebSocket(
           socket.emit("chat:conversation", { conversationId: resolvedConversationId });
         }
         conversationId = resolvedConversationId;
+
+        // Wait for any running conversation to complete (prevent concurrent execution)
+        const existingRun = runningConversations.get(resolvedConversationId);
+        if (existingRun) {
+          logger.info("Conversation already running, waiting for completion", { conversationId: resolvedConversationId });
+          await existingRun;
+        }
+
+        // Create a promise to track this execution
+        const runPromise = new Promise<void>((resolve) => {
+          resolveRun = resolve;
+        });
+        runningConversations.set(resolvedConversationId, runPromise);
 
         registryRunId = agentRegistry.register({
           source: "chat_ws",
@@ -273,6 +289,21 @@ export function setupWebSocket(
                 });
               }
 
+              // Emit tool result events to update tool call status in UI
+              if (event.type === "tool_result") {
+                socket.emit("tool:call_completed", {
+                  timestamp: event.timestamp,
+                  conversationId: resolvedConversationId,
+                  data: {
+                    toolName: (event.data as any)?.toolName,
+                    callId: (event.data as any)?.callId,
+                    success: (event.data as any)?.success,
+                    error: (event.data as any)?.error,
+                    summary: (event.data as any)?.summary,
+                  },
+                });
+              }
+
               // Emit iteration metrics for real-time token tracking
               if (event.type === "iteration" && event.data) {
                 const iterationData = event.data as Record<string, unknown>;
@@ -305,6 +336,11 @@ export function setupWebSocket(
         }
         for (const runAgent of runAgents) {
           unregisterActiveAgent(socket.id, runAgent);
+        }
+        // Clear the conversation lock
+        if (conversationId && runningConversations.has(conversationId)) {
+          runningConversations.delete(conversationId);
+          resolveRun!();
         }
       }
     });

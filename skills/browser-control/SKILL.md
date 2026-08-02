@@ -1,6 +1,13 @@
 ﻿---
 name: browser-control
 description: Use the browser tool to inspect, control, and verify browser-based flows safely
+category: automation
+tags: [browser, ui, automation, testing, web]
+scripts:
+  screenshot: "./scripts/screenshot.js"
+  click: "./scripts/click.js"
+dependencies: [filesystem-ops]
+priority: high
 related_skills: [shared-workspace-ops, shared-workspace-api-first, workflow-orchestrator, plan, fast-answer]
 primary_skills: [shared-workspace-ops]
 fallback_skills: [shared-workspace-api-first, workflow-orchestrator]

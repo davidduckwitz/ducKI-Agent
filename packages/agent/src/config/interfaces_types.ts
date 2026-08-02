@@ -74,6 +74,12 @@ export interface SkillManifest {
   primarySkills: string[];
   relatedSkills: string[];
   fallbackSkills: string[];
+  // Hermes Pattern #1: Skill Metadata System
+  category?: string;
+  tags?: string[];
+  scripts?: Record<string, string>;
+  dependencies?: string[];
+  priority?: "critical" | "high" | "medium" | "low";
 }
 
 export interface SkillSummary extends SkillManifest {

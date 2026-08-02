@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, resolve } from "node:path";
 import { Script, createContext } from "node:vm";
 import { createApiError, createApiResponse } from "@ducki/shared";
+import { skillRegistry } from "@ducki/agent";
 
 export const skillsRouter: IRouter = Router();
 
@@ -370,6 +371,65 @@ skillsRouter.post("/import", async (req, res, next) => {
   }
 });
 
+// Hermes Pattern #2: New discovery/metadata endpoints
+// Must be defined BEFORE /:slug routes to match correctly
+
+// Endpoint 1: GET /api/skills/discover?category=X&tags=Y,Z - Filter by metadata
+skillsRouter.get("/discover", (_req, res) => {
+  const category = _req.query.category as string | undefined;
+  const tagsParam = _req.query.tags as string | undefined;
+  const tags = tagsParam ? tagsParam.split(",").map(t => t.trim()) : undefined;
+
+  const filtered = skillRegistry.listAllSkills({ category, tags });
+  res.json(createApiResponse(filtered));
+});
+
+// Endpoint 4: GET /api/skills/graph - Get complete dependency graph
+skillsRouter.get("/graph", (_req, res) => {
+  const graph = skillRegistry.getSkillDependencyGraph();
+
+  // Convert Map to JSON-serializable format
+  const skills = Array.from(graph.entries()).map(([slug, dependencies]) => ({
+    slug,
+    name: skillRegistry.getSkillMetadata(slug)?.name ?? slug,
+    dependencies,
+  }));
+
+  res.json(createApiResponse({ skills }));
+});
+
+// Endpoint 6: GET /api/skills/manifest - Self-documentation manifest
+skillsRouter.get("/manifest", (_req, res) => {
+  const manifest = skillRegistry.generateSkillManifest();
+  res.json(createApiResponse(manifest));
+});
+
+// Endpoint 5: POST /api/skills/validate-dependencies - Validate dependency set (batch)
+skillsRouter.post("/validate-dependencies", (req, res) => {
+  const { skillSlugs } = req.body as { skillSlugs?: string[] };
+
+  if (!Array.isArray(skillSlugs)) {
+    res.status(400).json(createApiError("skillSlugs array is required"));
+    return;
+  }
+
+  const issues: Array<{ slug: string; missing: string[] }> = [];
+  let isValid = true;
+
+  for (const slug of skillSlugs) {
+    const validation = skillRegistry.validateSkillDependencies(slug);
+    if (!validation.valid) {
+      isValid = false;
+      issues.push({
+        slug,
+        missing: validation.missing ?? [],
+      });
+    }
+  }
+
+  res.json(createApiResponse({ valid: isValid, issues }));
+});
+
 skillsRouter.get("/:slug", (req, res) => {
   const slug = req.params["slug"] ?? "";
   if (!slug) {
@@ -393,6 +453,32 @@ skillsRouter.get("/:slug", (req, res) => {
       content,
     })
   );
+});
+
+// Endpoint 2: GET /api/skills/:slug/metadata - Get full metadata
+skillsRouter.get("/:slug/metadata", (req, res) => {
+  const slug = req.params["slug"] ?? "";
+  const skill = skillRegistry.getSkillMetadata(slug);
+
+  if (!skill) {
+    res.status(404).json(createApiError("Skill not found"));
+    return;
+  }
+
+  res.json(createApiResponse(skill));
+});
+
+// Endpoint 3: GET /api/skills/:slug/dependencies - Get dependency chain
+skillsRouter.get("/:slug/dependencies", (req, res) => {
+  const slug = req.params["slug"] ?? "";
+  const validation = skillRegistry.validateSkillDependencies(slug);
+
+  if (!skillRegistry.getSkillMetadata(slug)) {
+    res.status(404).json(createApiError("Skill not found"));
+    return;
+  }
+
+  res.json(createApiResponse(validation));
 });
 
 skillsRouter.put("/:slug", (req, res) => {

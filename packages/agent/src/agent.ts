@@ -301,7 +301,45 @@ export class Agent {
     this.conversation = new ConversationManager(db, this.logger);
     this.memory = new MemorySystem(db, this.logger);
     this.planner = new Planner(provider, this.logger);
-    this.executor = new Executor(this.logger, createDynamicToolResolver(db));
+
+    // Initialize executor with event callbacks for real-time UI updates (WebSocket streaming)
+    this.executor = new Executor(this.logger, createDynamicToolResolver(db), {
+      onToolStart: (toolName, input) => {
+        this.eventEmitterV2.emitEvent({
+          type: "tool_execution_started",
+          message: `Executing ${toolName}`,
+          data: { toolName, input },
+          timestamp: new Date().toISOString(),
+        });
+      },
+      onToolProgress: (toolName, progress) => {
+        this.eventEmitterV2.emitEvent({
+          type: "tool_call",
+          message: `${toolName}: ${progress}`,
+          data: { toolName, progress },
+          timestamp: new Date().toISOString(),
+        });
+      },
+      onToolComplete: (toolName, summary, duration, outputSize) => {
+        this.eventEmitterV2.emitEvent({
+          type: "tool_execution_completed",
+          message: summary,
+          data: { toolName, summary, duration, outputSize },
+          timestamp: new Date().toISOString(),
+        });
+      },
+      onToolError: (toolName, error) => {
+        this.eventEmitterV2.emitEvent({
+          type: "tool_execution_failed",
+          message: `${toolName} failed: ${error}`,
+          data: { toolName, error },
+          timestamp: new Date().toISOString(),
+        });
+      },
+      onToolDisposition: (toolName, disposition) => {
+        this.logger.debug("Tool disposition", { toolName, disposition });
+      },
+    });
 
     // Phase 2 Resilience: Initialize fallback executor with the executor instance
     this.fallbackExecutor = new FallbackToolExecutor(

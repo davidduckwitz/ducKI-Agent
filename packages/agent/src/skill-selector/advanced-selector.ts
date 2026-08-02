@@ -24,6 +24,10 @@ export interface SelectionResult {
   reasoning: string;
   confidence: number; // 0-1
   alternativeSkills?: SkillManifest[];
+  // Hermes Pattern #2: Auto-dependency resolution
+  directSkills?: SkillManifest[];
+  resolvedDependencies?: SkillManifest[];
+  dependencyIssues?: string[];
 }
 
 /**
@@ -118,17 +122,31 @@ export class AdvancedSkillSelector {
     // Step 4: Filter by bundle constraints
     const selected = this.filterByBundleConstraints(scored, relevantBundles, topN);
 
-    // Step 5: Resolve dependencies
-    const withDeps = this.resolveDependencies(selected, relevantBundles);
+    // Step 5: Resolve full dependency closure (Hermes Pattern #2)
+    const { resolved: withDeps, issues: depIssues } = this.resolveFullDependencies(selected);
 
     const elapsed = Date.now() - startTime;
+
+    // Add reasoning about dependency resolution
+    let reasoning = this.generateReasoning(withDeps, relevantBundles, context);
+    if (withDeps.length > selected.length) {
+      const addedCount = withDeps.length - selected.length;
+      reasoning += `. Auto-included ${addedCount} dependent skill(s).`;
+    }
+    if (depIssues.length > 0) {
+      reasoning += ` [Warnings: ${depIssues.join("; ")}]`;
+    }
 
     const result: SelectionResult = {
       selectedSkills: withDeps,
       bundles: relevantBundles.filter(b => b.skills.some(s => withDeps.some(sel => sel.slug === s.slug))),
-      reasoning: this.generateReasoning(withDeps, relevantBundles, context),
+      reasoning,
       confidence: this.calculateConfidence(scored.slice(0, topN), context),
       alternativeSkills: scored.slice(topN, topN + 3).map(s => s.skill),
+      // Hermes Pattern #2: Track direct vs resolved dependencies
+      directSkills: selected,
+      resolvedDependencies: withDeps.filter(s => !selected.some(sel => sel.slug === s.slug)),
+      dependencyIssues: depIssues.length > 0 ? depIssues : undefined,
     };
 
     this.logger.info("Skill selection complete", {
@@ -309,6 +327,63 @@ export class AdvancedSkillSelector {
     }
 
     return parts.join(". ") || "Skills selected based on relevance to user input";
+  }
+
+  /**
+   * Hermes Pattern #2: Resolve full dependency closure
+   * Recursively resolves all skill dependencies, detects circular deps
+   */
+  private resolveFullDependencies(
+    selected: SkillManifest[],
+    maxDepth: number = 5
+  ): { resolved: SkillManifest[]; issues: string[] } {
+    const resolved = new Map<string, SkillManifest>();
+    const issues: string[] = [];
+    const visited = new Set<string>();
+
+    const traverse = (skillSlug: string, path: string[] = [], depth: number = 0): void => {
+      // Check for circular dependency
+      if (path.includes(skillSlug)) {
+        const cycle = path.slice(path.indexOf(skillSlug)).concat(skillSlug);
+        issues.push(`Circular dependency: ${cycle.join(" → ")}`);
+        return;
+      }
+
+      // Check depth limit
+      if (depth > maxDepth) {
+        issues.push(`Dependency chain too deep for ${skillSlug}`);
+        return;
+      }
+
+      // Skip if already visited
+      if (visited.has(skillSlug)) return;
+      visited.add(skillSlug);
+
+      // Get skill
+      const skill = this.availableSkills.get(skillSlug);
+      if (!skill) {
+        issues.push(`Missing skill: ${skillSlug}`);
+        return;
+      }
+
+      resolved.set(skillSlug, skill);
+
+      // Recursively resolve dependencies
+      const dependencies = skill.dependencies || [];
+      for (const depSlug of dependencies) {
+        traverse(depSlug, [...path, skillSlug], depth + 1);
+      }
+    };
+
+    // Start traversal from direct skills
+    for (const skill of selected) {
+      traverse(skill.slug);
+    }
+
+    return {
+      resolved: Array.from(resolved.values()),
+      issues,
+    };
   }
 
   /**
