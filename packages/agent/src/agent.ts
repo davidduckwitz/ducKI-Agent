@@ -1896,8 +1896,9 @@ export class Agent {
         if (char === "{" || char === "[" || char === "(") depth++;
         if (char === "}" || char === "]" || char === ")") {
           depth--;
-          // Found closing bracket at depth 0
-          if (depth < 0 || (depth === 0 && char === "]")) {
+          // Found closing bracket at depth 0 - accept ] or ) as valid terminators
+          // ] for [TOOL:...] format, ) for call:...(...) format
+          if (depth < 0 || (depth === 0 && (char === "]" || char === ")"))) {
             return {
               body: response.slice(startPos, i).trim(),
               endIndex: i
@@ -1907,10 +1908,21 @@ export class Agent {
       }
     }
 
-    // Fallback: if no closing ] found, take rest of string
+    // Fallback: if no proper closing found, try to extract at least a reasonable chunk
+    // Don't just take the rest of the string (too greedy for large documents)
+    // Instead, look for a natural boundary (newline or max 5000 chars)
+    let fallbackEndIndex = startPos;
+    for (let i = startPos; i < response.length && i < startPos + 5000; i++) {
+      if (response[i] === "\n") {
+        fallbackEndIndex = i;
+        break;
+      }
+      fallbackEndIndex = i;
+    }
+
     return {
-      body: response.slice(startPos).trim(),
-      endIndex: response.length
+      body: response.slice(startPos, fallbackEndIndex).trim(),
+      endIndex: fallbackEndIndex
     };
   }
 
