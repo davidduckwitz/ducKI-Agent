@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useSettings, readFlag } from "./lib/useSettings";
+import { useAppStore } from "./lib/store";
 import { startConnectionGate } from "./lib/useServerQuery";
 import { Layout } from "./components/layout/Layout";
 import { Dashboard } from "./components/dashboard/Dashboard";
@@ -8,6 +9,7 @@ import { ChatContainer } from "./components/chat/ChatContainer";
 import { ProjectManager } from "./components/projects/ProjectManager";
 import { TaskManager } from "./components/tasks/TaskManager";
 import { ToastDisplay } from "./components/ui/toast-display";
+import { ToolActivityLogger } from "./components/chat/ToolActivityLogger";
 import { useI18n } from "./lib/i18n";
 import { initializeCharacterSystem } from "./components/chat/characters";
 
@@ -96,8 +98,9 @@ function CodingGate() {
   return <LazyRoute><CodingWorkspace /></LazyRoute>;
 }
 
-export default function App() {
+function AppContent() {
   const { t } = useI18n();
+  const { toolCalls, removeToolCall } = useAppStore();
 
   // Initialize character system on app startup
   useEffect(() => {
@@ -110,7 +113,7 @@ export default function App() {
   useEffect(() => startConnectionGate(), []);
 
   return (
-    <BrowserRouter>
+    <>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
@@ -141,6 +144,15 @@ export default function App() {
         </Route>
       </Routes>
       <ToastDisplay />
+      <ToolActivityLogger toolCalls={toolCalls} onRemoveCall={removeToolCall} />
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppContent />
     </BrowserRouter>
   );
 }

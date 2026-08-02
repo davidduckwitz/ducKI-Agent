@@ -1104,10 +1104,10 @@ export function ChatContainer() {
         />
       )}
 
-      {/* Tool Response Dock */}
+      {/* Tool Response Dock - only show tool calls for current conversation */}
       {showToolDock && toolCalls.length > 0 && (
         <ToolResponseDock
-          toolCalls={toolCalls}
+          toolCalls={toolCalls.filter(call => call.conversationId === conversationId)}
           onRemove={removeToolCall}
         />
       )}

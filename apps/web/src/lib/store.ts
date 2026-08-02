@@ -127,6 +127,7 @@ export interface ToolCallRecord {
     data?: unknown;
   };
   tabId?: string;
+  conversationId?: number; // Link to chat conversation - allows per-chat filtering
 }
 
 interface AppState {
@@ -356,13 +357,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (event.type === "tool_call" && event.data) {
           const toolName = event.data.toolName as string | undefined;
           if (toolName) {
-            // Add new tool call
+            // Add new tool call - link to current conversation
             const newToolCall: ToolCallRecord = {
               id: crypto.randomUUID(),
               toolName,
               timestamp: event.timestamp,
               status: "executing",
               input: event.data.input as Record<string, unknown>,
+              conversationId: s.conversationId, // Link to current chat
             };
             updatedToolCalls = [...s.toolCalls, newToolCall];
           }
@@ -498,6 +500,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         timestamp: data.timestamp,
         status: "executing",
         input: toolData,
+        conversationId: data.conversationId, // Link to conversation
       };
       get().addToolCall(toolCall);
     });
