@@ -97,10 +97,65 @@ export interface AgentRuntimeControls {
 
   // Memory & Reflection
   enableAutoMemory: boolean;
+  /**
+   * Enable response quality evaluation and self-improvement.
+   * When enabled, agent evaluates final response quality and attempts improvements.
+   * - Full mode: enabled by default, allows reflectionMaxRetries improvement cycles
+   * - Lightweight mode: disabled (only 5 iterations available, reflection would consume ~20%)
+   * - Chatbot mode: disabled (only 1-5 iterations total, no room for reflection)
+   * Cost: ~200-500 tokens per reflection + ~200-400ms latency
+   * Recommended: true for full mode (improves response quality)
+   * Settings key: AGENT_ENABLE_REFLECTION
+   */
   enableReflection: boolean;
+  /**
+   * Maximum reflection improvement attempts per response (0-3).
+   * Each attempt: evaluate quality, identify issues, generate improved version.
+   * - 0: reflection disabled (quick response)
+   * - 1: one improvement attempt (recommended, good quality/speed tradeoff)
+   * - 2-3: multiple attempts (higher quality, slower, more tokens)
+   * Note: Disabled in lightweight/chatbot modes regardless of this setting.
+   * Settings key: AGENT_REFLECTION_MAX_RETRIES
+   */
   reflectionMaxRetries: number;
+  /**
+   * Store reflection learnings (quality issues, improvement suggestions) in long-term memory.
+   * Helps agent learn from its own self-evaluations over time.
+   * Stores as "pending" memory entries requiring manual review before use.
+   * Recommended: false (only enable if you want to review reflection learnings)
+   * Settings key: AGENT_REFLECTION_STORE_MEMORY
+   */
   reflectionStoreMemory: boolean;
+  /**
+   * Run secondary "meta-review" reflection after improvements.
+   * Second reflection validates the already-improved response and catches edge cases.
+   * Useful for complex responses where initial reflection might miss something.
+   * Cost: +1 LLM call (~200-500 tokens) if enabled
+   * Only runs if enableReflection=true and response passes first reflection.
+   * Recommended: false (use for critical responses needing high confidence)
+   * Settings key: AGENT_REFLECTION_META_REVIEW
+   */
   reflectionMetaReview: boolean;
+  /**
+   * Run quality assessment after normal run completes (post maxIterations).
+   * Even when run ends due to iteration limits, reflection can assess quality for learning.
+   * Response is NOT improved (too late), but issues are stored in memory for future learning.
+   * Cost: +1 LLM call (~200-500 tokens) only at end of run
+   * Recommended: true (helps agent learn from its boundaries)
+   * Settings key: AGENT_REFLECTION_POST_ITERATION
+   */
+  reflectionPostIteration: boolean;
+  /**
+   * Minimum quality threshold for storing post-iteration learnings.
+   * Only stores issues in memory if quality is <= this level.
+   * Values: "poor" | "adequate" | "good" | "excellent"
+   * - "poor": Store if any quality issue found (most learning)
+   * - "adequate": Store if quality <= adequate (most relevant)
+   * - "good": Store if quality <= good (only bad responses)
+   * Recommended: "adequate" (good balance of learning frequency)
+   * Settings key: AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY
+   */
+  reflectionPostIterationMinQuality: "poor" | "adequate" | "good" | "excellent";
 
   // Reasoning & Tools
   reasonerUseToolMinConfidence: number;

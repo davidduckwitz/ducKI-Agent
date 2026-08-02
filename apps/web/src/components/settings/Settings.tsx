@@ -527,6 +527,32 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "AGENT_REFLECTION_POST_ITERATION",
+    label: "Post-Iteration Assessment",
+    description: "Bewertet Antwortqualitaet auch nach Iteration-Limit (fuer Lernen, keine Verbesserung mehr möglich).",
+    type: "select",
+    section: "Agent",
+    defaultValue: "true",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
+    key: "AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY",
+    label: "Post-Iteration Min Quality",
+    description: "Speichere Learnings nur wenn Qualitaet <= diesem Level ist (poor, adequate, good, excellent).",
+    type: "select",
+    section: "Agent",
+    defaultValue: "adequate",
+    options: [
+      { label: "Poor (Alle Fehler)", value: "poor" },
+      { label: "Adequate (Gute Balance)", value: "adequate" },
+      { label: "Good (Nur sehr schlecht)", value: "good" },
+      { label: "Excellent (Nie speichern)", value: "excellent" },
+    ],
+  },
+  {
     key: "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
     label: "Reasoner Min Confidence",
     description: "Mindest-Confidence, bevor Reasoner eine Antwort oder Tool-Ausfuehrung uebersteuern darf.",

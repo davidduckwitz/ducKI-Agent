@@ -2534,6 +2534,8 @@ export class Agent {
       reflectionMaxRetries: this.enableReflection ? 1 : 0,
       reflectionStoreMemory: false,
       reflectionMetaReview: false,
+      reflectionPostIteration: true,
+      reflectionPostIterationMinQuality: "adequate",
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
@@ -2598,6 +2600,8 @@ export class Agent {
         reflectionMaxRetries: this.parseNumberSetting(get("AGENT_REFLECTION_MAX_RETRIES"), defaults.reflectionMaxRetries, 0, 3),
         reflectionStoreMemory: this.parseBooleanSetting(get("AGENT_REFLECTION_STORE_MEMORY"), defaults.reflectionStoreMemory),
         reflectionMetaReview: this.parseBooleanSetting(get("AGENT_REFLECTION_META_REVIEW"), defaults.reflectionMetaReview),
+        reflectionPostIteration: this.parseBooleanSetting(get("AGENT_REFLECTION_POST_ITERATION"), defaults.reflectionPostIteration),
+        reflectionPostIterationMinQuality: (get("AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY") ?? defaults.reflectionPostIterationMinQuality) as "poor" | "adequate" | "good" | "excellent",
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
@@ -3560,8 +3564,15 @@ export class Agent {
     });
 
     if (effectiveMode === "lightweight") {
+      // Lightweight mode: Up to 5 iterations for faster responses on straightforward queries
       adjustedControls.maxIterations = Math.min(5, controls.maxIterations);
+      // Reflection disabled in lightweight mode:
+      // - Reflection adds 1+ LLM calls per retry, consuming significant iteration budget
+      // - With only 5 iterations total, reflection could consume 20%+ of the budget
+      // - Trade-off: Prioritize speed/responsiveness over self-correction on simple queries
+      // - Note: This can be revisited if lightweight mode responses need quality improvement
       adjustedControls.enableReflection = false;
+      adjustedControls.reflectionMaxRetries = 0;
     } else if (effectiveMode === "chatbot") {
       // chatbot mode's normal cap of 1 iteration means "make a tool call" and "read the
       // tool's result back to the user" can never both happen - the loop exits right after
@@ -3590,7 +3601,12 @@ export class Agent {
         // Other simple queries need 3+ iterations
         adjustedControls.maxIterations = Math.min(3, controls.maxIterations);
       }
+      // Reflection disabled in chatbot mode:
+      // - Chatbot mode has only 1-5 iterations total (vs 50 in full mode)
+      // - Reflection would consume all remaining iterations
+      // - No room for tool calls + reflection + response generation
       adjustedControls.enableReflection = false;
+      adjustedControls.reflectionMaxRetries = 0;
     }
 
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
@@ -4541,34 +4557,42 @@ export class Agent {
       });
     }
 
+    // Reflection & Self-Improvement Loop
+    // Evaluates response quality and iteratively improves it (up to reflectionMaxRetries times)
     let reflectionQuality: string | undefined;
-    let reflectionIssueSnapshot: string[] = [];
+    let reflectionIssues: string[] = [];
+    let reflectionSuggestions: string[] = [];
+
     if (adjustedControls.enableReflection && adjustedControls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
+      // Normal reflection pass: evaluate response and optionally improve it
       for (let reflectionAttempt = 1; reflectionAttempt <= adjustedControls.reflectionMaxRetries; reflectionAttempt++) {
         const reflectionResult = await this.reflection.evaluate(
           effectiveInput,
           this.sanitizeFinalResponse(finalResponse),
-          `toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
+          `attempt=${reflectionAttempt}; toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
         );
         reflectionQuality = reflectionResult.quality;
-        reflectionIssueSnapshot = Array.isArray(reflectionResult.issues)
-          ? reflectionResult.issues.slice(0, 5)
-          : [];
+        reflectionIssues = Array.isArray(reflectionResult.issues) ? reflectionResult.issues.slice(0, 5) : [];
+        reflectionSuggestions = Array.isArray(reflectionResult.suggestions) ? reflectionResult.suggestions.slice(0, 3) : [];
 
         emit("decision", "Reflection evaluation complete", {
           attempt: reflectionAttempt,
           quality: reflectionResult.quality,
           shouldRetry: reflectionResult.shouldRetry,
-          issues: Array.isArray(reflectionResult.issues) ? reflectionResult.issues.slice(0, 3) : [],
+          issues: reflectionIssues.slice(0, 3),
           inputTokens: reflectionResult.inputTokens,
           outputTokens: reflectionResult.outputTokens,
           totalTokens: reflectionResult.totalTokens,
         });
 
-        if (!reflectionResult.shouldRetry) break;
+        if (!reflectionResult.shouldRetry) {
+          // Quality is good enough, stop improvement attempts
+          break;
+        }
 
         const improved = reflectionResult.improvedResponse?.trim();
         if (!improved || improved === finalResponse.trim()) {
+          // No meaningful improvement offered, stop attempting
           emit("guardrail", "Reflection retry skipped", {
             reason: !improved ? "no_improved_response" : "same_response",
             attempt: reflectionAttempt,
@@ -4576,53 +4600,119 @@ export class Agent {
           break;
         }
 
+        // Apply improvement and loop to next attempt
         finalResponse = improved;
       }
     }
+
+    // Meta-Review Pass (optional second reflection)
+    // Validates the already-improved response and catches edge cases
+    let metaReflectionQuality: string | undefined;
+    let metaReflectionIssues: string[] = [];
+    let metaReflectionSuggestions: string[] = [];
 
     if (adjustedControls.enableReflection && adjustedControls.reflectionMetaReview && finalResponse.trim().length > 0) {
       const metaReflection = await this.reflection.evaluate(
         effectiveInput,
         this.sanitizeFinalResponse(finalResponse),
-        `meta-review=true; priorQuality=${reflectionQuality ?? "unknown"}; priorIssues=${reflectionIssueSnapshot.join(" | ")}`
+        `type=meta-review; priorQuality=${reflectionQuality ?? "unknown"}; priorIssueCount=${reflectionIssues.length}`
       );
+
+      metaReflectionQuality = metaReflection.quality;
+      metaReflectionIssues = Array.isArray(metaReflection.issues) ? metaReflection.issues.slice(0, 5) : [];
+      metaReflectionSuggestions = Array.isArray(metaReflection.suggestions) ? metaReflection.suggestions.slice(0, 3) : [];
 
       emit("decision", "Meta reflection evaluation complete", {
         quality: metaReflection.quality,
         shouldRetry: metaReflection.shouldRetry,
-        issues: Array.isArray(metaReflection.issues) ? metaReflection.issues.slice(0, 3) : [],
+        issues: metaReflectionIssues.slice(0, 3),
         inputTokens: metaReflection.inputTokens,
         outputTokens: metaReflection.outputTokens,
         totalTokens: metaReflection.totalTokens,
       });
 
+      // Meta-review can suggest final improvement
       const metaImproved = metaReflection.improvedResponse?.trim();
       if (metaReflection.shouldRetry && metaImproved && metaImproved !== finalResponse.trim()) {
         finalResponse = metaImproved;
-      }
-
-      if (controls.reflectionStoreMemory && Array.isArray(metaReflection.issues) && metaReflection.issues.length > 0) {
-        const learning = [
-          "Reflection learning",
-          `Quality: ${metaReflection.quality}`,
-          `Issues: ${metaReflection.issues.slice(0, 3).join("; ")}`,
-          `Suggestions: ${(Array.isArray(metaReflection.suggestions) ? metaReflection.suggestions.slice(0, 2) : []).join("; ")}`,
-        ]
-          .filter((part) => part.trim().length > 0)
-          .join(" | ");
-        await this.memory.addLongTermIfNovel(learning, 6, this.conversation.id, "pending");
+        // Use meta-review findings if they're better than initial reflection
+        if (metaReflectionQuality && metaReflectionIssues.length < reflectionIssues.length) {
+          reflectionQuality = metaReflectionQuality;
+          reflectionIssues = metaReflectionIssues;
+          reflectionSuggestions = metaReflectionSuggestions;
+        }
       }
     }
 
-    if (adjustedControls.enableReflection && adjustedControls.reflectionStoreMemory && reflectionIssueSnapshot.length > 0) {
+    // Post-Iteration Reflection Assessment
+    // Even when iteration limit reached, evaluate quality for learning (no improvement possible)
+    let postIterationQuality: string | undefined;
+    let postIterationIssues: string[] = [];
+    let postIterationSuggestions: string[] = [];
+
+    if (adjustedControls.enableReflection && adjustedControls.reflectionPostIteration && finalResponse.trim().length > 0) {
+      const postAssessment = await this.reflection.evaluate(
+        effectiveInput,
+        this.sanitizeFinalResponse(finalResponse),
+        `type=post-iteration; reason=max_iterations_reached; totalIterations=${iterations}; qualityIfNormal=${reflectionQuality ?? "unevaluated"}`
+      );
+
+      postIterationQuality = postAssessment.quality;
+      postIterationIssues = Array.isArray(postAssessment.issues) ? postAssessment.issues.slice(0, 5) : [];
+      postIterationSuggestions = Array.isArray(postAssessment.suggestions) ? postAssessment.suggestions.slice(0, 3) : [];
+
+      emit("decision", "Post-iteration quality assessment complete", {
+        quality: postAssessment.quality,
+        issues: postIterationIssues.slice(0, 3),
+        reason: "max_iterations_reached",
+        inputTokens: postAssessment.inputTokens,
+        outputTokens: postAssessment.outputTokens,
+        totalTokens: postAssessment.totalTokens,
+      });
+
+      // Store post-iteration learnings if quality is below threshold
+      const qualityRanking = { poor: 0, adequate: 1, good: 2, excellent: 3 };
+      const minQualityRanking = qualityRanking[adjustedControls.reflectionPostIterationMinQuality] ?? 1;
+      const actualQualityRanking = qualityRanking[postIterationQuality as keyof typeof qualityRanking] ?? 1;
+
+      if (adjustedControls.reflectionStoreMemory && actualQualityRanking <= minQualityRanking && postIterationIssues.length > 0) {
+        const postIterationLearning = [
+          "Post-Iteration Learning (Boundary Assessment)",
+          `Quality: ${postIterationQuality}`,
+          postIterationIssues.length > 0 ? `Issues at Boundary: ${postIterationIssues.slice(0, 3).join("; ")}` : "",
+          postIterationSuggestions.length > 0 ? `For Future: ${postIterationSuggestions.slice(0, 2).join("; ")}` : "",
+        ]
+          .filter((part) => part.trim().length > 0)
+          .join(" | ");
+
+        await this.memory.addLongTermIfNovel(
+          postIterationLearning,
+          4, // Importance: 4/10 - boundary learnings are valuable
+          this.conversation.id,
+          "pending"
+        );
+      }
+    }
+
+    // Store Reflection Learnings in Long-Term Memory
+    // Helps agent learn from its own quality evaluations
+    // Note: Always use the BEST quality info (prefer meta if it ran and found fewer issues)
+    if (adjustedControls.enableReflection && adjustedControls.reflectionStoreMemory && reflectionIssues.length > 0) {
       const reflectionLearning = [
-        "Reflection learning",
+        "Self-Reflection Learning",
         reflectionQuality ? `Quality: ${reflectionQuality}` : "",
-        `Issues: ${reflectionIssueSnapshot.slice(0, 3).join("; ")}`,
+        reflectionIssues.length > 0 ? `Issues: ${reflectionIssues.slice(0, 3).join("; ")}` : "",
+        reflectionSuggestions.length > 0 ? `Improvements: ${reflectionSuggestions.slice(0, 2).join("; ")}` : "",
       ]
         .filter((part) => part.trim().length > 0)
         .join(" | ");
-      await this.memory.addLongTermIfNovel(reflectionLearning, 5, this.conversation.id, "pending");
+
+      await this.memory.addLongTermIfNovel(
+        reflectionLearning,
+        5, // Importance: 5/10 - useful learning but not critical
+        this.conversation.id,
+        "pending" // Manual review before using in future contexts
+      );
     }
 
     // Add to memory
