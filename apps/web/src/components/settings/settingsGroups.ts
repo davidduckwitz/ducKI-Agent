@@ -296,6 +296,7 @@ export const TAB_ICONS: Record<string, LucideIcon> = {
   Provider: Cpu,
   API: KeyRound,
   Speech: Mic,
+  Voice: Mic,
   Agent: Sparkles,
   Memory: BookOpen,
   Database: HardDrive,

@@ -45,10 +45,15 @@ setTimeout(() => {
 function startOtherPackages() {
   if (devProcess) return; // Already started
 
+  const env = {
+    ...process.env,
+    VITE_API_PROXY_TARGET: 'http://127.0.0.1:3001',
+  };
+
   devProcess = spawn(
     'pnpm',
     ['-r', '--parallel', '--filter=!@ducki/cli', '--filter=!@ducki/shared', '--filter=!@ducki/desktop', '--filter=!@ducki/tauri-desktop', '--filter=!@ducki/tauri-server', 'run', 'dev'],
-    { stdio: 'inherit', shell: true }
+    { stdio: 'inherit', shell: true, env }
   );
 
   devProcess.on('exit', handleExit);

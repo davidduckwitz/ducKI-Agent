@@ -8,6 +8,7 @@ import { BrowserPreview } from "./BrowserPreview";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ReasoningDisplay } from "./ReasoningDisplay";
 import { ThinkBlockDisplay } from "./ThinkBlockDisplay";
+import { VoicePlayback } from "./VoicePlayback";
 
 /** Parsed think block with metadata */
 interface ThinkBlock {
@@ -406,8 +407,11 @@ export function MessageRow({
         {extras}
         <ReasoningDisplay thinking={thinking} compact={compactMode} />
       </div>
-      <div className="mt-1">
-        <MessageActions content={msg.content} t={t} align="start" />
+      <div className="mt-2 flex items-center gap-4">
+        <div className="flex-1">
+          <MessageActions content={msg.content} t={t} align="start" />
+        </div>
+        <VoicePlayback text={msg.content} />
       </div>
     </div>
   );

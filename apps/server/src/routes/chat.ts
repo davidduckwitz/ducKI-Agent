@@ -5,8 +5,109 @@ import { createApiResponse, createApiError } from "@ducki/shared";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 import { ChatCleanupService } from "../lib/chat-cleanup-service.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
+import { writeFileSync, unlinkSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import express from "express";
+import { createSpeechToTextProvider } from "@ducki/providers";
 
 export const chatRouter: IRouter = Router();
+
+// Helper function to read settings (similar to gateway.ts)
+function readRuntimeSetting(
+  settings: Map<string, string>,
+  key: string,
+  fallbackKey: string,
+  defaultValue?: string
+): string | undefined {
+  return settings.get(key) || settings.get(fallbackKey) || defaultValue;
+}
+
+function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
+  if (value === undefined) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return defaultValue;
+}
+
+// Middleware to handle raw binary data for transcribe endpoint
+chatRouter.post("/transcribe", async (req, res, next) => {
+  const startTime = Date.now();
+
+  try {
+    const body = req.body as any;
+    const base64Audio = body?.audio;
+
+    if (!base64Audio) {
+      res.status(400).json(createApiError("Audio data is required"));
+      return;
+    }
+
+    // Decode base64 to buffer (like Discord Gateway does)
+    const audioBuffer = Buffer.from(String(base64Audio), "base64");
+
+    if (audioBuffer.length === 0) {
+      res.status(400).json(createApiError("Audio data is empty"));
+      return;
+    }
+
+    const db = req.app.locals["db"] as DatabaseService;
+    const allSettings = await db.getAllSettings();
+    const settingsMap = new Map(allSettings.map((s) => [s.key, s.value]));
+
+    // Create provider (same as Discord Gateway)
+    const provider = createSpeechToTextProvider({
+      name: "nodejs-whisper",
+      model: readRuntimeSetting(settingsMap, "NODEJS_WHISPER_MODEL_NAME", "NODEJS_WHISPER_MODEL_NAME", "base"),
+      modelRootPath: readRuntimeSetting(settingsMap, "NODEJS_WHISPER_MODEL_ROOT_PATH", "NODEJS_WHISPER_MODEL_ROOT_PATH"),
+      autoDownloadModel: parseBoolean(
+        readRuntimeSetting(settingsMap, "NODEJS_WHISPER_AUTO_DOWNLOAD", "NODEJS_WHISPER_AUTO_DOWNLOAD", "true"),
+        true
+      ),
+      withCuda: parseBoolean(
+        readRuntimeSetting(settingsMap, "NODEJS_WHISPER_USE_CUDA", "NODEJS_WHISPER_USE_CUDA", "false"),
+        false
+      ),
+      timeoutMs: Number.parseInt(
+        readRuntimeSetting(settingsMap, "NODEJS_WHISPER_TIMEOUT_MS", "NODEJS_WHISPER_TIMEOUT_MS", "180000") ?? "180000",
+        10
+      ),
+    });
+
+    // Transcribe using buffer directly (like Discord Gateway does!)
+    const result = await provider.transcribe(audioBuffer, { language: "de" });
+
+    // Result could be a string directly or an object with text property
+    let text = "";
+    if (typeof result === "string") {
+      text = result.trim();
+    } else if (result && typeof result === "object") {
+      text = ((result as any).text || (result as any).transcript || String(result)).trim();
+    } else {
+      text = String(result).trim();
+    }
+
+    // Remove Whisper timestamps like "[00:00:00.000 --> 00:00:02.000]"
+    text = text.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/gm, "").trim();
+
+    const elapsed = Date.now() - startTime;
+
+    console.log(`[Transcribe] ✅ SUCCESS in ${elapsed}ms: "${text.substring(0, 100)}"`);
+
+    res.json(
+      createApiResponse({
+        text: text || "",
+      })
+    );
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[Transcribe] ❌ Error: ${errorMsg}`);
+    res.status(500).json(
+      createApiError(`Transkription fehlgeschlagen: ${errorMsg}`)
+    );
+  }
+});
 
 chatRouter.get("/conversations", async (req, res, next) => {
   try {

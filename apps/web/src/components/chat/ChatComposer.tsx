@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Image as ImageIcon, Loader2, Paperclip, Sparkles, Square, Wrench, X, Zap } from "lucide-react";
+import { ArrowUp, Image as ImageIcon, Loader2, Paperclip, Sparkles, Square, Wrench, X, Zap, Mic } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { ToolSkillSelector, type SelectorMode } from "./ToolSkillSelector";
@@ -47,18 +47,166 @@ export function ChatComposer({
   const { chatProvider, chatModel, setChatProvider, setChatModel } = useAppStore();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<any>(null);
   const [selector, setSelector] = useState<{ mode: SelectorMode; query: string } | null>(null);
   const [focused, setFocused] = useState(false);
   const [showLLMSelector, setShowLLMSelector] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
+  const shouldSendAfterTranscribeRef = useRef(false);
 
   useEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
-  }, [value]);
+
+    // Auto-send if transcription just completed
+    if (shouldSendAfterTranscribeRef.current && value.trim().length > 0 && !isLoading) {
+      shouldSendAfterTranscribeRef.current = false;
+      // Schedule send after state is fully updated
+      setTimeout(() => onSend(), 50);
+    }
+  }, [value, isLoading, onSend]);
 
   const focusInput = () => textareaRef.current?.focus();
+
+  const handleVoiceToggle = async () => {
+    if (isListening) {
+      if (recognitionRef.current) {
+        const recorder = recognitionRef.current as MediaRecorder;
+        if (recorder.state !== "inactive") {
+          recorder.stop();
+        }
+      }
+      setIsListening(false);
+      return;
+    }
+
+    try {
+      setVoiceError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Find supported MIME types
+      let mimeType = "audio/webm";
+      const supportedTypes = [
+        "audio/webm",
+        "audio/webm;codecs=opus",
+        "audio/mp4",
+        "audio/wav",
+        "audio/ogg",
+      ];
+      for (const type of supportedTypes) {
+        if (MediaRecorder.isTypeSupported(type)) {
+          mimeType = type;
+          console.log("Using MIME type:", mimeType);
+          break;
+        }
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      const chunks: Blob[] = [];
+      let hasData = false;
+
+      mediaRecorder.ondataavailable = (e) => {
+        console.log("Data available:", e.data.size, "bytes");
+        if (e.data.size > 0) {
+          hasData = true;
+          chunks.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+
+        try {
+          setIsListening(false);
+          console.log("Recording stopped. Total chunks:", chunks.length, "Has data:", hasData);
+
+          if (!hasData || chunks.length === 0) {
+            setVoiceError("Keine Sprache erkannt - bitte versuchen Sie es erneut");
+            return;
+          }
+
+          const audioBlob = new Blob(chunks, { type: mimeType });
+          console.log("Audio blob size:", audioBlob.size);
+
+          if (audioBlob.size < 100) {
+            setVoiceError("Zu kurze Aufnahme - bitte versuchen Sie es erneut");
+            return;
+          }
+
+          setVoiceError("Transkribiere...");
+          const arrayBuffer = await audioBlob.arrayBuffer();
+          console.log("Sending to server, buffer size:", arrayBuffer.byteLength);
+
+          // Convert to base64 for reliable transmission
+          const base64Audio = btoa(
+            String.fromCharCode.apply(null, Array.from(new Uint8Array(arrayBuffer)))
+          );
+          console.log("Base64 encoded size:", base64Audio.length);
+
+          const response = await fetch("/api/chat/transcribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ audio: base64Audio, mimeType }),
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            setVoiceError(error.error || "Transkription fehlgeschlagen");
+            return;
+          }
+
+          const result = await response.json();
+          const text = result.data?.text?.trim();
+          if (text) {
+            const newMessage = value + (value.trim() ? " " : "") + text;
+            onChange(newMessage);
+            setVoiceError(null);
+            // Set flag to auto-send when value updates
+            shouldSendAfterTranscribeRef.current = true;
+          } else {
+            setVoiceError("Keine Sprache erkannt");
+          }
+        } catch (err) {
+          console.error("Transcription error:", err);
+          setVoiceError("Transkription fehlgeschlagen");
+        }
+      };
+
+      mediaRecorder.onerror = (e) => {
+        stream.getTracks().forEach((track) => track.stop());
+        console.error("MediaRecorder error:", e.error);
+        setVoiceError(`Aufnahmefehler: ${e.error}`);
+        setIsListening(false);
+      };
+
+      recognitionRef.current = mediaRecorder;
+      setIsListening(true);
+      console.log("Starting recording with MIME type:", mimeType);
+      mediaRecorder.start();
+
+      setTimeout(() => {
+        if (recognitionRef.current === mediaRecorder && mediaRecorder.state === "recording") {
+          mediaRecorder.stop();
+        }
+      }, 30000);
+    } catch (err) {
+      if (err instanceof Error) {
+        if (err.name === "NotAllowedError") {
+          setVoiceError("Mikrofon-Berechtigung erforderlich. Bitte Zugriff erlauben.");
+        } else if (err.name === "NotFoundError") {
+          setVoiceError("Kein Mikrofon verfügbar");
+        } else {
+          setVoiceError(err.message);
+        }
+      } else {
+        setVoiceError("Fehler beim Starten der Sprachaufnahme");
+      }
+      setIsListening(false);
+    }
+  };
 
   const handleChange = (next: string) => {
     onChange(next);
@@ -171,6 +319,18 @@ export function ChatComposer({
         </div>
       )}
 
+      {voiceError && (
+        <div className="mb-2 rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2 text-xs text-destructive flex items-center justify-between">
+          <span>{voiceError}</span>
+          <button
+            onClick={() => setVoiceError(null)}
+            className="text-destructive/70 hover:text-destructive transition-colors"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+
       <div
         onClick={focusInput}
         className={`cursor-text rounded-2xl border bg-card shadow-sm transition-colors ${
@@ -249,6 +409,13 @@ export function ChatComposer({
             icon={<Paperclip className="h-4 w-4" />}
             label={t("chat.attachFile")}
             onClick={() => fileInputRef.current?.click()}
+          />
+          <ComposerButton
+            icon={<Mic className="h-4 w-4" />}
+            label="Spracheingabe"
+            title={isListening ? "Aufnahme läuft..." : "Spracheingabe starten"}
+            active={isListening}
+            onClick={() => !isLoading && !uploading && handleVoiceToggle()}
           />
           <ComposerButton
             icon={<Sparkles className="h-4 w-4" />}

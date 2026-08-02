@@ -13,6 +13,7 @@ import { CredentialManagementSettings } from "./CredentialManagementSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
 import { AnimationSettings } from "./AnimationSettings";
 import { BackendSettings } from "./BackendSettings";
+import { VoiceSettings } from "./VoiceSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -1168,7 +1169,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup"];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "Voice", "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "Voice", "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1308,6 +1309,13 @@ export function Settings() {
 
       {activeTab === "Database" && <DatabaseSettings />}
 
+      {activeTab === "Voice" && (
+        <div className="card space-y-3">
+          <h2 className="text-lg font-semibold">🎙️ Sprache (STT/TTS)</h2>
+          <VoiceSettings />
+        </div>
+      )}
+
       {activeTab === "Credentials" && <CredentialManagementSettings />}
 
       {activeTab === "Chat Cleanup" && (
@@ -1364,7 +1372,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && (
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Voice" && (
         <div className="space-y-4">
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);
