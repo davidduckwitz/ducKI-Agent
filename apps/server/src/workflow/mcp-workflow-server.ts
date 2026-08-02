@@ -1,6 +1,6 @@
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
-import { getSessionManager } from "../lib/session-manager";
+import { getSessionManager } from "../lib/session-manager.js";
 
 function ok(data: unknown): ToolResult {
   return { success: true, data };

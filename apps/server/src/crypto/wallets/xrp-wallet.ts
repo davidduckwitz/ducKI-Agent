@@ -1,5 +1,5 @@
 import { Wallet } from "xrpl";
-import { BaseWallet, Address, Balance } from "./wallet-base";
+import { BaseWallet, Address, Balance } from "./wallet-base.js";
 
 export class XRPWallet extends BaseWallet {
   currency: "XRP" = "XRP";

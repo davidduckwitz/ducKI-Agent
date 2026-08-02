@@ -1,6 +1,6 @@
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
-import { getSessionManager } from "../lib/session-manager";
-import { getScreenshotStorageManager } from "../lib/screenshot-storage";
+import { getSessionManager } from "../lib/session-manager.js";
+import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
 
 function ok(data: unknown): ToolResult {
   return { success: true, data };

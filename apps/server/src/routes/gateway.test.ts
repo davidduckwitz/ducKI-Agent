@@ -1,4 +1,4 @@
-import { isGatewayConversationName } from "./gateway";
+import { isGatewayConversationName } from "./gateway.js";
 
 const discordConfig = {
   id: "discord_main",

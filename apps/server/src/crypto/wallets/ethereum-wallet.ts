@@ -1,5 +1,5 @@
 import { ethers } from "ethers";
-import { BaseWallet, Address, Balance } from "./wallet-base";
+import { BaseWallet, Address, Balance } from "./wallet-base.js";
 
 export class EthereumWallet extends BaseWallet {
   currency: "ETH" = "ETH";

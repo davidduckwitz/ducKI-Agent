@@ -2,7 +2,7 @@ import { ECPairFactory } from "ecpair";
 import { payments, networks } from "bitcoinjs-lib";
 import * as tinysecp from "tiny-secp256k1";
 import { randomBytes } from "crypto";
-import { BaseWallet, Address, Balance } from "./wallet-base";
+import { BaseWallet, Address, Balance } from "./wallet-base.js";
 
 const ECPair = ECPairFactory(tinysecp);
 

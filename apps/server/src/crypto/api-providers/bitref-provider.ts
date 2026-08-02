@@ -1,5 +1,5 @@
-import { BlockchainApiProvider, Fee } from "./blockchain-api";
-import { Balance, Transaction, TransactionStatus } from "../wallets/wallet-base";
+import { BlockchainApiProvider, Fee } from "./blockchain-api.js";
+import { Balance, Transaction, TransactionStatus } from "../wallets/wallet-base.js";
 
 export class BitrefProvider extends BlockchainApiProvider {
   provider = "bitref";

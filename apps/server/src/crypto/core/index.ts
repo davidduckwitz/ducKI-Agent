@@ -1,4 +1,4 @@
-export * from "./math";
+export * from "./math.js";
 
 // Placeholder exports for other core modules
 export function encrypt(data: string, key: Buffer): string {

@@ -1,5 +1,5 @@
 import type { Logger } from "@ducki/logger";
-import { ToolStagingManager } from "./tool-staging-manager";
+import { ToolStagingManager } from "./tool-staging-manager.js";
 
 export interface ToolResponseHandlerOptions {
   minContentSize?: number; // Threshold to stage large responses (default: 5KB)

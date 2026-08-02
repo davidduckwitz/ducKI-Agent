@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Router as ExpressRouter } from "express";
-import { getScreenshotStorageManager } from "../lib/screenshot-storage";
+import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
 
 export const screenshotRouter: ExpressRouter = Router();
 
