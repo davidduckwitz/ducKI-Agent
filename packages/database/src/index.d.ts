@@ -28,6 +28,7 @@ export declare class DatabaseService {
         limit?: number;
         beforeId?: number;
     }): Promise<MessageSelect[]>;
+    deleteMessagesAfter(conversationId: number, afterId: number): Promise<void>;
     createProject(data: Omit<ProjectInsert, "createdAt" | "updatedAt">): Promise<ProjectSelect>;
     getProject(id: number): Promise<ProjectSelect | undefined>;
     listProjects(): Promise<ProjectSelect[]>;

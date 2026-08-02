@@ -1,10 +1,11 @@
+import { randomUUID } from "crypto";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Agent, AgentRunEvent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { BitcoinPuzzleService } from "@ducki/agent";
-import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
+import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
 
@@ -19,6 +20,20 @@ export const SERVER_PROTOCOL_VERSION = 1;
  * used to be broadcast unconditionally, including when nobody was listening.
  */
 const readyClients = new Set<string>();
+
+/**
+ * In-memory map of sessionChatId → conversationId to prevent race conditions
+ * when client sends multiple messages rapidly on a new chat.
+ * Maps frontend-generated session IDs to actual conversation IDs.
+ */
+const sessionChatIdMap = new Map<string, number>();
+
+/**
+ * Prevent duplicate processing of the same first message when the client emits twice
+ * (e.g. rapid key/button race or transient reconnect behavior).
+ */
+const processedChatMessageKeys = new Map<string, number>();
+const CHAT_MESSAGE_DEDUP_TTL_MS = 2 * 60 * 1000;
 
 /**
  * The sidebar needs the running-puzzle count alongside the agent metrics; it used to get
@@ -49,6 +64,17 @@ export function setupWebSocket(
   const activeAgentsBySocket = new Map<string, Set<Agent>>();
   // Prevent concurrent execution on the same conversation
   const runningConversations = new Map<number, Promise<void>>();
+  // Serializes first-time conversation creation per frontend sessionChatId.
+  const pendingSessionConversation = new Map<string, Promise<number>>();
+
+  const cleanupProcessedChatMessageKeys = (): void => {
+    const now = Date.now();
+    for (const [key, ts] of processedChatMessageKeys) {
+      if (now - ts > CHAT_MESSAGE_DEDUP_TTL_MS) {
+        processedChatMessageKeys.delete(key);
+      }
+    }
+  };
 
   const emitMetrics = (): void => {
     if (readyClients.size === 0) return;
@@ -137,8 +163,10 @@ export function setupWebSocket(
     socket.on("chat:message", async (data: {
       message: string;
       conversationId?: number;
+      sessionChatId?: string;
       attachments?: Array<{ name: string; path?: string; url?: string; mimeType?: string }>;
       agentMode?: "full" | "plan";
+      localMessageId?: string;
     }) => {
       let registryRunId: string | undefined;
       const runAgents: Agent[] = [];
@@ -147,6 +175,26 @@ export function setupWebSocket(
       let conversationId: number | undefined = data.conversationId;
       let resolveRun: (() => void) | undefined;
       try {
+        // Idempotency guard: ignore duplicate emits of the same local message id.
+        if (data.localMessageId) {
+          cleanupProcessedChatMessageKeys();
+          const scope = data.sessionChatId
+            ? `session:${data.sessionChatId}`
+            : data.conversationId
+              ? `conversation:${data.conversationId}`
+              : `socket:${socket.id}`;
+          const dedupKey = `${scope}:${data.localMessageId}`;
+          if (processedChatMessageKeys.has(dedupKey)) {
+            logger.warn("Ignoring duplicate chat:message emit", {
+              dedupKey,
+              conversationId: data.conversationId,
+              sessionChatId: data.sessionChatId,
+            });
+            return;
+          }
+          processedChatMessageKeys.set(dedupKey, Date.now());
+        }
+
         // Determine the conversation directly via the database instead of spinning up a
         // throwaway Agent instance just to call startConversation()/loadConversation() -
         // that instance was previously discarded and never used to actually run the
@@ -155,10 +203,42 @@ export function setupWebSocket(
         if (data.conversationId) {
           resolvedConversationId = data.conversationId;
         } else {
-          const conv = await db.createConversation({
-            name: deriveConversationTitle(data.message),
-          });
-          resolvedConversationId = conv.id;
+          // NEW: Check if we have a sessionChatId from the frontend
+          // This prevents race conditions where multiple messages create multiple conversations
+          let existingConvId = data.sessionChatId ? sessionChatIdMap.get(data.sessionChatId) : undefined;
+
+          if (existingConvId) {
+            // Already created a conversation for this session in this server instance
+            resolvedConversationId = existingConvId;
+          } else {
+            if (data.sessionChatId) {
+              // Serialize createConversation for this logical new-chat session.
+              const pending = pendingSessionConversation.get(data.sessionChatId);
+              if (pending) {
+                resolvedConversationId = await pending;
+              } else {
+                const creationPromise = (async () => {
+                  const conv = await db.createConversation({
+                    name: deriveConversationTitle(data.message),
+                  });
+                  sessionChatIdMap.set(data.sessionChatId!, conv.id);
+                  return conv.id;
+                })();
+                pendingSessionConversation.set(data.sessionChatId, creationPromise);
+                try {
+                  resolvedConversationId = await creationPromise;
+                } finally {
+                  pendingSessionConversation.delete(data.sessionChatId);
+                }
+              }
+            } else {
+              // Fallback path without session id.
+              const conv = await db.createConversation({
+                name: deriveConversationTitle(data.message),
+              });
+              resolvedConversationId = conv.id;
+            }
+          }
           socket.emit("chat:conversation", { conversationId: resolvedConversationId });
         }
         conversationId = resolvedConversationId;
@@ -185,28 +265,19 @@ export function setupWebSocket(
 
         socket.emit("chat:start", { timestamp: new Date().toISOString(), conversationId: resolvedConversationId });
 
-        const result = await runAgentWithRepairRetry(
-          createAgent,
-          data.message,
-          (errorMessage) => [
-            "The previous websocket chat run failed with a runtime error.",
-            `Error: ${errorMessage}`,
-            "Restart from scratch with a fresh solution path.",
-            data.message,
-          ].join("\n"),
-          async (runAgent) => {
-            registerActiveAgent(socket.id, runAgent);
-            runAgents.push(runAgent);
-            await runAgent.loadConversation(resolvedConversationId);
+        let attemptProducedOutput = false;
+
+        const runOptions = {
+          stream: true,
+          attachments: data.attachments,
+          agentMode: data.agentMode,
+          localMessageId: data.localMessageId,
+          onChunk: (chunk: string) => {
+            attemptProducedOutput = true;
+            socket.emit("chat:chunk", { content: chunk, conversationId: resolvedConversationId });
           },
-          {
-            stream: true,
-            attachments: data.attachments,
-            agentMode: data.agentMode,
-            onChunk: (chunk) => {
-              socket.emit("chat:chunk", { content: chunk, conversationId: resolvedConversationId });
-            },
-            onEvent: async (event: AgentRunEvent) => {
+          onEvent: async (event: AgentRunEvent) => {
+              attemptProducedOutput = true;
               const eventToEmit = { ...event };
 
               // Auto-handle large screenshots: store to disk if > 150KB
@@ -320,11 +391,75 @@ export function setupWebSocket(
                   });
                 }
               }
-            },
-          }
-        );
+          },
+        };
 
-        socket.emit("chat:complete", { ...result.result, conversationId: resolvedConversationId });
+        const runAttempt = async (prompt: string) => {
+          const runAgent = createAgent();
+          registerActiveAgent(socket.id, runAgent);
+          runAgents.push(runAgent);
+          await runAgent.loadConversation(resolvedConversationId);
+          return runAgent.run(prompt, runOptions);
+        };
+
+        const checkpointRows = await db.getMessagesPage({
+          conversationId: resolvedConversationId,
+          limit: 1,
+        });
+        const checkpointMessageId = checkpointRows[0]?.id ?? 0;
+
+        let result;
+        try {
+          attemptProducedOutput = false;
+          result = await runAttempt(data.message);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          if (!shouldRetryAgentRun(errorMessage)) {
+            throw error;
+          }
+
+          if (attemptProducedOutput) {
+            // The user already received streamed output/events from attempt 1.
+            // Retrying here would duplicate visible timeline entries and tool calls.
+            logger.warn("Skipping websocket retry because first attempt already emitted output", {
+              conversationId: resolvedConversationId,
+              error: errorMessage,
+            });
+            throw error;
+          }
+
+          const latestRows = await db.getMessagesPage({
+            conversationId: resolvedConversationId,
+            limit: 1,
+          });
+          const latestMessageId = latestRows[0]?.id ?? checkpointMessageId;
+
+          if (latestMessageId > checkpointMessageId) {
+            await db.deleteMessagesAfter(resolvedConversationId, checkpointMessageId);
+            logger.warn("Rolled back partial first attempt before retry", {
+              conversationId: resolvedConversationId,
+              checkpointMessageId,
+              latestMessageId,
+            });
+          }
+
+          const retryPrompt = [
+            "The previous websocket chat run failed with a runtime error.",
+            `Error: ${errorMessage}`,
+            "Restart from scratch with a fresh solution path.",
+            data.message,
+          ].join("\n");
+
+          attemptProducedOutput = false;
+          result = await runAttempt(retryPrompt);
+        }
+
+        socket.emit("chat:complete", {
+          ...result,
+          conversationId: resolvedConversationId,
+          // Stable per-turn id so the client can deterministically collapse duplicate completes.
+          messageId: data.localMessageId || randomUUID(),
+        });
       } catch (error) {
         socket.emit("chat:error", {
           error: error instanceof Error ? error.message : String(error),

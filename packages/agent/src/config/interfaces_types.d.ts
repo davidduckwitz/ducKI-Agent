@@ -26,6 +26,7 @@ export interface AgentRunOptions {
     onChunk?: (chunk: string) => void;
     onEvent?: (event: AgentRunEvent) => void;
     contextCaps?: AgentRunContextCaps;
+    localMessageId?: string;
 }
 export type AgentRunEventType = "plan" | "iteration" | "tool_call" | "tool_result" | "reasoning" | "decision" | "guardrail" | "skill_selection" | "tool_retry";
 export interface AgentRunEvent {

@@ -476,7 +476,7 @@ export function CodingWorkspace() {
       text,
     ].join("\n");
 
-    sendMessage(contextPrefix, undefined, options.planMode ? "plan" : undefined, text);
+    void sendMessage(contextPrefix, undefined, options.planMode ? "plan" : undefined, text);
     setIsEnsuringConversation(false);
   };
 

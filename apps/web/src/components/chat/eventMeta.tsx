@@ -12,6 +12,7 @@ export function eventIcon(eventType?: AgentEventType, eventData?: Record<string,
   if (eventType === "skill_selection") return <Zap className="w-4 h-4 text-cyan-300 animate-pulse" />;
   if (eventType === "tool_retry") return <RefreshCw className="w-4 h-4 text-orange-300" />;
   if (eventType === "iteration") return <Activity className="w-4 h-4 text-blue-300" />;
+  if (eventType === "thinking") return <BrainCircuit className="w-4 h-4 text-amber-300 animate-pulse" />;
   if (eventType === "decision" || eventType === "guardrail") return <BrainCircuit className="w-4 h-4 text-emerald-300" />;
   if (eventType === "mode_selected") return <Sparkles className="w-4 h-4 text-fuchsia-300" />;
   if (eventType === "browser_preview") return <Monitor className="w-4 h-4 text-cyan-300" />;
@@ -29,6 +30,7 @@ export function eventTone(eventType?: AgentEventType, eventData?: Record<string,
   }
   if (eventType === "skill_selection") return "border-cyan-500/30 bg-cyan-500/[0.07] text-cyan-100";
   if (eventType === "tool_retry") return "border-orange-500/40 bg-orange-500/10 text-orange-100";
+  if (eventType === "thinking") return "border-amber-500/30 bg-amber-500/[0.07] text-amber-100";
   if (eventType === "guardrail") return "border-orange-500/40 bg-orange-500/10 text-orange-100";
   if (eventType === "tool_call") return "border-amber-500/30 bg-amber-500/[0.07] text-amber-100";
   if (eventType === "tool_result") return "border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-100";
@@ -42,6 +44,7 @@ export function eventLabel(t: (key: string) => string, eventType?: AgentEventTyp
   if (eventType === "tool_result") return t("chat.eventToolResult");
   if (eventType === "skill_selection") return "Skills Selected";
   if (eventType === "tool_retry") return "Tool Retry";
+  if (eventType === "thinking") return "Thinking";
   if (eventType === "iteration") return t("chat.eventIteration");
   if (eventType === "decision") return t("chat.eventDecision");
   if (eventType === "guardrail") return t("chat.eventGuardrail");

@@ -7,6 +7,25 @@ import { api } from "../../lib/api";
 import { BrowserPreview } from "./BrowserPreview";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ReasoningDisplay } from "./ReasoningDisplay";
+import { ThinkBlockDisplay } from "./ThinkBlockDisplay";
+
+/** Parsed think block with metadata */
+interface ThinkBlock {
+  id: string;
+  content: string;
+  startTime: Date;
+  endTime?: Date;
+  toolCalls: Array<{
+    position: number;
+    toolName: string;
+    purpose: string;
+    status: "planned" | "executing" | "completed" | "failed";
+    confidence: number;
+  }>;
+  thinkingDepth: "shallow" | "medium" | "deep";
+  tokenEstimate?: number;
+  status: "streaming" | "complete";
+}
 
 interface RowCommonProps {
   compactMode?: boolean;
@@ -79,6 +98,28 @@ export function EventRow({
         <BrowserPreview msg={msg} />
       </div>
     );
+  }
+
+  // Handle think block events with modern streaming UI
+  if (msg.eventType === "thinking") {
+    const thinkBlocks = msg.eventData?.["thinkBlocks"] as ThinkBlock[] | undefined;
+    const isStreaming = msg.eventData?.["isStreaming"] as boolean | undefined;
+
+    if (thinkBlocks && thinkBlocks.length > 0) {
+      return (
+        <div className={`${ANIMATE_IN} space-y-3`}>
+          {thinkBlocks.map((block, idx) => (
+            <ThinkBlockDisplay
+              key={block.id}
+              thinkBlock={block}
+              isStreaming={isStreaming}
+              showStats={true}
+              compact={false}
+            />
+          ))}
+        </div>
+      );
+    }
   }
 
   const toolName = typeof msg.eventData?.["toolName"] === "string" ? (msg.eventData["toolName"] as string) : undefined;

@@ -4,6 +4,7 @@ import { translations, type Language, type TranslationTree } from "./translation
 import type { AgentEventType } from "../components/chat/chatTypes";
 import { getSocketUrl } from "./backendUrl";
 import { useConnectionStore } from "./connectionStore";
+import { api } from "./api";
 
 const LANGUAGE_STORAGE_KEY = "ducki.language";
 const CLIENT_ID_KEY = "ducki.clientId";
@@ -66,6 +67,10 @@ function formatChatErrorMessage(rawError: string): string {
   }
 
   return `${t("chat.errorPrefix")} ${rawError}`;
+}
+
+function normalizeAssistantContent(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
 }
 
 export interface ChatAttachment {
@@ -137,7 +142,10 @@ interface AppState {
   // Chat
   messages: ChatMessage[];
   conversationId: number | undefined;
+  sessionChatId: string | undefined;
   awaitingNewConversation: boolean;
+  pendingLocalMessageId?: string;
+  runningConversationIds: Set<number>;
   isLoading: boolean;
   streamingContent: string;
   globalRunningAgents: number;
@@ -180,7 +188,8 @@ interface AppState {
     displayContent?: string,
     provider?: string,
     model?: string
-  ) => void;
+  ) => Promise<void>;
+  handleNewChat: () => void;
   stopMessage: () => void;
   clearChat: () => void;
   setConversationId: (id: number | undefined) => void;
@@ -218,7 +227,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   agentStatus: "idle",
   messages: [],
   conversationId: undefined,
+  sessionChatId: undefined,
   awaitingNewConversation: false,
+  pendingLocalMessageId: undefined,
+  runningConversationIds: new Set(),
   isLoading: false,
   streamingContent: "",
   globalRunningAgents: 0,
@@ -243,6 +255,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   runningTools: new Set(),
 
   initSocket: () => {
+    const existingSocket = get().socket;
+    if (existingSocket) {
+      return;
+    }
+
     // getSocketUrl honours a "remote" backend in the browser too. Previously that was
     // only applied on desktop, so a browser pointed at a remote backend sent its HTTP
     // requests there but kept the socket on its own origin.
@@ -298,6 +315,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         connected: false,
         isLoading: false,
         streamingContent: "",
+        runningConversationIds: new Set(),
         messages: s.isLoading ? [...s.messages, disconnectMsg] : s.messages,
       }));
     };
@@ -319,12 +337,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     // A run's events belong to the currently displayed chat only if their conversationId
-    // matches, or the chat is a brand-new one still waiting to learn its id from the server
-    // (and the user hasn't switched to a different chat in the meantime).
+    // matches. For a brand-new chat that is still unbound (conversationId undefined), only
+    // unscoped events (without conversationId) are accepted until chat:conversation binds it.
+    // This prevents an older still-running chat from leaking events into the newly opened chat.
     const belongsToActiveConversation = (eventConversationId?: number): boolean => {
       const s = get();
       if (s.conversationId === eventConversationId) return true;
-      return s.awaitingNewConversation && s.conversationId === undefined;
+      if (eventConversationId === undefined) {
+        return s.awaitingNewConversation && s.conversationId === undefined;
+      }
+      return false;
     };
 
     socket.on("chat:conversation", (data: { conversationId: number }) => {
@@ -336,7 +358,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     socket.on("chat:start", (data: { conversationId?: number }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
-      set({ isLoading: true, streamingContent: "" });
+      set((s) => {
+        const nextRunning = new Set(s.runningConversationIds);
+        if (typeof data.conversationId === "number") {
+          nextRunning.add(data.conversationId);
+        }
+        return { isLoading: true, streamingContent: "", runningConversationIds: nextRunning };
+      });
     });
 
     socket.on("chat:event", (event: ChatEvent) => {
@@ -402,18 +430,65 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({ streamingContent: s.streamingContent + data.content }));
     });
 
-    socket.on("chat:complete", (data: { response: string; conversationId?: number }) => {
+    socket.on("chat:complete", (data: { response: string; conversationId?: number; messageId?: string }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
-      const msg: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: data.response,
-        timestamp: new Date().toISOString(),
-      };
+      const msgTimestamp = new Date().toISOString();
       set((s) => ({
-        messages: [...s.messages, msg],
-        isLoading: false,
-        streamingContent: "",
+        ...(() => {
+          const localTurnId = s.pendingLocalMessageId;
+          const msg: ChatMessage = {
+            id: data.messageId || crypto.randomUUID(),
+            role: "assistant",
+            content: data.response,
+            timestamp: msgTimestamp,
+            metadata: {
+              localMessageId: localTurnId,
+              serverMessageId: data.messageId,
+            },
+          };
+
+          const normalizedIncoming = normalizeAssistantContent(data.response);
+          // Structural dedupe: if the same assistant text already exists after the most
+          // recent user message, this is a duplicate completion for the same turn.
+          let lastUserIndex = -1;
+          for (let i = s.messages.length - 1; i >= 0; i--) {
+            if (s.messages[i]?.role === "user") {
+              lastUserIndex = i;
+              break;
+            }
+          }
+
+          const alreadyPresentSinceLastUser = s.messages
+            .slice(lastUserIndex + 1)
+            .some((existing) => existing.role === "assistant" && normalizeAssistantContent(existing.content) === normalizedIncoming);
+
+          // Secondary guard for rare duplicate complete packets outside strict ordering.
+          const incomingTs = Date.parse(msgTimestamp);
+          const alreadyPresentRecent = s.messages.some((existing) => {
+            if (existing.role !== "assistant") return false;
+            const existingNormalized = normalizeAssistantContent(existing.content);
+            if (existingNormalized !== normalizedIncoming) return false;
+            const existingTs = Date.parse(existing.timestamp);
+            if (!Number.isFinite(existingTs) || !Number.isFinite(incomingTs)) return false;
+            return Math.abs(incomingTs - existingTs) <= 30_000;
+          });
+
+          const alreadyPresent = alreadyPresentSinceLastUser || alreadyPresentRecent;
+          const alreadyPresentById = s.messages.some((existing) => existing.id === msg.id);
+
+          const nextRunning = new Set(s.runningConversationIds);
+          if (typeof data.conversationId === "number") {
+            nextRunning.delete(data.conversationId);
+          }
+
+          return {
+            messages: alreadyPresent || alreadyPresentById ? s.messages : [...s.messages, msg],
+            isLoading: false,
+            streamingContent: "",
+            pendingLocalMessageId: undefined,
+            runningConversationIds: nextRunning,
+          };
+        })(),
       }));
     });
 
@@ -427,9 +502,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         eventType: "reasoning",
       };
       set((s) => ({
-        messages: [...s.messages, msg],
-        isLoading: false,
-        streamingContent: "",
+        ...(() => {
+          const nextRunning = new Set(s.runningConversationIds);
+          if (typeof data.conversationId === "number") {
+            nextRunning.delete(data.conversationId);
+          }
+          return {
+            messages: [...s.messages, msg],
+            isLoading: false,
+            streamingContent: "",
+            pendingLocalMessageId: undefined,
+            runningConversationIds: nextRunning,
+          };
+        })(),
       }));
     });
 
@@ -442,9 +527,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         timestamp: new Date().toISOString(),
       };
       set((s) => ({
-        messages: [...s.messages, msg],
-        isLoading: false,
-        streamingContent: "",
+        ...(() => {
+          const nextRunning = new Set(s.runningConversationIds);
+          if (typeof data.conversationId === "number") {
+            nextRunning.delete(data.conversationId);
+          }
+          return {
+            messages: [...s.messages, msg],
+            isLoading: false,
+            streamingContent: "",
+            pendingLocalMessageId: undefined,
+            runningConversationIds: nextRunning,
+          };
+        })(),
       }));
     });
 
@@ -540,19 +635,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ socket: null, connected: false });
   },
 
-  sendMessage: (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string, provider?: string, model?: string) => {
-    const { socket, conversationId, isLoading } = get();
+  sendMessage: async (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string, provider?: string, model?: string) => {
+    const { socket, conversationId, sessionChatId, isLoading } = get();
     if (!socket || !content.trim() || isLoading) return;
 
+    const messageId = crypto.randomUUID();
     const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: messageId,
       role: "user",
       // Callers that wrap the prompt in machine-facing context (the coding workspace
       // prepends a [CODING_CONTEXT] block) pass what the user actually typed here, so the
       // chat shows their message instead of the scaffolding around it.
       content: displayContent ?? content,
       timestamp: new Date().toISOString(),
-      metadata: attachments && attachments.length > 0 ? { attachments } : undefined,
+      // CRITICAL FIX #1: Store the local UUID in metadata so we can link it to the DB ID
+      // when the message is persisted. This enables deduplication when undefined→defined
+      // conversationId transition happens.
+      metadata: {
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        localMessageId: messageId,  // Link to DB when persisted
+      },
     };
 
     // Set isLoading synchronously (not waiting for the server's "chat:start" ack) so the
@@ -563,12 +665,71 @@ export const useAppStore = create<AppState>((set, get) => ({
       messages: [...s.messages, userMsg],
       isLoading: true,
       streamingContent: "",
-      // Only a brand-new chat (no conversationId yet) needs to wait for the server to
-      // assign one; if the user switches chats before it arrives, this flag lets the
-      // chat:conversation handler recognize the id is stale and ignore it.
-      awaitingNewConversation: conversationId === undefined,
+      pendingLocalMessageId: messageId,
+      // Conversation id is now created up-front before starting the agent run.
+      awaitingNewConversation: false,
     }));
-    socket.emit("chat:message", { message: content, conversationId, attachments, agentMode, provider, model });
+
+    try {
+      let resolvedConversationId = conversationId;
+      if (resolvedConversationId === undefined) {
+        const created = await api.chat.createConversation({
+          name: content.trim().slice(0, 80),
+        });
+        resolvedConversationId = created.conversationId;
+
+        set((s) => {
+          const nextRunning = new Set(s.runningConversationIds);
+          nextRunning.add(resolvedConversationId!);
+          return {
+            conversationId: resolvedConversationId,
+            awaitingNewConversation: false,
+            runningConversationIds: nextRunning,
+          };
+        });
+      }
+
+      socket.emit("chat:message", {
+        message: content,
+        conversationId: resolvedConversationId,
+        sessionChatId,
+        attachments,
+        agentMode,
+        provider,
+        model,
+        localMessageId: messageId,
+      });
+    } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      set((s) => ({
+        messages: [
+          ...s.messages,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: formatChatErrorMessage(errorText),
+            timestamp: new Date().toISOString(),
+          },
+        ],
+        isLoading: false,
+        streamingContent: "",
+        pendingLocalMessageId: undefined,
+      }));
+    }
+  },
+
+  handleNewChat: () => {
+    const newSessionId = crypto.randomUUID();
+    set({
+      conversationId: undefined,
+      sessionChatId: newSessionId,
+      messages: [],
+      streamingContent: "",
+      isLoading: false,
+      pendingLocalMessageId: undefined,
+      agentStatus: "idle",
+      toolCalls: [],
+    });
   },
 
   stopMessage: () => {
@@ -578,7 +739,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   clearChat: () => set({ messages: [] }),
-  setConversationId: (id) => set({ conversationId: id, awaitingNewConversation: false }),
+  setConversationId: (id) =>
+    set((s) => ({
+      conversationId: id,
+      awaitingNewConversation: false,
+      isLoading: typeof id === "number" ? s.runningConversationIds.has(id) : false,
+      streamingContent: "",
+    })),
   setMessages: (messages) =>
     set((s) => ({
       messages: typeof messages === "function" ? messages(s.messages) : messages,

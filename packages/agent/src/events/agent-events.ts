@@ -92,6 +92,21 @@ export const AGENT_EVENT_TYPES = {
   /** Input normalization applied (aliases resolved, JSON repaired, etc.). */
   INPUT_NORMALIZATION: "input_normalization",
 
+  /** Think block streaming started (Phase 2). */
+  THINK_BLOCK_STARTED: "think_block_started",
+
+  /** Think block content delta received during streaming (Phase 2). */
+  THINK_BLOCK_DELTA: "think_block_delta",
+
+  /** Think block streaming completed (Phase 2). */
+  THINK_BLOCK_COMPLETED: "think_block_completed",
+
+  /** Agent asking clarification question (Phase 3). */
+  AGENT_QUESTION_ASKED: "agent_question_asked",
+
+  /** User response to agent question received (Phase 3). */
+  AGENT_QUESTION_ANSWERED: "agent_question_answered",
+
   // Legacy event types (backward compat)
   PLAN: "plan",
   ITERATION: "iteration",

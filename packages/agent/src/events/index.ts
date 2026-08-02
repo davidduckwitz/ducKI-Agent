@@ -6,3 +6,7 @@ export {
   type AgentEventEmitter,
 } from "./agent-events.js";
 export { EventEmitterV2, type EventEmitterV2Options } from "./event-emitter-v2.js";
+export {
+  ThinkBlockEventEmitter,
+  AgentQuestionEventEmitter,
+} from "./think-block-events.js";

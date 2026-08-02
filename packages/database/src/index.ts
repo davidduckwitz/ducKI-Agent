@@ -1,6 +1,6 @@
 import { createClient, type Client } from "@libsql/client";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
-import { eq, desc, and, lt, or, isNull } from "drizzle-orm";
+import { eq, desc, and, lt, or, isNull, gt } from "drizzle-orm";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
@@ -252,6 +252,13 @@ export class DatabaseService {
       .all();
 
     return [...page].sort((a, b) => a.id - b.id);
+  }
+
+  async deleteMessagesAfter(conversationId: number, afterId: number): Promise<void> {
+    await this.db
+      .delete(schema.messages)
+      .where(and(eq(schema.messages.conversationId, conversationId), gt(schema.messages.id, afterId)))
+      .run();
   }
 
   // ============================================================

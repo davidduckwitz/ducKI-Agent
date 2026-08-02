@@ -56,6 +56,8 @@ export interface AgentRunOptions {
    *  via the Planner and returns it as the response, without executing any tools. */
   agentMode?: "full" | "lightweight" | "chatbot" | "plan";
   attachments?: AgentRunAttachment[];
+  /** Client-side UUID for message deduplication */
+  localMessageId?: string;
 }
 
 export interface AgentRunEvent {

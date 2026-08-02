@@ -55,6 +55,18 @@ export { AGENT_HOOK_NAMES, type AgentHookContexts } from "./hooks/hook-names.js"
 export { EventEmitterV2, type EventEmitterV2Options } from "./events/event-emitter-v2.js";
 export { AGENT_EVENT_TYPES } from "./events/agent-events.js";
 export type { AgentRunEventSnapshot } from "./events/agent-events.js";
+export {
+  ThinkBlockEventEmitter,
+  AgentQuestionEventEmitter,
+} from "./events/think-block-events.js";
+
+// Think Block Parser (Phase 1)
+export { ThinkBlockParser } from "./parsers/think-block-parser.js";
+export type {
+  ThinkBlock,
+  ToolCallReference,
+  ParseResult,
+} from "./parsers/think-block-parser.js";
 
 // Phase 2: Tool Approval Policies & Input Normalization
 export {

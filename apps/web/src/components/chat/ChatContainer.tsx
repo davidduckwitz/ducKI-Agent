@@ -77,6 +77,23 @@ function compareMessages(a: RenderedChatMessage, b: RenderedChatMessage): number
   return 0;
 }
 
+function normalizeMessageForDedup(content: string): string {
+  return content.replace(/\s+/g, " ").trim();
+}
+
+function buildEventDedupKey(
+  eventType: AgentEventType | undefined,
+  content: string,
+  timestamp: string
+): string {
+  const normalizedType = eventType ?? "unknown";
+  const normalizedContent = normalizeMessageForDedup(content);
+  const ts = Date.parse(timestamp);
+  // Bucket by second to avoid millisecond drift between live/persisted paths.
+  const secondBucket = Number.isFinite(ts) ? Math.floor(ts / 1000) : timestamp;
+  return `${normalizedType}|${normalizedContent}|${secondBucket}`;
+}
+
 export function ChatContainer() {
   const { t } = useI18n();
   const qc = useQueryClient();
@@ -85,9 +102,11 @@ export function ChatContainer() {
     sendMessage,
     stopMessage,
     clearChat,
+    handleNewChat,
     isLoading,
     streamingContent,
     conversationId,
+    awaitingNewConversation,
     setConversationId,
     setMessages,
     connected,
@@ -130,8 +149,9 @@ export function ChatContainer() {
   const pendingPrependHeightRef = useRef<number | null>(null);
   const stickToBottomRef = useRef(true);
   const activeConversationRef = useRef<HTMLDivElement>(null);
-  const prevConversationIdRef = useRef<number | undefined>(conversationId);
-  const chatSwitchFlagRef = useRef(false);
+  const conversationListSyncRef = useRef<number | undefined>(conversationId);
+  const mergePreviousConversationRef = useRef<number | undefined>(conversationId);
+  const lastProcessedDataSnapshotRef = useRef<string>("");
 
   const defaultExpandedForType = (eventType?: AgentEventType) => false;
 
@@ -142,6 +162,24 @@ export function ChatContainer() {
     }, 0);
     setTotalTokens(total);
   }, [messages]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    if (streamingContent.trim().length > 0) return;
+
+    let lastUserIndex = -1;
+    let lastAssistantIndex = -1;
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i]?.role === "user") lastUserIndex = i;
+      if (messages[i]?.role === "assistant") lastAssistantIndex = i;
+    }
+
+    // Defensive fallback: if an assistant reply is already present after the latest user
+    // message but loading is still true, a completion event was likely missed.
+    if (lastAssistantIndex > lastUserIndex && lastAssistantIndex >= 0) {
+      useAppStore.setState({ isLoading: false, streamingContent: "" });
+    }
+  }, [messages, isLoading, streamingContent]);
 
   useEffect(() => {
     if (activeConversationRef.current && conversationsViewportRef.current) {
@@ -181,6 +219,8 @@ export function ChatContainer() {
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextBeforeId : undefined),
     enabled: Boolean(conversationId),
+    staleTime: 1000 * 60 * 5,  // 5 minutes - prevent aggressive refetch
+    gcTime: 0,                 // No cache - delete immediately to prevent carry-over
   });
 
   const conversations = conversationsQuery.data?.pages.flatMap((page) => page.items) ?? [];
@@ -190,27 +230,13 @@ export function ChatContainer() {
     // to the first message (see chat:conversation in store.ts) - the sidebar's cached list
     // has no way to know about it yet. Refetch exactly on that undefined -> defined
     // transition so the newly named conversation shows up without waiting on staleTime.
-    const previous = prevConversationIdRef.current;
-    prevConversationIdRef.current = conversationId;
+    const previous = conversationListSyncRef.current;
+    conversationListSyncRef.current = conversationId;
     if (previous === undefined && conversationId !== undefined) {
       void qc.invalidateQueries({ queryKey: ["chat", "conversations", "page"] });
     }
   }, [conversationId, qc]);
 
-  useEffect(() => {
-    // Detect when switching to a different conversation and signal the message-merge effect
-    // to clear old messages before processing new data.
-    const previous = prevConversationIdRef.current;
-
-    if (previous !== undefined && conversationId !== previous) {
-      // Chat switch detected - set flag for message-merge effect to handle cleanup
-      chatSwitchFlagRef.current = true;
-      // Clear expanded events when switching to a defined conversation
-      if (conversationId !== undefined) {
-        setExpandedEvents({});
-      }
-    }
-  }, [conversationId]);
 
     const appliedQueryConversationId = useRef(false);
     useEffect(() => {
@@ -231,8 +257,48 @@ export function ChatContainer() {
     useEffect(() => {
       if (!conversationId) return;
 
-      // If chat just switched and new query data hasn't arrived yet, wait for fresh data
-      if (chatSwitchFlagRef.current && selectedConversationMessages.isFetching) {
+      // Detect chat switch - clear old messages before processing new ones
+      const previousId = mergePreviousConversationRef.current;
+      if (previousId !== undefined && conversationId !== previousId) {
+        setMessages([]);
+        setExpandedEvents({});
+
+        // CRITICAL FIX #1: REMOVE the old query completely - don't just set data to undefined
+        // setQueryData() leaves cached data; removeQueries() deletes the entire cache entry
+        // This prevents stale data from being used when the new query hasn't loaded yet
+        qc.removeQueries({
+          queryKey: ["chat", "messages", previousId],
+        });
+
+        // Reset snapshot so new chat's data is processed
+        lastProcessedDataSnapshotRef.current = "";
+      }
+
+      // CRITICAL FIX #2: Update ref AFTER all checks, not before
+      // This ensures previousId stays accurate for the duration of this effect
+      mergePreviousConversationRef.current = conversationId;
+
+      // CRITICAL FIX #3: Stricter guards to prevent merge before new query has data
+
+      // When conversationId transitions from undefined → defined (new chat),
+      // wait until the query has actually loaded before merging
+      const isNewConversation = previousId === undefined && conversationId !== undefined;
+      if (isNewConversation && (selectedConversationMessages.isLoading || !selectedConversationMessages.data)) {
+        // New chat's query not yet loaded - skip merge for now
+        return;
+      }
+
+      // Skip if still waiting for new conversation to be created
+      if (awaitingNewConversation && (selectedConversationMessages.isLoading || !selectedConversationMessages.data)) {
+        // Conversation not yet confirmed by server - skip merge
+        return;
+      }
+
+      // When switching between existing chats, wait for new query to load
+      // Check: did conversationId change from one real value to another?
+      const isChatSwitch = previousId !== undefined && conversationId !== previousId;
+      if (isChatSwitch && (selectedConversationMessages.isLoading || !selectedConversationMessages.data)) {
+        // New chat's query still loading - skip merge
         return;
       }
 
@@ -241,6 +307,16 @@ export function ChatContainer() {
         .reverse()
         .flatMap((page) => page.items);
       if (!persisted) return;
+
+      // IDEMPOTENCY: Only process if the data has actually changed since last run
+      // Include conversationId in snapshot so switching chats always re-merges
+      // Use string length comparison as a lightweight snapshot - full JSON.stringify
+      // would be more accurate but expensive for large message sets
+      const dataSnapshot = `${conversationId}:${persisted.length}:${persisted.map((p) => p.id).join(",")}`;
+      if (dataSnapshot === lastProcessedDataSnapshotRef.current) {
+        return;  // Already processed this exact data, skip
+      }
+      lastProcessedDataSnapshotRef.current = dataSnapshot;
 
       const mapPersistedMessage = (msg: PersistedMessage) => {
         const metadata = parseMessageMetadata(msg.metadata);
@@ -335,18 +411,110 @@ export function ChatContainer() {
       // updater so this effect does not depend on `messages` — depending on it while
       // also calling setMessages here caused an infinite render loop.
       setMessages((prev) => {
-        // If an agent is actively running, preserve local (non-persisted) messages.
-        // Otherwise, only show persisted messages to avoid mixing messages from different conversations.
-        const localMessages = isLoading ? prev.filter((m) => !m.id.startsWith("db-")) : [];
-        // Deduplicate: remove local messages that are already in persisted
+        // Always preserve local (non-persisted) messages until they appear in DB.
+        // During streaming: shows live updates while agent runs
+        // After agent completes: shows messages until DB catches up
+        // The query will eventually fetch them from DB and deduplicate here
+        const localMessages = prev.filter((m) => !m.id.startsWith("db-"));
+
+        // FIX #1: Deduplicate using both DB IDs AND local UUIDs in metadata
+        // Build a set of persisted IDs (regular db-N identifiers)
         const persistedIds = new Set(renderedPersisted.map((m) => m.id));
-        const uniqueLocalMessages = localMessages.filter((m) => !persistedIds.has(m.id));
+
+        // ALSO build a set of localMessageIds from persisted metadata
+        // This links UUID→DB-ID when a message moves from local to persisted
+        const persistedLocalIds = new Set<string>();
+        const persistedAssistantTurnIds = new Set<string>();
+        const persistedEventKeys = new Set<string>();
+        persisted.forEach((msg) => {
+          const meta = parseMessageMetadata(msg.metadata);
+          const localId = (meta?.localMessageId as string | undefined);
+          if (localId) {
+            persistedLocalIds.add(localId);
+            if (msg.role === "assistant") {
+              persistedAssistantTurnIds.add(localId);
+            }
+          }
+
+          if (msg.role === "event") {
+            let eventType: AgentEventType | undefined;
+            if (msg.toolResult) {
+              try {
+                const parsed = JSON.parse(msg.toolResult) as { eventType?: string };
+                const type = parsed.eventType;
+                if (
+                  type === "plan" ||
+                  type === "iteration" ||
+                  type === "tool_call" ||
+                  type === "tool_result" ||
+                  type === "reasoning" ||
+                  type === "decision" ||
+                  type === "guardrail" ||
+                  type === "mode_selected"
+                ) {
+                  eventType = type;
+                }
+              } catch {
+                // Keep eventType undefined for malformed payloads.
+              }
+            }
+
+            persistedEventKeys.add(buildEventDedupKey(eventType, msg.content, msg.createdAt));
+          }
+        });
+
+        // Remove local messages that are already in DB - check both:
+        // 1. By their current rendered ID (fallback for older messages)
+        // 2. By their localMessageId in metadata (new UUIDs)
+        let uniqueLocalMessages = localMessages.filter((m) => {
+          if (m.role === "event") {
+            const key = buildEventDedupKey(m.eventType, m.content, m.timestamp);
+            return !persistedEventKeys.has(key);
+          }
+
+          const localMessageId = (m.metadata?.localMessageId as string | undefined) ?? m.id;
+          const serverMessageId = m.metadata?.serverMessageId as string | undefined;
+          const turnKey = localMessageId || serverMessageId;
+          if (persistedIds.has(m.id)) return false; // Old style ID match
+          if (persistedLocalIds.has(localMessageId)) return false; // Turn-key UUID match
+          if (m.role === "assistant" && turnKey && persistedAssistantTurnIds.has(turnKey)) return false;
+          return true;
+        });
+
+        // Fallback dedupe for first-message race: optimistic local user/assistant entries
+        // can still survive if the persisted counterpart has no localMessageId link.
+        // Match by role+content with a tight time window to avoid removing older repeats.
+        const persistedByContent = new Map<string, number[]>();
+        for (const p of renderedPersisted) {
+          if (p.role === "event") continue;
+          const key = `${p.role}:${normalizeMessageForDedup(p.content)}`;
+          const list = persistedByContent.get(key) ?? [];
+          const ts = Date.parse(p.timestamp);
+          if (Number.isFinite(ts)) list.push(ts);
+          persistedByContent.set(key, list);
+        }
+
+        uniqueLocalMessages = uniqueLocalMessages.filter((m) => {
+          if (m.role === "event") return true;
+          const key = `${m.role}:${normalizeMessageForDedup(m.content)}`;
+          const persistedTimes = persistedByContent.get(key);
+          if (!persistedTimes || persistedTimes.length === 0) return true;
+
+          const localTime = Date.parse(m.timestamp);
+          if (!Number.isFinite(localTime)) return true;
+
+          return !persistedTimes.some((persistedTime) => Math.abs(persistedTime - localTime) <= 15_000);
+        });
+
         return [...renderedPersisted, ...uniqueLocalMessages].sort(compareMessages);
       });
-
-      // Reset flag after merging with fresh data
-      chatSwitchFlagRef.current = false;
-    }, [conversationId, selectedConversationMessages.data, selectedConversationMessages.isFetching, setMessages, t, isLoading]);
+    }, [
+      conversationId,
+      awaitingNewConversation,
+      selectedConversationMessages.data,
+      selectedConversationMessages.isFetching,
+      selectedConversationMessages.isLoading,
+    ]);
 
   useEffect(() => {
     const viewport = messagesViewportRef.current;
@@ -385,7 +553,9 @@ export function ChatContainer() {
     if (!viewport) return;
     const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     if (distanceToBottom > 120) return;
-    if (!conversationsQuery.hasNextPage || conversationsQuery.isFetchingNextPage) return;
+    // Check current state - these need to be checked from the ref to get latest values
+    if (!conversationsQuery.hasNextPage) return;
+    if (conversationsQuery.isFetchingNextPage) return;
     void conversationsQuery.fetchNextPage();
   };
 
@@ -435,7 +605,7 @@ export function ChatContainer() {
     const finalInput = `${input.trim()}${uploadSummary}`.trim();
     if (!finalInput) return;
 
-    sendMessage(
+    void sendMessage(
       finalInput,
       attachments.length > 0 ? attachments : undefined,
       planMode ? "plan" : undefined,
@@ -526,7 +696,7 @@ export function ChatContainer() {
       .filter(Boolean)
       .join("\n\n");
 
-    sendMessage(prompt, undefined, undefined, "Plan verbessern: Dateien analysieren und Rückfragen stellen");
+    void sendMessage(prompt, undefined, undefined, "Plan verbessern: Dateien analysieren und Rückfragen stellen");
   };
 
   const generateProjectNameFromGoal = (goal: string): string => {
@@ -875,17 +1045,13 @@ export function ChatContainer() {
       <aside
         ref={conversationsViewportRef}
         onScroll={handleConversationsScroll}
-        className={`${chatListOpen ? "block" : "hidden"} ${compactMode ? "lg:w-72" : "lg:w-80"} w-full shrink-0 space-y-1 overflow-y-auto border-b border-border bg-card/40 p-2 max-h-[42vh] lg:max-h-none lg:border-b-0 lg:border-r`}
+        className={`${chatListOpen ? "block" : "hidden"} lg:block ${compactMode ? "lg:w-72" : "lg:w-80"} w-full shrink-0 space-y-1 overflow-y-auto border-b border-border bg-card/40 p-2 max-h-[42vh] lg:max-h-screen lg:border-b-0 lg:border-r`}
       >
         <div className="flex items-center justify-between gap-2 px-1 py-1">
           <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{t("chat.chats")}</h2>
           <button
             onClick={() => {
-              // Not clearChat(): that only wipes the visible messages and leaves the old
-              // conversationId in place, so the next message would silently continue the
-              // previous chat (and inherit its already-generated name) instead of starting
-              // a fresh one.
-              setConversationId(undefined);
+              handleNewChat();
             }}
             className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition hover:bg-accent hover:text-foreground"
           >
@@ -904,7 +1070,15 @@ export function ChatContainer() {
                 : "hover:bg-accent"
             }`}
           >
-            <button onClick={() => setConversationId(conv.id)} className="min-w-0 flex-1 text-left" title={conv.name}>
+            <button
+              onClick={() => {
+                setMessages([]);
+                setExpandedEvents({});
+                setConversationId(conv.id);
+              }}
+              className="min-w-0 flex-1 text-left"
+              title={conv.name}
+            >
               <div className="truncate text-xs font-medium">{conv.name}</div>
               <div className="text-[10px] text-muted-foreground">{new Date(conv.updatedAt).toLocaleString()}</div>
             </button>

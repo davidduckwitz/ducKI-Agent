@@ -3022,10 +3022,17 @@ export class Agent {
     options: AgentRunOptions,
     emit: (type: AgentRunEventType, message: string, data?: Record<string, unknown>) => void
   ): Promise<AgentRunResult> {
+    const metadata: Record<string, unknown> = {};
+    if (options.attachments?.length) {
+      metadata.attachments = options.attachments;
+    }
+    if (options.localMessageId) {
+      metadata.localMessageId = options.localMessageId;
+    }
     const userMessage: LLMMessage = {
       role: "user",
       content: userInput,
-      metadata: options.attachments?.length ? { attachments: options.attachments } : undefined,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
     await this.conversation.addMessage(userMessage);
     this.history.add(userMessage);
@@ -3040,7 +3047,15 @@ export class Agent {
       options.onChunk(response);
     }
 
-    const assistantMessage: LLMMessage = { role: "assistant", content: response };
+    const assistantMetadata: Record<string, unknown> = {};
+    if (options.localMessageId) {
+      assistantMetadata.localMessageId = options.localMessageId;
+    }
+    const assistantMessage: LLMMessage = {
+      role: "assistant",
+      content: response,
+      metadata: Object.keys(assistantMetadata).length > 0 ? assistantMetadata : undefined,
+    };
     await this.conversation.addMessage(assistantMessage);
     this.history.add(assistantMessage);
 
@@ -3552,12 +3567,22 @@ export class Agent {
 
       // Persist event timeline so reloaded chats can render tool/reasoning history.
       if (this.conversation.id !== undefined) {
+        const eventMetadata: Record<string, unknown> = {
+          eventType: type,
+          data,
+          timestamp,
+          snapshot,
+        };
+        if (options.localMessageId) {
+          eventMetadata.localMessageId = options.localMessageId;
+        }
         void this.db
           .addMessage({
             conversationId: this.conversation.id,
             role: "event",
             content: message,
-            toolResult: JSON.stringify({ eventType: type, data, timestamp, snapshot }),
+            toolResult: JSON.stringify(eventMetadata),
+            metadata: options.localMessageId ? JSON.stringify({ localMessageId: options.localMessageId }) : undefined,
           })
           .catch(() => {
             // Ignore event persistence errors to avoid interrupting the run loop.
@@ -3894,10 +3919,17 @@ export class Agent {
     }
 
     // Add user message
+    const userMetadata: Record<string, unknown> = {};
+    if (options.attachments?.length) {
+      userMetadata.attachments = options.attachments;
+    }
+    if (options.localMessageId) {
+      userMetadata.localMessageId = options.localMessageId;
+    }
     const userMessage: LLMMessage = {
       role: "user",
       content: effectiveInput,
-      metadata: options.attachments?.length ? { attachments: options.attachments } : undefined,
+      metadata: Object.keys(userMetadata).length > 0 ? userMetadata : undefined,
     };
     await this.conversation.addMessage(userMessage);
     this.history.add(userMessage);
@@ -4518,7 +4550,15 @@ export class Agent {
       // This ensures proper message ordering for the LLM:
       // User -> Assistant -> Tool Results -> (next iteration or exit)
       // Without this, the LLM sees tool results without an assistant message that called them
-      const assistantMessage: LLMMessage = { role: "assistant", content: response };
+      const assistantMetadata: Record<string, unknown> = {};
+      if (options.localMessageId) {
+        assistantMetadata.localMessageId = options.localMessageId;
+      }
+      const assistantMessage: LLMMessage = {
+        role: "assistant",
+        content: response,
+        metadata: Object.keys(assistantMetadata).length > 0 ? assistantMetadata : undefined,
+      };
       await this.conversation.addMessage(assistantMessage);
       this.history.add(assistantMessage);
 
