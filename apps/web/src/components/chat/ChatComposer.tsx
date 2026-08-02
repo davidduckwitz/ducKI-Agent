@@ -60,12 +60,13 @@ export function ChatComposer({
     if (!element) return;
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+  }, [value]);
 
-    // Auto-send if transcription just completed
+  // Separate effect for auto-send to avoid double-sends
+  useEffect(() => {
     if (shouldSendAfterTranscribeRef.current && value.trim().length > 0 && !isLoading) {
       shouldSendAfterTranscribeRef.current = false;
-      // Schedule send after state is fully updated
-      setTimeout(() => onSend(), 50);
+      onSend();
     }
   }, [value, isLoading, onSend]);
 
