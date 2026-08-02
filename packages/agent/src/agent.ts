@@ -2953,8 +2953,48 @@ export class Agent {
       buffer = data;
     } else if (typeof data.screenshotUrl === "string" && data.screenshotUrl.length > 0) {
       // New format: Screenshot stored in server storage (from browser tool)
-      // Instead of downloading, pass URL directly to LLM which can load it
-      const analysisText = `Screenshot stored at: ${data.screenshotUrl}\n(Screenshot ID: ${data.screenshotId})\n\nAnalyze this screenshot from URL and describe:\n1. Page content and what you see\n2. Key text, buttons, and interactive elements\n3. Visual layout and design\n4. Any errors or status indicators\n5. Current state relative to expected result`;
+      // Fetch the image and convert to data: URL so Ollama provider can extract base64
+      let imageDataUrl: string | undefined;
+      let fetchedBuffer: Buffer | undefined;
+
+      try {
+        // Build absolute URL if relative
+        let screenUrl = data.screenshotUrl;
+        if (!screenUrl.startsWith("http://") && !screenUrl.startsWith("https://")) {
+          const baseUrl = process.env["SERVER_BASE_URL"] || `http://localhost:${process.env["SERVER_PORT"] || 3000}`;
+          screenUrl = `${baseUrl}${screenUrl}`;
+        }
+
+        this.logger.debug("Fetching screenshot from URL", { screenUrl });
+        const response = await fetch(screenUrl);
+
+        if (response.ok) {
+          const arrayBuffer = await response.arrayBuffer();
+          fetchedBuffer = Buffer.from(arrayBuffer);
+          const mimeType = response.headers.get("content-type") || "image/png";
+          imageDataUrl = `data:${mimeType};base64,${fetchedBuffer.toString("base64")}`;
+
+          this.logger.debug("Screenshot fetched and converted to data URL", {
+            url: data.screenshotUrl,
+            size: fetchedBuffer.length,
+            mimeType,
+          });
+        } else {
+          this.logger.warn("Failed to fetch screenshot - non-OK response", {
+            url: screenUrl,
+            status: response.status,
+            statusText: response.statusText,
+          });
+        }
+      } catch (error) {
+        this.logger.warn("Failed to fetch screenshot image from URL", {
+          url: data.screenshotUrl,
+          error: error instanceof Error ? error.message : String(error),
+          note: "Will use relative URL as fallback - may not work with vision models",
+        });
+      }
+
+      const analysisText = `Screenshot from: ${data.screenshotUrl}\n\nAnalyze this screenshot and describe:\n1. Page content and what you see\n2. Key text, buttons, and interactive elements\n3. Visual layout and design\n4. Any errors or status indicators\n5. Current state relative to expected result`;
 
       const imageContent: LLMContent[] = [
         {
@@ -2963,22 +3003,31 @@ export class Agent {
         },
         {
           type: "image_url",
-          image_url: { url: data.screenshotUrl, detail: "high" }
+          image_url: {
+            url: imageDataUrl || data.screenshotUrl,
+            detail: "high"
+          }
         }
       ];
 
       const screenshotMessage: LLMMessage = {
         role: "user",
         content: imageContent,
-        metadata: { source: "browser_screenshot", url: data.screenshotUrl, storedId: data.screenshotId },
+        metadata: {
+          source: "browser_screenshot",
+          url: data.screenshotUrl,
+          storedId: data.screenshotId,
+          hasDataUrl: !!imageDataUrl,
+        },
       };
 
       this.currentScreenshotMessage = screenshotMessage;
       this.history.add(screenshotMessage, "screenshot");
 
-      this.logger.info("Screenshot URL message stored for iterations", {
+      this.logger.info("Screenshot message prepared for vision model", {
         url: data.screenshotUrl,
-        size: data.screenshotSize,
+        hasDataUrl: !!imageDataUrl,
+        imageSize: fetchedBuffer?.length,
         id: data.screenshotId,
         provider: this.provider.name,
       });

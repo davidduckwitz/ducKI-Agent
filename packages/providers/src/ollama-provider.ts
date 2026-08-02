@@ -28,6 +28,23 @@ function transformMessageForOllama(message: LLMMessage): { message: ChatCompleti
       const base64Match = url.match(/^data:[^;]*;base64,(.+)$/);
       if (base64Match?.[1]) {
         images.push(base64Match[1]);
+      } else if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("/")) {
+        // URL is not in data: format - this is expected to have been handled by agent
+        // Log warning for debugging but don't fail
+        console.warn(
+          "[OllamaProvider] Image URL is not in data: format. Agent should convert to data:base64 URL.",
+          {
+            url: url.substring(0, 100) + (url.length > 100 ? "..." : ""),
+            format: "Expected: data:image/png;base64,<data>, Got: relative or http URL",
+            provider: "ollama",
+            tip: "This usually means the screenshot fetch in agent.ts didn't complete successfully",
+          }
+        );
+      } else {
+        // Unknown URL format
+        console.warn("[OllamaProvider] Unknown image URL format", {
+          url: url.substring(0, 100),
+        });
       }
     } else if (part.type === "text") {
       textParts.push(part.text);

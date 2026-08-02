@@ -21,10 +21,10 @@ export function createBrowserControlMcpTool(): ToolExecutor {
 
   return {
     name: "browser-control",
-    description: "Control browser automation - navigate, click, type, screenshot (session-based)",
+    description: "Control browser automation with vision support - navigate, click, type, screenshot (session-based, vision-enabled for LLM models)",
     definition: {
       name: "browser-control",
-      description: "Browser automation control via Puppeteer/Playwright",
+      description: "Browser automation control with vision capabilities - enables screenshots for LLM vision models",
       parameters: {
         type: "object",
         properties: {
