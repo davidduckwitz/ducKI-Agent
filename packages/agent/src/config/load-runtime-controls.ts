@@ -22,6 +22,8 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     reflectionMaxRetries: parseInt(process.env["AGENT_REFLECTION_MAX_RETRIES"] ?? "3"),
     reflectionStoreMemory: (process.env["AGENT_REFLECTION_STORE_MEMORY"] ?? "true").toLowerCase() !== "false",
     reflectionMetaReview: (process.env["AGENT_REFLECTION_META_REVIEW"] ?? "true").toLowerCase() !== "false",
+    reflectionPostIteration: (process.env["AGENT_REFLECTION_POST_ITERATION"] ?? "true").toLowerCase() !== "false",
+    reflectionPostIterationMinQuality: (process.env["AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY"] ?? "adequate") as "poor" | "adequate" | "good" | "excellent",
 
     reasonerUseToolMinConfidence: parseFloat(process.env["AGENT_REASONER_MIN_CONFIDENCE"] ?? "0.7"),
     maxConsecutiveToolFailures: parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3"),
