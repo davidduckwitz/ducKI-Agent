@@ -8,6 +8,18 @@ import { BitcoinPuzzleService } from "@ducki/agent";
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
+import { browserTool } from "@ducki/tools";
+
+/** Actions the browser control panel (UI-initiated, not agent-initiated) may invoke directly. */
+const ALLOWED_UI_BROWSER_ACTIONS = new Set([
+  "list_sessions",
+  "screenshot",
+  "goto",
+  "get_content",
+  "click",
+  "close",
+]);
+
 
 const logger = getRootLogger().child("WebSocket");
 
@@ -299,7 +311,9 @@ export function setupWebSocket(
                 if (screenshotBase64 && screenshotBase64.length > 100) { // Sanity check
                   try {
                     const manager = getScreenshotStorageManager();
-                    const result = await manager.handleScreenshot(screenshotBase64, "image/png");
+                    const screenshotFormat = (event.data.format as string | undefined) ?? "jpeg";
+                    const mimeType = `image/${screenshotFormat}`;
+                    const result = await manager.handleScreenshot(screenshotBase64, mimeType);
 
                     if (result.isStored) {
                       // Add storage URL (keep original screenshot data for chat display)
@@ -508,11 +522,38 @@ export function setupWebSocket(
       }
     });
 
-    socket.on("browser:stop", (data: { serverId?: string }) => {
-      if (data.serverId) {
-        logger.info("Browser stop requested", { serverId: data.serverId });
+    socket.on("browser:stop", async (data: { tabId?: string; serverId?: string }, callback?: (result: unknown) => void) => {
+      const sessionId = data.tabId || data.serverId;
+      if (!sessionId) {
+        callback?.({ success: false, error: "No session id provided" });
+        return;
       }
+      logger.info("Browser stop requested", { sessionId });
+      const result = await browserTool.execute({ action: "close", sessionId });
+      callback?.(result);
     });
+
+    // Live control panel for the shared browser session(s) - lets the UI list, screenshot,
+    // navigate, and close sessions directly, reusing the same worker/session pool the
+    // agent's browser tool calls use.
+    socket.on("browser:list", async (_data: unknown, callback?: (result: unknown) => void) => {
+      const result = await browserTool.execute({ action: "list_sessions" });
+      callback?.(result);
+    });
+
+    socket.on(
+      "browser:control",
+      async (data: Record<string, unknown>, callback?: (result: unknown) => void) => {
+        const action = String(data?.["action"] ?? "").trim();
+        if (!ALLOWED_UI_BROWSER_ACTIONS.has(action)) {
+          callback?.({ success: false, error: `Action '${action}' is not allowed from the UI control panel` });
+          return;
+        }
+        const result = await browserTool.execute({ ...data, action });
+        callback?.(result);
+      }
+    );
+
 
     socket.on("disconnect", () => {
       stopSocketAgents(socket.id);

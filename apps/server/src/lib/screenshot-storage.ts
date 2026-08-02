@@ -15,8 +15,22 @@ interface StoredScreenshot {
   id: string;
   url: string;
   size: number;
+  mimeType: string;
   storedAt: Date;
   expiresAt: Date;
+}
+
+function extensionForMimeType(mimeType: string): string {
+  switch (mimeType) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    case "image/png":
+    default:
+      return "png";
+  }
 }
 
 class ScreenshotStorageManager {
@@ -38,7 +52,7 @@ class ScreenshotStorageManager {
    */
   async handleScreenshot(
     base64Data: string,
-    mimeType: string = "image/png"
+    mimeType: string = "image/jpeg"
   ): Promise<
     | { isStored: false; data: string; mimeType: string; size: number }
     | { isStored: true; id: string; url: string; size: number }
@@ -57,7 +71,7 @@ class ScreenshotStorageManager {
 
     // Size exceeds limit - store to disk
     const id = randomUUID();
-    const filepath = join(STORAGE_DIR, `${id}.png`);
+    const filepath = join(STORAGE_DIR, `${id}.${extensionForMimeType(mimeType)}`);
 
     await writeFile(filepath, buffer);
 
@@ -65,6 +79,7 @@ class ScreenshotStorageManager {
       id,
       url: `/api/screenshots/${id}`,
       size,
+      mimeType,
       storedAt: new Date(),
       expiresAt: new Date(Date.now() + DEFAULT_TTL),
     };
@@ -75,6 +90,7 @@ class ScreenshotStorageManager {
       id,
       size: `${Math.round(size / 1024)}KB`,
       url: screenshot.url,
+      mimeType,
     });
 
     return {
@@ -99,7 +115,7 @@ class ScreenshotStorageManager {
       return null;
     }
 
-    const filepath = join(STORAGE_DIR, `${id}.png`);
+    const filepath = join(STORAGE_DIR, `${id}.${extensionForMimeType(screenshot.mimeType)}`);
     try {
       return await readFile(filepath);
     } catch (error) {
@@ -109,13 +125,19 @@ class ScreenshotStorageManager {
   }
 
   /**
+   * Get the stored mimeType for a screenshot (used to set the correct Content-Type header).
+   */
+  getScreenshotMimeType(id: string): string {
+    return this.screenshots.get(id)?.mimeType ?? "image/jpeg";
+  }
+
+  /**
    * Delete a screenshot
    */
   private async deleteScreenshot(id: string): Promise<void> {
     const screenshot = this.screenshots.get(id);
     if (!screenshot) return;
 
-    const filepath = join(STORAGE_DIR, `${id}.png`);
     try {
       // File deletion would go here if using fs.unlink
       this.screenshots.delete(id);

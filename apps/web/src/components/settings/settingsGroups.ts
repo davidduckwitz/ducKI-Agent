@@ -263,6 +263,7 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       icon: Monitor,
       keys: [
         "BROWSER_HEADLESS_MODE",
+        "BROWSER_REUSE_SESSION",
         "BROWSER_VIEWPORT_WIDTH",
         "BROWSER_VIEWPORT_HEIGHT",
         "BROWSER_CUSTOM_EXECUTABLE_PATH",

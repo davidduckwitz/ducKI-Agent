@@ -20,7 +20,7 @@ interface BrowserPreviewProps {
 }
 
 export function BrowserPreview({ msg }: BrowserPreviewProps) {
-  const { setBrowserPreviewModal, socket } = useAppStore();
+  const { setBrowserPreviewModal, controlBrowserSession } = useAppStore();
   const data = msg.eventData as BrowserPreviewData | undefined;
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -51,20 +51,30 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
       ? screenshotSource
       : screenshotSource.startsWith("/")
         ? screenshotSource // Storage URL path
-        : `data:image/webp;base64,${screenshotSource}`
+        : `data:image/jpeg;base64,${screenshotSource}`
     : undefined;
 
-  const handleExportHtml = () => {
-    if (!data.htmlContent) {
-      alert("No HTML content available to export.");
-      return;
+  const handleExportHtml = async () => {
+    let html = data.htmlContent;
+    if (!html) {
+      if (!data.tabId) {
+        alert("No HTML content available to export.");
+        return;
+      }
+      const result = await controlBrowserSession(data.tabId, "get_content");
+      const resultData = result.data as { html?: string } | undefined;
+      if (!result.success || !resultData?.html) {
+        alert(result.error ?? "Failed to fetch page content.");
+        return;
+      }
+      html = resultData.html;
     }
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `browser-export-${timestamp}.html`;
     const element = document.createElement("a");
     element.setAttribute(
       "href",
-      `data:text/html;charset=utf-8,${encodeURIComponent(data.htmlContent)}`
+      `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
     );
     element.setAttribute("download", filename);
     element.style.display = "none";
@@ -87,7 +97,7 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
     } else if (source.startsWith("data:")) {
       link.href = source;
     } else {
-      link.href = `data:image/webp;base64,${source}`;
+      link.href = `data:image/jpeg;base64,${source}`;
     }
 
     link.download = filename;
@@ -96,9 +106,11 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
     document.body.removeChild(link);
   };
 
-  const handleStopProcess = () => {
-    if (socket && data.serverId) {
-      socket.emit("browser:stop", { serverId: data.serverId });
+  const handleStopProcess = async () => {
+    if (!data.tabId) return;
+    const result = await controlBrowserSession(data.tabId, "close");
+    if (!result.success) {
+      console.warn("[BrowserPreview] Failed to close session", result.error);
     }
   };
 
@@ -180,7 +192,7 @@ interface BrowserPreviewModalProps {
 }
 
 export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps) {
-  const { socket } = useAppStore();
+  const { controlBrowserSession } = useAppStore();
 
   const screenshotSource = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
   const screenshotSrc = screenshotSource
@@ -188,20 +200,30 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
       ? screenshotSource
       : screenshotSource.startsWith("/")
         ? screenshotSource
-        : `data:image/webp;base64,${screenshotSource}`
+        : `data:image/jpeg;base64,${screenshotSource}`
     : undefined;
 
-  const handleExportHtml = () => {
-    if (!data.htmlContent) {
-      alert("No HTML content available to export.");
-      return;
+  const handleExportHtml = async () => {
+    let html = data.htmlContent;
+    if (!html) {
+      if (!data.tabId) {
+        alert("No HTML content available to export.");
+        return;
+      }
+      const result = await controlBrowserSession(data.tabId, "get_content");
+      const resultData = result.data as { html?: string } | undefined;
+      if (!result.success || !resultData?.html) {
+        alert(result.error ?? "Failed to fetch page content.");
+        return;
+      }
+      html = resultData.html;
     }
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `browser-export-${timestamp}.html`;
     const element = document.createElement("a");
     element.setAttribute(
       "href",
-      `data:text/html;charset=utf-8,${encodeURIComponent(data.htmlContent)}`
+      `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
     );
     element.setAttribute("download", filename);
     element.style.display = "none";
@@ -224,7 +246,7 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
     } else if (source.startsWith("data:")) {
       link.href = source;
     } else {
-      link.href = `data:image/webp;base64,${source}`;
+      link.href = `data:image/jpeg;base64,${source}`;
     }
 
     link.download = filename;
@@ -233,9 +255,12 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
     document.body.removeChild(link);
   };
 
-  const handleStopProcess = () => {
-    if (socket && data.serverId) {
-      socket.emit("browser:stop", { serverId: data.serverId });
+  const handleStopProcess = async () => {
+    if (data.tabId) {
+      const result = await controlBrowserSession(data.tabId, "close");
+      if (!result.success) {
+        console.warn("[BrowserPreviewModal] Failed to close session", result.error);
+      }
     }
     onClose();
   };

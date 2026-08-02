@@ -8,12 +8,14 @@ type BrowserAction =
   | "detect"
   | "launch"
   | "list_pages"
+  | "list_sessions"
   | "goto"
   | "click"
   | "type"
   | "press"
   | "wait"
   | "screenshot"
+  | "get_content"
   | "evaluate"
   | "cookies_get"
   | "cookies_set"
@@ -44,6 +46,9 @@ interface BrowserWorkerResponse {
 // Sessions map - kept alive in main process so they persist across worker restarts
 const mainProcessSessions = new Map<string, { launchedAt: string; url?: string }>();
 const sessions = new Map<string, BrowserSession>();
+// The session every agent/UI reuses by default so a chat doesn't spawn its own browser
+// on every run. Only cleared when that specific session is closed or has died.
+let defaultSessionId: string | undefined;
 const pending = new Map<
   string,
   {
@@ -253,6 +258,7 @@ async function createSession(options: {
   blockResources?: "none" | "tracking" | "ads" | "all";
   hideAutomation?: boolean;
   cookieDetection?: boolean;
+  proxyUrl?: string;
 }): Promise<{ sessionId: string; targetUrl?: string; browserPath?: string }> {
   const puppeteer = await getPuppeteer();
   const executablePath = options.executablePath ?? resolveBrowserPath();
@@ -283,6 +289,7 @@ async function createSession(options: {
       "--mute-audio",
       "--no-first-run",
       ...(options.disableImages ? ["--blink-settings=imagesEnabled=false"] : []),
+      ...(options.proxyUrl ? [`--proxy-server=${options.proxyUrl}`] : []),
     ],
   });
   const page = await browser.newPage();
@@ -322,11 +329,31 @@ async function createSession(options: {
     launchedAt: new Date().toISOString(),
   };
   sessions.set(sessionId, session);
+
+  // Without this, an external crash/close of the browser process fires an unhandled
+  // "disconnected"/"error" event on the Puppeteer EventEmitter, which crashes the whole
+  // worker (killing every other session too). Clean up just this session instead.
+  browser.on("disconnected", () => {
+    console.warn(`[browser] Session '${sessionId}' disconnected (browser crashed or was closed externally)`);
+    sessions.delete(sessionId);
+    if (defaultSessionId === sessionId) defaultSessionId = undefined;
+  });
+
   return { sessionId, browserPath: executablePath, targetUrl: session.targetUrl };
 }
 
 async function ensureSession(input: Record<string, unknown>): Promise<{ sessionId: string; session: BrowserSession }> {
   const requestedSessionId = String(input["sessionId"] ?? "").trim();
+
+  // No sessionId given at all (common for a fresh agent run that doesn't know one yet) -
+  // fall back to the shared default session instead of failing outright.
+  if (!requestedSessionId && defaultSessionId) {
+    const defaultSession = sessions.get(defaultSessionId);
+    if (defaultSession) {
+      return { sessionId: defaultSessionId, session: defaultSession };
+    }
+  }
+
   if (!requestedSessionId) throw new Error("sessionId is required");
 
   const session = await getSession(requestedSessionId);
@@ -365,12 +392,14 @@ export const browserTool: ToolExecutor = {
             "detect",
             "launch",
             "list_pages",
+            "list_sessions",
             "goto",
             "click",
             "type",
             "press",
             "wait",
             "screenshot",
+            "get_content",
             "evaluate",
             "cookies_get",
             "cookies_set",
@@ -383,6 +412,7 @@ export const browserTool: ToolExecutor = {
           ],
         },
         sessionId: { type: "string", description: "Browser session id" },
+        newSession: { type: "boolean", description: "For action=launch: force a brand-new browser instead of reusing the shared default session", default: false },
         url: { type: "string", description: "URL to open or navigate to" },
         selector: { type: "string", description: "CSS selector for click/type/wait" },
         text: { type: "string", description: "Text to type" },
@@ -392,7 +422,10 @@ export const browserTool: ToolExecutor = {
         headless: { type: "boolean", description: "Launch browser in headless mode" },
         viewport: { type: "object", description: "Viewport size", properties: { width: { type: "number" }, height: { type: "number" } } },
         executablePath: { type: "string", description: "Optional browser executable path" },
+        proxyUrl: { type: "string", description: "Optional proxy server for action=launch, e.g. http://proxy:8080" },
         filePath: { type: "string", description: "Screenshot file path" },
+        screenshotFormat: { type: "string", enum: ["jpeg", "png", "webp"], description: "Screenshot image format (jpeg is the safest default for local vision models)", default: "jpeg" },
+        screenshotQuality: { type: "number", description: "Screenshot compression quality 1-100 (ignored for png)", default: 85 },
         script: { type: "string", description: "JavaScript executed in page context" },
         count: { type: "number", description: "Limit for list_pages" },
         cookies: { type: "array", description: "Cookie definitions for cookies_set" },
@@ -464,6 +497,30 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         });
       }
       case "launch": {
+        // Reuse the shared default session unless the caller explicitly asks for a
+        // brand-new browser - this is what stops every agent run from spawning its own
+        // browser instance instead of collaborating on one.
+        const forceNew = input["newSession"] === true || input["newSession"] === "true";
+        if (!forceNew && defaultSessionId) {
+          const existing = sessions.get(defaultSessionId);
+          if (existing) {
+            if (input["url"]) {
+              await existing.page.goto(String(input["url"]), { waitUntil: "domcontentloaded" });
+              existing.targetUrl = existing.page.url();
+            }
+            const reusedResult = {
+              sessionId: defaultSessionId,
+              reused: true,
+              currentUrl: existing.page.url(),
+              launchedAt: existing.launchedAt,
+            };
+            console.info(`[browser] Reusing shared session: ${defaultSessionId}`);
+            return ok(reusedResult);
+          }
+          // Default session died without going through "close" - fall through to relaunch.
+          defaultSessionId = undefined;
+        }
+
         const viewport = parseViewports(input["viewport"]);
         const { sessionId, browserPath } = await createSession({
           headless: input["headless"] === true || input["headless"] === "true",
@@ -474,7 +531,9 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           blockResources: (input["blockResources"] as "none" | "tracking" | "ads" | "all") || "none",
           hideAutomation: input["hideAutomation"] !== false && input["hideAutomation"] !== "false",
           cookieDetection: input["cookieDetection"] === true || input["cookieDetection"] === "true",
+          proxyUrl: typeof input["proxyUrl"] === "string" ? input["proxyUrl"] : undefined,
         });
+        defaultSessionId = sessionId;
         const session = await getSession(sessionId);
         if (browserPath) {
           console.info(`[browser] launching ${browserSelectionLabel(browserPath)} at ${browserPath}`);
@@ -486,6 +545,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         }
         const result = {
           sessionId,
+          reused: false,
           browserPath: browserPath ?? null,
           browserName: browserPath ? browserSelectionLabel(browserPath) : null,
           currentUrl: session?.page.url() ?? null,
@@ -506,6 +566,23 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           }))
         );
         return ok({ sessionId, pages: result });
+      }
+      case "list_sessions": {
+        const list = await Promise.all(
+          Array.from(sessions.entries()).map(async ([sessionId, session]) => ({
+            sessionId,
+            url: session.page.url(),
+            title: await session.page.title().catch(() => ""),
+            launchedAt: session.launchedAt,
+            isDefault: sessionId === defaultSessionId,
+          }))
+        );
+        return ok({ sessions: list, defaultSessionId: defaultSessionId ?? null });
+      }
+      case "get_content": {
+        const { sessionId, session } = await ensureSession(input);
+        const html = await session.page.content();
+        return ok({ sessionId, html, length: html.length, url: session.page.url() });
       }
       case "goto": {
         const { sessionId, session } = await ensureSession(input);
@@ -559,10 +636,19 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         const { sessionId, session } = await ensureSession(input);
         const filePath = String(input["filePath"] ?? "").trim();
         const path = filePath || undefined;
-        // webp because the chat preview (BrowserPreview.tsx) wraps the returned base64 as
-        // `data:image/webp;base64,...` - Puppeteer's default (png) would still render (most
-        // browsers sniff the real format), but mislabels the data URI's declared MIME type.
-        const buffer = await session.page.screenshot({ path: path as string | undefined, fullPage: true, type: "webp" });
+        // Default to jpeg: many local vision model backends (llama.cpp/GGUF loaders via
+        // stb_image, used by most self-hosted Qwen-VL/Llava setups) can't decode webp at
+        // all, which is why screenshots were "invisible" to those models. jpeg/png are
+        // universally supported; webp/png remain available via BROWSER_SCREENSHOT_FORMAT
+        // for setups that don't feed screenshots to a local vision model.
+        const format = (String(input["screenshotFormat"] ?? "jpeg").trim().toLowerCase() || "jpeg") as "jpeg" | "png" | "webp";
+        const quality = format === "png" ? undefined : Math.max(1, Math.min(100, Number(input["screenshotQuality"] ?? 85)));
+        const buffer = await session.page.screenshot({
+          path: path as string | undefined,
+          fullPage: true,
+          type: format,
+          ...(quality !== undefined ? { quality } : {}),
+        });
 
         // Get viewport dimensions
         const viewport = session.page.viewport() || { width: 1440, height: 1024 };
@@ -578,7 +664,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           screenshot: Buffer.from(buffer).toString("base64"),
           // Metadata for screenshot tracking
           metadata: {
-            format: "webp",
+            format,
             width: viewport.width,
             height: viewport.height,
             timestamp: new Date().toISOString(),
@@ -788,6 +874,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         if (!session) return fail(`Browser session '${sessionId}' not found`);
         await session.browser.close();
         sessions.delete(sessionId);
+        if (defaultSessionId === sessionId) defaultSessionId = undefined;
         return ok({ closed: true, sessionId });
       }
       default:
@@ -810,5 +897,14 @@ function startWorkerLoop(): void {
 }
 
 if (isWorkerMode()) {
+  // Safety net: without these, any uncaught exception or unhandled rejection anywhere in
+  // Puppeteer's internals (e.g. a page/browser crash, dropped CDP connection) crashes this
+  // entire worker process with exit code 1, taking down every active session at once.
+  process.on("uncaughtException", (error) => {
+    console.error("[browser-worker] Uncaught exception (worker kept alive):", error);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[browser-worker] Unhandled rejection (worker kept alive):", reason);
+  });
   startWorkerLoop();
 }

@@ -927,6 +927,18 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "BROWSER_REUSE_SESSION",
+    label: "Shared Session wiederverwenden",
+    description: "Alle Agenten teilen sich eine Browser-Session statt bei jedem Lauf einen eigenen Browser zu starten. Deaktivieren, um für jeden Lauf einen frischen Browser zu erzwingen.",
+    type: "select",
+    section: "Browser",
+    defaultValue: "true",
+    options: [
+      { label: "Enabled (geteilte Session)", value: "true" },
+      { label: "Disabled (immer neuer Browser)", value: "false" },
+    ],
+  },
+  {
     key: "BROWSER_VIEWPORT_WIDTH",
     label: "Viewport Width (px)",
     description: "Browser window width for screenshots (800-2560)",
@@ -961,14 +973,14 @@ const PREDEFINED_FIELDS: SettingField[] = [
   {
     key: "BROWSER_SCREENSHOT_FORMAT",
     label: "Screenshot Format",
-    description: "Image format for screenshots (webp=smaller, png=better compatibility, jpeg=lowest quality)",
+    description: "Bildformat für Screenshots. JPEG wird empfohlen: viele lokale Vision-Modelle (z.B. llama.cpp-basierte Qwen-VL Server) können WebP nicht dekodieren, wodurch Screenshots vom Modell nicht erkannt wurden. PNG bietet verlustfreie Qualität bei größerer Dateigröße.",
     type: "select",
     section: "Browser",
-    defaultValue: "webp",
+    defaultValue: "jpeg",
     options: [
-      { label: "WebP (Recommended)", value: "webp" },
-      { label: "PNG", value: "png" },
-      { label: "JPEG", value: "jpeg" },
+      { label: "JPEG (Recommended)", value: "jpeg" },
+      { label: "PNG (Lossless, größer)", value: "png" },
+      { label: "WebP (nicht von allen Vision-Modellen unterstützt)", value: "webp" },
     ],
   },
   {

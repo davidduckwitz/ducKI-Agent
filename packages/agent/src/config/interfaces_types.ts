@@ -230,6 +230,34 @@ export interface AgentRuntimeControls {
   bedrockTimeoutMs: number;
   bedrockMaxRetries: number;
   bedrockRegion: string;
+
+  // Browser tool - applied as defaults on action=launch when the LLM/UI call omits them.
+  /** Settings key: BROWSER_REUSE_SESSION - reuse the shared session instead of launching a new browser every run. */
+  browserReuseSession: boolean;
+  /** Settings key: BROWSER_HEADLESS_MODE */
+  browserHeadless: boolean;
+  /** Settings key: BROWSER_VIEWPORT_WIDTH */
+  browserViewportWidth: number;
+  /** Settings key: BROWSER_VIEWPORT_HEIGHT */
+  browserViewportHeight: number;
+  /** Settings key: BROWSER_CUSTOM_EXECUTABLE_PATH */
+  browserExecutablePath: string;
+  /** Settings key: BROWSER_USER_AGENT */
+  browserUserAgent: string;
+  /** Settings key: BROWSER_SCREENSHOT_FORMAT - jpeg is the safest default (many local vision models can't decode webp). */
+  browserScreenshotFormat: "jpeg" | "png" | "webp";
+  /** Settings key: BROWSER_SCREENSHOT_QUALITY */
+  browserScreenshotQuality: number;
+  /** Settings key: BROWSER_DISABLE_IMAGES */
+  browserDisableImages: boolean;
+  /** Settings key: BROWSER_BLOCK_RESOURCES */
+  browserBlockResources: "none" | "tracking" | "ads" | "all";
+  /** Settings key: BROWSER_DISABLE_AUTOMATION - inverted: true keeps automation hidden. */
+  browserHideAutomation: boolean;
+  /** Settings key: BROWSER_COOKIE_DETECTION */
+  browserCookieDetection: boolean;
+  /** Settings key: BROWSER_PROXY_URL */
+  browserProxyUrl: string;
 }
 
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)

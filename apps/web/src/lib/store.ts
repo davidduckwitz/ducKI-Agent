@@ -116,6 +116,7 @@ export interface BrowserSession {
   isActive: boolean;
   cookies?: string[];
   lastUsed: string;
+  isDefault?: boolean;
 }
 
 export interface ToolCallRecord {
@@ -219,6 +220,12 @@ interface AppState {
   setRunningTools: (tools: Set<string>) => void;
   removeBrowserSession: (tabId: string) => void;
   setShowToolDock: (show: boolean) => void;
+  refreshBrowserSessions: () => Promise<void>;
+  controlBrowserSession: (
+    sessionId: string,
+    action: string,
+    params?: Record<string, unknown>
+  ) => Promise<{ success: boolean; data?: unknown; error?: string }>;
 }
 
 export type AgentMode = "full" | "plan";
@@ -582,6 +589,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({
         messages: [...s.messages, msg],
       }));
+      // A new/updated session just became visible - keep the session panel in sync.
+      void get().refreshBrowserSessions();
     });
 
     // Tool call tracking
@@ -801,6 +810,47 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
   setShowToolDock: (show) => set({ showToolDock: show }),
   setRunningTools: (tools) => set({ runningTools: tools }),
+
+  refreshBrowserSessions: () => {
+    const socket = get().socket;
+    if (!socket) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      socket.emit(
+        "browser:list",
+        {},
+        (result: {
+          success: boolean;
+          data?: { sessions?: Array<{ sessionId: string; url: string; title?: string; launchedAt: string; isDefault: boolean }> };
+        }) => {
+          if (result?.success && result.data?.sessions) {
+            const sessions: BrowserSession[] = result.data.sessions.map((s) => ({
+              tabId: s.sessionId,
+              url: s.url,
+              title: s.title,
+              isActive: true,
+              lastUsed: s.launchedAt,
+              isDefault: s.isDefault,
+            }));
+            set({ browserSessions: sessions });
+          }
+          resolve();
+        }
+      );
+    });
+  },
+  controlBrowserSession: (sessionId, action, params) => {
+    const socket = get().socket;
+    if (!socket) return Promise.resolve({ success: false, error: "Not connected" });
+    return new Promise((resolve) => {
+      socket.emit(
+        "browser:control",
+        { sessionId, action, ...params },
+        (result: { success: boolean; data?: unknown; error?: string }) => {
+          resolve(result ?? { success: false, error: "No response from server" });
+        }
+      );
+    });
+  },
 
   // Character System (NEW)
   setSelectedCharacterId: (id) => set({ selectedCharacterId: id }),

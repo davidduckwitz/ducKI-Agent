@@ -1223,6 +1223,48 @@ export class Agent {
       if (normalizedInput["timeoutMs"] === undefined) {
         normalizedInput["timeoutMs"] = controls.browserToolTimeoutMs;
       }
+
+      const browserAction = String(normalizedInput["action"] ?? "").trim().toLowerCase();
+      if (browserAction === "launch") {
+        if (normalizedInput["newSession"] === undefined) {
+          normalizedInput["newSession"] = !controls.browserReuseSession;
+        }
+        if (normalizedInput["headless"] === undefined) {
+          normalizedInput["headless"] = controls.browserHeadless;
+        }
+        if (normalizedInput["viewport"] === undefined) {
+          normalizedInput["viewport"] = { width: controls.browserViewportWidth, height: controls.browserViewportHeight };
+        }
+        if (normalizedInput["executablePath"] === undefined && controls.browserExecutablePath) {
+          normalizedInput["executablePath"] = controls.browserExecutablePath;
+        }
+        if (normalizedInput["userAgent"] === undefined && controls.browserUserAgent) {
+          normalizedInput["userAgent"] = controls.browserUserAgent;
+        }
+        if (normalizedInput["disableImages"] === undefined) {
+          normalizedInput["disableImages"] = controls.browserDisableImages;
+        }
+        if (normalizedInput["blockResources"] === undefined) {
+          normalizedInput["blockResources"] = controls.browserBlockResources;
+        }
+        if (normalizedInput["hideAutomation"] === undefined) {
+          normalizedInput["hideAutomation"] = controls.browserHideAutomation;
+        }
+        if (normalizedInput["cookieDetection"] === undefined) {
+          normalizedInput["cookieDetection"] = controls.browserCookieDetection;
+        }
+        if (normalizedInput["proxyUrl"] === undefined && controls.browserProxyUrl) {
+          normalizedInput["proxyUrl"] = controls.browserProxyUrl;
+        }
+      }
+      if (browserAction === "screenshot") {
+        if (normalizedInput["screenshotFormat"] === undefined) {
+          normalizedInput["screenshotFormat"] = controls.browserScreenshotFormat;
+        }
+        if (normalizedInput["screenshotQuality"] === undefined) {
+          normalizedInput["screenshotQuality"] = controls.browserScreenshotQuality;
+        }
+      }
     }
 
     if (!(await this.executor.hasTool(normalizedName))) {
@@ -2632,6 +2674,19 @@ export class Agent {
       bedrockTimeoutMs: 30000,
       bedrockMaxRetries: 3,
       bedrockRegion: "us-east-1",
+      browserReuseSession: true,
+      browserHeadless: true,
+      browserViewportWidth: 1440,
+      browserViewportHeight: 1024,
+      browserExecutablePath: "",
+      browserUserAgent: "",
+      browserScreenshotFormat: "jpeg",
+      browserScreenshotQuality: 85,
+      browserDisableImages: false,
+      browserBlockResources: "tracking",
+      browserHideAutomation: true,
+      browserCookieDetection: false,
+      browserProxyUrl: "",
     };
 
     try {
@@ -2699,6 +2754,19 @@ export class Agent {
         bedrockTimeoutMs: this.parseNumberSetting(get("AGENT_BEDROCK_TIMEOUT_MS"), defaults.bedrockTimeoutMs, 5000, 600000),
         bedrockMaxRetries: this.parseNumberSetting(get("AGENT_BEDROCK_MAX_RETRIES"), defaults.bedrockMaxRetries, 0, 10),
         bedrockRegion: (get("AGENT_BEDROCK_REGION") ?? defaults.bedrockRegion) as any,
+        browserReuseSession: this.parseBooleanSetting(get("BROWSER_REUSE_SESSION"), defaults.browserReuseSession),
+        browserHeadless: this.parseBooleanSetting(get("BROWSER_HEADLESS_MODE"), defaults.browserHeadless),
+        browserViewportWidth: this.parseNumberSetting(get("BROWSER_VIEWPORT_WIDTH"), defaults.browserViewportWidth, 320, 3840),
+        browserViewportHeight: this.parseNumberSetting(get("BROWSER_VIEWPORT_HEIGHT"), defaults.browserViewportHeight, 240, 2160),
+        browserExecutablePath: get("BROWSER_CUSTOM_EXECUTABLE_PATH") ?? defaults.browserExecutablePath,
+        browserUserAgent: get("BROWSER_USER_AGENT") ?? defaults.browserUserAgent,
+        browserScreenshotFormat: (get("BROWSER_SCREENSHOT_FORMAT") ?? defaults.browserScreenshotFormat) as "jpeg" | "png" | "webp",
+        browserScreenshotQuality: this.parseNumberSetting(get("BROWSER_SCREENSHOT_QUALITY"), defaults.browserScreenshotQuality, 1, 100),
+        browserDisableImages: this.parseBooleanSetting(get("BROWSER_DISABLE_IMAGES"), defaults.browserDisableImages),
+        browserBlockResources: (get("BROWSER_BLOCK_RESOURCES") ?? defaults.browserBlockResources) as "none" | "tracking" | "ads" | "all",
+        browserHideAutomation: this.parseBooleanSetting(get("BROWSER_DISABLE_AUTOMATION"), defaults.browserHideAutomation),
+        browserCookieDetection: this.parseBooleanSetting(get("BROWSER_COOKIE_DETECTION"), defaults.browserCookieDetection),
+        browserProxyUrl: get("BROWSER_PROXY_URL") ?? defaults.browserProxyUrl,
       };
       return result;
     } catch {
@@ -2724,20 +2792,20 @@ export class Agent {
       if (sharp) {
         // Compress with progressive quality reduction if needed
         result = await sharp(buffer)
-          .webp({ quality: 80 })
+          .jpeg({ quality: 80 })
           .toBuffer();
 
         // If still too large, reduce quality further
         if (result.length > maxSizeBytes) {
           result = await sharp(buffer)
-            .webp({ quality: 60 })
+            .jpeg({ quality: 60 })
             .toBuffer();
         }
 
         // Last resort: ultra-low quality
         if (result.length > maxSizeBytes) {
           result = await sharp(buffer)
-            .webp({ quality: 40 })
+            .jpeg({ quality: 40 })
             .toBuffer();
         }
 
@@ -2890,12 +2958,12 @@ export class Agent {
 
       const imageContent: LLMContent[] = [
         {
-          type: "image_url",
-          image_url: { url: data.screenshotUrl, detail: "high" }
-        },
-        {
           type: "text",
           text: analysisText
+        },
+        {
+          type: "image_url",
+          image_url: { url: data.screenshotUrl, detail: "high" }
         }
       ];
 
@@ -2976,14 +3044,19 @@ export class Agent {
     // Each provider implementation handles conversion to its own API format:
     // - OpenAI/Claude: uses content array directly
     // - Ollama: converts image_url to separate images field
+    // Text first, image second: matches the request shape confirmed to work against local
+    // Qwen-VL vision endpoints (some servers are picky about part ordering).
     const imageContent: LLMContent[] = [
-      {
-        type: "image_url",
-        image_url: { url: `data:image/webp;base64,${base64String}`, detail: "high" }
-      },
       {
         type: "text",
         text: analysisText
+      },
+      {
+        type: "image_url",
+        // compressImageBuffer() always re-encodes as jpeg via sharp when available -
+        // webp was silently unreadable by common local vision backends (llama.cpp/GGUF
+        // loaders use stb_image, which has no webp decoder).
+        image_url: { url: `data:image/jpeg;base64,${base64String}`, detail: "high" }
       }
     ];
 
@@ -2997,7 +3070,7 @@ export class Agent {
         source: "browser_screenshot",
         url,
         estimatedTokens,
-        format: "webp",
+        format: "jpeg",
         size: buffer.length,
       },
     };
@@ -3362,11 +3435,13 @@ export class Agent {
           : undefined;
 
         if (screenshotBase64) {
+          const screenshotFormat = (rawResultData?.["metadata"] as { format?: string } | undefined)?.format ?? "jpeg";
           emit("browser_preview", `Screenshot: ${(rawResultData?.["url"] as string | undefined) ?? "preview"}`, {
             toolBatchId,
             tabId: rawResultData?.["sessionId"],
             url: rawResultData?.["url"],
             screenshot: screenshotBase64,
+            format: screenshotFormat,
             isStreaming: false,
           });
         }

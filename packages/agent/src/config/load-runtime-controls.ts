@@ -79,6 +79,21 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     bedrockTimeoutMs: providerSettings.adapters?.bedrock?.timeoutMs ?? 30000,
     bedrockMaxRetries: providerSettings.adapters?.bedrock?.maxRetries ?? 3,
     bedrockRegion: providerSettings.adapters?.bedrock?.region ?? "us-east-1",
+
+    // Browser tool
+    browserReuseSession: (process.env["BROWSER_REUSE_SESSION"] ?? "true").toLowerCase() !== "false",
+    browserHeadless: (process.env["BROWSER_HEADLESS_MODE"] ?? "true").toLowerCase() !== "false",
+    browserViewportWidth: parseInt(process.env["BROWSER_VIEWPORT_WIDTH"] ?? "1440", 10) || 1440,
+    browserViewportHeight: parseInt(process.env["BROWSER_VIEWPORT_HEIGHT"] ?? "1024", 10) || 1024,
+    browserExecutablePath: process.env["BROWSER_CUSTOM_EXECUTABLE_PATH"] ?? "",
+    browserUserAgent: process.env["BROWSER_USER_AGENT"] ?? "",
+    browserScreenshotFormat: (process.env["BROWSER_SCREENSHOT_FORMAT"] ?? "jpeg") as "jpeg" | "png" | "webp",
+    browserScreenshotQuality: parseInt(process.env["BROWSER_SCREENSHOT_QUALITY"] ?? "85", 10) || 85,
+    browserDisableImages: (process.env["BROWSER_DISABLE_IMAGES"] ?? "false").toLowerCase() === "true",
+    browserBlockResources: (process.env["BROWSER_BLOCK_RESOURCES"] ?? "tracking") as "none" | "tracking" | "ads" | "all",
+    browserHideAutomation: (process.env["BROWSER_DISABLE_AUTOMATION"] ?? "true").toLowerCase() !== "false",
+    browserCookieDetection: (process.env["BROWSER_COOKIE_DETECTION"] ?? "false").toLowerCase() === "true",
+    browserProxyUrl: process.env["BROWSER_PROXY_URL"] ?? "",
   };
 }
 

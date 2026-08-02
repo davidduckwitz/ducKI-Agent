@@ -22,7 +22,7 @@ screenshotRouter.get("/:id", async (req, res) => {
     return res.status(404).json({ error: "Screenshot not found or expired" });
   }
 
-  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Content-Type", manager.getScreenshotMimeType(id));
   res.setHeader("Cache-Control", "private, max-age=3600");
   res.send(buffer);
 });
@@ -45,10 +45,12 @@ screenshotRouter.post("/:id/download", async (req, res) => {
     return res.status(404).json({ error: "Screenshot not found or expired" });
   }
 
+  const mimeType = manager.getScreenshotMimeType(id);
+  const extension = mimeType === "image/png" ? "png" : mimeType === "image/webp" ? "webp" : "jpg";
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const filename = `screenshot-${timestamp}.png`;
+  const filename = `screenshot-${timestamp}.${extension}`;
 
-  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Content-Type", mimeType);
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.setHeader("Cache-Control", "no-cache");
   res.send(buffer);
