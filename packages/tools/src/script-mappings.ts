@@ -1,5 +1,3 @@
-import type { SkillManifest } from "@ducki/shared";
-
 /**
  * Hermes Pattern #3: Explicit script-to-tool mappings
  * Centralizes where each skill's scripts are located for discovery and validation
@@ -8,6 +6,11 @@ import type { SkillManifest } from "@ducki/shared";
 export interface ScriptMapping {
   skillSlug: string;
   scripts: Record<string, string>; // scriptName -> filePath
+}
+
+export interface SkillManifest {
+  slug: string;
+  scripts?: Record<string, string>;
 }
 
 /**

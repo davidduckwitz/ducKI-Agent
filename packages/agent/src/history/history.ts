@@ -44,6 +44,10 @@ export class History {
     this.entries = [];
   }
 
+  clearByType(toolName: string): void {
+    this.entries = this.entries.filter((e) => e.toolName !== toolName);
+  }
+
   get length(): number {
     return this.entries.length;
   }

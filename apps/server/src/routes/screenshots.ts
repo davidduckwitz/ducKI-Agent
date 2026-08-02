@@ -26,3 +26,30 @@ screenshotRouter.get("/:id", async (req, res) => {
   res.setHeader("Cache-Control", "private, max-age=3600");
   res.send(buffer);
 });
+
+/**
+ * POST /api/screenshots/:id/download
+ * Download a screenshot with filename
+ */
+screenshotRouter.post("/:id/download", async (req, res) => {
+  const { id } = req.params;
+
+  if (!id || typeof id !== "string") {
+    return res.status(400).json({ error: "Invalid screenshot ID" });
+  }
+
+  const manager = getScreenshotStorageManager();
+  const buffer = await manager.getScreenshot(id);
+
+  if (!buffer) {
+    return res.status(404).json({ error: "Screenshot not found or expired" });
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `screenshot-${timestamp}.png`;
+
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.setHeader("Cache-Control", "no-cache");
+  res.send(buffer);
+});

@@ -69,8 +69,8 @@ export function Sidebar({
   const busy = runningCount > 0 || runningTools.size > 0;
 
   const startNewChat = () => {
-    // Not clearChat(): that keeps the old conversationId, so the next message would
-    // silently continue the previous chat instead of starting a fresh one.
+    // Clear chat state and reset for a fresh conversation
+    useAppStore.getState().clearChat();
     setConversationId(undefined);
     navigate("/chat");
   };

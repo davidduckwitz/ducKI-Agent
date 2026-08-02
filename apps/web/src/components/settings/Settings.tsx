@@ -27,7 +27,7 @@ interface SettingField {
   label: string;
   description: string;
   type: SettingFieldType;
-  section: "Provider" | "API" | "Speech" | "Agent" | "Memory" | "Database" | "Crypto";
+  section: "Provider" | "API" | "Speech" | "Agent" | "Memory" | "Database" | "Crypto" | "Browser";
   defaultValue: string;
   options?: { label: string; value: string }[];
 }
@@ -913,9 +913,133 @@ const PREDEFINED_FIELDS: SettingField[] = [
     section: "Crypto",
     defaultValue: "300",
   },
+  // Browser Configuration Settings
+  {
+    key: "BROWSER_HEADLESS_MODE",
+    label: "Headless Mode",
+    description: "Run browser in headless mode (no visible window)",
+    type: "select",
+    section: "Browser",
+    defaultValue: "true",
+    options: [
+      { label: "Enabled", value: "true" },
+      { label: "Disabled (Show Window)", value: "false" },
+    ],
+  },
+  {
+    key: "BROWSER_VIEWPORT_WIDTH",
+    label: "Viewport Width (px)",
+    description: "Browser window width for screenshots (800-2560)",
+    type: "number",
+    section: "Browser",
+    defaultValue: "1440",
+  },
+  {
+    key: "BROWSER_VIEWPORT_HEIGHT",
+    label: "Viewport Height (px)",
+    description: "Browser window height for screenshots (600-1440)",
+    type: "number",
+    section: "Browser",
+    defaultValue: "1024",
+  },
+  {
+    key: "BROWSER_CUSTOM_EXECUTABLE_PATH",
+    label: "Custom Browser Path",
+    description: "Path to Chrome/Edge executable (leave empty for auto-detect)",
+    type: "text",
+    section: "Browser",
+    defaultValue: "",
+  },
+  {
+    key: "BROWSER_USER_AGENT",
+    label: "Custom User Agent",
+    description: "Custom user agent string (leave empty for Chrome default)",
+    type: "text",
+    section: "Browser",
+    defaultValue: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  },
+  {
+    key: "BROWSER_SCREENSHOT_FORMAT",
+    label: "Screenshot Format",
+    description: "Image format for screenshots (webp=smaller, png=better compatibility, jpeg=lowest quality)",
+    type: "select",
+    section: "Browser",
+    defaultValue: "webp",
+    options: [
+      { label: "WebP (Recommended)", value: "webp" },
+      { label: "PNG", value: "png" },
+      { label: "JPEG", value: "jpeg" },
+    ],
+  },
+  {
+    key: "BROWSER_SCREENSHOT_QUALITY",
+    label: "Screenshot Quality (0-100)",
+    description: "Compression quality for screenshots (higher = larger file, better quality)",
+    type: "number",
+    section: "Browser",
+    defaultValue: "80",
+  },
+  {
+    key: "BROWSER_DISABLE_IMAGES",
+    label: "Disable Images",
+    description: "Don't load images (faster page load, no screenshots of images)",
+    type: "select",
+    section: "Browser",
+    defaultValue: "false",
+    options: [
+      { label: "Enabled", value: "true" },
+      { label: "Disabled", value: "false" },
+    ],
+  },
+  {
+    key: "BROWSER_BLOCK_RESOURCES",
+    label: "Block Resources",
+    description: "Block ads, tracking, or all external resources for faster load",
+    type: "select",
+    section: "Browser",
+    defaultValue: "tracking",
+    options: [
+      { label: "None", value: "none" },
+      { label: "Tracking Scripts Only", value: "tracking" },
+      { label: "Ads + Tracking", value: "ads" },
+      { label: "All External", value: "all" },
+    ],
+  },
+  {
+    key: "BROWSER_DISABLE_AUTOMATION",
+    label: "Hide Automation Detection",
+    description: "Hide navigator.webdriver to avoid anti-bot detection",
+    type: "select",
+    section: "Browser",
+    defaultValue: "true",
+    options: [
+      { label: "Enabled", value: "true" },
+      { label: "Disabled", value: "false" },
+    ],
+  },
+  {
+    key: "BROWSER_COOKIE_DETECTION",
+    label: "Auto-Dismiss Cookie Banners",
+    description: "Automatically detect and dismiss cookie consent banners",
+    type: "select",
+    section: "Browser",
+    defaultValue: "false",
+    options: [
+      { label: "Enabled", value: "true" },
+      { label: "Disabled", value: "false" },
+    ],
+  },
+  {
+    key: "BROWSER_PROXY_URL",
+    label: "Proxy URL (Optional)",
+    description: "Route browser traffic through HTTP/HTTPS proxy (e.g., http://proxy:8080)",
+    type: "text",
+    section: "Browser",
+    defaultValue: "",
+  },
 ];
 
-const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database", "Crypto"];
+const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database", "Browser", "Crypto"];
 type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character" | "Backend";
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {

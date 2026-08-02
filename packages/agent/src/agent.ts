@@ -2709,23 +2709,65 @@ export class Agent {
    * whole-turn version of the standalone "plan" tool (plan-tool.ts); both share
    * formatPlanAsMarkdown so a plan reads the same regardless of which path produced it.
    */
-  private compressImageBuffer(buffer: Buffer, maxSizeBytes: number = 200000): Buffer {
-    // LM Studio (and most LLM providers) can handle 200KB+ images
-    // Only warn if significantly larger
-    if (buffer.length > maxSizeBytes) {
-      this.logger.warn("Image buffer exceeds limit for external APIs", {
-        size: buffer.length,
-        max: maxSizeBytes,
-        recommendation: "Consider installing sharp library for real compression; for now accepting oversized image",
+  private async compressImageBuffer(buffer: Buffer, maxSizeBytes: number = 150000): Promise<Buffer> {
+    // Enforce conservative 150KB limit for LLM providers (actual limit is 200KB but stay safe)
+    let result = buffer;
+
+    // Try to use sharp library if available for real compression
+    try {
+      // @ts-expect-error sharp is an optional dependency
+      const sharp = (await import("sharp")).default;
+      if (sharp) {
+        // Compress with progressive quality reduction if needed
+        result = await sharp(buffer)
+          .webp({ quality: 80 })
+          .toBuffer();
+
+        // If still too large, reduce quality further
+        if (result.length > maxSizeBytes) {
+          result = await sharp(buffer)
+            .webp({ quality: 60 })
+            .toBuffer();
+        }
+
+        // Last resort: ultra-low quality
+        if (result.length > maxSizeBytes) {
+          result = await sharp(buffer)
+            .webp({ quality: 40 })
+            .toBuffer();
+        }
+
+        const ratio = ((1 - result.length / buffer.length) * 100).toFixed(1);
+        this.logger.info("Image compressed with sharp", {
+          originalSize: buffer.length,
+          compressedSize: result.length,
+          compressionRatio: `${ratio}%`,
+          exceedsLimit: result.length > maxSizeBytes,
+        });
+
+        return result;
+      }
+    } catch (sharpError) {
+      // Sharp not available, fallback to simple size check
+      this.logger.debug("Sharp library not available for image compression", {
+        error: sharpError instanceof Error ? sharpError.message : String(sharpError),
       });
-      // Don't truncate - it destroys the image! Better to send full image than corrupted one
-      return buffer;
     }
-    return buffer;
+
+    // Fallback: Log if image exceeds limit
+    if (buffer.length > maxSizeBytes) {
+      this.logger.warn("Image exceeds LLM provider size limit", {
+        size: Math.round(buffer.length / 1024),
+        limit: Math.round(maxSizeBytes / 1024),
+        recommendation: "Install sharp library for compression: npm install sharp",
+      });
+    }
+
+    return result;
   }
 
   async createImageMessage(imageBuffer: Buffer, mimeType: string = "image/png", description: string = ""): Promise<LLMMessage> {
-    const buffer = this.compressImageBuffer(imageBuffer);
+    const buffer = await this.compressImageBuffer(imageBuffer);
     const base64Url = `data:${mimeType};base64,${buffer.toString("base64")}`;
 
     const imageContent: LLMContent[] = [
@@ -2892,7 +2934,7 @@ export class Agent {
     if (!buffer) return;
 
     // Compress image for efficiency (WebP is already compressed)
-    buffer = this.compressImageBuffer(buffer);
+    buffer = await this.compressImageBuffer(buffer);
 
     // Enforce strict LLM provider limit (200KB is the actual limit, not Database limit)
     const MAX_IMAGE_SIZE = 150000; // 150KB - be conservative to stay under 200KB limit
@@ -2909,7 +2951,22 @@ export class Agent {
     const url = (data.url as string) ?? "(unknown)";
     const base64String = buffer.toString("base64");
 
-    const analysisText = `Screenshot captured from: ${url}\n\nAnalyze this screenshot and describe:\n1. Page content and what you see\n2. Key text, buttons, and interactive elements\n3. Visual layout and design\n4. Any errors or status indicators\n5. Current state relative to expected result`;
+    // Clear old screenshots from history before adding new one (Fix #3: Multiple screenshot handling)
+    this.history.clearByType("screenshot");
+
+    // Generate context-aware analysis prompt based on browser action (Fix #2: Context-aware prompts)
+    const toolAction = toolInput.action as string;
+    let analysisText = `Screenshot captured from: ${url}\n\nAnalyze this screenshot and describe:\n1. Page content and what you see\n2. Key text, buttons, and interactive elements\n3. Visual layout and design\n4. Any errors or status indicators\n5. Current state relative to expected result`;
+
+    if (toolAction === "click") {
+      analysisText = `Screenshot after clicking.\nVerify the click worked:\n1. Did the page change?\n2. Are there new elements or changes?\n3. Any error messages or unexpected behavior?`;
+    } else if (toolAction === "type") {
+      analysisText = `Screenshot after typing.\nVerify text input:\n1. Is text in the correct field?\n2. Is cursor/focus visible?\n3. Any validation feedback or errors?`;
+    } else if (toolAction === "navigate") {
+      analysisText = `Screenshot after navigation to ${url}.\nVerify page load:\n1. Did page load successfully?\n2. Are main elements visible?\n3. Any error/loading states?\n4. Is content as expected?`;
+    } else if (toolAction === "wait") {
+      analysisText = `Screenshot after waiting.\nCheck expected element appearance:\n1. Did the expected element appear?\n2. Page state vs expected?\n3. Is page ready for next action?`;
+    }
 
     // Use standard LLMContent[] format for ALL providers
     // Each provider implementation handles conversion to its own API format:
@@ -2926,16 +2983,31 @@ export class Agent {
       }
     ];
 
+    // Calculate estimated tokens (Fix #4: Token counting)
+    const estimatedTokens = Math.round(base64String.length / 500); // Rough estimate: 500 chars ≈ 1 token
+
     const screenshotMessage: LLMMessage = {
       role: "user",
       content: imageContent,
-      metadata: { source: "browser_screenshot", url },
+      metadata: {
+        source: "browser_screenshot",
+        url,
+        estimatedTokens,
+        format: "webp",
+        size: buffer.length,
+      },
     };
 
     // Store screenshot message to be added at each iteration
     // Don't persist to DB - vision messages are ephemeral but need to persist across iterations
     this.currentScreenshotMessage = screenshotMessage;
     this.history.add(screenshotMessage, "screenshot");
+
+    this.logger.info("Screenshot vision message stored", {
+      estimatedTokens,
+      size: buffer.length,
+      action: toolAction,
+    });
 
     this.logger.info("Screenshot vision message stored for iterations", {
       base64Size: base64String.length,

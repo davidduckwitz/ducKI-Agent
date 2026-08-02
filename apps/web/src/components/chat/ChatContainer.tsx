@@ -131,6 +131,7 @@ export function ChatContainer() {
   const stickToBottomRef = useRef(true);
   const activeConversationRef = useRef<HTMLDivElement>(null);
   const prevConversationIdRef = useRef<number | undefined>(conversationId);
+  const chatSwitchFlagRef = useRef(false);
 
   const defaultExpandedForType = (eventType?: AgentEventType) => false;
 
@@ -196,6 +197,21 @@ export function ChatContainer() {
     }
   }, [conversationId, qc]);
 
+  useEffect(() => {
+    // Detect when switching to a different conversation and signal the message-merge effect
+    // to clear old messages before processing new data.
+    const previous = prevConversationIdRef.current;
+
+    if (previous !== undefined && conversationId !== previous) {
+      // Chat switch detected - set flag for message-merge effect to handle cleanup
+      chatSwitchFlagRef.current = true;
+      // Clear expanded events when switching to a defined conversation
+      if (conversationId !== undefined) {
+        setExpandedEvents({});
+      }
+    }
+  }, [conversationId]);
+
     const appliedQueryConversationId = useRef(false);
     useEffect(() => {
       // Only ever apply the ?conversationId= param once on initial load - otherwise this
@@ -214,6 +230,12 @@ export function ChatContainer() {
 
     useEffect(() => {
       if (!conversationId) return;
+
+      // If chat just switched and new query data hasn't arrived yet, wait for fresh data
+      if (chatSwitchFlagRef.current && selectedConversationMessages.isFetching) {
+        return;
+      }
+
       const persisted = selectedConversationMessages.data?.pages
         .slice()
         .reverse()
@@ -316,13 +338,15 @@ export function ChatContainer() {
         // If an agent is actively running, preserve local (non-persisted) messages.
         // Otherwise, only show persisted messages to avoid mixing messages from different conversations.
         const localMessages = isLoading ? prev.filter((m) => !m.id.startsWith("db-")) : [];
-        return [...renderedPersisted, ...localMessages].sort(compareMessages);
+        // Deduplicate: remove local messages that are already in persisted
+        const persistedIds = new Set(renderedPersisted.map((m) => m.id));
+        const uniqueLocalMessages = localMessages.filter((m) => !persistedIds.has(m.id));
+        return [...renderedPersisted, ...uniqueLocalMessages].sort(compareMessages);
       });
-    }, [conversationId, selectedConversationMessages.data, setMessages, t, isLoading]);
 
-  useEffect(() => {
-    setExpandedEvents({});
-  }, [conversationId]);
+      // Reset flag after merging with fresh data
+      chatSwitchFlagRef.current = false;
+    }, [conversationId, selectedConversationMessages.data, selectedConversationMessages.isFetching, setMessages, t, isLoading]);
 
   useEffect(() => {
     const viewport = messagesViewportRef.current;

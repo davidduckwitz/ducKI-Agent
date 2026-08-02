@@ -14,6 +14,7 @@ import {
   BookOpen,
   HardDrive,
   CreditCard,
+  Monitor,
   type LucideIcon,
 } from "lucide-react";
 
@@ -256,6 +257,38 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       ],
     },
   ],
+  Browser: [
+    {
+      name: "Display & Viewport",
+      icon: Monitor,
+      keys: [
+        "BROWSER_HEADLESS_MODE",
+        "BROWSER_VIEWPORT_WIDTH",
+        "BROWSER_VIEWPORT_HEIGHT",
+        "BROWSER_CUSTOM_EXECUTABLE_PATH",
+        "BROWSER_USER_AGENT",
+      ],
+    },
+    {
+      name: "Screenshot Settings",
+      icon: Target,
+      keys: [
+        "BROWSER_SCREENSHOT_FORMAT",
+        "BROWSER_SCREENSHOT_QUALITY",
+      ],
+    },
+    {
+      name: "Performance & Detection",
+      icon: Gauge,
+      keys: [
+        "BROWSER_DISABLE_IMAGES",
+        "BROWSER_BLOCK_RESOURCES",
+        "BROWSER_DISABLE_AUTOMATION",
+        "BROWSER_COOKIE_DETECTION",
+        "BROWSER_PROXY_URL",
+      ],
+    },
+  ],
 };
 
 export const TAB_ICONS: Record<string, LucideIcon> = {
@@ -265,5 +298,6 @@ export const TAB_ICONS: Record<string, LucideIcon> = {
   Agent: Sparkles,
   Memory: BookOpen,
   Database: HardDrive,
+  Browser: Monitor,
   Crypto: CreditCard,
 };

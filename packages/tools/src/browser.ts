@@ -244,14 +244,24 @@ async function getSession(sessionId: string): Promise<BrowserSession | undefined
   return sessions.get(sessionId);
 }
 
-async function createSession(options: { headless?: boolean; viewport?: { width: number; height: number }; executablePath?: string }): Promise<{ sessionId: string; targetUrl?: string; browserPath?: string }> {
+async function createSession(options: {
+  headless?: boolean;
+  viewport?: { width: number; height: number };
+  executablePath?: string;
+  userAgent?: string;
+  disableImages?: boolean;
+  blockResources?: "none" | "tracking" | "ads" | "all";
+  hideAutomation?: boolean;
+  cookieDetection?: boolean;
+}): Promise<{ sessionId: string; targetUrl?: string; browserPath?: string }> {
   const puppeteer = await getPuppeteer();
   const executablePath = options.executablePath ?? resolveBrowserPath();
   if (!executablePath) {
     throw new Error("No local browser executable found. Set PUPPETEER_EXECUTABLE_PATH, CHROME_BIN, EDGE_BIN, or BROWSER_PATH.");
   }
+
   const browser = await puppeteer.launch({
-    headless: options.headless ?? false,
+    headless: options.headless ?? true,
     executablePath,
     defaultViewport: options.viewport ?? { width: 1440, height: 1024 },
     args: [
@@ -272,21 +282,38 @@ async function createSession(options: { headless?: boolean; viewport?: { width: 
       "--metrics-recording-only",
       "--mute-audio",
       "--no-first-run",
+      ...(options.disableImages ? ["--blink-settings=imagesEnabled=false"] : []),
     ],
   });
   const page = await browser.newPage();
 
-  // Hide automation indicators
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "webdriver", {
-      get: () => false,
+  // Hide automation indicators (configurable)
+  if (options.hideAutomation !== false) {
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false,
+      });
     });
-  });
+  }
 
-  // Set realistic user agent
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  );
+  // Set user agent (configurable)
+  const userAgent = options.userAgent || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  await page.setUserAgent(userAgent);
+
+  // Set up resource blocking if enabled
+  if (options.blockResources && options.blockResources !== "none") {
+    const { setupResourceBlocking } = await import("./browser-features/cookie-detection.js");
+    await setupResourceBlocking(page, options.blockResources);
+  }
+
+  // Detect and dismiss cookie banners if enabled
+  if (options.cookieDetection) {
+    const { detectAndDismissCookieBanners } = await import("./browser-features/cookie-detection.js");
+    const result = await detectAndDismissCookieBanners(page);
+    if (result.dismissed) {
+      console.log("[browser] Cookie banner dismissed automatically");
+    }
+  }
 
   const sessionId = makeSessionId();
   const session: BrowserSession = {
@@ -439,9 +466,14 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
       case "launch": {
         const viewport = parseViewports(input["viewport"]);
         const { sessionId, browserPath } = await createSession({
-          headless: input["headless"] === true,
+          headless: input["headless"] === true || input["headless"] === "true",
           viewport,
           executablePath: typeof input["executablePath"] === "string" ? input["executablePath"] : undefined,
+          userAgent: typeof input["userAgent"] === "string" ? input["userAgent"] : undefined,
+          disableImages: input["disableImages"] === true || input["disableImages"] === "true",
+          blockResources: (input["blockResources"] as "none" | "tracking" | "ads" | "all") || "none",
+          hideAutomation: input["hideAutomation"] !== false && input["hideAutomation"] !== "false",
+          cookieDetection: input["cookieDetection"] === true || input["cookieDetection"] === "true",
         });
         const session = await getSession(sessionId);
         if (browserPath) {
@@ -531,6 +563,10 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         // `data:image/webp;base64,...` - Puppeteer's default (png) would still render (most
         // browsers sniff the real format), but mislabels the data URI's declared MIME type.
         const buffer = await session.page.screenshot({ path: path as string | undefined, fullPage: true, type: "webp" });
+
+        // Get viewport dimensions
+        const viewport = session.page.viewport() || { width: 1440, height: 1024 };
+
         return ok({
           sessionId,
           savedTo: path ?? null,
@@ -540,6 +576,14 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           // responsible for keeping this out of the LLM-facing tool result (it's for
           // rendering the preview to the user, not for the model to read as text).
           screenshot: Buffer.from(buffer).toString("base64"),
+          // Metadata for screenshot tracking
+          metadata: {
+            format: "webp",
+            width: viewport.width,
+            height: viewport.height,
+            timestamp: new Date().toISOString(),
+            sizeKb: Math.round(buffer.byteLength / 1024),
+          },
         });
       }
       case "evaluate": {
