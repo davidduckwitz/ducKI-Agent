@@ -69,7 +69,7 @@ export function getApiBaseUrl(config: BackendConfig = readBackendConfig()): stri
     return `${normalizeRemote(config.url)}/api`;
   }
   if (isDesktopApp()) {
-    return `http://localhost:${config.port ?? DEFAULT_PORT}`;
+    return `http://localhost:${config.port ?? DEFAULT_PORT}/api`;
   }
   return "/api";
 }
