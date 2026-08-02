@@ -7,6 +7,7 @@ import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
 import { Planner } from "./planner/planner.js";
@@ -38,6 +39,7 @@ import { FallbackResponseGenerator } from "./response/fallback-response-generato
 import { ToolCircuitBreaker } from "./tool-strategy/circuit-breaker.js";
 import { FallbackToolExecutor } from "./tool-strategy/fallback-executor.js";
 import { ToolHealthMonitor } from "./tool-health/tool-health-monitor.js";
+import { ThinkBlockParser } from "./parsers/think-block-parser.js";
 import { ToolDependencyChecker } from "./tool-strategy/tool-dependencies.js";
 
 import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
@@ -193,6 +195,7 @@ export class Agent {
   private reasoner: Reasoner;
   private reflection: Reflection;
   private history: History;
+  private thinkBlockParser: ThinkBlockParser;
   private logger: Logger;
   private skillsRoot: string;
   private stopRequested = false;
@@ -366,6 +369,7 @@ export class Agent {
     this.reasoner = new Reasoner(provider, this.logger);
     this.reflection = new Reflection(provider, this.logger);
     this.history = new History();
+    this.thinkBlockParser = new ThinkBlockParser();
     this.toolGraph = new ToolExecutionGraph();
     this.conversationCompressor = new ConversationCompressor(provider);
   }
@@ -3085,6 +3089,10 @@ export class Agent {
       hasToolMarkers: /\[TOOL:/.test(response),
     });
 
+    // Shared by every tool_call/tool_result/browser_preview event below so the UI can
+    // fold all tool calls issued by this single LLM response into one collapsible group.
+    const toolBatchId = randomUUID();
+
     // Extract all tool calls from response
     const extractResult = this.extractAllToolCalls(response);
     let toolCalls = extractResult.calls;
@@ -3162,6 +3170,8 @@ export class Agent {
     // Emit initial tool-call detection event
     const callSummaries = toolCalls.map((c) => summarizeToolCall(c.toolName, c.input));
     emit("tool_call", callSummaries.join(" · "), {
+      toolBatchId,
+      batchSize: toolCalls.length,
       count: toolCalls.length,
       tools: toolCalls.map((c) => c.toolName),
       // summary carries what the reader actually needs (which file, which command); the
@@ -3353,6 +3363,7 @@ export class Agent {
 
         if (screenshotBase64) {
           emit("browser_preview", `Screenshot: ${(rawResultData?.["url"] as string | undefined) ?? "preview"}`, {
+            toolBatchId,
             tabId: rawResultData?.["sessionId"],
             url: rawResultData?.["url"],
             screenshot: screenshotBase64,
@@ -3436,6 +3447,7 @@ export class Agent {
           ? "OK"
           : `Fehler: ${executed.result.error ?? "unbekannt"}`;
         emit("tool_result", `${resultSummary} — ${resultOutcome}`, {
+          toolBatchId,
           toolName: toolCall?.toolName,
           summary: resultSummary,
           callId: executed.id,
@@ -3533,11 +3545,18 @@ export class Agent {
         timestamp,
       };
 
+      // The live socket payload only carries `data` (snapshot is DB-only, see below), so
+      // the UI has no way to know which iteration/tool-batch an event belongs to unless we
+      // stamp it here. Every event gets `iteration`; tool events additionally carry
+      // whatever `toolBatchId` the caller passed in `data` (used to fold a batch of tool
+      // calls from one LLM turn into a single collapsible group in the chat UI).
+      const dataWithIteration = { iteration: iterations, ...data };
+
       // Emit via V2 event emitter (batched, with snapshot)
       this.eventEmitterV2.emitEvent({
         type: type as AgentRunEventType,
         message,
-        data,
+        data: dataWithIteration,
         snapshot,
         timestamp,
       });
@@ -3547,7 +3566,7 @@ export class Agent {
       const eventPayload = {
         type: type as AgentRunEventType,
         message,
-        data,
+        data: dataWithIteration,
         timestamp,
       };
 
@@ -3569,7 +3588,7 @@ export class Agent {
       if (this.conversation.id !== undefined) {
         const eventMetadata: Record<string, unknown> = {
           eventType: type,
-          data,
+          data: dataWithIteration,
           timestamp,
           snapshot,
         };
@@ -4505,7 +4524,7 @@ export class Agent {
           toolsJustExecuted,
         });
 
-        emit("guardrail", "Model returned empty response after tool execution, retrying with explicit prompt", {
+        emit("guardrail", "Modell antwortete leer nach Tool-Ausfuehrung, versuche erneut mit expliziter Aufforderung", {
           iteration: iterations,
         });
 
@@ -4513,9 +4532,13 @@ export class Agent {
         const recoveryPrompt: LLMMessage = {
           role: "user",
           content: "You executed the tools. Please provide a concise response based on their results. What information did they return? How does it answer the original question?",
+          metadata: { internal: true, kind: "empty_response_recovery" },
         };
         await this.conversation.addMessage(recoveryPrompt);
         this.history.add(recoveryPrompt, "empty_response_recovery");
+        emit("internal_instruction", "Fordere das Modell zu einer Antwort anhand der Tool-Ergebnisse auf...", {
+          kind: "empty_response_recovery",
+        });
 
         // Mark that we've attempted recovery once
         emptyResponseAfterTools = true;
@@ -4528,7 +4551,7 @@ export class Agent {
             iteration: iterations,
             newResponseLength: response.length,
           });
-          emit("decision", "LLM recovery retry succeeded", {
+          emit("decision", "Wiederholungsversuch erfolgreich", {
             iteration: iterations,
             recoveredResponseLength: response.length,
           });
@@ -4537,7 +4560,7 @@ export class Agent {
             iteration: iterations,
             error: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
           });
-          emit("guardrail", "Recovery retry failed, continuing with empty response", {
+          emit("guardrail", "Wiederholungsversuch fehlgeschlagen, fahre mit leerer Antwort fort", {
             error: recoveryError instanceof Error ? recoveryError.message : "unknown error",
           });
         }
@@ -4547,6 +4570,23 @@ export class Agent {
       // Extract and execute tool calls BEFORE adding response to conversation
       // This ensures the conversation and chat only see cleaned response text
       this.logger.info("[RUNLOOP] Starting early tool-call extraction", { iteration: iterations });
+
+      // Pull any <think>/```thinking```/[THINKING] block out of the raw response before it
+      // becomes the visible assistant message, and surface it as its own "thinking" event
+      // so the UI can render it distinctly instead of leaving raw reasoning markup in the
+      // chat bubble (or, previously, dropping it silently - nothing called this parser).
+      const thinkParseResult = this.thinkBlockParser.parse(response);
+      if (thinkParseResult.thinkBlocks.length > 0) {
+        emit(
+          "thinking",
+          `Agent hat nachgedacht (${thinkParseResult.statistics.thinkingDepth}, ${thinkParseResult.thinkBlocks.length} Block(s))`,
+          {
+            thinkBlocks: thinkParseResult.thinkBlocks.map((block) => ({ ...block, status: "complete" as const })),
+            isStreaming: false,
+          }
+        );
+        response = thinkParseResult.remainingContent;
+      }
 
       // CRITICAL FIX: Add assistant message FIRST, before tool execution
       // This ensures proper message ordering for the LLM:
@@ -4631,17 +4671,29 @@ export class Agent {
           analyzePrompt = {
             role: "user",
             content: "Please analyze the screenshot and other tool results provided above. What information did they provide? How do they answer my original question? Provide a clear summary.",
+            metadata: { internal: true, kind: "screenshot_analysis" },
           };
         } else {
           // For non-browser tools, ask for analysis of results
           analyzePrompt = {
             role: "user",
             content: `Please analyze the results from the ${toolNames} tool(s) that just executed. What information did they provide? How do they answer my original question? Provide a clear summary based on these results.`,
+            metadata: { internal: true, kind: "tool_analysis", toolNames },
           };
         }
 
         await this.conversation.addMessage(analyzePrompt);
         this.history.add(analyzePrompt, "tool_results_analysis_prompt");
+
+        // Live status note so the user sees this immediately instead of only after the
+        // internal prompt round-trips through a DB reload (see metadata.internal above).
+        const internalMessage = this.currentScreenshotMessage && browserToolsCount > 0
+          ? "Analysiere Screenshot und Tool-Ergebnisse..."
+          : `Analysiere Ergebnisse von ${toolNames}...`;
+        emit("internal_instruction", internalMessage, {
+          kind: this.currentScreenshotMessage && browserToolsCount > 0 ? "screenshot_analysis" : "tool_analysis",
+          toolNames,
+        });
       }
 
       // Stream the cleaned response to user (without [TOOL:...] markers)

@@ -10,7 +10,8 @@ export type AgentEventType =
   | "tool_retry"
   | "mode_selected"
   | "browser_preview"
-  | "thinking";
+  | "thinking"
+  | "internal_instruction";
 
 /**
  * A chat message as rendered in the UI.

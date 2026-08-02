@@ -228,7 +228,12 @@ export function CodingWorkspace() {
               type === "reasoning" ||
               type === "decision" ||
               type === "guardrail" ||
-              type === "mode_selected"
+              type === "skill_selection" ||
+              type === "tool_retry" ||
+              type === "mode_selected" ||
+              type === "browser_preview" ||
+              type === "thinking" ||
+              type === "internal_instruction"
             ) {
               eventType = type;
             }
@@ -258,7 +263,9 @@ export function CodingWorkspace() {
       };
     });
 
-    setMessages(mapped as never);
+    // Synthetic follow-up prompts (metadata.internal) already showed a translated status
+    // note as an internal_instruction event above - don't also render the raw prompt.
+    setMessages(mapped.filter((m) => !(m.role === "user" && m.metadata?.internal === true)) as never);
   }, [conversationMessagesQuery.data, setMessages]);
 
   useEffect(() => {

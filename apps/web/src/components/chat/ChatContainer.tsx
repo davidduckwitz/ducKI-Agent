@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { ArrowDown, Plus, Trash2, X } from "lucide-react";
 import { useAppStore, type ChatAttachment } from "../../lib/store";
 import { useUiStore } from "../../lib/uiStore";
@@ -10,6 +10,7 @@ import { DynamicCharacter } from "./characters/DynamicCharacter";
 import { ToolResponseDock } from "./ToolResponseCard";
 import { BrowserSessionManager } from "./BrowserSessionManager";
 import { EventRow, MessageRow, StreamingRow } from "./ChatMessageRow";
+import { ToolGroupRow } from "./ToolGroupRow";
 import { ChatHeader } from "./ChatHeader";
 import { ChatComposer } from "./ChatComposer";
 import { ChatWelcome } from "./ChatWelcome";
@@ -133,6 +134,7 @@ export function ChatContainer() {
   const [planMode, setPlanMode] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
+  const [expandedToolGroups, setExpandedToolGroups] = useState<Record<string, boolean>>({});
   const [showPlanPanel, setShowPlanPanel] = useState(false);
   const [currentPlan, setCurrentPlan] = useState<Plan | null | undefined>(null);
   const [lastProcessedPlanId, setLastProcessedPlanId] = useState<string>("");
@@ -154,6 +156,50 @@ export function ChatContainer() {
   const lastProcessedDataSnapshotRef = useRef<string>("");
 
   const defaultExpandedForType = (eventType?: AgentEventType) => false;
+
+  // Fold consecutive tool_call/tool_result/tool_retry events that share the same
+  // toolBatchId (all tools issued by one LLM turn) into a single collapsible group, so a
+  // turn firing several tools doesn't leave a wall of separate boxes in the timeline.
+  // Events without a toolBatchId (older persisted runs, before this field existed) fall
+  // back to rendering individually.
+  const renderItems = useMemo(() => {
+    const TOOL_GROUP_TYPES = new Set(["tool_call", "tool_result", "tool_retry"]);
+    type RenderItem =
+      | { kind: "message"; msg: RenderedChatMessage }
+      | { kind: "toolGroup"; id: string; events: RenderedChatMessage[] };
+
+    const items: RenderItem[] = [];
+    let currentGroup: { id: string; batchId: string; events: RenderedChatMessage[] } | null = null;
+
+    const flushGroup = () => {
+      if (currentGroup && currentGroup.events.length > 0) {
+        items.push({ kind: "toolGroup", id: currentGroup.id, events: currentGroup.events });
+      }
+      currentGroup = null;
+    };
+
+    for (const msg of messages) {
+      const batchId = msg.role === "event" && msg.eventType && TOOL_GROUP_TYPES.has(msg.eventType)
+        ? (msg.eventData?.["toolBatchId"] as string | undefined)
+        : undefined;
+
+      if (batchId) {
+        if (currentGroup && currentGroup.batchId === batchId) {
+          currentGroup.events.push(msg);
+        } else {
+          flushGroup();
+          currentGroup = { id: `group-${batchId}`, batchId, events: [msg] };
+        }
+        continue;
+      }
+
+      flushGroup();
+      items.push({ kind: "message", msg });
+    }
+    flushGroup();
+
+    return items;
+  }, [messages]);
 
   useEffect(() => {
     const total = messages.reduce((sum, msg) => {
@@ -337,7 +383,12 @@ export function ChatContainer() {
                 type === "reasoning" ||
                 type === "decision" ||
                 type === "guardrail" ||
-                type === "mode_selected"
+                type === "skill_selection" ||
+                type === "tool_retry" ||
+                type === "mode_selected" ||
+                type === "browser_preview" ||
+                type === "thinking" ||
+                type === "internal_instruction"
               ) {
                 eventType = type;
               }
@@ -405,7 +456,12 @@ export function ChatContainer() {
         };
       };
 
-      const renderedPersisted = persisted.map(mapPersistedMessage);
+      const renderedPersisted = persisted
+        .map(mapPersistedMessage)
+        // Synthetic follow-up prompts (metadata.internal) are only there to steer the LLM;
+        // their user-facing status note was already shown live as an internal_instruction
+        // event, so the raw prompt itself must not also render as a fake user turn.
+        .filter((m) => !(m.role === "user" && m.metadata?.internal === true));
 
       // Merge against the latest local (non-persisted) messages via the functional
       // updater so this effect does not depend on `messages` — depending on it while
@@ -450,7 +506,12 @@ export function ChatContainer() {
                   type === "reasoning" ||
                   type === "decision" ||
                   type === "guardrail" ||
-                  type === "mode_selected"
+                  type === "skill_selection" ||
+                  type === "tool_retry" ||
+                  type === "mode_selected" ||
+                  type === "browser_preview" ||
+                  type === "thinking" ||
+                  type === "internal_instruction"
                 ) {
                   eventType = type;
                 }
@@ -1178,21 +1239,31 @@ export function ChatContainer() {
                 />
               )}
 
-              {messages.map((msg) =>
-                msg.role === "event" ? (
-                  <EventRow
-                    key={msg.id}
-                    msg={msg}
+              {renderItems.map((item) =>
+                item.kind === "toolGroup" ? (
+                  <ToolGroupRow
+                    key={item.id}
+                    events={item.events}
                     t={t}
-                    expanded={expandedEvents[msg.id] ?? defaultExpandedForType(msg.eventType)}
-                    onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: isOpen }))}
+                    expanded={expandedToolGroups[item.id] ?? false}
+                    onToggle={(isOpen) => setExpandedToolGroups((prev) => ({ ...prev, [item.id]: isOpen }))}
+                    expandedChildren={expandedEvents}
+                    onToggleChild={(id, isOpen) => setExpandedEvents((prev) => ({ ...prev, [id]: isOpen }))}
+                  />
+                ) : item.msg.role === "event" ? (
+                  <EventRow
+                    key={item.msg.id}
+                    msg={item.msg}
+                    t={t}
+                    expanded={expandedEvents[item.msg.id] ?? defaultExpandedForType(item.msg.eventType)}
+                    onToggle={(isOpen) => setExpandedEvents((prev) => ({ ...prev, [item.msg.id]: isOpen }))}
                   />
                 ) : (
                   <MessageRow
-                    key={msg.id}
-                    msg={msg}
+                    key={item.msg.id}
+                    msg={item.msg}
                     compactMode={compactMode}
-                    onResend={msg.role === "user" ? () => setInput(msg.content) : undefined}
+                    onResend={item.msg.role === "user" ? () => setInput(item.msg.content) : undefined}
                     t={t}
                   />
                 )

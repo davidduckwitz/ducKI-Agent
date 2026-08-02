@@ -107,6 +107,11 @@ export const AGENT_EVENT_TYPES = {
   /** User response to agent question received (Phase 3). */
   AGENT_QUESTION_ANSWERED: "agent_question_answered",
 
+  /** Synthetic follow-up prompt injected into the conversation to keep the model on
+   *  track (e.g. "analyze the tool results"). Shown to the user as a short, translated
+   *  status note instead of a raw fake user turn. */
+  INTERNAL_INSTRUCTION: "internal_instruction",
+
   // Legacy event types (backward compat)
   PLAN: "plan",
   ITERATION: "iteration",
