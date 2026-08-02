@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolResult, ToolExecutor } from "@ducki/shared";
+import type { ToolDefinition, ToolResult, ToolExecutor, ToolDisposition } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
 
 export interface ToolCallWithId {
@@ -14,6 +14,7 @@ export interface ToolEventCallbacks {
   onToolProgress?: (toolName: string, progress: string) => void;
   onToolComplete?: (toolName: string, summary: string, duration: number, outputSize?: number) => void;
   onToolError?: (toolName: string, error: string) => void;
+  onToolDisposition?: (toolName: string, disposition: ToolDisposition) => void;
 }
 
 export class Executor {
@@ -75,10 +76,15 @@ export class Executor {
       tool = await this.dynamicResolver(toolName);
     }
     if (!tool) {
+      const notFoundDisposition: ToolDisposition = "error";
+      const errorMsg = `Tool '${toolName}' not found. Available tools: ${Array.from(this.tools.keys()).join(", ")}`;
+      this.logger.error("Tool not found", { toolName, disposition: notFoundDisposition });
+      this.eventCallbacks?.onToolDisposition?.(toolName, notFoundDisposition);
       return {
         success: false,
         data: null,
-        error: `Tool '${toolName}' not found. Available tools: ${Array.from(this.tools.keys()).join(", ")}`,
+        error: errorMsg,
+        disposition: notFoundDisposition,
       };
     }
 
@@ -112,13 +118,25 @@ export class Executor {
     // Broadcast tool start event
     this.eventCallbacks?.onToolStart?.(toolName, executionInput);
 
+    let disposition: ToolDisposition = "unknown";
+
     try {
       const result = await tool.execute(executionInput);
       const executionTime = Date.now() - startTime;
 
+      // Determine disposition
+      if (result?.success) {
+        disposition = "success";
+      } else if (result?.error) {
+        disposition = "error";
+      } else {
+        disposition = "unknown";
+      }
+
       this.logger.info("Tool executed", {
         toolName,
         success: result.success,
+        disposition,
         executionTime,
       });
 
@@ -132,6 +150,9 @@ export class Executor {
           : undefined;
         this.eventCallbacks?.onToolComplete?.(toolName, summary, executionTime, outputSize);
       }
+
+      // Broadcast disposition event
+      this.eventCallbacks?.onToolDisposition?.(toolName, disposition);
 
       // Track browser sessions when launch succeeds or any action returns a sessionId
       if (toolName === "browser" && result.success) {
@@ -156,21 +177,37 @@ export class Executor {
 
       return {
         ...result,
+        disposition,
         metadata: { toolName, executionTime },
       };
     } catch (error) {
       const executionTime = Date.now() - startTime;
       const message = error instanceof Error ? error.message : String(error);
 
-      this.logger.error("Tool execution failed", { toolName, error: message });
+      // Determine if this is a timeout
+      if (error instanceof Error) {
+        if (error.name === "AbortError" || error.message?.includes("timeout") || error.message?.includes("Timeout")) {
+          disposition = "timeout";
+        } else {
+          disposition = "error";
+        }
+      } else {
+        disposition = "error";
+      }
+
+      this.logger.error("Tool execution failed", { toolName, error: message, disposition });
 
       // Broadcast tool error event
       this.eventCallbacks?.onToolError?.(toolName, message);
+
+      // Broadcast disposition event
+      this.eventCallbacks?.onToolDisposition?.(toolName, disposition);
 
       return {
         success: false,
         data: null,
         error: message,
+        disposition,
         metadata: { toolName, executionTime },
       };
     }

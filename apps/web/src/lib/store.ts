@@ -548,7 +548,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   clearChat: () => set({ messages: [] }),
-  setConversationId: (id) => set({ conversationId: id, messages: [], awaitingNewConversation: false }),
+  setConversationId: (id) => set({ conversationId: id, awaitingNewConversation: false }),
   setMessages: (messages) =>
     set((s) => ({
       messages: typeof messages === "function" ? messages(s.messages) : messages,

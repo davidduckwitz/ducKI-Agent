@@ -175,7 +175,7 @@ export function ChatContainer() {
     queryFn: ({ pageParam }) =>
       api.chat.getMessagesPage(conversationId ?? 0, {
         beforeId: pageParam as number | undefined,
-        limit: 50,
+        limit: 25,
       }) as Promise<{ items: PersistedMessage[]; hasMore: boolean; nextBeforeId?: number }>,
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextBeforeId : undefined),
@@ -220,106 +220,104 @@ export function ChatContainer() {
         .flatMap((page) => page.items);
       if (!persisted) return;
 
-      // Only update messages from the query if we are not currently loading/streaming an active agent run.
-      // This prevents stale results from overwriting local events and chunks received via WebSockets.
-      if (!isLoading) {
-        const mapPersistedMessage = (msg: PersistedMessage) => {
-          const metadata = parseMessageMetadata(msg.metadata);
+      const mapPersistedMessage = (msg: PersistedMessage) => {
+        const metadata = parseMessageMetadata(msg.metadata);
 
-          if (msg.role === "event") {
-            let eventType: AgentEventType | undefined;
-            let eventData: Record<string, unknown> | undefined;
+        if (msg.role === "event") {
+          let eventType: AgentEventType | undefined;
+          let eventData: Record<string, unknown> | undefined;
 
-            if (msg.toolResult) {
-              try {
-                const parsed = JSON.parse(msg.toolResult) as { eventType?: string; data?: Record<string, unknown> };
-                const type = parsed.eventType;
-                if (
-                  type === "plan" ||
-                  type === "iteration" ||
-                  type === "tool_call" ||
-                  type === "tool_result" ||
-                  type === "reasoning" ||
-                  type === "decision" ||
-                  type === "guardrail" ||
-                  type === "mode_selected"
-                ) {
-                  eventType = type;
-                }
-                eventData = parsed.data;
-              } catch {
-                // Ignore malformed event metadata and render fallback event entry.
-              }
-            }
-
-            return {
-              id: `db-${msg.id}`,
-              role: "event" as const,
-              content: msg.content,
-              timestamp: msg.createdAt,
-              eventType,
-              eventData,
-              metadata,
-            };
-          }
-
-          // Backward compatibility for old conversations saved before event persistence.
-          if (msg.role === "assistant") {
-            const raw = msg.content.trim();
-            const isToolCall = raw.includes("[TOOL:") || raw.includes("<|tool_call>") || raw.includes("<tool_call>");
-            if (isToolCall) {
-              return {
-                id: `db-${msg.id}`,
-                role: "event" as const,
-                content: raw,
-                timestamp: msg.createdAt,
-                eventType: "tool_call" as const,
-                metadata,
-              };
-            }
-          }
-
-          if (msg.role === "tool") {
-            let parsed: unknown;
+          if (msg.toolResult) {
             try {
-              parsed = JSON.parse(msg.content);
+              const parsed = JSON.parse(msg.toolResult) as { eventType?: string; data?: Record<string, unknown> };
+              const type = parsed.eventType;
+              if (
+                type === "plan" ||
+                type === "iteration" ||
+                type === "tool_call" ||
+                type === "tool_result" ||
+                type === "reasoning" ||
+                type === "decision" ||
+                type === "guardrail" ||
+                type === "mode_selected"
+              ) {
+                eventType = type;
+              }
+              eventData = parsed.data;
             } catch {
-              parsed = msg.content;
+              // Ignore malformed event metadata and render fallback event entry.
             }
-
-            const success = Boolean((parsed as { success?: boolean })?.success);
-            const error = (parsed as { error?: string })?.error;
-
-            return {
-              id: `db-${msg.id}`,
-              role: "event" as const,
-              content: success ? t("chat.toolSuccess") : `${t("chat.toolFailed")}${error ? `: ${error}` : ""}`,
-              timestamp: msg.createdAt,
-              eventType: "tool_result" as const,
-              eventData: typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : { raw: parsed },
-              metadata,
-            };
           }
 
           return {
             id: `db-${msg.id}`,
-            role: msg.role,
+            role: "event" as const,
             content: msg.content,
             timestamp: msg.createdAt,
+            eventType,
+            eventData,
             metadata,
           };
+        }
+
+        // Backward compatibility for old conversations saved before event persistence.
+        if (msg.role === "assistant") {
+          const raw = msg.content.trim();
+          const isToolCall = raw.includes("[TOOL:") || raw.includes("<|tool_call>") || raw.includes("<tool_call>");
+          if (isToolCall) {
+            return {
+              id: `db-${msg.id}`,
+              role: "event" as const,
+              content: raw,
+              timestamp: msg.createdAt,
+              eventType: "tool_call" as const,
+              metadata,
+            };
+          }
+        }
+
+        if (msg.role === "tool") {
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(msg.content);
+          } catch {
+            parsed = msg.content;
+          }
+
+          const success = Boolean((parsed as { success?: boolean })?.success);
+          const error = (parsed as { error?: string })?.error;
+
+          return {
+            id: `db-${msg.id}`,
+            role: "event" as const,
+            content: success ? t("chat.toolSuccess") : `${t("chat.toolFailed")}${error ? `: ${error}` : ""}`,
+            timestamp: msg.createdAt,
+            eventType: "tool_result" as const,
+            eventData: typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : { raw: parsed },
+            metadata,
+          };
+        }
+
+        return {
+          id: `db-${msg.id}`,
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.createdAt,
+          metadata,
         };
+      };
 
-        const renderedPersisted = persisted.map(mapPersistedMessage);
+      const renderedPersisted = persisted.map(mapPersistedMessage);
 
-        // Merge against the latest local (non-persisted) messages via the functional
-        // updater so this effect does not depend on `messages` — depending on it while
-        // also calling setMessages here caused an infinite render loop.
-        setMessages((prev) => {
-          const localMessages = prev.filter((m) => !m.id.startsWith("db-"));
-          return [...renderedPersisted, ...localMessages].sort(compareMessages);
-        });
-      }
+      // Merge against the latest local (non-persisted) messages via the functional
+      // updater so this effect does not depend on `messages` — depending on it while
+      // also calling setMessages here caused an infinite render loop.
+      setMessages((prev) => {
+        // If an agent is actively running, preserve local (non-persisted) messages.
+        // Otherwise, only show persisted messages to avoid mixing messages from different conversations.
+        const localMessages = isLoading ? prev.filter((m) => !m.id.startsWith("db-")) : [];
+        return [...renderedPersisted, ...localMessages].sort(compareMessages);
+      });
     }, [conversationId, selectedConversationMessages.data, setMessages, t, isLoading]);
 
   useEffect(() => {

@@ -78,10 +78,13 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 
+export type ToolDisposition = "success" | "error" | "timeout" | "unknown";
+
 export interface ToolResult {
   success: boolean;
   data: unknown;
   error?: string;
+  disposition?: ToolDisposition;
   metadata?: {
     toolName: string;
     executionTime: number;

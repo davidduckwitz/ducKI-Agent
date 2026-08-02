@@ -3179,6 +3179,7 @@ export class Agent {
           callId: executed.id,
           toolName: toolCall?.toolName,
           success: executed.result.success,
+          disposition: (executed.result as any).disposition ?? "unknown",
           error: executed.result.error,
           resultSize: JSON.stringify(executed.result.data).length,
         });
@@ -3541,11 +3542,11 @@ export class Agent {
 
     // Adjust iteration limits based on detected tools/queries (applies to all modes)
     if (hasTaskTool) {
-      // Task execution needs 3+ iterations: execute tools, read results, generate response
-      adjustedControls.maxIterations = Math.min(Math.max(3, controls.maxIterations), 10);
+      // Task execution needs 5+ iterations: execute tools, read results, generate response
+      adjustedControls.maxIterations = Math.min(Math.max(5, controls.maxIterations), 10);
     } else if (isDateTimeQuery || hasBrowserTool) {
-      // Browser/Date-time queries need 2+ iterations
-      adjustedControls.maxIterations = Math.min(Math.max(2, controls.maxIterations), 10);
+      // Browser/Date-time queries need 4+ iterations
+      adjustedControls.maxIterations = Math.min(Math.max(4, controls.maxIterations), 10);
     }
 
     this.logger.debug("[RUNLOOP] Mode and iteration adjustment", {
@@ -3559,7 +3560,7 @@ export class Agent {
     });
 
     if (effectiveMode === "lightweight") {
-      adjustedControls.maxIterations = Math.min(2, controls.maxIterations);
+      adjustedControls.maxIterations = Math.min(5, controls.maxIterations);
       adjustedControls.enableReflection = false;
     } else if (effectiveMode === "chatbot") {
       // chatbot mode's normal cap of 1 iteration means "make a tool call" and "read the
@@ -3580,14 +3581,14 @@ export class Agent {
                           userInput.toLowerCase().includes("tracked");
 
       if (hasTaskTool) {
-        // Task execution needs 3 iterations minimum
-        adjustedControls.maxIterations = Math.min(3, controls.maxIterations);
+        // Task execution needs 3+ iterations minimum
+        adjustedControls.maxIterations = Math.min(5, controls.maxIterations);
       } else if (isDateTimeQuery || hasBrowserTool) {
-        // Browser/Date-time queries need 2 iterations
-        adjustedControls.maxIterations = Math.min(2, controls.maxIterations);
+        // Browser/Date-time queries need 4+ iterations
+        adjustedControls.maxIterations = Math.min(4, controls.maxIterations);
       } else {
-        // Other simple queries need 1 iteration
-        adjustedControls.maxIterations = 1;
+        // Other simple queries need 3+ iterations
+        adjustedControls.maxIterations = Math.min(3, controls.maxIterations);
       }
       adjustedControls.enableReflection = false;
     }
