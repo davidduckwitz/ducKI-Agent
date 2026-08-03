@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { ArrowDown, Plus, Trash2, X } from "lucide-react";
-import { useAppStore, type ChatAttachment } from "../../lib/store";
+import { useAppStore, type ChatAttachment, registerChatCompleteCallback } from "../../lib/store";
 import { useUiStore } from "../../lib/uiStore";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams, useNavigate } from "react-router-dom";
@@ -146,6 +146,7 @@ export function ChatContainer() {
   const [totalTokens, setTotalTokens] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [toolSummaries, setToolSummaries] = useState<ToolSummaryItem[]>([]);
+  const [persistentStreamingContent, setPersistentStreamingContent] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesViewportRef = useRef<HTMLDivElement>(null);
   const conversationsViewportRef = useRef<HTMLElement>(null);
@@ -201,6 +202,20 @@ export function ChatContainer() {
 
     return items;
   }, [messages]);
+
+  // Track streaming content so it persists even after streamingContent is cleared
+  // Keep it visible indefinitely - don't clear when isLoading changes
+  // This ensures the last response is always visible in the duck box
+  useEffect(() => {
+    if (streamingContent.trim().length > 0) {
+      setPersistentStreamingContent(streamingContent);
+    }
+  }, [streamingContent]);
+
+  // Clear persistent content only when conversation changes (user starts new chat)
+  useEffect(() => {
+    setPersistentStreamingContent("");
+  }, [conversationId]);
 
   useEffect(() => {
     const total = messages.reduce((sum, msg) => {
@@ -284,6 +299,46 @@ export function ChatContainer() {
     }
   }, [conversationId, qc]);
 
+  // Register callback to add completed messages directly to React Query cache
+  // This avoids race conditions where chat:complete is called before DB persistence
+  useEffect(() => {
+    registerChatCompleteCallback((convId: number, response: string, messageId: string) => {
+      // Don't wait for DB - add to cache immediately so it appears in UI right away
+      // The Store already added it, so we just need to ensure React Query also has it
+      // Only update if React Query has already fetched this conversation's messages
+      const existing = qc.getQueryData(["chat", "messages", convId]);
+      if (!existing) {
+        console.log("[cache update] Skipping - React Query cache not initialized yet");
+        return; // React Query hasn't fetched yet, don't create empty cache
+      }
+
+      qc.setQueryData(
+        ["chat", "messages", convId],
+        (old: any) => {
+          if (!old || !old.pages) return old;
+          // Add the new message to the first page
+          return {
+            ...old,
+            pages: old.pages.map((page: any, idx: number) =>
+              idx === 0 ? {
+                ...page,
+                items: [
+                  ...page.items,
+                  {
+                    id: Math.max(...page.items.map((m: any) => m.id || 0), 0) + 1,
+                    role: "assistant",
+                    content: response,
+                    createdAt: new Date().toISOString(),
+                    metadata: JSON.stringify({ serverMessageId: messageId }),
+                  }
+                ]
+              } : page
+            )
+          };
+        }
+      );
+    });
+  }, [qc]);
 
     const appliedQueryConversationId = useRef(false);
     useEffect(() => {
@@ -346,6 +401,12 @@ export function ChatContainer() {
       const isChatSwitch = previousId !== undefined && conversationId !== previousId;
       if (isChatSwitch && (selectedConversationMessages.isLoading || !selectedConversationMessages.data)) {
         // New chat's query still loading - skip merge
+        return;
+      }
+
+      // Skip merge if currently refetching - prevents overwriting Store messages with stale data
+      // Only proceed if data is loaded AND not currently fetching fresh data
+      if (selectedConversationMessages.isFetching && !isChatSwitch && !isNewConversation) {
         return;
       }
 
@@ -472,6 +533,11 @@ export function ChatContainer() {
         // During streaming: shows live updates while agent runs
         // After agent completes: shows messages until DB catches up
         // The query will eventually fetch them from DB and deduplicate here
+        console.log("[ChatContainer merge] Before merge", {
+          prevLength: prev.length,
+          prevRoles: prev.map(m => `${m.role}:${m.content?.substring(0,20)}`).join(' | '),
+          persistedLength: persisted?.length,
+        });
         const localMessages = prev.filter((m) => !m.id.startsWith("db-"));
 
         // FIX #1: Deduplicate using both DB IDs AND local UUIDs in metadata
@@ -568,14 +634,22 @@ export function ChatContainer() {
           return !persistedTimes.some((persistedTime) => Math.abs(persistedTime - localTime) <= 15_000);
         });
 
-        return [...renderedPersisted, ...uniqueLocalMessages].sort(compareMessages);
+        const result = [...renderedPersisted, ...uniqueLocalMessages].sort(compareMessages);
+        console.log("[ChatContainer merge] After merge", {
+          renderedPersistedLength: renderedPersisted.length,
+          uniqueLocalLength: uniqueLocalMessages.length,
+          finalLength: result.length,
+          finalRoles: result.map(m => `${m.role}:${m.content?.substring(0,20)}`).join(' | '),
+        });
+        return result;
       });
     }, [
       conversationId,
       awaitingNewConversation,
       selectedConversationMessages.data,
       selectedConversationMessages.isFetching,
-      selectedConversationMessages.isLoading,
+      // isLoading omitted: isLoading is checked in guards but causes duplicate runs
+      // isFetching is needed so effect runs when refetch completes, but guard skips during active fetch
     ]);
 
   useEffect(() => {
@@ -590,17 +664,26 @@ export function ChatContainer() {
       return;
     }
 
-    if (stickToBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Always scroll to bottom when new messages arrive OR user is near bottom
+    // Check if user is within 500px of bottom (very generous)
+    const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    const shouldAutoScroll = stickToBottomRef.current || distanceToBottom < 500;
+
+    if (shouldAutoScroll) {
+      // Use setTimeout to ensure DOM has updated before scrolling
+      setTimeout(() => {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 0);
     }
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, persistentStreamingContent]);
 
   const handleMessagesScroll = () => {
     const viewport = messagesViewportRef.current;
     if (!viewport) return;
 
     const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    stickToBottomRef.current = distanceToBottom < 120;
+    // Stick to bottom if within 300px (generous threshold for auto-scroll)
+    stickToBottomRef.current = distanceToBottom < 300;
     setShowScrollDown(distanceToBottom > 400);
 
     if (viewport.scrollTop > 120) return;
@@ -1382,7 +1465,7 @@ ${summary}`;
           <div
             ref={messagesViewportRef}
             onScroll={handleMessagesScroll}
-            className="h-full overflow-y-auto px-3 py-4 sm:px-6"
+            className="h-full overflow-y-auto px-3 py-4 pb-40 sm:px-6"
           >
             <div className={`mx-auto w-full ${contentWidth} ${compactMode ? "space-y-4" : "space-y-6"}`}>
               {selectedConversationMessages.isFetchingNextPage && (
@@ -1439,14 +1522,14 @@ ${summary}`;
                 />
               ))}
 
-              {isLoading && (
+              {(isLoading || persistentStreamingContent.trim().length > 0) && (
                 <div className="flex items-end gap-3">
                   <div className="min-w-0 flex-1">
-                    <StreamingRow compactMode={compactMode} streamingContent={streamingContent} t={t} />
+                    <StreamingRow compactMode={compactMode} streamingContent={persistentStreamingContent} t={t} />
                   </div>
                   <div className="hidden shrink-0 sm:block">
                     <DynamicCharacter
-                      isWorking
+                      isWorking={isLoading}
                       size={56}
                       characterId={selectedCharacterId}
                       customConfig={characterCustomizations}

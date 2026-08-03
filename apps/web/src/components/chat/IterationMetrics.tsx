@@ -41,8 +41,20 @@ export function IterationMetrics({
       }
     };
 
+    const handleChatStart = (data: any) => {
+      // Reset metrics for this conversation when a new message starts processing
+      if (data.conversationId === conversationId) {
+        setMetrics([]);
+        setTotalTokensUsed(0);
+      }
+    };
+
     socket.on("agent:iteration-metrics", handleIterationMetrics);
-    return () => socket.off("agent:iteration-metrics", handleIterationMetrics);
+    socket.on("chat:start", handleChatStart);
+    return () => {
+      socket.off("agent:iteration-metrics", handleIterationMetrics);
+      socket.off("chat:start", handleChatStart);
+    };
   }, [socket, conversationId]);
 
   if (metrics.length === 0) {

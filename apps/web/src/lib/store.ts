@@ -73,6 +73,13 @@ function normalizeAssistantContent(content: string): string {
   return content.replace(/\s+/g, " ").trim();
 }
 
+// Callback registry for query cache invalidation
+// This allows ChatContainer to register a callback that syncs the query cache
+let onChatCompleteCallback: ((conversationId: number, response: string, messageId: string) => void) | null = null;
+export function registerChatCompleteCallback(callback: ((conversationId: number, response: string, messageId: string) => void) | null) {
+  onChatCompleteCallback = callback;
+}
+
 export interface ChatAttachment {
   name: string;
   path?: string;
@@ -438,7 +445,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     socket.on("chat:complete", (data: { response: string; conversationId?: number; messageId?: string }) => {
-      if (!belongsToActiveConversation(data.conversationId)) return;
+      console.log("[store] chat:complete received", {
+        responseLength: data.response?.length,
+        responsePreview: data.response?.substring(0, 100),
+        conversationId: data.conversationId,
+        messageId: data.messageId,
+      });
+      if (!belongsToActiveConversation(data.conversationId)) {
+        console.log("[store] chat:complete ignored - not active conversation");
+        return;
+      }
       const msgTimestamp = new Date().toISOString();
       set((s) => ({
         ...(() => {
@@ -494,6 +510,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           const nextRunning = new Set(s.runningConversationIds);
           if (typeof data.conversationId === "number") {
             nextRunning.delete(data.conversationId);
+            // Add message directly to React Query cache to avoid race conditions
+            setTimeout(() => onChatCompleteCallback?.(data.conversationId as number, data.response, msg.id), 0);
           }
 
           return {
@@ -779,6 +797,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setConversationId: (id) =>
     set((s) => ({
       conversationId: id,
+      messages: s.conversationId !== id ? [] : s.messages, // Only clear messages when switching to a DIFFERENT conversation
       awaitingNewConversation: false,
       isLoading: typeof id === "number" ? s.runningConversationIds.has(id) : false,
       streamingContent: "",

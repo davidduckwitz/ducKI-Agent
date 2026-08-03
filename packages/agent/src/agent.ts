@@ -3826,10 +3826,12 @@ export class Agent {
     }
 
     // If user has explicitly set a high maxIterations value (e.g. via settings),
-    // don't auto-downgrade to lightweight/chatbot mode as that would apply hard caps
+    // don't auto-downgrade to chatbot mode (which caps at 5), but allow lightweight for simple queries
     const userSetHighIterations = this.maxIterations > 50; // 50 is the default
-    if (userSetHighIterations) {
-      effectiveMode = "full";
+    if (userSetHighIterations && effectiveMode === "chatbot") {
+      // Only keep full mode if we were downgraded all the way to chatbot
+      // Allow lightweight for simple queries even with high iterations
+      effectiveMode = "lightweight";
     }
 
     if (effectiveMode !== "full") {
