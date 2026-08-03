@@ -406,9 +406,9 @@ export function ChatContainer() {
         return;
       }
 
-      // Skip if still waiting for new conversation to be created
-      if (awaitingNewConversation && (selectedConversationMessages.isLoading || !selectedConversationMessages.data)) {
-        // Conversation not yet confirmed by server - skip merge
+      // Skip all merging if still waiting for new conversation to be created
+      // Don't merge ANY data while creating a new chat - prevents old messages from bleeding through
+      if (awaitingNewConversation) {
         return;
       }
 
@@ -1308,7 +1308,7 @@ ${summary}`;
       };
 
       const stepIdx = phaseToStepIdx[phase];
-      if (stepIdx === undefined || stepIdx >= currentPlan.steps.length) return;
+      if (!currentPlan?.steps || stepIdx === undefined || stepIdx >= currentPlan.steps.length) return;
 
       if (type === "phase_started") {
         setStepStatuses((prev) => ({

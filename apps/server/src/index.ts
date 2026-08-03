@@ -423,7 +423,6 @@ function buildAgentFactory(
 			: {};
 
 		const agent = new Agent(providerRef.current, db, undefined, agentOptions);
-		console.log("[buildAgentFactory] Agent created with maxIterations:", agent.maxIterations);
 		// Wrap tools to broadcast events and handle response staging
 		const wrappedTools = wrapTools(runtimeTools);
 		for (const tool of wrappedTools) {

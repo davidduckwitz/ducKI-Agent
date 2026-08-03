@@ -61,6 +61,12 @@ codingAgentRouter.post("/run", async (req, res, next) => {
 
     // Create an event emitter that broadcasts phase events over WebSocket
     const phaseEventEmitter: AgentEventEmitter = {
+      emitChunk(chunk: string) {
+        // Broadcast streaming chunks to all connected clients
+        if (io) {
+          io.emit("coding_agent_chunk", { chunk });
+        }
+      },
       emitEvent(event: any) {
         // Broadcast phase events to all connected clients
         if (io) {

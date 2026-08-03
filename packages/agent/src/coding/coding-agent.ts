@@ -313,8 +313,8 @@ export class CodingAgent {
 
   private emit(type: "iteration" | "decision" | "phase_started" | "phase_completed" | "phase_failed", message: string, data?: Record<string, unknown>): void {
     try {
-      const eventType = type === "iteration" ? "iteration" : type === "decision" ? "decision" : "internal_instruction";
-      this.eventEmitter?.emitEvent({ type: eventType as const, message, data, timestamp: new Date().toISOString() });
+      const eventType: "iteration" | "decision" | "internal_instruction" = type === "iteration" ? "iteration" : type === "decision" ? "decision" : "internal_instruction";
+      this.eventEmitter?.emitEvent({ type: eventType, message, data, timestamp: new Date().toISOString() });
     } catch {
       // Event delivery is best-effort telemetry - never let it abort a coding run.
     }

@@ -1,4 +1,5 @@
 export { Agent } from "./agent.js";
+export type { AgentEventEmitter } from "./config/interfaces_types.js";
 export { AgentOptions, AgentRunResult, AgentRunEvent, AgentRunEventType, AgentRunOptions, AgentRuntimeControls } from "./config/interfaces_types.js"
 export { ErrorClassifier, ErrorCategory } from "./executor/error-classifier.js";
 export type { ErrorClassification } from "./executor/error-classifier.js";

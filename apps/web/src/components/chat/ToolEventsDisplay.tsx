@@ -34,6 +34,13 @@ export function ToolEventsDisplay({
   const [browserPreviewData, setBrowserPreviewData] = useState<any>(null);
   const previousActiveToolsRef = useRef<Set<string>>(new Set());
 
+  // Clear events when conversation changes to prevent old tool calls from bleeding through
+  useEffect(() => {
+    setEvents([]);
+    setCompletedSummary(null);
+    setBrowserPreviewData(null);
+  }, [conversationId]);
+
   useEffect(() => {
     if (!socket) return;
 
