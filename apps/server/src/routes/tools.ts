@@ -45,7 +45,7 @@ toolsRouter.get("/", async (req, res, next) => {
  */
 toolsRouter.post("/execute", async (req, res, next) => {
   try {
-    const createAgent = req.app.locals["createAgent"] as () => Agent;
+    const createAgent = req.app.locals["createAgent"] as () => Promise<Agent>;
     const body = req.body as { toolName?: string; input?: Record<string, unknown>; conversationId?: number };
     const toolName = String(body.toolName ?? "").trim();
     if (!toolName) {
@@ -53,7 +53,7 @@ toolsRouter.post("/execute", async (req, res, next) => {
       return;
     }
 
-    const agent = createAgent();
+    const agent = await createAgent();
     if (body.conversationId) {
       await agent.loadConversation(body.conversationId);
     }

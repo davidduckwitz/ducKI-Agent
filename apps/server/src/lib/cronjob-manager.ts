@@ -29,7 +29,7 @@ export class CronjobManager {
 
   constructor(
     private readonly db: DatabaseService,
-    private readonly createAgent: () => Agent,
+    private readonly createAgent: () => Promise<Agent>,
     private readonly logger: Logger
   ) {
     this.intervalMs = Number.parseInt(process.env["CRONJOB_TICK_MS"] ?? "30000", 10);

@@ -25,6 +25,7 @@ import { PanelEmpty } from "../ui/panel";
 import { SplitHandle } from "../ui/split-handle";
 import { CodingEditorTabs } from "./CodingEditorTabs";
 import { CodingAgentPanel } from "./CodingAgentPanel";
+import { PlanExecutionPanel, type Plan, type StepStatus } from "../chat/PlanExecutionPanel";
 import type { CodingFileItem } from "./CodingFileTree";
 import type { AgentEventType, RenderedChatMessage } from "../chat/chatTypes";
 
@@ -116,14 +117,12 @@ export function CodingWorkspace() {
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [showPlanPanel, setShowPlanPanel] = useState(false);
+  const lastPlanIdRef = useRef<number | undefined>();
   const [renaming, setRenaming] = useState(false);
   const [renameTarget, setRenameTarget] = useState("");
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [isEnsuringConversation, setIsEnsuringConversation] = useState(false);
-  // -1, not the current nonce: the sidebar fires its command and navigates here in the
-  // same tick, so this lazily-loaded view mounts *after* the command already exists.
-  // Seeding with the current nonce would swallow exactly that first command.
-  const handledCommandNonce = useRef(-1);
 
   const [projectConversationMap, setProjectConversationMap] = useState<Record<string, number>>(() => {
     try {
@@ -319,19 +318,51 @@ export function CodingWorkspace() {
     [drafts]
   );
 
+  // Extract current plan from messages for modal display
+  const currentPlan = useMemo(() => {
+    const msgs = messages ?? [];
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const msg = msgs[i];
+      if (!msg || msg.eventType !== "plan" || !msg.eventData) continue;
+      const data = msg.eventData as unknown as Plan;
+      if (data.goal && Array.isArray(data.steps) && data.steps.length > 0) return data;
+    }
+    return null;
+  }, [messages]);
+
   useEffect(() => {
     setRenaming(false);
     setRenameTarget(selectedPath);
   }, [selectedPath]);
 
+  // Auto-show plan modal when a NEW plan appears (only once per plan)
+  useEffect(() => {
+    if (currentPlan && currentPlan.id !== lastPlanIdRef.current) {
+      lastPlanIdRef.current = currentPlan.id;
+      setShowPlanPanel(true);
+    }
+  }, [currentPlan?.id]);
+
   const createProject = useMutation({
     mutationFn: (name: string) => api.coding.createProject(name),
-    onSuccess: async (data) => {
+    onSuccess: async (data: { created: boolean; slug: string; path: string }) => {
       setNewProjectName("");
       setShowCreateProjectModal(false);
-      setSelectedProject(data.slug);
+
+      // First refetch projects to ensure the new project is in the list
       await qc.invalidateQueries({ queryKey: ["coding", "projects"] });
+      // Then select it after refetch completes
+      await qc.refetchQueries({ queryKey: ["coding", "projects"] });
+
+      // Now set the selected project
+      setSelectedProject(data.slug);
+
+      // Load files for the new project
       await qc.invalidateQueries({ queryKey: ["coding", "files", data.slug] });
+    },
+    onError: (error) => {
+      console.error("Failed to create project:", error);
+      // Keep modal open on error so user can try again
     },
   });
 
@@ -400,12 +431,13 @@ export function CodingWorkspace() {
   }, [saveActiveFile]);
 
   // Commands from the sidebar's "Neu" menu / explorer header.
+  const handledCommandNonce = useRef(-1);
   useEffect(() => {
     if (command.nonce === handledCommandNonce.current) return;
     handledCommandNonce.current = command.nonce;
     if (command.action === "new-project") setShowCreateProjectModal(true);
     if (command.action === "upload") setShowUploadModal(true);
-  }, [command]);
+  }, [command.nonce, command.action]);
 
   const previewType = useMemo<"html" | "image" | "markdown" | "text" | "none">(() => {
     if (!selectedPath) return "none";
@@ -836,6 +868,30 @@ export function CodingWorkspace() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Plan Execution Panel Modal - only show before execution starts */}
+      {showPlanPanel && currentPlan && (
+        <PlanExecutionPanel
+          plan={currentPlan}
+          onRefine={() => {
+            setShowPlanPanel(false);
+            const planText = currentPlan.markdown || JSON.stringify(currentPlan.steps, null, 2);
+            sendMessage(
+              `Verbessere diesen Plan: ${currentPlan.goal}\n\nBisheriger Plan:\n${planText}`,
+              undefined,
+              "plan",
+              ""
+            );
+          }}
+          onExecute={() => {
+            setShowPlanPanel(false);
+            // The plan execution is handled by the agent sending the command
+            sendMessage("Umsetzen", undefined, undefined, "");
+          }}
+          onClose={() => setShowPlanPanel(false)}
+          isExecuting={isLoading}
+        />
       )}
     </div>
   );

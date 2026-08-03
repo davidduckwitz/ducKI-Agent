@@ -1088,8 +1088,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
   let runId: string | undefined;
   try {
     const db = req.app.locals["db"] as DatabaseService;
-    const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
-    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+    const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
+    const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
     const agentRegistry = req.app.locals["agentRegistry"] as {
       register: (entry: { source: "chat_http" | "chat_ws" | "task_run" | "gateway_inbound"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
       unregister: (id: string) => void;
@@ -1321,7 +1321,7 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
     let processingErrorMessage: string | undefined;
     try {
       const runResult = await runAgentWithRepairRetry(
-        createAgent ?? (() => agent),
+        createAgent ?? (async () => agent),
         prefixedMessage,
         (errorMessage) => [
           "The previous gateway run failed with a runtime error.",
@@ -1479,8 +1479,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
 gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
-    const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
-    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+    const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
+    const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
     const agentRegistry = req.app.locals["agentRegistry"] as {
       register: (entry: { source: "chat_http" | "chat_ws" | "task_run" | "gateway_inbound"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
       unregister: (id: string) => void;
@@ -1616,7 +1616,7 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
             ? `[${config.portal} / ${interactionUserName}] ${interactionMessage}`
             : `[${config.portal}] ${interactionMessage}`;
           const result = await runAgentWithRepairRetry(
-            createAgent ?? (() => agent),
+            createAgent ?? (async () => agent),
             incomingMessage,
             (errorMessage) => [
               "The previous Discord interaction run failed with a runtime error.",
@@ -1756,7 +1756,7 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
         ? `[${config.portal} / ${resolveGatewayUserName(config, normalized.userName)}] ${webhookMessage}`
         : `[${config.portal}] ${webhookMessage}`;
       const result = await runAgentWithRepairRetry(
-        createAgent ?? (() => agent),
+        createAgent ?? (async () => agent),
         incomingMessage,
         (errorMessage) => [
           "The previous gateway webhook run failed with a runtime error.",

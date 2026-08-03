@@ -6,6 +6,7 @@ import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
 import type { Plan } from "../chat/PlanExecutionPanel";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import { PanelEmpty } from "../ui/panel";
+import { PlanRefinementDialog } from "./PlanRefinementDialog";
 
 const COMPLEXITY_LABEL: Record<number, string> = { 1: "niedrig", 3: "mittel", 5: "hoch" };
 
@@ -28,6 +29,7 @@ export function CodingPlanPanel({
   const { t } = useI18n();
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showRefinement, setShowRefinement] = useState(false);
 
   const { plan, planIndex } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -160,11 +162,7 @@ export function CodingPlanPanel({
         <button
           type="button"
           className="btn-secondary flex-1 py-1.5 text-xs"
-          onClick={() =>
-            onRefine(
-              `Verbessere diesen Plan: ${plan.goal}\n\nBisheriger Plan:\n${plan.markdown || JSON.stringify(plan.steps, null, 2)}`
-            )
-          }
+          onClick={() => setShowRefinement(true)}
         >
           <Sparkles className="mr-1 inline h-3.5 w-3.5" />
           {t("codingPage.refinePlan")}
@@ -179,6 +177,17 @@ export function CodingPlanPanel({
           {t("codingPage.executePlan")}
         </button>
       </div>
+
+      {showRefinement && (
+        <PlanRefinementDialog
+          plan={plan}
+          onSubmit={(prompt) => {
+            setShowRefinement(false);
+            onRefine(prompt);
+          }}
+          onCancel={() => setShowRefinement(false)}
+        />
+      )}
     </div>
   );
 }

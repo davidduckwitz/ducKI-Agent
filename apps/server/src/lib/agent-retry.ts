@@ -18,13 +18,13 @@ export function shouldRetryAgentRun(errorMessage: string): boolean {
 }
 
 export async function runAgentWithRepairRetry(
-  createAgent: () => Agent,
+  createAgent: () => Promise<Agent>,
   firstPrompt: string,
   retryPromptFactory: (errorMessage: string) => string,
   prepareAgentRun?: (agent: Agent, attempt: number) => Promise<void> | void,
   options?: AgentRunOptions
 ): Promise<{ result: AgentRunResult; attempts: number }> {
-  const firstAgent = createAgent();
+  const firstAgent = await createAgent();
   try {
     await prepareAgentRun?.(firstAgent, 1);
     const result = await firstAgent.run(firstPrompt, options);
@@ -35,7 +35,7 @@ export async function runAgentWithRepairRetry(
       throw error;
     }
 
-    const retryAgent = createAgent();
+    const retryAgent = await createAgent();
     await prepareAgentRun?.(retryAgent, 2);
     const retryPrompt = retryPromptFactory(errorMessage);
     const retryOptions: AgentRunOptions | undefined = options?.stream

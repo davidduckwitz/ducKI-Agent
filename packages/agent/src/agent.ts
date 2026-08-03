@@ -451,6 +451,16 @@ export class Agent {
     let iterations = 0;
     const controls = await this.loadRuntimeControls();
 
+    // Load ever-used skills for scoring boost (non-blocking)
+    try {
+      const everUsedSkills = await this.db.getEverUsedSkills();
+      skillSelector.setEverUsedSkills(everUsedSkills);
+    } catch (error) {
+      this.logger.warn("Failed to load ever-used skills", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     // Phase 1: Clear tool error tracking for new conversation
     this.toolErrorTracker.clear();
 
@@ -3815,6 +3825,13 @@ export class Agent {
       effectiveMode = "lightweight";
     }
 
+    // If user has explicitly set a high maxIterations value (e.g. via settings),
+    // don't auto-downgrade to lightweight/chatbot mode as that would apply hard caps
+    const userSetHighIterations = this.maxIterations > 50; // 50 is the default
+    if (userSetHighIterations) {
+      effectiveMode = "full";
+    }
+
     if (effectiveMode !== "full") {
       emit("mode_selected", `Agent operating in ${effectiveMode} mode`, {
         mode: effectiveMode,
@@ -4012,6 +4029,16 @@ export class Agent {
     const activeSkillSlugs = activeSkills.map((skill) => skill.slug);
     this.activeSkillSlugsForRun = new Set(activeSkillSlugs);
     const workflowOrchestratorActive = activeSkillSlugs.includes("workflow-orchestrator");
+
+    // Track ever-used skills (non-blocking)
+    if (activeSkillSlugs.length > 0) {
+      this.db.addEverUsedSkills(activeSkillSlugs).catch((error) => {
+        this.logger.warn("Failed to track ever-used skills", {
+          error: error instanceof Error ? error.message : String(error),
+          skills: activeSkillSlugs,
+        });
+      });
+    }
 
     // Register skill embeddings for semantic indexing (P3.3)
     for (const skill of activeSkills) {
@@ -4772,9 +4799,15 @@ export class Agent {
         emptyResponseAfterTools = false; // Reset recovery flag for this execution batch
       }
 
-      // If tools were executed and we're still within iteration budget, add analysis prompt
-      // This ensures the LLM analyzes results and provides a response (not just execute and go silent)
-      if (toolResultsMap.size > 0 && iterations < adjustedControls.maxIterations) {
+      // If tools were executed and the cleaned response is empty, we MUST ask for analysis
+      // Empty text after tool calls means the agent only said [TOOL:...] without any message.
+      // Even near iteration limit, we need the agent to actually respond about what tools found.
+      const shouldAddAnalysisPrompt = toolResultsMap.size > 0 && (
+        iterations < adjustedControls.maxIterations ||  // Always if we have budget
+        (cleanedResponse.trim().length === 0 && iterations >= 1)  // Or if response is empty (need one more chance to answer)
+      );
+
+      if (shouldAddAnalysisPrompt) {
         const toolNames = Array.from(new Set(
           Array.from(toolResultsMap.keys())
             .map(id => {
@@ -4947,6 +4980,19 @@ export class Agent {
           emit("guardrail", "Reflection retry skipped", {
             reason: !improved ? "no_improved_response" : "same_response",
             attempt: reflectionAttempt,
+          });
+          break;
+        }
+
+        // Safety check: Don't replace a good response with a much shorter one
+        // (could indicate reflection model is hallucinating or degrading quality)
+        const isSignificantlyShorter = improved.length < finalResponse.trim().length * 0.6;
+        if (isSignificantlyShorter && reflectionQuality && reflectionQuality !== "poor") {
+          emit("guardrail", "Reflection improvement rejected", {
+            reason: "significantly_shorter_response",
+            original_length: finalResponse.trim().length,
+            improved_length: improved.length,
+            current_quality: reflectionQuality,
           });
           break;
         }

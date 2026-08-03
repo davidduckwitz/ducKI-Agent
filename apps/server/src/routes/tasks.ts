@@ -69,8 +69,8 @@ tasksRouter.post("/:id/run", async (req, res, next) => {
     register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
     unregister: (id: string) => void;
   };
-  const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
-  const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+  const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
+  const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
   let runId: string | undefined;
 
   try {
@@ -108,7 +108,7 @@ tasksRouter.post("/:id/run", async (req, res, next) => {
     });
 
     const runResult = await runAgentWithRepairRetry(
-      createAgent ?? (() => agent),
+      createAgent ?? (async () => agent),
       prompt,
       (errorMessage) => [
         "The previous task run failed with a runtime error.",

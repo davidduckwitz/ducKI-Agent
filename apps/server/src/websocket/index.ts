@@ -69,7 +69,7 @@ function buildHelloSnapshot(gatewayStatus: unknown) {
 
 export function setupWebSocket(
   io: SocketIOServer,
-  createAgent: () => Agent,
+  createAgent: () => Promise<Agent>,
   db: DatabaseService,
   getGatewayStatus: () => unknown = () => undefined
 ): void {
@@ -415,7 +415,7 @@ export function setupWebSocket(
         };
 
         const runAttempt = async (prompt: string) => {
-          const runAgent = createAgent();
+          const runAgent = await createAgent();
           registerActiveAgent(socket.id, runAgent);
           runAgents.push(runAgent);
           await runAgent.loadConversation(resolvedConversationId);

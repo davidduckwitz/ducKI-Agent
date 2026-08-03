@@ -81,7 +81,15 @@ export const api = {
       request<unknown>("/projects", { method: "POST", body: JSON.stringify(data) }),
     update: (id: number, data: Record<string, unknown>) =>
       request<unknown>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    delete: (id: number) => request<unknown>(`/projects/${id}`, { method: "DELETE" }),
+    getDependencies: (id: number) =>
+      request<{
+        codingFolder?: boolean;
+        conversationCount: number;
+        taskCount: number;
+        workflowCount: number;
+      }>(`/projects/${id}/dependencies`),
+    delete: (id: number, options?: { deleteCodingFolder?: boolean; deleteConversations?: boolean; deleteTasks?: boolean; deleteWorkflows?: boolean }) =>
+      request<unknown>(`/projects/${id}`, { method: "DELETE", body: JSON.stringify(options || {}) }),
   },
 
   tasks: {

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Pencil, Trash2, FolderOpen } from "lucide-react";
+import { Plus, Pencil, Trash2, FolderOpen, AlertCircle, Folder, MessageSquare, CheckSquare } from "lucide-react";
 import { api } from "../../lib/api";
 
 interface Project {
@@ -17,11 +17,25 @@ interface ProjectContent {
   codingProjects?: Array<{ name: string }>;
 }
 
+interface DeleteOptions {
+  deleteCodingFolder: boolean;
+  deleteConversations: boolean;
+  deleteTasks: boolean;
+  deleteWorkflows: boolean;
+}
+
 export function ProjectManager() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ name: "", description: "", folder: "" });
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+  const [projectToDelete, setProjectToDelete] = useState<{ id: number; name: string } | null>(null);
+  const [deleteOptions, setDeleteOptions] = useState({
+    deleteCodingFolder: true,
+    deleteConversations: false,
+    deleteTasks: false,
+    deleteWorkflows: false,
+  });
 
   const { data: projects = [] } = useQuery({
     queryKey: ["projects"],
@@ -38,8 +52,12 @@ export function ProjectManager() {
   });
 
   const remove = useMutation({
-    mutationFn: (id: number) => api.projects.delete(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+    mutationFn: ({ id, options }: { id: number; options: DeleteOptions }) => api.projects.delete(id, options),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      setProjectToDelete(null);
+      setSelectedProjectId(null);
+    },
   });
 
   const { data: selectedProject } = useQuery({
@@ -129,9 +147,13 @@ export function ProjectManager() {
                   </div>
                 </div>
                 <button
+                  type="button"
+                  aria-label="Projekt löschen"
                   onClick={(e) => {
+                    e.preventDefault();
                     e.stopPropagation();
-                    remove.mutate(project.id);
+                    console.log("[ProjectManager] Delete clicked for project:", project.id, project.name);
+                    setProjectToDelete({ id: project.id, name: project.name });
                   }}
                   className="p-1.5 text-gray-400 hover:text-red-400 transition-colors shrink-0"
                 >
@@ -196,6 +218,84 @@ export function ProjectManager() {
           </div>
         )}
       </div>
+
+      {projectToDelete && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 rounded-lg max-w-md w-full border border-gray-700 space-y-4 p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-red-500/10 rounded">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-white">Projekt löschen</h3>
+                <p className="text-sm text-gray-400">{projectToDelete.name}</p>
+                <p className="text-xs text-gray-500 mt-1">ID: {projectToDelete.id}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <p className="text-sm text-gray-300">Wählen Sie, was gelöscht werden soll:</p>
+              <div className="space-y-2 bg-gray-800/50 rounded p-3">
+                <label className="flex items-center gap-3 cursor-pointer hover:bg-gray-700/50 p-2 rounded">
+                  <input
+                    type="checkbox"
+                    checked={deleteOptions.deleteCodingFolder}
+                    onChange={(e) => setDeleteOptions(prev => ({ ...prev, deleteCodingFolder: e.target.checked }))}
+                    className="w-4 h-4 rounded"
+                  />
+                  <Folder className="w-4 h-4 text-blue-400 shrink-0" />
+                  <span className="text-sm text-gray-300 flex-1">Projektverzeichnis (Coding)</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer hover:bg-gray-700/50 p-2 rounded">
+                  <input
+                    type="checkbox"
+                    checked={deleteOptions.deleteConversations}
+                    onChange={(e) => setDeleteOptions(prev => ({ ...prev, deleteConversations: e.target.checked }))}
+                    className="w-4 h-4 rounded"
+                  />
+                  <MessageSquare className="w-4 h-4 text-green-400 shrink-0" />
+                  <span className="text-sm text-gray-300 flex-1">Chats ({conversations?.length || 0})</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer hover:bg-gray-700/50 p-2 rounded">
+                  <input
+                    type="checkbox"
+                    checked={deleteOptions.deleteTasks}
+                    onChange={(e) => setDeleteOptions(prev => ({ ...prev, deleteTasks: e.target.checked }))}
+                    className="w-4 h-4 rounded"
+                  />
+                  <CheckSquare className="w-4 h-4 text-yellow-400 shrink-0" />
+                  <span className="text-sm text-gray-300 flex-1">Tasks ({tasks?.length || 0})</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="bg-red-500/10 border border-red-500/20 rounded p-3">
+              <p className="text-xs text-red-300">Diese Aktion kann nicht rückgängig gemacht werden.</p>
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setProjectToDelete(null)}
+                disabled={remove.isPending}
+                className="px-4 py-2 rounded border border-gray-600 text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
+              >
+                Abbrechen
+              </button>
+              <button
+                onClick={() => {
+                  remove.mutate({ id: projectToDelete.id, options: deleteOptions });
+                }}
+                disabled={remove.isPending}
+                className="px-4 py-2 rounded bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {remove.isPending ? "Löschen..." : "Löschen"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

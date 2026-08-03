@@ -106,7 +106,7 @@ interface ProjectData {
  */
 plansRouter.post("/:id/execute", async (req, res, next) => {
   try {
-    const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
+    const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
     const createCodingAgent = req.app.locals["createCodingAgent"] as
       | ((options?: { sandboxRoot?: string }) => import("@ducki/agent").CodingAgent)
       | undefined;
@@ -249,7 +249,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
         }
 
         // Fallback to regular agent
-        const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+        const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
         if (!agent) {
           throw new Error("Agent not available");
         }

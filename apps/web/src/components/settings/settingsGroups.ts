@@ -229,6 +229,18 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "EXECUTION_MODE_UPDATE_PLAN_FILE",
       ],
     },
+    {
+      name: "Coding Agent",
+      icon: Terminal,
+      keys: [
+        "CODING_AGENT_MAX_ITERATIONS",
+        "CODING_AGENT_MAX_ITERATIONS_SIMPLE",
+        "CODING_AGENT_MAX_ITERATIONS_MEDIUM",
+        "CODING_AGENT_MAX_ITERATIONS_COMPLEX",
+        "CODING_AGENT_MAX_ATTEMPTS",
+        "CODING_AGENT_TIMEOUT_MS",
+      ],
+    },
   ],
   Memory: [
     {

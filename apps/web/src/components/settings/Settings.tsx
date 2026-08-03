@@ -14,6 +14,7 @@ import { DatabaseSettings } from "./DatabaseSettings";
 import { AnimationSettings } from "./AnimationSettings";
 import { BackendSettings } from "./BackendSettings";
 import { VoiceSettings } from "./VoiceSettings";
+import { CodingAgentSettings } from "./CodingAgentSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -1316,6 +1317,35 @@ export function Settings() {
         </div>
       )}
 
+      {activeTab === "Agent" && (
+        <div className="space-y-6">
+          {/* Normal Agent Settings - from SUBSECTIONS */}
+          <div className="space-y-4">
+            {(SUBSECTIONS["Agent"] ?? []).map((group) => {
+              const groupKeys = new Set(group.keys);
+              const fields = PREDEFINED_FIELDS.filter((f) => f.section === "Agent" && groupKeys.has(f.key));
+              if (fields.length === 0) return null;
+              const Icon = group.icon;
+
+              return (
+                <div key={group.name} className="card space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Icon className="w-4 h-4 text-primary" />
+                    <h3 className="font-semibold">{group.name}</h3>
+                  </div>
+                  <div className="space-y-3">{fields.map((field) => renderField(field))}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Coding Agent Settings */}
+          <div className="border-t border-border pt-6">
+            <CodingAgentSettings settingsMap={settingsMap} />
+          </div>
+        </div>
+      )}
+
       {activeTab === "Credentials" && <CredentialManagementSettings />}
 
       {activeTab === "Chat Cleanup" && (
@@ -1372,7 +1402,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Voice" && (
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Voice" && activeTab !== "Agent" && (
         <div className="space-y-4">
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);

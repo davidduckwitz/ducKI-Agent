@@ -33,8 +33,20 @@ export interface PlanEventPayload {
   goal: string;
   title: string;
   complexity: number;
+  complexityScore?: number;
   stepCount: number;
-  steps: Array<{ title: string; description: string; tools?: string[] }>;
+  executionStrategy?: "sequential" | "parallel" | "hybrid";
+  steps: Array<{
+    id: string;
+    title: string;
+    description: string;
+    tools?: string[];
+    priority?: string;
+    duration?: number;
+    parallelizable?: string[];
+    subtasks?: Array<{ id: string; title: string; description: string; tools?: string[] }>;
+  }>;
+  validationIssues?: string[];
   markdown: string;
 }
 
@@ -44,12 +56,27 @@ export function toPlanEventPayload(plan: Plan, markdown: string): PlanEventPaylo
     goal: plan.goal,
     title: `Plan: ${plan.goal}`,
     complexity: COMPLEXITY_SCORE[plan.estimatedComplexity] ?? 3,
+    complexityScore: plan.estimatedComplexityScore,
     stepCount: plan.steps.length,
+    executionStrategy: plan.executionStrategy,
     steps: plan.steps.map((step) => ({
+      id: step.id,
       title: step.title,
       description: step.description,
       ...(step.toolsNeeded?.length ? { tools: step.toolsNeeded } : {}),
+      priority: step.priority,
+      duration: step.estimatedDuration,
+      ...(step.canParallelizeWith?.length ? { parallelizable: step.canParallelizeWith } : {}),
+      ...(step.subtasks?.length ? {
+        subtasks: step.subtasks.map((sub) => ({
+          id: sub.id,
+          title: sub.title,
+          description: sub.description,
+          ...(sub.toolsNeeded?.length ? { tools: sub.toolsNeeded } : {}),
+        })),
+      } : {}),
     })),
+    validationIssues: plan.validationResult?.issues,
     markdown,
   };
 }
@@ -60,18 +87,70 @@ export function formatPlanAsMarkdown(plan: Plan): string {
   const lines: string[] = [
     `## Plan: ${plan.goal}`,
     "",
-    `**Geschaetzte Komplexitaet:** ${COMPLEXITY_LABEL[plan.estimatedComplexity] ?? plan.estimatedComplexity}`,
-    "",
   ];
 
+  // Add header info
+  lines.push(`**Geschaetzte Komplexitaet:** ${COMPLEXITY_LABEL[plan.estimatedComplexity] ?? plan.estimatedComplexity}`);
+  if (plan.estimatedComplexityScore) {
+    lines.push(`**Komplexitaets-Punktzahl:** ${plan.estimatedComplexityScore}/5`);
+  }
+  if (plan.totalSteps) {
+    lines.push(`**Gesamt-Schritte:** ${plan.totalSteps}`);
+  }
+  if (plan.executionStrategy) {
+    lines.push(`**Ausführungs-Strategie:** ${plan.executionStrategy}`);
+  }
+  lines.push("");
+
+  // Add validation issues if any
+  if (plan.validationResult?.issues?.length) {
+    lines.push("⚠️ **Validierungsprobleme:**");
+    plan.validationResult.issues.forEach((issue) => {
+      lines.push(`- ${issue}`);
+    });
+    lines.push("");
+  }
+
+  // Add steps with detailed info
   plan.steps.forEach((step, index) => {
     lines.push(`${index + 1}. **${step.title}**`);
     if (step.description) lines.push(`   ${step.description}`);
-    if (step.toolsNeeded?.length) lines.push(`   _Benoetigte Tools: ${step.toolsNeeded.join(", ")}_`);
-    if (step.dependsOn?.length) lines.push(`   _Abhaengig von: ${step.dependsOn.join(", ")}_`);
+
+    const metadata: string[] = [];
+    if (step.priority) metadata.push(`Priority: ${step.priority}`);
+    if (step.estimatedDuration) {
+      const mins = Math.round(step.estimatedDuration / 60);
+      metadata.push(`Est. ${mins}min`);
+    }
+    if (metadata.length) {
+      lines.push(`   _${metadata.join(" | ")}_`);
+    }
+
+    if (step.toolsNeeded?.length) {
+      lines.push(`   _Benoetigte Tools: ${step.toolsNeeded.join(", ")}_`);
+    }
+    if (step.dependsOn?.length) {
+      lines.push(`   _Abhaengig von: ${step.dependsOn.join(", ")}_`);
+    }
+    if (step.canParallelizeWith?.length) {
+      lines.push(`   ✓ Kann parallel laufen mit: ${step.canParallelizeWith.join(", ")}`);
+    }
+
+    // Add subtasks if any
+    if (step.subtasks?.length) {
+      lines.push(`   **Untertasks:**`);
+      step.subtasks.forEach((sub, subIdx) => {
+        lines.push(`   ${index + 1}.${String.fromCharCode(97 + subIdx)}) ${sub.title}`);
+        if (sub.description) lines.push(`      ${sub.description}`);
+        if (sub.toolsNeeded?.length) {
+          lines.push(`      _Tools: ${sub.toolsNeeded.join(", ")}_`);
+        }
+      });
+    }
+    lines.push("");
   });
 
-  lines.push("", "_Dies ist nur ein Plan - es wurde noch nichts ausgefuehrt._");
+  lines.push("_Dies ist nur ein Plan - es wurde noch nichts ausgefuehrt._");
   return lines.join("\n");
 }
 

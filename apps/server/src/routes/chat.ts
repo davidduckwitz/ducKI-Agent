@@ -271,8 +271,8 @@ chatRouter.get("/search", async (req, res, next) => {
 chatRouter.post("/", async (req, res, next) => {
   let runId: string | undefined;
   try {
-    const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
-    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+    const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
+    const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
     const agentRegistry = req.app.locals["agentRegistry"] as {
       register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
       unregister: (id: string) => void;
@@ -313,7 +313,7 @@ chatRouter.post("/", async (req, res, next) => {
       : message;
 
     const result = await runAgentWithRepairRetry(
-      createAgent ?? (() => agent),
+      createAgent ?? (async () => agent),
       routedMessage,
       (errorMessage) => [
         "The previous chat run failed with a runtime error.",
@@ -340,8 +340,8 @@ chatRouter.post("/", async (req, res, next) => {
 
 chatRouter.post("/conversation", async (req, res, next) => {
   try {
-    const createAgent = req.app.locals["createAgent"] as (() => Agent) | undefined;
-    const agent = createAgent ? createAgent() : (req.app.locals["agent"] as Agent);
+    const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
+    const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
     const { name, projectId } = req.body as { name?: string; projectId?: number };
     const convId = await agent.startConversation({ name, projectId });
     res.json(createApiResponse({ conversationId: convId }));

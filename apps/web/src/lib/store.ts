@@ -473,17 +473,23 @@ export const useAppStore = create<AppState>((set, get) => ({
             };
           }
 
-          // Also skip if we have very recent identical content (within 10 seconds)
-          // to prevent duplicates in the same turn, but allow same content in different turns
-          const incomingTs = Date.parse(msgTimestamp);
-          const recentIdenticalContent = s.messages.some((existing) => {
-            if (existing.role !== "assistant") return false;
-            if (normalizeAssistantContent(existing.content) !== normalizeAssistantContent(data.response)) return false;
-            const existingTs = Date.parse(existing.timestamp);
-            if (!Number.isFinite(existingTs) || !Number.isFinite(incomingTs)) return false;
-            // Only consider it a duplicate if it's from the last 10 seconds (same turn)
-            return Math.abs(incomingTs - existingTs) <= 10_000;
-          });
+          // Only skip if empty response (not a valid message worth showing)
+          // Don't deduplicate based on recent content - the server sent this for a reason
+          if (!data.response.trim()) {
+            console.debug("[store.chat:complete] Empty response, skipping", {
+              messageId: msg.id,
+            });
+            const nextRunning = new Set(s.runningConversationIds);
+            if (typeof data.conversationId === "number") {
+              nextRunning.delete(data.conversationId);
+            }
+            return {
+              isLoading: false,
+              streamingContent: "",
+              pendingLocalMessageId: undefined,
+              runningConversationIds: nextRunning,
+            };
+          }
 
           const nextRunning = new Set(s.runningConversationIds);
           if (typeof data.conversationId === "number") {
@@ -491,7 +497,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
 
           return {
-            messages: recentIdenticalContent ? s.messages : [...s.messages, msg],
+            messages: [...s.messages, msg],
             isLoading: false,
             streamingContent: "",
             pendingLocalMessageId: undefined,

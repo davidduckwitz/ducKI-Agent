@@ -3,7 +3,7 @@ import { ArrowDown, Plus, Trash2, X } from "lucide-react";
 import { useAppStore, type ChatAttachment } from "../../lib/store";
 import { useUiStore } from "../../lib/uiStore";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { DynamicCharacter } from "./characters/DynamicCharacter";
@@ -14,7 +14,7 @@ import { ToolGroupRow } from "./ToolGroupRow";
 import { ChatHeader } from "./ChatHeader";
 import { ChatComposer } from "./ChatComposer";
 import { ChatWelcome } from "./ChatWelcome";
-import { PlanExecutionPanel, type Plan, type StepStatus } from "./PlanExecutionPanel";
+import { type Plan, type StepStatus } from "./PlanExecutionPanel";
 import { BrowserPreviewModal } from "./BrowserPreview";
 import { ToolEventsDisplay } from "./ToolEventsDisplay";
 import { ToolEventSummary } from "./ToolEventSummary";
@@ -130,6 +130,7 @@ export function ChatContainer() {
   // The sidebar now carries the recent + pinned chats, so this column starts folded
   // away on every breakpoint. It stays available for search / infinite scroll / delete.
   const { chatListOpen, toggleChatList } = useUiStore();
+  const navigate = useNavigate();
   const [compactMode, setCompactMode] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -787,6 +788,8 @@ export function ChatContainer() {
       // execution of this same plan/thread) instead of spinning up a disconnected new one
       // each time - an "improve this plan" round must land in the same project folder.
       let projectId: number | undefined = conversations.find((c) => c.id === conversationId)?.projectId;
+      let sandboxRoot: string | undefined;
+
       if (!projectId) {
         try {
           const projectName = generateProjectNameFromGoal(currentPlan.goal || currentPlan.title || "project");
@@ -795,54 +798,162 @@ export function ChatContainer() {
             description: currentPlan.goal || currentPlan.title,
           });
           projectId = (created as any)?.id;
+          // Derive slug from project name: lowercase + replace spaces with hyphens
+          // Frontend sends only the project slug to server, server combines it with CODING_ROOT
+          sandboxRoot = projectName.toLowerCase().replace(/\s+/g, "-");
         } catch (projectError) {
           console.warn("Could not create project for plan execution:", projectError);
           // Continue execution without project - not critical
+        }
+      } else {
+        // If project already exists, derive slug from its name
+        try {
+          const existingProject = await api.projects.get(projectId);
+          const projectName = (existingProject as any)?.name;
+          if (projectName) {
+            // Derive slug from project name: lowercase + replace spaces with hyphens
+            sandboxRoot = projectName.toLowerCase().replace(/\s+/g, "-");
+          } else {
+            console.warn(`Project ${projectId} has no name, agent will use default location`);
+          }
+        } catch (projectError) {
+          console.warn(`Could not fetch existing project ${projectId}:`, projectError);
         }
       }
 
       setExecutionProgress(15);
 
-      // The plan lives in this session's event stream, not in a server-side store, so the
-      // steps have to travel with the request - otherwise the agent would only receive an
-      // id it cannot resolve back to any actual plan content.
-      const result = await api.plans.execute(currentPlan.id, {
-        goal: currentPlan.goal,
-        steps: currentPlan.steps ?? [],
-        markdown: currentPlan.markdown,
-        conversationId: conversationId ?? undefined,
-        projectId,
-      });
+      // AUTO-SWITCH TO CODING AGENT: When user clicks "Umsetzen", delegate to dedicated CodingAgent
+      // This ensures file-writing operations and disciplined execution with verification
+      const executionGoal = `Implementiere diesen Plan:
 
-      // Plan execution started - keep panel open for live updates from WebSocket
-      // The agent runs asynchronously and sends updates via chat:event/chat:complete events
-      // Don't close the panel or stop tracking - wait for actual completion message
+## ${currentPlan.title || "Plan"}
 
-      // Add a status message
+**Ziel:** ${currentPlan.goal}
+
+**Schritte:**
+${
+  (currentPlan.steps ?? [])
+    .map(
+      (step, idx) =>
+        `${idx + 1}. **${step.title}**
+   ${step.description}${
+          step.tools && step.tools.length > 0
+            ? `
+   Tools: ${step.tools.join(", ")}`
+            : ""
+        }`
+    )
+    .join("\n\n")
+}
+
+${currentPlan.markdown ? `\n**Detaillierter Plan:**\n${currentPlan.markdown}` : ""}`;
+
+      // Call dedicated CodingAgent endpoint with the plan as goal
+      // CodingAgent has full file-writing permissions and discipline enforcement
+      // Calculate iterations based on plan complexity:
+      // - Simple plans (1-3 steps): 20 iterations
+      // - Medium plans (4-7 steps): 50 iterations
+      // - Complex plans (8+ steps): 100 iterations
+      const stepCount = currentPlan.steps?.length ?? 0;
+      const calculatedIterations = stepCount <= 3 ? 20 : stepCount <= 7 ? 50 : 100;
+
+      const codingResult = await fetch("/api/coding-agent/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          goal: executionGoal,
+          sandboxRoot: sandboxRoot,
+          maxAttempts: 3,
+          maxIterations: calculatedIterations,
+        }),
+      }).then((r) => r.json());
+
+      // Add execution started message
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "event",
-          content: `Plan-Ausführung gestartet (${currentPlan.steps?.length ?? 0} Schritte)`,
+          content: `Coding Agent startet Plan-Umsetzung (${currentPlan.steps?.length ?? 0} Schritte)`,
           timestamp: new Date().toISOString(),
           eventType: "iteration",
-          eventData: { message: result?.message ?? "Plan execution started", planId: currentPlan.id },
+          eventData: {
+            message: "Coding Agent started executing plan",
+            planId: currentPlan.id,
+            stepCount: currentPlan.steps?.length ?? 0,
+          },
         },
       ]);
 
-      setExecutionProgress(10); // Keep panel visible
-      // Don't close panel or stop tracking - wait for WebSocket completion events
+      // If CodingAgent execution completed, add result with proper formatting
+      if (codingResult?.data) {
+        const success = (codingResult.data as any)?.success ?? false;
+        let summary = (codingResult.data as any)?.summary ?? "Plan execution completed";
+        const attempts = (codingResult.data as any)?.attempts ?? 1;
+        const verified = (codingResult.data as any)?.verified ?? false;
+        const verifyCommand = (codingResult.data as any)?.verifyCommand;
+
+        // Clean up summary for display - remove excessive markdown or formatting
+        // If summary is multi-line, preserve the formatting
+        if (typeof summary === "string") {
+          summary = summary.trim();
+          // Escape JSON if it appears in the summary
+          if (summary.includes("{") && summary.includes("}")) {
+            // Keep JSON readable with proper formatting
+            try {
+              const parsed = JSON.parse(summary);
+              summary = `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
+            } catch {
+              // Not valid JSON, keep as-is
+            }
+          }
+        }
+
+        const formattedMessage = `## Plan-Umsetzung ${success ? "✅ erfolgreich" : "❌ fehlgeschlagen"}
+
+**Status:** ${success ? "Abgeschlossen" : "Fehler"}
+**Versuche:** ${attempts}/3
+**Verifiziert:** ${verified ? "✅ Ja" : "❌ Nein"}${verifyCommand ? `\n**Verifikationbefehl:** \`${verifyCommand}\`` : ""}
+
+---
+
+## Zusammenfassung
+
+${summary}`;
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: formattedMessage,
+            timestamp: new Date().toISOString(),
+            eventType: undefined,
+            eventData: {
+              ...codingResult.data,
+              source: "coding_agent",
+              executedAt: new Date().toISOString(),
+            },
+          },
+        ]);
+      }
+
+      // Close the plan panel
+      setShowPlanPanel(false);
+      setPlanExecuting(false);
+      setExecutionProgress(undefined);
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : "Unbekannter Fehler";
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "event",
-          content: `Umsetzung fehlgeschlagen: ${error instanceof Error ? error.message : "Unbekannter Fehler"}`,
+          content: `Coding Agent Umsetzung fehlgeschlagen: ${errorMsg}`,
           timestamp: new Date().toISOString(),
           eventType: "tool_result",
-          eventData: { error: true },
+          eventData: { error: true, message: errorMsg },
         },
       ]);
       setPlanExecuting(false);
@@ -864,7 +975,6 @@ export function ChatContainer() {
     const planData = lastPlanMessage.eventData as unknown as Plan;
     if (planData.goal && Array.isArray(planData.steps) && planData.steps.length > 0) {
       setCurrentPlan(planData);
-      setShowPlanPanel(true);
       setLastProcessedPlanId(lastPlanMessage.id);
       // A fresh plan starts clean - without this, a still-mounted stepStatuses/progress
       // from a previously executed plan would bleed into this one (steps re-indexed from
@@ -872,6 +982,12 @@ export function ChatContainer() {
       setStepStatuses({});
       setExecutionProgress(0);
       setPlanExecuting(false);
+
+      // Auto-switch to Coding Area when plan is created in chat
+      // This allows the user to immediately continue with execution in the dedicated Coding workspace
+      setTimeout(() => {
+        navigate("/coding");
+      }, 300);
     }
   };
 
@@ -1076,6 +1192,48 @@ export function ChatContainer() {
     setExecutionProgress(Math.round(isLoading ? Math.min(95, progress) : progress));
   }, [messages, streamingContent, planExecuting, currentPlan?.steps, planMessageIndex, isLoading]);
 
+  // Listen for real-time phase events from Coding Agent over WebSocket
+  useEffect(() => {
+    if (!socket || !planExecuting || !currentPlan?.steps) return;
+
+    const handlePhaseEvent = (event: any) => {
+      const { type, phase, data } = event;
+
+      // Map phase names to step indices (assuming steps match phases in order)
+      const phaseToStepIdx: Record<string, number> = {
+        explore: 0,
+        plan: 1,
+        edit: 2,
+        verify: 3,
+        report: 4,
+      };
+
+      const stepIdx = phaseToStepIdx[phase];
+      if (stepIdx === undefined || stepIdx >= currentPlan.steps.length) return;
+
+      if (type === "phase_started") {
+        setStepStatuses((prev) => ({
+          ...prev,
+          [stepIdx]: "in_progress",
+        }));
+      } else if (type === "phase_completed") {
+        setStepStatuses((prev) => ({
+          ...prev,
+          [stepIdx]: "completed",
+        }));
+      } else if (type === "phase_failed") {
+        setStepStatuses((prev) => ({
+          ...prev,
+          [stepIdx]: "failed",
+        }));
+      }
+    };
+
+    socket.on("coding_agent_event", handlePhaseEvent);
+    return () => {
+      socket.off("coding_agent_event", handlePhaseEvent);
+    };
+  }, [socket, planExecuting, currentPlan?.steps]);
 
   const deleteConversation = useMutation({
     mutationFn: (conversationIdToDelete: number) => api.chat.deleteConversation(conversationIdToDelete),
@@ -1350,20 +1508,6 @@ export function ChatContainer() {
           </div>
         </div>
       </div>
-
-      {/* Plan Execution Panel */}
-      {showPlanPanel && currentPlan && currentPlan.goal && currentPlan.steps && (
-        <PlanExecutionPanel
-          plan={currentPlan as Plan}
-          onRefine={isPlanCompleted ? handlePlanImprovementAnalysis : handlePlanRefinement}
-          onExecute={handlePlanExecution}
-          onClose={() => setShowPlanPanel(false)}
-          isExecuting={planExecuting}
-          executionProgress={executionProgress}
-          stepStatuses={stepStatuses}
-          isCompleted={isPlanCompleted}
-        />
-      )}
 
       {/* Browser Preview Modal */}
       {browserPreview.showModal && browserPreview.currentPreview && (

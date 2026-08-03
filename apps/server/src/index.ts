@@ -4,6 +4,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { createServer } from "node:http";
 import { Buffer } from "node:buffer";
+import { resolve } from "node:path";
 import { Server as SocketIOServer } from "socket.io";
 import {
 	Agent,
@@ -410,8 +411,19 @@ function buildAgentFactory(
 	runtimeTools: ToolExecutor[],
 	wikiServiceRef: { current?: LlmWikiService }
 ) {
-	return () => {
-		const agent = new Agent(providerRef.current, db);
+	return async () => {
+		// Load database settings for agent configuration
+		const maxIterationsSetting = await db.getSetting("AGENT_MAX_ITERATIONS");
+		console.log("[buildAgentFactory] Loading agent settings", {
+			maxIterationsSetting,
+			parsed: maxIterationsSetting ? parseInt(maxIterationsSetting) : undefined,
+		});
+		const agentOptions = maxIterationsSetting
+			? { maxIterations: parseInt(maxIterationsSetting) }
+			: {};
+
+		const agent = new Agent(providerRef.current, db, undefined, agentOptions);
+		console.log("[buildAgentFactory] Agent created with maxIterations:", agent.maxIterations);
 		// Wrap tools to broadcast events and handle response staging
 		const wrappedTools = wrapTools(runtimeTools);
 		for (const tool of wrappedTools) {
@@ -635,8 +647,18 @@ async function bootstrap(): Promise<void> {
 		workflowExecutor.registerTool(tool);
 	}
 
-	const createCodingAgentFactory = (options?: { sandboxRoot?: string }): CodingAgent =>
-		createCodingAgent(providerRef.current, db, { sandboxRoot: options?.sandboxRoot ?? CODING_ROOT });
+	const createCodingAgentFactory = (options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: any }): CodingAgent => {
+		// If sandboxRoot is provided, combine it with CODING_ROOT
+		// Frontend sends just the project slug, server combines it with CODING_ROOT
+		let resolvedSandboxRoot = CODING_ROOT;
+		if (options?.sandboxRoot) {
+			resolvedSandboxRoot = resolve(CODING_ROOT, options.sandboxRoot);
+		}
+		return createCodingAgent(providerRef.current, db, options?.eventEmitter, {
+			sandboxRoot: resolvedSandboxRoot,
+			maxIterations: options?.maxIterations,
+		});
+	};
 
 	const workflowEngineRef: { current: WorkflowEngine } = {
 		current: new WorkflowEngine(providerRef.current, db, workflowExecutor, {
@@ -652,7 +674,7 @@ async function bootstrap(): Promise<void> {
 	// dereferences it when a run actually calls the wiki tool.
 	const wikiServiceRef: { current?: LlmWikiService } = {};
 	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef);
-	const defaultAgent = createAgent();
+	const defaultAgent = await createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
 	cronjobManager.start();
 	await ensureLogCleanupCron(db);

@@ -59,6 +59,17 @@ export interface CodingRunResult {
   verified: boolean;
 }
 
+export interface CodingPhaseEvent {
+  type: "phase_started" | "phase_completed" | "phase_failed";
+  phase: "explore" | "plan" | "edit" | "verify" | "report";
+  title: string;
+  description?: string;
+  result?: string;
+  error?: string;
+  timestamp: string;
+  attempt: number;
+}
+
 /** Verification output is fed back into the next prompt; a full failing build log would
  *  otherwise crowd out the goal and the agent's own context. Keeps head and tail because
  *  the first error and the summary line are both diagnostic. */
@@ -140,7 +151,7 @@ export class CodingAgent {
     this.agent = new Agent(provider, db, eventEmitter, {
       name: options.name ?? "CodingAgent",
       systemPrompt: basePrompt,
-      maxIterations: options.maxIterations ?? 30,
+      maxIterations: options.maxIterations ?? 100,
       hooks: disciplineHooks,
     });
 
@@ -242,6 +253,9 @@ export class CodingAgent {
       const runResult = await this.agent.run(prompt);
       lastSummary = runResult.response;
 
+      // Extract and emit phase events from response
+      this.extractAndEmitPhaseEvents(lastSummary, attempt);
+
       if (!verifyCommand) {
         // Nothing to check against - report honestly that the result is unverified
         // instead of letting "no check" masquerade as a passing check.
@@ -297,11 +311,79 @@ export class CodingAgent {
     };
   }
 
-  private emit(type: "iteration" | "decision", message: string, data?: Record<string, unknown>): void {
+  private emit(type: "iteration" | "decision" | "phase_started" | "phase_completed" | "phase_failed", message: string, data?: Record<string, unknown>): void {
     try {
-      this.eventEmitter?.emitEvent({ type, message, data, timestamp: new Date().toISOString() });
+      const eventType = type === "iteration" ? "iteration" : type === "decision" ? "decision" : "internal_instruction";
+      this.eventEmitter?.emitEvent({ type: eventType as const, message, data, timestamp: new Date().toISOString() });
     } catch {
       // Event delivery is best-effort telemetry - never let it abort a coding run.
+    }
+  }
+
+  private emitPhase(event: CodingPhaseEvent): void {
+    try {
+      const message = `${event.title}${event.description ? ': ' + event.description : ''}`;
+      this.eventEmitter?.emitEvent({
+        type: "internal_instruction" as const,
+        message,
+        data: {
+          phase_event: event.type,
+          phase: event.phase,
+          title: event.title,
+          description: event.description,
+          result: event.result,
+          error: event.error,
+          attempt: event.attempt,
+        },
+        timestamp: event.timestamp,
+      });
+    } catch {
+      // Event delivery is best-effort telemetry - never let it abort a coding run.
+    }
+  }
+
+  private extractAndEmitPhaseEvents(response: string, attempt: number): void {
+    const phases: Array<"explore" | "plan" | "edit" | "verify" | "report"> = ["explore", "plan", "edit", "verify", "report"];
+    const phaseDescriptions: Record<string, string> = {
+      explore: "Lokalisieren und Lesen relevanter Dateien",
+      plan: "Planen der zu ändernden Dateien",
+      edit: "Durchführen der Änderungen",
+      verify: "Verifizierung der Änderungen",
+      report: "Zusammenfassung der Änderungen",
+    };
+
+    for (const phase of phases) {
+      const startMarker = `>> PHASE: ${phase.toUpperCase()}`;
+      const endMarker = `<< ${phase.toUpperCase()} COMPLETE`;
+
+      const startIdx = response.indexOf(startMarker);
+      const endIdx = response.indexOf(endMarker);
+
+      if (startIdx !== -1) {
+        this.emitPhase({
+          type: "phase_started",
+          phase,
+          title: phase.charAt(0).toUpperCase() + phase.slice(1),
+          description: phaseDescriptions[phase],
+          timestamp: new Date().toISOString(),
+          attempt,
+        });
+      }
+
+      if (endIdx !== -1) {
+        // Extract content between start and end markers
+        const contentStart = startIdx !== -1 ? startIdx + startMarker.length : 0;
+        const content = response.substring(contentStart, endIdx !== -1 ? endIdx : response.length).trim();
+
+        this.emitPhase({
+          type: "phase_completed",
+          phase,
+          title: phase.charAt(0).toUpperCase() + phase.slice(1),
+          result: content.slice(0, 500), // Keep first 500 chars of result
+          timestamp: new Date().toISOString(),
+          attempt,
+        });
+      }
     }
   }
 
@@ -315,16 +397,37 @@ export class CodingAgent {
     const parts: string[] = [`Goal: ${goal}`, ""];
 
     if (this.sandboxRoot) {
-      parts.push(`Project root: ${this.sandboxRoot} - all paths and commands are relative to it.`, "");
+      parts.push(
+        `Project root: ${this.sandboxRoot}`,
+        "",
+        "CRITICAL PATH HANDLING:",
+        `- ONLY use RELATIVE paths from the project root (e.g., 'src/index.ts', 'package.json', 'docs/README.md')`,
+        `- NEVER use absolute paths (no leading /)`,
+        `- NEVER include 'shared-workspace' or 'coding' in your file paths`,
+        `- ALL file operations are automatically scoped to ${this.sandboxRoot}`,
+        `- Examples of CORRECT paths: 'index.html', 'src/app.ts', 'config/settings.json'`,
+        `- Examples of WRONG paths: '/apps/server/...', 'shared-workspace/...', 'coding/...'`,
+        ""
+      );
     }
 
     parts.push(
-      "Work in these phases, and state which phase you are in:",
+      "Work in these phases, and EXPLICITLY STATE the phase you are starting and completing:",
       "1. EXPLORE - locate the relevant files and read them before changing anything.",
+      "   At start: \">> PHASE: EXPLORE\"",
+      "   At end: \"<< EXPLORE COMPLETE\"",
       "2. PLAN - name the exact files you will edit and what changes each one needs.",
+      "   At start: \">> PHASE: PLAN\"",
+      "   At end: \"<< PLAN COMPLETE\"",
       "3. EDIT - make minimal, targeted edits (prefer the filesystem tool's \"edit\" action).",
+      "   At start: \">> PHASE: EDIT\"",
+      "   At end: \"<< EDIT COMPLETE\"",
       "4. VERIFY - re-read what you changed and run the verification command below.",
-      "5. REPORT - list the files you changed and what the verification showed."
+      "   At start: \">> PHASE: VERIFY\"",
+      "   At end: \"<< VERIFY COMPLETE\"",
+      "5. REPORT - list the files you changed and what the verification showed.",
+      "   At start: \">> PHASE: REPORT\"",
+      "   At end: \"<< REPORT COMPLETE\""
     );
 
     if (verifyCommand) {
@@ -362,7 +465,8 @@ export class CodingAgent {
 export function createCodingAgent(
   provider: LLMProvider,
   db: DatabaseService,
+  eventEmitter?: AgentEventEmitter,
   options?: CodingAgentOptions
 ): CodingAgent {
-  return new CodingAgent(provider, db, undefined, options);
+  return new CodingAgent(provider, db, eventEmitter, options);
 }

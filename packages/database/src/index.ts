@@ -283,18 +283,62 @@ export class DatabaseService {
     return this.db.update(schema.projects).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(schema.projects.id, id)).returning().get();
   }
 
-  async deleteProject(id: number): Promise<void> {
-    const projectConversations = await this.db
-      .select({ id: schema.conversations.id })
+  async getProjectDependencies(id: number): Promise<{
+    codingFolder?: boolean;
+    conversationCount: number;
+    taskCount: number;
+    workflowCount: number;
+  }> {
+    const conversationCount = await this.db
+      .select()
       .from(schema.conversations)
       .where(eq(schema.conversations.projectId, id))
-      .all();
+      .all()
+      .then(r => r.length);
 
-    for (const conversation of projectConversations) {
-      await this.deleteConversation(conversation.id);
+    const taskCount = await this.db
+      .select()
+      .from(schema.tasks)
+      .where(eq(schema.tasks.projectId, id))
+      .all()
+      .then(r => r.length);
+
+    return {
+      codingFolder: true,
+      conversationCount,
+      taskCount,
+      workflowCount: 0,
+    };
+  }
+
+  async deleteProject(id: number, options?: {
+    deleteCodingFolder?: boolean;
+    deleteConversations?: boolean;
+    deleteTasks?: boolean;
+    deleteWorkflows?: boolean;
+  }): Promise<void> {
+    const shouldDeleteConversations = options?.deleteConversations !== false;
+    const shouldDeleteTasks = options?.deleteTasks !== false;
+
+    // Always delete archived conversations (they reference the project)
+    await this.db.delete(schema.archivedConversations).where(eq(schema.archivedConversations.projectId, id)).run();
+
+    if (shouldDeleteConversations) {
+      const projectConversations = await this.db
+        .select({ id: schema.conversations.id })
+        .from(schema.conversations)
+        .where(eq(schema.conversations.projectId, id))
+        .all();
+
+      for (const conversation of projectConversations) {
+        await this.deleteConversation(conversation.id);
+      }
     }
 
-    await this.db.delete(schema.tasks).where(eq(schema.tasks.projectId, id)).run();
+    if (shouldDeleteTasks) {
+      await this.db.delete(schema.tasks).where(eq(schema.tasks.projectId, id)).run();
+    }
+
     await this.db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
   }
 
@@ -547,6 +591,42 @@ export class DatabaseService {
 
   async deleteSetting(key: string): Promise<void> {
     await this.db.delete(schema.settings).where(eq(schema.settings.key, key)).run();
+  }
+
+  /**
+   * Add skills to EVER_USED_SKILLS set (merge with existing)
+   */
+  async addEverUsedSkills(skillSlugs: string[]): Promise<void> {
+    if (skillSlugs.length === 0) return;
+
+    const existing = await this.getSetting("EVER_USED_SKILLS");
+    let everUsed: string[] = [];
+    if (existing) {
+      try {
+        const parsed = JSON.parse(existing);
+        everUsed = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        everUsed = [];
+      }
+    }
+
+    // Merge with new skills
+    const merged = Array.from(new Set([...everUsed, ...skillSlugs])).sort();
+    await this.setSetting("EVER_USED_SKILLS", JSON.stringify(merged));
+  }
+
+  /**
+   * Get EVER_USED_SKILLS as array
+   */
+  async getEverUsedSkills(): Promise<string[]> {
+    const existing = await this.getSetting("EVER_USED_SKILLS");
+    if (!existing) return [];
+    try {
+      const parsed = JSON.parse(existing);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
 
   // ============================================================

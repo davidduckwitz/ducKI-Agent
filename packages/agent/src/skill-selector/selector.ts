@@ -20,9 +20,17 @@ export class SkillSelector {
   private metricsCache = new Map<string, SkillMetrics>();
   private skillEmbeddings = new Map<string, number[]>(); // Simple word-frequency embeddings
   private readonly maxCacheAge = 86400000; // 24 hours
+  private everUsedSkills: Set<string> = new Set();
 
   constructor() {
     this.logger = getRootLogger().child("SkillSelector");
+  }
+
+  /**
+   * Set the ever-used skills set for scoring boost
+   */
+  setEverUsedSkills(slugs: string[]): void {
+    this.everUsedSkills = new Set(slugs);
   }
 
   /**
@@ -80,8 +88,8 @@ export class SkillSelector {
   }
 
   /**
-   * Score a skill based on Jaccard similarity, semantic similarity, and success rate.
-   * Formula: jaccard × 0.4 + semantic × 0.3 + success_rate × 0.3
+   * Score a skill based on Jaccard similarity, semantic similarity, success rate, and ever-used status.
+   * Formula: jaccard × 0.4 + semantic × 0.3 + success_rate × 0.3, with +0.15 boost for ever-used skills
    */
   scoreSkill(
     input: string,
@@ -99,7 +107,14 @@ export class SkillSelector {
 
     const decayedSuccessRate = successRate * (1 + decayFactor);
 
-    return jaccardSimilarity * 0.4 + semanticSimilarity * 0.3 + Math.min(1, decayedSuccessRate) * 0.3;
+    let score = jaccardSimilarity * 0.4 + semanticSimilarity * 0.3 + Math.min(1, decayedSuccessRate) * 0.3;
+
+    // Boost score for skills that have been used before (even if not recently successful)
+    if (this.everUsedSkills.has(skill.slug)) {
+      score = Math.min(1, score + 0.15);
+    }
+
+    return score;
   }
 
   /**
