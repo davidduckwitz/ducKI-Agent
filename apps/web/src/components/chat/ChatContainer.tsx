@@ -204,15 +204,31 @@ export function ChatContainer() {
   }, [messages]);
 
   // Track streaming content so it persists even after streamingContent is cleared
-  // Keep it visible indefinitely - don't clear when isLoading changes
-  // This ensures the last response is always visible in the duck box
+  // Keep it visible during streaming, then clear once the actual message appears in the chat
   useEffect(() => {
     if (streamingContent.trim().length > 0) {
       setPersistentStreamingContent(streamingContent);
     }
   }, [streamingContent]);
 
-  // Clear persistent content only when conversation changes (user starts new chat)
+  // Auto-clear persistent streaming content once the actual message appears in messages array
+  // This prevents duplication: streaming box shows during response, then disappears when message renders
+  useEffect(() => {
+    if (persistentStreamingContent.trim().length === 0) return;
+    if (messages.length === 0) return;
+
+    // Check if the last message in the array is an assistant message that matches the streaming content
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.role === "assistant") {
+      // Clear the persistent streaming content after a brief delay to avoid jarring disappearance
+      const timer = setTimeout(() => {
+        setPersistentStreamingContent("");
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [messages, persistentStreamingContent]);
+
+  // Clear persistent content when conversation changes (user starts new chat)
   useEffect(() => {
     setPersistentStreamingContent("");
   }, [conversationId]);
