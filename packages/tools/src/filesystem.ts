@@ -191,28 +191,13 @@ export const filesystemTool: ToolExecutor = {
     let content = input["content"] as string | undefined;
     const recursive = (input["recursive"] as boolean | undefined) ?? false;
 
-    // De-escape literal \n, \t, \r sequences that LLM might generate
+    // De-escape literal \n, \t, \r escape sequences (from JSON string parsing)
+    // ONLY convert actual escape sequences, not random 'n' characters - other patterns break code
     if (content) {
       content = content
         .replace(/\\n/g, "\n")
         .replace(/\\t/g, "\t")
         .replace(/\\r/g, "\r");
-
-      // Smart fix for 'n' instead of newline: convert when clearly a line boundary
-      // Pattern 1: 'n' followed by 2+ spaces (indentation) - covers 2-space and 4-space indent
-      content = content.replace(/n(?=\s{2,})/g, "\n");
-
-      // Pattern 2: 'n' followed by closing bracket/brace/paren (end of statement/block)
-      content = content.replace(/n(?=[}\])])/g, "\n");
-
-      // Pattern 3: 'n' followed by // or /* (comment start) - very safe
-      content = content.replace(/n(?=\/[\/\*])/g, "\n");
-
-      // Pattern 4: Double 'nn' (blank line)
-      content = content.replace(/nn/g, "\n\n");
-
-      // Pattern 5: 'n' at end of string
-      content = content.replace(/n$/gm, "\n");
     }
 
     try {
