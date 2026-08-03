@@ -379,7 +379,18 @@ export class Agent {
   }
 
   async loadConversation(id: number): Promise<void> {
-    return this.conversation.load(id);
+    await this.conversation.load(id);
+    // Sync history with loaded conversation so mode detection has context
+    // This prevents lightweight mode from being incorrectly selected for old chats
+    const messages = this.conversation.getMessages();
+    this.history.clear();
+    for (const msg of messages) {
+      this.history.add(msg, msg.role === "tool" ? "tool" : undefined);
+    }
+    this.logger.info("History synced after loading conversation", {
+      conversationId: id,
+      messageCount: messages.length,
+    });
   }
 
   /**
@@ -3854,8 +3865,8 @@ export class Agent {
     });
 
     if (effectiveMode === "lightweight") {
-      // Lightweight mode: Up to 5 iterations for faster responses on straightforward queries
-      adjustedControls.maxIterations = Math.min(5, controls.maxIterations);
+      // Lightweight mode: Up to 10 iterations for faster responses while maintaining context
+      adjustedControls.maxIterations = Math.min(10, controls.maxIterations);
       // Reflection disabled in lightweight mode:
       // - Reflection adds 1+ LLM calls per retry, consuming significant iteration budget
       // - With only 5 iterations total, reflection could consume 20%+ of the budget
@@ -3882,14 +3893,14 @@ export class Agent {
                           userInput.toLowerCase().includes("tracked");
 
       if (hasTaskTool) {
-        // Task execution needs 3+ iterations minimum
-        adjustedControls.maxIterations = Math.min(5, controls.maxIterations);
+        // Task execution needs 5+ iterations minimum
+        adjustedControls.maxIterations = Math.min(10, controls.maxIterations);
       } else if (isDateTimeQuery || hasBrowserTool) {
         // Browser/Date-time queries need 4+ iterations
-        adjustedControls.maxIterations = Math.min(4, controls.maxIterations);
+        adjustedControls.maxIterations = Math.min(8, controls.maxIterations);
       } else {
         // Other simple queries need 3+ iterations
-        adjustedControls.maxIterations = Math.min(3, controls.maxIterations);
+        adjustedControls.maxIterations = Math.min(5, controls.maxIterations);
       }
       // Reflection disabled in chatbot mode:
       // - Chatbot mode has only 1-5 iterations total (vs 50 in full mode)
@@ -4246,7 +4257,7 @@ export class Agent {
     const contextCaps = options.contextCaps;
     const basMaxSystemPromptChars = envCap("AGENT_MAX_SYSTEM_PROMPT_CHARS", effectiveMode === "full" ? 120000 : 20000, 2000);
     const basMaxDynamicMemoryChars = envCap("AGENT_MAX_DYNAMIC_MEMORY_CHARS", effectiveMode === "full" ? 24000 : 0, 0);
-    const basMaxContextMessages = envCap("AGENT_MAX_CONTEXT_MESSAGES", effectiveMode === "full" ? 60 : 8, 1);
+    const basMaxContextMessages = envCap("AGENT_MAX_CONTEXT_MESSAGES", effectiveMode === "full" ? 60 : effectiveMode === "lightweight" ? 999 : 8, 1);
     const basMaxContextChars = envCap("AGENT_MAX_CONTEXT_CHARS", effectiveMode === "full" ? 120000 : 60000, 2000);
     const basMaxContextMessageChars = envCap("AGENT_MAX_CONTEXT_MESSAGE_CHARS", effectiveMode === "full" ? 12000 : 2000, 200);
 

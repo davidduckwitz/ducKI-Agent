@@ -1106,7 +1106,7 @@ export function ChatContainer() {
       <aside
         ref={conversationsViewportRef}
         onScroll={handleConversationsScroll}
-        className={`${chatListOpen ? "block" : "hidden"} lg:block ${compactMode ? "lg:w-72" : "lg:w-80"} w-full shrink-0 space-y-1 overflow-y-auto border-b border-border bg-card/40 p-2 max-h-[42vh] lg:max-h-screen lg:border-b-0 lg:border-r`}
+        className={`${chatListOpen ? "block" : "hidden"} ${chatListOpen ? "lg:block" : "lg:hidden"} ${compactMode ? "lg:w-72" : "lg:w-80"} w-full shrink-0 space-y-1 overflow-y-auto border-b border-border bg-card/40 p-2 max-h-[42vh] lg:max-h-screen lg:border-b-0 lg:border-r`}
       >
         <div className="flex items-center justify-between gap-2 px-1 py-1">
           <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{t("chat.chats")}</h2>

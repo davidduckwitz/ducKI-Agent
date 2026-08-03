@@ -454,34 +454,36 @@ export const useAppStore = create<AppState>((set, get) => ({
             },
           };
 
-          const normalizedIncoming = normalizeAssistantContent(data.response);
-          // Structural dedupe: if the same assistant text already exists after the most
-          // recent user message, this is a duplicate completion for the same turn.
-          let lastUserIndex = -1;
-          for (let i = s.messages.length - 1; i >= 0; i--) {
-            if (s.messages[i]?.role === "user") {
-              lastUserIndex = i;
-              break;
+          // Skip if exact same message ID already exists (true duplicate)
+          const alreadyPresentById = s.messages.some((existing) => existing.id === msg.id);
+          if (alreadyPresentById) {
+            console.debug("[store.chat:complete] Message already exists by ID, skipping duplicate", {
+              messageId: msg.id,
+              contentPreview: data.response.substring(0, 100),
+            });
+            const nextRunning = new Set(s.runningConversationIds);
+            if (typeof data.conversationId === "number") {
+              nextRunning.delete(data.conversationId);
             }
+            return {
+              isLoading: false,
+              streamingContent: "",
+              pendingLocalMessageId: undefined,
+              runningConversationIds: nextRunning,
+            };
           }
 
-          const alreadyPresentSinceLastUser = s.messages
-            .slice(lastUserIndex + 1)
-            .some((existing) => existing.role === "assistant" && normalizeAssistantContent(existing.content) === normalizedIncoming);
-
-          // Secondary guard for rare duplicate complete packets outside strict ordering.
+          // Also skip if we have very recent identical content (within 10 seconds)
+          // to prevent duplicates in the same turn, but allow same content in different turns
           const incomingTs = Date.parse(msgTimestamp);
-          const alreadyPresentRecent = s.messages.some((existing) => {
+          const recentIdenticalContent = s.messages.some((existing) => {
             if (existing.role !== "assistant") return false;
-            const existingNormalized = normalizeAssistantContent(existing.content);
-            if (existingNormalized !== normalizedIncoming) return false;
+            if (normalizeAssistantContent(existing.content) !== normalizeAssistantContent(data.response)) return false;
             const existingTs = Date.parse(existing.timestamp);
             if (!Number.isFinite(existingTs) || !Number.isFinite(incomingTs)) return false;
-            return Math.abs(incomingTs - existingTs) <= 30_000;
+            // Only consider it a duplicate if it's from the last 10 seconds (same turn)
+            return Math.abs(incomingTs - existingTs) <= 10_000;
           });
-
-          const alreadyPresent = alreadyPresentSinceLastUser || alreadyPresentRecent;
-          const alreadyPresentById = s.messages.some((existing) => existing.id === msg.id);
 
           const nextRunning = new Set(s.runningConversationIds);
           if (typeof data.conversationId === "number") {
@@ -489,7 +491,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
 
           return {
-            messages: alreadyPresent || alreadyPresentById ? s.messages : [...s.messages, msg],
+            messages: recentIdenticalContent ? s.messages : [...s.messages, msg],
             isLoading: false,
             streamingContent: "",
             pendingLocalMessageId: undefined,
@@ -617,14 +619,25 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     socket.on("tool:call_completed", (data: { timestamp: string; conversationId?: number; data?: Record<string, unknown> }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
-      const toolData = data.data as { toolName?: string; callId?: string; success?: boolean; error?: string; summary?: string } | undefined;
+      const toolData = data.data as { toolName?: string; callId?: string; success?: boolean; error?: string; summary?: string; disposition?: string } | undefined;
       const toolName = toolData?.toolName ?? "unknown";
+      const callId = toolData?.callId;
 
-      // Find the tool call by toolName (they're added in same order)
+      // Find the tool call by exact callId if available, otherwise by toolName
       const toolCalls = get().toolCalls;
-      const toolCall = toolCalls.find(
-        (tc) => tc.toolName === toolName && tc.status === "executing"
-      );
+      let toolCall = undefined;
+
+      if (callId) {
+        // Prefer matching by exact callId for precision
+        toolCall = toolCalls.find((tc) => tc.id === callId);
+      }
+
+      if (!toolCall) {
+        // Fallback: match by toolName for backward compatibility
+        toolCall = toolCalls.find(
+          (tc) => tc.toolName === toolName && tc.status === "executing"
+        );
+      }
 
       if (toolCall) {
         get().updateToolCall(toolCall.id, {
@@ -632,6 +645,15 @@ export const useAppStore = create<AppState>((set, get) => ({
           result: toolData?.success
             ? { success: true, output: toolData.summary }
             : { success: false, error: toolData?.error ?? "Unknown error" },
+        });
+      } else {
+        // Log when tool call is not found (helps debug missing responses)
+        console.warn("[store.tool:call_completed] Tool call not found", {
+          toolName,
+          callId,
+          success: toolData?.success,
+          error: toolData?.error,
+          activeToolCalls: toolCalls.map((tc) => ({ id: tc.id, toolName: tc.toolName, status: tc.status })),
         });
       }
     });

@@ -376,6 +376,11 @@ export function setupWebSocket(
 
               // Emit tool result events to update tool call status in UI
               if (event.type === "tool_result") {
+                logger.debug("Emitting tool:call_completed", {
+                  toolName: (event.data as any)?.toolName,
+                  callId: (event.data as any)?.callId,
+                  success: (event.data as any)?.success,
+                });
                 socket.emit("tool:call_completed", {
                   timestamp: event.timestamp,
                   conversationId: resolvedConversationId,
@@ -385,6 +390,7 @@ export function setupWebSocket(
                     success: (event.data as any)?.success,
                     error: (event.data as any)?.error,
                     summary: (event.data as any)?.summary,
+                    disposition: (event.data as any)?.disposition,
                   },
                 });
               }
