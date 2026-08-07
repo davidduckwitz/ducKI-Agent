@@ -219,7 +219,7 @@ export const api = {
       return request<unknown[]>(`/memory${query ? `?${query}` : ""}`);
     },
     action: (payload: {
-      action: "add" | "replace" | "remove" | "batch" | "pending_list" | "approve" | "prune_short_term";
+      action: "add" | "replace" | "remove" | "batch" | "pending_list" | "approve" | "prune_short_term" | "consolidate";
       type?: string;
       target?: "memory" | "user";
       conversationId?: number;
@@ -229,6 +229,7 @@ export const api = {
       pendingId?: string;
       approved?: boolean;
       keep?: number;
+      threshold?: number;
     }) => request<unknown>("/memory/actions", { method: "POST", body: JSON.stringify(payload) }),
     delete: (id: number) => request<{ deleted: boolean; id: number }>(`/memory/${id}`, { method: "DELETE" }),
     getProfile: () => request<{ systemPrompt: string; agentBehavior: string; humanInfo: string }>("/memory/profile"),

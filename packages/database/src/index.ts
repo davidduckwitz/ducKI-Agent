@@ -5,7 +5,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
-import { scoreKeywordRelevance, foldGerman } from "@ducki/shared";
+import { scoreKeywordRelevance, foldGerman, tokenizeText } from "@ducki/shared";
 import * as schema from "./schema.js";
 import { computeNextRun } from "./cron.js";
 import type {
@@ -570,6 +570,64 @@ export class DatabaseService {
         error: error instanceof Error ? error.message : String(error),
       });
       return 0;
+    }
+  }
+
+  /**
+   * Collapses near-duplicate approved long-term memories that the write-time novelty check (>=0.9
+   * identical) let through in a slightly reworded form. Greedily clusters by content-word overlap
+   * (Jaccard over stopword-filtered tokens); within each cluster of 2+, the strongest entry is kept
+   * (highest importance, then longest, then newest) and the redundant ones are deleted. This only
+   * removes redundancy - no memory content is invented or merged - and never touches short-term,
+   * semantic, pending, or settings rows. Best-effort; failures never throw.
+   */
+  async consolidateLongTermMemories(threshold = 0.7): Promise<{ groups: number; removed: number; kept: number }> {
+    try {
+      const entries = (await this.getMemories(undefined, "long-term", "approved"))
+        .map((entry) => ({ entry, tokens: new Set(tokenizeText(entry.content, { removeStopwords: true, minLength: 3 })) }))
+        .filter((item) => item.tokens.size > 0);
+
+      const jaccard = (a: Set<string>, b: Set<string>): number => {
+        let intersection = 0;
+        for (const token of a) if (b.has(token)) intersection++;
+        const union = a.size + b.size - intersection;
+        return union === 0 ? 0 : intersection / union;
+      };
+
+      const used = new Set<number>();
+      let groups = 0;
+      let removed = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const base = entries[i];
+        if (!base || used.has(base.entry.id)) continue;
+        const cluster = [base];
+        for (let j = i + 1; j < entries.length; j++) {
+          const other = entries[j];
+          if (!other || used.has(other.entry.id)) continue;
+          if (jaccard(base.tokens, other.tokens) >= threshold) cluster.push(other);
+        }
+        if (cluster.length < 2) continue;
+        groups++;
+        // Keep the strongest representative; delete the rest.
+        cluster.sort((x, y) =>
+          (y.entry.importance - x.entry.importance)
+          || (y.entry.content.length - x.entry.content.length)
+          || (y.entry.id - x.entry.id));
+        for (const dup of cluster) used.add(dup.entry.id);
+        for (const dup of cluster.slice(1)) {
+          await this.deleteMemory(dup.entry.id);
+          removed++;
+        }
+      }
+
+      const kept = entries.length - removed;
+      if (removed > 0) this.logger.info("Consolidated long-term memories", { groups, removed, kept });
+      return { groups, removed, kept };
+    } catch (error) {
+      this.logger.warn("Failed to consolidate long-term memories", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { groups: 0, removed: 0, kept: 0 };
     }
   }
 

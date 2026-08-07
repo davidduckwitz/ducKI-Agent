@@ -65,6 +65,28 @@ describe("memory search prefilter + pruning", () => {
     expect(remaining.map((m) => m.content).sort()).toEqual(["short note 4", "short note 5"]);
   });
 
+  // ── Consolidation collapses near-duplicate long-term memories ────────────────
+
+  it("consolidates near-duplicate long-term memories, keeping the strongest", async () => {
+    await db.addMemory({ content: "Deploy script runs npm build and npm test before release", importance: 5, type: "long-term" });
+    await db.addMemory({ content: "The deploy script runs npm build then npm test", importance: 9, type: "long-term" });
+    await db.addMemory({ content: "deploy script: npm build and npm test each release", importance: 4, type: "long-term" });
+    await db.addMemory({ content: "User prefers concise answers in German", importance: 7, type: "long-term" });
+    await db.addMemory({ content: "throwaway", importance: 1, type: "short-term" });
+
+    const result = await db.consolidateLongTermMemories(0.5);
+    expect(result.groups).toBe(1);
+    expect(result.removed).toBe(2);
+
+    const longTerm = await db.getMemories(undefined, "long-term");
+    // The unrelated preference survives; the deploy cluster collapses to its highest-importance entry.
+    expect(longTerm.map((m) => m.content)).toContain("User prefers concise answers in German");
+    expect(longTerm.map((m) => m.content)).toContain("The deploy script runs npm build then npm test");
+    expect(longTerm).toHaveLength(2);
+    // Short-term is never touched by consolidation.
+    expect(await db.getMemories(undefined, "short-term")).toHaveLength(1);
+  });
+
   it("keep=0 deletes ALL short-term but never touches long-term", async () => {
     await db.addMemory({ content: "durable fact", importance: 8, type: "long-term" });
     for (let i = 0; i < 3; i++) {

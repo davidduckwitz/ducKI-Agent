@@ -575,7 +575,13 @@ async function bootstrapDiscordGatewayBridge(
 
 async function bootstrap(): Promise<void> {
 	const app = express();
-	const httpServer = createServer(app);
+	// Raise the HTTP header limit well above Node's ~16KB default. Requests in the screenshot
+	// flow (e.g. an <img>/GET to /api/screenshots/:id or /api/shared/view carrying accumulated
+	// cookies, or a tool-driven request that mistakenly puts base64 image data in a header)
+	// can intermittently push total request headers past 16KB, which Node rejects with HTTP 431
+	// "Request Header Fields Too Large" before Express ever runs. 64KB is generous while still
+	// bounding abuse. Screenshot BYTES still travel in the body/URL path, never in headers.
+	const httpServer = createServer({ maxHeaderSize: 64 * 1024 }, app);
 
 	app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 	app.use(

@@ -150,6 +150,10 @@ export class MemorySystem {
       .filter((part): part is string => Boolean(part && part.trim().length > 0))
       .join(" | ");
 
+    if (!this.shouldStoreDurableLearning(content)) {
+      return { shouldRemember: false, stored: false, reason: "low_signal_content" };
+    }
+
     const importance = resultText.length >= 80 ? 8 : 7;
     const stored = await this.addLongTermIfNovel(content, importance, conversationId, "pending");
 
@@ -369,8 +373,53 @@ export class MemorySystem {
   private shouldStoreLearning(content: string, minLength: number): boolean {
     const normalized = this.normalize(content);
     if (normalized.length < minLength) return false;
-    const tooGeneric = /(successful pattern captured|completed successfully|action: list)$/i.test(normalized);
-    return !tooGeneric;
+    return this.shouldStoreDurableLearning(normalized);
+  }
+
+  // Scaffolding labels of the agent's self-generated "learnings". A memory built only from these plus a
+  // status word ("Self-Reflection Learning | Quality: good | Issues: -") is process telemetry, not
+  // durable knowledge, and used to flood the retrieved memory pool with noise.
+  private static readonly TELEMETRY_LABELS =
+    /\b(self-reflection learning|post-iteration learning|boundary assessment|skill workflow|workflow learning|task learning|quality|issues?|improvements?|suggestions?|status|action|for future|successful pattern captured)\b/gi;
+
+  /**
+   * A learning is worth keeping only if, once the templated scaffolding is stripped, enough real
+   * content words remain. This filters pure process/telemetry auto-learnings while keeping ones that
+   * carry actual substance (a concrete task result, a specific reflection suggestion, etc.).
+   */
+  private isLowSignalLearning(content: string): boolean {
+    const normalized = this.normalize(content);
+    if (normalized.length < 40) return true;
+    if (/(successful pattern captured|completed successfully|action:\s*list)\s*$/i.test(normalized)) return true;
+    const stripped = normalized
+      .replace(MemorySystem.TELEMETRY_LABELS, " ")
+      .replace(/[|#:.\-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const substantiveTokens = tokenizeText(stripped, { removeStopwords: true, minLength: 3 });
+    return substantiveTokens.length < 4;
+  }
+
+  private shouldStoreDurableLearning(content: string): boolean {
+    return !this.isLowSignalLearning(content);
+  }
+
+  /**
+   * Stores an auto-generated learning only if it clears the durable-signal bar. Use this (not
+   * addLongTermIfNovel) for anything the agent writes about its own process - reflection, boundary
+   * assessments, tool/workflow outcomes - so low-signal telemetry never enters the retrieved pool.
+   */
+  async addDurableLearningIfNovel(
+    content: string,
+    importance = 5,
+    conversationId?: number,
+    status: "approved" | "pending" = "pending"
+  ): Promise<boolean> {
+    if (!this.shouldStoreDurableLearning(content)) {
+      this.logger.debug("Skipped low-signal learning", { preview: this.normalize(content).slice(0, 60) });
+      return false;
+    }
+    return this.addLongTermIfNovel(content, importance, conversationId, status);
   }
 
   private normalize(value: string): string {

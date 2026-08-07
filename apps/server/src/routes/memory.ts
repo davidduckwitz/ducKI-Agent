@@ -273,6 +273,16 @@ memoryRouter.post("/actions", async (req, res, next) => {
       return;
     }
 
+    if (action === "consolidate") {
+      // Collapses near-duplicate approved long-term memories. `threshold` (0..1) controls how similar
+      // two entries must be to be treated as duplicates; only redundant copies are removed.
+      const thresholdRaw = Number(req.body?.threshold);
+      const threshold = Number.isFinite(thresholdRaw) && thresholdRaw > 0 && thresholdRaw <= 1 ? thresholdRaw : 0.7;
+      const result = await db.consolidateLongTermMemories(threshold);
+      res.json(createApiResponse({ consolidated: true, threshold, ...result }));
+      return;
+    }
+
     res.status(400).json({ success: false, error: `Unknown action '${action}'`, timestamp: new Date().toISOString() });
   } catch (e) { next(e); }
 });

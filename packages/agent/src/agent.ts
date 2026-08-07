@@ -2402,6 +2402,15 @@ export class Agent {
       }
     }
 
+    if (normalizedTool === "browser") {
+      if (/selector is required/.test(normalizedError)) {
+        return "Browser hint: click needs a CSS 'selector'. For type, either pass 'selector' + 'text', or click/focus the field first and then call type with just 'text' to type into the focused element.";
+      }
+      if (/type requires 'text'/.test(normalizedError)) {
+        return "Browser hint: the type action needs a non-empty 'text' value (optionally a 'selector' too).";
+      }
+    }
+
     if (normalizedTool === "task" && /unknown task action/.test(normalizedError)) {
       return "Task hint: Allowed actions are create, list, get, update, start, complete, fail, delete.";
     }
@@ -5103,7 +5112,7 @@ export class Agent {
           .filter((part) => part.trim().length > 0)
           .join(" | ");
 
-        await this.memory.addLongTermIfNovel(
+        await this.memory.addDurableLearningIfNovel(
           postIterationLearning,
           4, // Importance: 4/10 - boundary learnings are valuable
           this.conversation.id,
@@ -5125,7 +5134,7 @@ export class Agent {
         .filter((part) => part.trim().length > 0)
         .join(" | ");
 
-      await this.memory.addLongTermIfNovel(
+      await this.memory.addDurableLearningIfNovel(
         reflectionLearning,
         5, // Importance: 5/10 - useful learning but not critical
         this.conversation.id,

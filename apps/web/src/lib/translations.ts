@@ -416,6 +416,11 @@ export const translations: Record<Language, TranslationTree> = {
       pruneSuccess: "{count} Short-Term-Memories aufgeraeumt.",
       pruneFailed: "Aufraeumen fehlgeschlagen",
       pruneNone: "Keine Short-Term-Memories zum Aufraeumen.",
+      consolidate: "Konsolidieren",
+      consolidateConfirm: "Aehnliche Long-Term-Memories zusammenfassen? Es werden nur redundante Duplikate entfernt, kein Inhalt neu erzeugt.",
+      consolidateSuccess: "{removed} redundante Memories entfernt ({groups} Gruppen).",
+      consolidateNone: "Keine redundanten Memories gefunden.",
+      consolidateFailed: "Konsolidierung fehlgeschlagen",
     },
     gatewayPage: {
       subtitle: "Externe Portal-Nachrichten laufen hier in echte Conversations ein und erscheinen danach im normalen Chat-Verlauf.",
@@ -1151,6 +1156,11 @@ export const translations: Record<Language, TranslationTree> = {
       pruneSuccess: "Cleaned {count} short-term memories.",
       pruneFailed: "Cleanup failed",
       pruneNone: "No short-term memories to clean.",
+      consolidate: "Consolidate",
+      consolidateConfirm: "Merge similar long-term memories? Only redundant duplicates are removed, no content is generated.",
+      consolidateSuccess: "Removed {removed} redundant memories ({groups} groups).",
+      consolidateNone: "No redundant memories found.",
+      consolidateFailed: "Consolidation failed",
     },
     gatewayPage: {
       subtitle: "External portal messages arrive as real conversations and then appear in regular chat history.",

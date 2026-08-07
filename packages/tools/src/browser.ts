@@ -607,8 +607,17 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         const { sessionId, session } = await ensureSession(input);
         const selector = String(input["selector"] ?? "").trim();
         const text = String(input["text"] ?? "");
-        if (!selector) return fail("selector is required");
         const timeout = Number(input["timeout"] ?? 10000);
+        if (!selector) {
+          // No selector given: type into the currently-focused element. Models routinely
+          // call `type` with just `text` right after a click/focus (mirroring Puppeteer's
+          // page.keyboard.type semantics). Falling back here - instead of failing with
+          // "selector is required" - makes that natural flow work. `text` is still required
+          // because typing nothing is always a mistake.
+          if (!text) return fail("type requires 'text' (optionally with 'selector')");
+          await session.page.keyboard.type(text);
+          return ok({ sessionId, typed: text.length, selector: null, viaFocusedElement: true });
+        }
         await session.page.waitForSelector(selector, { visible: true, timeout });
         await session.page.click(selector);
         await session.page.type(selector, text);

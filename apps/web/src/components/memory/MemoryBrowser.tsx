@@ -218,6 +218,25 @@ export function MemoryBrowser() {
     },
   });
 
+  const consolidate = useMutation({
+    // Collapses near-duplicate long-term memories; only redundant copies are removed (server-side).
+    mutationFn: () => api.memory.action({ action: "consolidate" }) as Promise<{ removed?: number; groups?: number }>,
+    onSuccess: async (res) => {
+      await qc.invalidateQueries({ queryKey: ["memory"] });
+      const removed = res?.removed ?? 0;
+      setInlineToast({
+        type: "success",
+        message: removed > 0
+          ? t("memoryPage.consolidateSuccess").replace("{removed}", String(removed)).replace("{groups}", String(res?.groups ?? 0))
+          : t("memoryPage.consolidateNone"),
+      });
+    },
+    onError: (error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      setInlineToast({ type: "error", message: `${t("memoryPage.consolidateFailed")}: ${reason}` });
+    },
+  });
+
   useEffect(() => {
     if (!inlineToast) return;
     const timer = window.setTimeout(() => setInlineToast(null), 3500);
@@ -501,6 +520,18 @@ export function MemoryBrowser() {
             <Trash2 className="w-4 h-4" />
             {t("memoryPage.pruneShortTerm")}
             {shortTermCount > 0 ? ` (${shortTermCount})` : ""}
+          </button>
+          <button
+            className="btn-secondary flex items-center gap-2"
+            title={t("memoryPage.consolidateConfirm")}
+            disabled={consolidate.isPending}
+            onClick={() => {
+              if (!window.confirm(t("memoryPage.consolidateConfirm"))) return;
+              consolidate.mutate();
+            }}
+          >
+            <RefreshCcw className="w-4 h-4" />
+            {t("memoryPage.consolidate")}
           </button>
         </div>
 
