@@ -1,21 +1,21 @@
 # Security Quick Checklist (1 Minute)
 
-Nutze diese Kurzversion bei Low-Risk-Tasks ohne sensible Daten oder kritische Infrastruktur.
+Use this short version for low-risk tasks without sensitive data or critical infrastructure.
 
-## 1. Scope in einem Satz
-- Was wird konkret geaendert?
-- Was bleibt garantiert unberuehrt?
+## 1. Scope in one sentence
+- What exactly is being changed?
+- What is guaranteed to remain untouched?
 
-## 2. Kein Secret-Risiko
-- Keine Tokens, Keys, Passwoerter oder vertrauliche Inhalte ausgeben, loggen oder committen.
+## 2. No secret risk
+- Do not output, log, or commit tokens, keys, passwords, or confidential content.
 
-## 3. Kein destruktiver Schritt
-- Keine potenziell gefaehrlichen Befehle ohne explizite Freigabe.
-- Bei Unsicherheit stoppen und nachfragen.
+## 3. No destructive step
+- No potentially dangerous commands without explicit approval.
+- When in doubt, stop and ask.
 
-## 4. Trust-Check
-- Externe Eingaben nicht blind uebernehmen.
-- Mindestens einfache Validierung/Sanitizing anwenden.
+## 4. Trust check
+- Do not blindly accept external input.
+- Apply at least simple validation/sanitizing.
 
-## 5. Mini-Verifikation
-- Einen konkreten Check ausfuehren (z. B. typecheck/test/repro) und Ergebnis benennen.
+## 5. Mini verification
+- Run one concrete check (e.g. typecheck/test/repro) and state the result.

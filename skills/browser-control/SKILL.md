@@ -235,7 +235,7 @@ Use these patterns when a browser action fails. Prefer one recovery step at a ti
 
 ## Skill Interop
 
-- Nutze `shared-workspace-ops` (oder `shared-workspace-api-first`) fuer persistente Artefakte aus Browser-Faellen:
-- Screenshots, PDFs, Downloads, Exportdateien.
-- Wenn ein Browser-Lauf in mehrere Schritte zerfaellt, erstelle zuerst mit `plan` eine Schrittfolge oder nutze `workflow-orchestrator` fuer Wiederholbarkeit.
-- Wenn nur eine direkte Kurzantwort noetig ist, pruefe vor Browser-Aktionen mit `fast-answer`, ob Browser-Control ueberhaupt erforderlich ist.
+- Use `shared-workspace-ops` (or `shared-workspace-api-first`) for persistent artifacts from browser runs:
+- Screenshots, PDFs, downloads, export files.
+- When a browser run breaks into multiple steps, first create a step sequence with `plan` or use `workflow-orchestrator` for repeatability.
+- When only a direct short answer is needed, check with `fast-answer` before browser actions whether browser control is required at all.

@@ -159,19 +159,22 @@ export function ChatContainer() {
 
   const defaultExpandedForType = (eventType?: AgentEventType) => false;
 
-  // Fold consecutive tool_call/tool_result/tool_retry events that share the same
-  // toolBatchId (all tools issued by one LLM turn) into a single collapsible group, so a
-  // turn firing several tools doesn't leave a wall of separate boxes in the timeline.
-  // Events without a toolBatchId (older persisted runs, before this field existed) fall
-  // back to rendering individually.
+  // Fold a CONTIGUOUS run of tool_call/tool_result/tool_retry events into a single collapsible
+  // group, so a turn firing several tools doesn't leave a wall of separate boxes in the timeline.
+  // When the server supplies a toolBatchId (all tools of one LLM turn), a change of batch splits the
+  // group; otherwise adjacency alone groups them (any non-tool event in between ends the run). The
+  // group id is derived from the first event's stable dedup key so its open/closed state survives the
+  // local→persisted id swap instead of resetting mid-run.
   const renderItems = useMemo(() => {
     const TOOL_GROUP_TYPES = new Set(["tool_call", "tool_result", "tool_retry"]);
     type RenderItem =
       | { kind: "message"; msg: RenderedChatMessage }
       | { kind: "toolGroup"; id: string; events: RenderedChatMessage[] };
 
+    type ToolGroup = { id: string; batchId?: string; events: RenderedChatMessage[] };
+
     const items: RenderItem[] = [];
-    let currentGroup: { id: string; batchId: string; events: RenderedChatMessage[] } | null = null;
+    let currentGroup: ToolGroup | null = null;
 
     const flushGroup = () => {
       if (currentGroup && currentGroup.events.length > 0) {
@@ -180,18 +183,39 @@ export function ChatContainer() {
       currentGroup = null;
     };
 
-    for (const msg of messages) {
-      const batchId = msg.role === "event" && msg.eventType && TOOL_GROUP_TYPES.has(msg.eventType)
-        ? (msg.eventData?.["toolBatchId"] as string | undefined)
-        : undefined;
+    const makeGroup = (msg: RenderedChatMessage, batchId: string | undefined): ToolGroup => ({
+      id: batchId
+        ? `group-${batchId}`
+        : `group-${buildEventDedupKey(msg.eventType, msg.content, msg.timestamp)}`,
+      ...(batchId ? { batchId } : {}),
+      events: [msg],
+    });
 
-      if (batchId) {
-        if (currentGroup && currentGroup.batchId === batchId) {
-          currentGroup.events.push(msg);
-        } else {
+    for (const msg of messages) {
+      const isToolEvent =
+        msg.role === "event" && !!msg.eventType && TOOL_GROUP_TYPES.has(msg.eventType);
+
+      if (isToolEvent) {
+        const batchId = msg.eventData?.["toolBatchId"] as string | undefined;
+        if (!currentGroup) {
+          currentGroup = makeGroup(msg, batchId);
+        } else if (batchId && currentGroup.batchId && batchId !== currentGroup.batchId) {
+          // Explicit batch boundary within a contiguous run: start a fresh group.
           flushGroup();
-          currentGroup = { id: `group-${batchId}`, batchId, events: [msg] };
+          currentGroup = makeGroup(msg, batchId);
+        } else {
+          currentGroup.events.push(msg);
         }
+        continue;
+      }
+
+      // A non-tool event that belongs to the active batch (e.g. a browser_preview screenshot emitted
+      // BETWEEN the tool_call and its tool_result) must not close the group - otherwise the tool_call
+      // ends up alone in a box that can never leave the "running" state. Render it inline but keep the
+      // group open so the batch's tool_result events rejoin the same collapsible box.
+      const msgBatchId = msg.eventData?.["toolBatchId"] as string | undefined;
+      if (currentGroup && msgBatchId && currentGroup.batchId === msgBatchId) {
+        items.push({ kind: "message", msg });
         continue;
       }
 
@@ -948,12 +972,11 @@ ${
 
 ${currentPlan.markdown ? `\n**Detaillierter Plan:**\n${currentPlan.markdown}` : ""}`;
 
-      // Call dedicated CodingAgent endpoint with the plan as goal
-      // CodingAgent has full file-writing permissions and discipline enforcement
-      // Calculate iterations based on plan complexity:
-      // - Simple plans (1-3 steps): 20 iterations
-      // - Medium plans (4-7 steps): 50 iterations
-      // - Complex plans (8+ steps): 100 iterations
+      // Call dedicated CodingAgent endpoint with the plan as goal.
+      // CodingAgent has full file-writing permissions and discipline enforcement.
+      // Iteration/attempt/timeout budgets now come from /settings > Agenten (server-authoritative):
+      // we send the plan's step count and the server picks the SIMPLE/MEDIUM/COMPLEX tier from the
+      // persisted settings. calculatedIterations stays only as a fallback for older servers.
       const stepCount = currentPlan.steps?.length ?? 0;
       const calculatedIterations = stepCount <= 3 ? 20 : stepCount <= 7 ? 50 : 100;
 
@@ -963,7 +986,7 @@ ${currentPlan.markdown ? `\n**Detaillierter Plan:**\n${currentPlan.markdown}` : 
         body: JSON.stringify({
           goal: executionGoal,
           sandboxRoot: sandboxRoot,
-          maxAttempts: 3,
+          stepCount,
           maxIterations: calculatedIterations,
         }),
       }).then((r) => r.json());
@@ -1496,12 +1519,13 @@ ${summary}`;
                 />
               )}
 
-              {renderItems.map((item) =>
+              {renderItems.map((item, itemIndex) =>
                 item.kind === "toolGroup" ? (
                   <ToolGroupRow
                     key={item.id}
                     events={item.events}
                     t={t}
+                    live={itemIndex === renderItems.length - 1}
                     expanded={expandedToolGroups[item.id] ?? false}
                     onToggle={(isOpen) => setExpandedToolGroups((prev) => ({ ...prev, [item.id]: isOpen }))}
                     expandedChildren={expandedEvents}

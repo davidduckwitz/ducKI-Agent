@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "./bootstrap-workspace.js";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";

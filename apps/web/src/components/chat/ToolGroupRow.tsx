@@ -5,10 +5,11 @@ import { EventRow } from "./ChatMessageRow";
 const ANIMATE_IN = "animate-in fade-in slide-in-from-bottom-1 duration-300";
 
 /**
- * Folds every tool_call/tool_result/tool_retry event that shares one `toolBatchId` (all
- * tool calls issued by a single LLM turn) into one collapsible box, so a turn that fires
- * five tools does not leave five separate boxes in the timeline. Collapsed by default;
- * expanding reveals the individual EventRow entries exactly as before.
+ * Folds a contiguous run of tool_call/tool_result/tool_retry events (the tool calls of a single LLM
+ * turn) into one collapsible box, so a turn that fires five tools does not leave five separate boxes
+ * in the timeline. Collapsed by default; expanding reveals the individual EventRow entries exactly as
+ * before. Count and names are derived from the grouped events themselves (the server does not emit an
+ * aggregate count/tools field), so the header stays accurate as results stream in.
  */
 export function ToolGroupRow({
   events,
@@ -17,6 +18,7 @@ export function ToolGroupRow({
   onToggle,
   expandedChildren,
   onToggleChild,
+  live = false,
 }: {
   events: RenderedChatMessage[];
   t: (key: string) => string;
@@ -24,13 +26,29 @@ export function ToolGroupRow({
   onToggle: (open: boolean) => void;
   expandedChildren: Record<string, boolean>;
   onToggleChild: (id: string, open: boolean) => void;
+  /** True only for the last item in the transcript. A group that isn't last can never still be
+   *  "running" - the run has demonstrably moved past it - which prevents a permanently spinning box
+   *  when a tool_call has no matching tool_result (skipped/blocked calls emit no result event). */
+  live?: boolean;
 }) {
+  // The server emits ONE aggregate tool_call event per batch carrying count + tools[], then one
+  // tool_result event per tool. Derive the expected total from that aggregate (falling back to the
+  // number of result events) rather than counting call events, of which there is only one per batch.
   const callEvent = events.find((e) => e.eventType === "tool_call");
   const resultEvents = events.filter((e) => e.eventType === "tool_result");
-  const expectedCount = (callEvent?.eventData?.["count"] as number | undefined) ?? events.length;
-  const isRunning = resultEvents.length < expectedCount;
+  const batchCount = callEvent?.eventData?.["count"] as number | undefined;
+  const batchTools = callEvent?.eventData?.["tools"] as string[] | undefined;
+  const expectedCount = batchCount ?? batchTools?.length ?? (resultEvents.length || events.length);
+  const isRunning = live && resultEvents.length < expectedCount;
   const failedCount = resultEvents.filter((e) => e.eventData?.["success"] === false).length;
-  const toolNames = (callEvent?.eventData?.["tools"] as string[] | undefined) ?? [];
+  const toolNames = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(batchTools) ? batchTools : []),
+        ...resultEvents.map((e) => e.eventData?.["toolName"] as string | undefined),
+      ].filter((name): name is string => typeof name === "string" && name.length > 0)
+    )
+  );
 
   const label = isRunning
     ? t("chat.toolGroupRunning").replace("{count}", String(expectedCount))

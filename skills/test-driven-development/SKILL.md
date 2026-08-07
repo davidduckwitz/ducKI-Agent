@@ -11,27 +11,27 @@ source: "Inspired by common Hermes/OpenClaw software-dev skill patterns"
 
 # TDD Mode
 
-## Ablauf
-1. Schreibe zuerst einen fehlschlagenden Test.
-2. Fuehre den Test aus und bestaetige den Fehler.
-3. Implementiere minimalen Code fuer gruen.
-4. Fuehre relevante Tests erneut aus.
-5. Refactor nur bei gruenen Tests.
+## Procedure
+1. Write a failing test first.
+2. Run the test and confirm the failure.
+3. Implement the minimal code to make it green.
+4. Re-run the relevant tests.
+5. Refactor only with green tests.
 
-## Anforderungen
-- Kein ungetesteter Produktionscode.
-- Tests muessen Verhalten abdecken, nicht interne Details.
-- Testdaten klar und reproduzierbar.
+## Requirements
+- No untested production code.
+- Tests must cover behavior, not internal details.
+- Test data clear and reproducible.
 
-## Ausgabeformat
-- Geaenderte Dateien
-- Testbefehle und Ergebnisse
-- Restrisiken oder nicht abgedeckte Faelle
+## Output format
+- Changed files
+- Test commands and results
+- Residual risks or uncovered cases
 
 ## Skill Interop
 
-- Wenn Scope unklar ist, zuerst `plan` fuer klare Schritte nutzen.
-- Vor Implementierung optional `history-search` nutzen, um bestehende Testmuster wiederzuverwenden.
-- Nach gruener Umsetzung `code-review` als Abschlusskontrolle ausfuehren.
+- If the scope is unclear, use `plan` first for clear steps.
+- Before implementation, optionally use `history-search` to reuse existing test patterns.
+- After a green implementation, run `code-review` as a final check.
 
 

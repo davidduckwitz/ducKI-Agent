@@ -1,11 +1,11 @@
 # Skill: Skill Management
 
-## Zusammenfassung
-Verwaltung von Skills (Markdown-basierte Wissenserweiterung). Der Agent kann damit seine eigenen Fähigkeiten erweitern, aktualisieren und verwalten.
+## Summary
+Management of skills (Markdown-based knowledge extension). With it, the agent can extend, update, and manage its own capabilities.
 
-## Kernfunktionen
+## Core functions
 
-### 1. Skill erstellen oder updaten
+### 1. Create or update a skill
 ```
 [TOOL:skill_manage({
   "action": "write",
@@ -14,24 +14,24 @@ Verwaltung von Skills (Markdown-basierte Wissenserweiterung). Der Agent kann dam
 })]
 ```
 
-**Wann nutzen:**
-- Neue Fähigkeiten für spezifische Aufgaben hinzufügen
-- Best Practices und Workflows dokumentieren
-- Wiederverwendbare Patterns etablieren
+**When to use:**
+- Add new capabilities for specific tasks
+- Document best practices and workflows
+- Establish reusable patterns
 
-### 2. Skill auflisten
+### 2. List skills
 ```
 [TOOL:skill_manage({
   "action": "list"
 })]
 ```
 
-**Wann nutzen:**
-- Verfügbare Skills überprüfen
-- Bevor man Operationen auf Skills macht
-- Um zu sehen, welche Fähigkeiten bereits vorhanden sind
+**When to use:**
+- Check available skills
+- Before performing operations on skills
+- To see which capabilities already exist
 
-### 3. Skill ansehen
+### 3. View a skill
 ```
 [TOOL:skill_manage({
   "action": "view",
@@ -39,12 +39,12 @@ Verwaltung von Skills (Markdown-basierte Wissenserweiterung). Der Agent kann dam
 })]
 ```
 
-**Wann nutzen:**
-- Bestehende Skills verstehen und lernen
-- Vor Updates überprüfen, was bereits existiert
-- Best Practices von anderen Skills übernehmen
+**When to use:**
+- Understand and learn from existing skills
+- Check what already exists before updates
+- Adopt best practices from other skills
 
-### 4. Skill ausführen (Sandbox-Script)
+### 4. Execute a skill (sandbox script)
 ```
 [TOOL:skill_manage({
   "action": "execute",
@@ -52,12 +52,12 @@ Verwaltung von Skills (Markdown-basierte Wissenserweiterung). Der Agent kann dam
 })]
 ```
 
-**Wann nutzen:**
-- Automatisierte Tasks durchführen
-- Scripts die im Skill gespeichert sind ausführen
-- Nur wenn Skill ein `script.js` enthält
+**When to use:**
+- Perform automated tasks
+- Run scripts stored in the skill
+- Only when the skill contains a `script.js`
 
-### 5. Skill löschen
+### 5. Delete a skill
 ```
 [TOOL:skill_manage({
   "action": "delete",
@@ -65,104 +65,104 @@ Verwaltung von Skills (Markdown-basierte Wissenserweiterung). Der Agent kann dam
 })]
 ```
 
-**Wann nutzen:**
-- Veraltete Skills entfernen
-- Cleaner Code-Architektur aufrechterhalten
-- VORSICHT: Löschen ist permanent!
+**When to use:**
+- Remove outdated skills
+- Keep a clean code architecture
+- CAUTION: deletion is permanent!
 
-## Skill-Struktur (Best Practice)
+## Skill structure (best practice)
 
 ```markdown
 # Skill: Descriptive Name
 
-## Zusammenfassung
-1-2 Sätze was dieser Skill macht und wofür er gut ist.
+## Summary
+1-2 sentences on what this skill does and what it is good for.
 
-## Verwendungsbeispiele
+## Usage examples
 
 ### Use Case 1: [Concrete Task]
-Code-Beispiel zeigen:
+Show a code example:
 \`\`\`
 [TOOL:relevant_tool(...)]
 \`\`\`
-Erklären was passiert.
+Explain what happens.
 
 ## Best Practices
-- Was zu vermeiden ist
-- Gotchas/Fallstricke
-- Performance-Tipps
+- What to avoid
+- Gotchas/pitfalls
+- Performance tips
 
-## Abhängigkeiten
-- Welche Tools/Skills sind nötig
-- Voraussetzungen für Nutzung
+## Dependencies
+- Which tools/skills are needed
+- Prerequisites for use
 
-## Siehe auch
-- [andere-related-skills]
+## See also
+- [other-related-skills]
 ```
 
-## Integrationsmuster
+## Integration patterns
 
-### Pattern 1: Tool-Skill-Kombination
-Skills funktionieren am besten wenn sie:
-1. Ein bestimmtes Tool dokumentieren (z.B. skill-manage selbst)
-2. Spezifische Use-Cases zeigen
-3. Mit Agent-Workflows zusammenpassen
+### Pattern 1: tool-skill combination
+Skills work best when they:
+1. Document a specific tool (e.g. skill-manage itself)
+2. Show specific use cases
+3. Fit with agent workflows
 
-### Pattern 2: Skill-Verkettung
-Skills können andere Skills referenzieren:
+### Pattern 2: skill chaining
+Skills can reference other skills:
 - `[TOOL:skill_manage({"action": "view", "name": "filesystem-operations"})]`
-- Hilft dem Agent beste Practices zu lernen
-- Schafft zusammenhängende Wissensbasis
+- Helps the agent learn best practices
+- Creates a coherent knowledge base
 
-## Wichtige Regeln
+## Important rules
 
-⚠️ **KRITISCH:**
-- Skills sind **JSON-safe**: Inhalt muss korrekt escaped sein
-- Keine sensiblen Informationen in Skills speichern
-- Skills sind PUBLIC - alle Agents können sie lesen
-- Skill-Namen sollten kebab-case sein (my-skill-name)
+⚠️ **CRITICAL:**
+- Skills are **JSON-safe**: content must be correctly escaped
+- Do not store sensitive information in skills
+- Skills are PUBLIC - all agents can read them
+- Skill names should be kebab-case (my-skill-name)
 
-✅ **EMPFOHLEN:**
-- Kurze, fokussierte Skills (nicht > 2000 Zeichen)
-- Praktische Beispiele statt nur Theorie
-- Tool-Links einbauen: `[TOOL:tool_name(...)]`
-- Zusammenhängende Skills als Ökosystem denken
+✅ **RECOMMENDED:**
+- Short, focused skills (not > 2000 characters)
+- Practical examples instead of just theory
+- Include tool links: `[TOOL:tool_name(...)]`
+- Think of related skills as an ecosystem
 
-## Workflow-Integration
+## Workflow integration
 
-Guter Workflow mit Skills:
-1. **Ziel definieren** - Was muss ich tun?
-2. **Relevante Skills finden** - `skill_manage list` + `skill_manage view`
-3. **Best Practices lernen** - Von ähnlichen Skills
-4. **Tool nutzen** - Mit Dokumentation aus Skill
-5. **Ergebnis evaluieren** - Funktioniert es?
-6. **Skill updaten?** - Falls neue Patterns gefunden wurden
+A good workflow with skills:
+1. **Define the goal** - What do I need to do?
+2. **Find relevant skills** - `skill_manage list` + `skill_manage view`
+3. **Learn best practices** - From similar skills
+4. **Use the tool** - With the documentation from the skill
+5. **Evaluate the result** - Does it work?
+6. **Update the skill?** - If new patterns were found
 
-## Häufige Fehler
+## Common mistakes
 
-❌ **Zu tun:**
-- Skill-Namen zu lang oder mit Underscores
-- Zu viel Text, zu wenig Struktur
-- Tools ohne Erklärung nutzen
-- Auf veraltete Skills verlassen
+❌ **Don't:**
+- Skill names too long or with underscores
+- Too much text, too little structure
+- Use tools without explanation
+- Rely on outdated skills
 
-✅ **Stattdessen:**
-- Kurze, aussagekräftige Namen
-- Gliederung mit `## Überschriften`
-- Immer Tool-Beispiele zeigen
-- Skills regelmäßig updaten
+✅ **Instead:**
+- Short, meaningful names
+- Structure with `## headings`
+- Always show tool examples
+- Update skills regularly
 
-## Selbst-Referenz
+## Self-reference
 
-Dieser Skill dokumentiert das `skill_manage` Tool.
-Man kann damit auch sich selbst updaten:
+This skill documents the `skill_manage` tool.
+You can also use it to update itself:
 
 ```
 [TOOL:skill_manage({
   "action": "write",
   "name": "skill-manage",
-  "content": "[neuer Skill-Text]"
+  "content": "[new skill text]"
 })]
 ```
 
-Nützlich um Best Practices zu etablieren, die alle Skills befolgen sollten.
+Useful for establishing best practices that all skills should follow.

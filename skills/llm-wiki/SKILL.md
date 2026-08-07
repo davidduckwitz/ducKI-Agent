@@ -1,6 +1,6 @@
-﻿---
+---
 name: llm-wiki
-description: "Nutze das LLM-Wiki als primaere Wissensquelle, mit klarer Reihenfolge fuer Search, Moderation und Antwortaufbau."
+description: "Use the LLM wiki as the primary knowledge source, with a clear order for search, moderation, and answer construction."
 related_skills: [shared-workspace-ops, cronjobs, history-search, workflow-orchestrator]
 
 primary_skills: [shared-workspace-ops]
@@ -10,41 +10,39 @@ version: 1.0.0
 
 # LLM Wiki Skill
 
-## Ziel
-Verwende das LLM-Wiki korrekt, bevor externe oder unzuverlaessige Quellen genutzt werden.
+## Goal
+Use the LLM wiki correctly before resorting to external or unreliable sources.
 
-## Wann anwenden
-Nutze diesen Skill bei Fragen nach vorhandenem Wissen, internen Dokumenten, wiederkehrenden Fakten, Regeln, Projektkonventionen oder wenn der User explizit nach Wiki/Knowledge fragt.
+## When to apply
+Use this skill for questions about existing knowledge, internal documents, recurring facts, rules, project conventions, or whenever the user explicitly asks for the wiki/knowledge base.
 
-## Ausfuehrungsreihenfolge
-1. Suche mit dem `wiki`-Tool: `wiki action=search query="..."`.
-2. Formuliere die Suche als Stichworte, nicht als ganzen Satz - gesucht wird ueber Begriffe.
-3. Wenn nichts passt: einmal mit anderen/breiteren Begriffen erneut suchen, bevor du aufgibst.
-4. Fuer den Volltext eines Treffers: `wiki action=get id=<id>`.
-5. Nutze bevorzugt `approved` Eintraege; `candidate` nur mit `includeCandidates=true` und Kennzeichnung als vorlaeufig.
-6. Wenn keine Treffer vorhanden sind, sage das explizit - erfinde keine Wiki-Inhalte.
+## Execution order
+1. Search with the `wiki` tool: `wiki action=search query="..."`.
+2. Phrase the search as keywords, not a full sentence - it searches over terms.
+3. If nothing matches: search once more with different/broader terms before giving up.
+4. For the full text of a hit: `wiki action=get id=<id>`.
+5. Prefer `approved` entries; use `candidate` only with `includeCandidates=true` and flag it as preliminary.
+6. If there are no hits, say so explicitly - do not invent wiki content.
 
-## Tool-Nutzung
-- Primaer: das native `wiki`-Tool (`action=search|get|status`). Es laeuft im selben Prozess,
-  es sind keine URLs, Ports oder HTTP-Aufrufe noetig.
-- Nur fuer Moderation (approve/reject) das HTTP-Tool gegen `/api/wiki/entries/:id/approve`
-  bzw. `.../reject` nutzen, und ausschliesslich bei explizitem Review-Auftrag.
+## Tool usage
+- Primary: the native `wiki` tool (`action=search|get|status`). It runs in the same process,
+  so no URLs, ports, or HTTP calls are needed.
+- Use the HTTP tool only for moderation (approve/reject) against `/api/wiki/entries/:id/approve`
+  or `.../reject`, and only on an explicit review request.
 
-## Antwortregeln
-- Nenne bei Fakten die Quelle (`sourcePath`/Titel) kurz mit.
-- Bei mehreren Treffern: priorisiere hoechsten Score + neuere Eintraege.
-- Trenne sicheres Wissen (approved) von vorlaeufigem Wissen (candidate).
+## Answer rules
+- When stating facts, briefly cite the source (`sourcePath`/title).
+- With multiple hits: prioritize the highest score plus more recent entries.
+- Separate confirmed knowledge (approved) from preliminary knowledge (candidate).
 
 ## Guardrails
-- Kein Halluzinieren bei fehlenden Treffern.
-- Keine stillschweigende Nutzung von `candidate` als harte Wahrheit.
-- Wenn Wiki deaktiviert ist, weise darauf hin und arbeite mit alternativen Quellen weiter.
+- No hallucinating when there are no hits.
+- Do not silently treat `candidate` entries as hard truth.
+- If the wiki is disabled, point that out and continue with alternative sources.
 
 ## Skill Interop
 
-- Wenn relevantes Wissen fehlt, neue/aktualisierte Inhalte ueber `shared-workspace-ops` in `shared-workspace/llm-wiki` ablegen.
-- Fuer periodisches Lernen/Reindexing `cronjobs` einsetzen.
-- Bei Antwortkonflikten zwischen Wiki und Historie `history-search` als Gegencheck nutzen.
-- Fuer laengere Wissens-Pipelines `workflow-orchestrator` verwenden.
-
-
+- If relevant knowledge is missing, store new/updated content in `shared-workspace/llm-wiki` via `shared-workspace-ops`.
+- Use `cronjobs` for periodic learning/reindexing.
+- On answer conflicts between the wiki and history, use `history-search` as a cross-check.
+- For longer knowledge pipelines, use `workflow-orchestrator`.

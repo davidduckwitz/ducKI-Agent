@@ -77,10 +77,10 @@ When reporting to user, include:
 
 ## Skill Interop
 
-- Vor dem Graph-Start mit `fast-answer` pruefen, ob Workflow-Orchestrierung wirklich noetig ist.
-- Plan-/Manager-Knoten mit Regeln aus `plan` ausrichten.
-- Recherche-Knoten bevorzugt mit `history-search` und (bei Wissensfragen) `llm-wiki` bauen.
-- Browser-Knoten nutzen `browser-control`; Dateien daraus immer ueber `shared-workspace-ops` oder `shared-workspace-api-first` persistieren.
-- Review-/Qualitaetsknoten mit `code-review` und `test-driven-development` absichern.
+- Before starting the graph, use `fast-answer` to check whether workflow orchestration is really needed.
+- Align plan/manager nodes with the rules from `plan`.
+- Build research nodes preferably with `history-search` and (for knowledge questions) `llm-wiki`.
+- Browser nodes use `browser-control`; always persist their files via `shared-workspace-ops` or `shared-workspace-api-first`.
+- Safeguard review/quality nodes with `code-review` and `test-driven-development`.
 
 

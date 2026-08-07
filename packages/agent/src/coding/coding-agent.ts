@@ -44,6 +44,12 @@ export interface CodingRunOptions {
   verifyCommand?: string;
   /** Overrides the instance's default macro attempt budget for this run only. */
   maxAttempts?: number;
+  /**
+   * Wall-clock budget for the whole run, in milliseconds. Enforced as a soft deadline checked at
+   * each attempt boundary (never aborts an in-flight LLM/tool call mid-way), so the run stops
+   * cleanly once the budget is exhausted instead of retrying indefinitely. Omit/0 to disable.
+   */
+  timeoutMs?: number;
 }
 
 export interface CodingRunResult {
@@ -238,8 +244,27 @@ export class CodingAgent {
       verifyCommand = this.detectDefaultVerifyCommand();
     }
 
+    const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
+
     let lastSummary = "";
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Soft wall-clock budget: stop before starting another attempt once the deadline has passed
+      // rather than burning further attempts. In-flight calls are never interrupted mid-way.
+      if (deadline && Date.now() > deadline && attempt > 1) {
+        this.emit("decision", `Time budget of ${opts.timeoutMs}ms exhausted after ${attempt - 1} attempt(s) - stopping.`, {
+          attempt: attempt - 1,
+          timeoutMs: opts.timeoutMs,
+        });
+        return {
+          success: false,
+          verified: false,
+          summary: `${lastSummary}\n\n[Stopped: time budget of ${opts.timeoutMs}ms exhausted after ${attempt - 1} attempt(s).]`,
+          attempts: attempt - 1,
+          conversationId,
+          ...(verifyCommand ? { verifyCommand } : {}),
+        };
+      }
+
       this.emit("iteration", `Coding-Versuch ${attempt}/${maxAttempts}`, {
         attempt,
         maxAttempts,

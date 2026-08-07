@@ -103,8 +103,8 @@ When done, return:
 
 ## Skill Interop
 
-- PrimÃ¤rer Persistenz-Skill fuer andere Skills: `browser-control`, `workflow-orchestrator`, `llm-wiki`, `discord`, `mcp-integration`.
-- Wenn API-Verhalten exakt eingehalten werden muss, eskaliere zu `shared-workspace-api-first`.
-- Wenn zuerst ein Umsetzungsplan noetig ist, kombiniere mit `plan`.
+- Primary persistence skill for other skills: `browser-control`, `workflow-orchestrator`, `llm-wiki`, `discord`, `mcp-integration`.
+- When API behavior must be followed exactly, escalate to `shared-workspace-api-first`.
+- When an implementation plan is needed first, combine with `plan`.
 
 

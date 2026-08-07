@@ -1,11 +1,11 @@
 import { createClient, type Client } from "@libsql/client";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
-import { eq, desc, and, lt, or, isNull, gt } from "drizzle-orm";
+import { eq, desc, and, lt, or, isNull, gt, like, notInArray } from "drizzle-orm";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
-import { scoreKeywordRelevance } from "@ducki/shared";
+import { scoreKeywordRelevance, foldGerman } from "@ducki/shared";
 import * as schema from "./schema.js";
 import { computeNextRun } from "./cron.js";
 import type {
@@ -60,6 +60,16 @@ export class DatabaseService {
     await this.runMigrations();
 
     this.logger.info("Database initialized", { path: this.dbPath, journalMode });
+  }
+
+  /** Releases the underlying libsql client. Optional in long-running servers; useful for tests and
+   *  short-lived scripts so the database file is not left locked. */
+  close(): void {
+    try {
+      this.client?.close();
+    } catch {
+      // Already closed or never opened - nothing to release.
+    }
   }
 
   /**
@@ -139,6 +149,33 @@ export class DatabaseService {
     await this.client.execute(`ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
     });
+
+    await this.client.execute(`ALTER TABLE memories ADD COLUMN content_folded TEXT`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+    // One-time backfill of the folded prefilter column for rows that predate it. Cheap on a normal
+    // memory table; the LIKE prefilter only skips rows once every candidate has a folded value.
+    try {
+      const pending = await this.db
+        .select({ id: schema.memories.id, content: schema.memories.content })
+        .from(schema.memories)
+        .where(isNull(schema.memories.contentFolded))
+        .all();
+      for (const row of pending) {
+        await this.db
+          .update(schema.memories)
+          .set({ contentFolded: foldGerman(row.content) })
+          .where(eq(schema.memories.id, row.id))
+          .run();
+      }
+      if (pending.length > 0) {
+        this.logger.info("Backfilled folded content for memory prefilter", { rows: pending.length });
+      }
+    } catch (error) {
+      this.logger.warn("Could not backfill memory content_folded column", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     await this.client.execute(`ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER REFERENCES tasks(id)`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
@@ -393,7 +430,13 @@ export class DatabaseService {
   // Memories
   // ============================================================
   async addMemory(data: Omit<MemoryInsert, "createdAt">): Promise<MemorySelect> {
-    const result = await this.db.insert(schema.memories).values({ ...data, createdAt: new Date().toISOString() }).returning().get();
+    const result = await this.db.insert(schema.memories).values({
+      ...data,
+      // Keep the folded prefilter column in sync on write so retrieval never has to fall back to a
+      // full scan for freshly stored memories.
+      contentFolded: data.contentFolded ?? foldGerman(data.content),
+      createdAt: new Date().toISOString(),
+    }).returning().get();
     if (!result) throw new Error("Failed to add memory");
     return result;
   }
@@ -444,21 +487,90 @@ export class DatabaseService {
     if (type !== undefined) conditions.push(eq(schema.memories.type, type));
     if (status !== undefined) conditions.push(eq(schema.memories.status, status));
 
+    // SQL prefilter: only load rows whose folded content contains at least one folded keyword as a
+    // substring. The scorer matches a keyword iff a folded content TOKEN starts with the folded
+    // keyword, and "token starts with X" implies "folded content contains X" - so this LIKE is a
+    // guaranteed SUPERSET of the rows the JS scorer keeps. `_`/`%` inside a keyword only widen the
+    // match (still a superset), and rows with a NULL folded column (pre-backfill) are always kept, so
+    // the prefilter can never drop a result - it just moves the heavy tokenization off the full table.
+    const foldedKeywords = keywords
+      .map((k) => foldGerman(String(k)).trim())
+      .filter((k) => k.length > 0);
+    if (foldedKeywords.length > 0) {
+      const likeClauses = foldedKeywords.map((k) => like(schema.memories.contentFolded, `%${k}%`));
+      conditions.push(or(...likeClauses, isNull(schema.memories.contentFolded)));
+    }
+
     const memories = conditions.length > 0
       ? await this.db.select().from(schema.memories).where(and(...conditions)).all()
       : await this.db.select().from(schema.memories).all();
 
+    const now = Date.now();
     return memories
       .map(m => ({
         entry: m,
-        // Conversation-local memories win ties against global ones of equal relevance.
+        // Conversation-local memories win ties against global ones of equal relevance, and a mild
+        // recency boost keeps recall fresh so newer learnings edge out equally-relevant stale ones
+        // without overriding relevance (max +0.3 vs. keyword scores that typically range 1-3).
         score: scoreKeywordRelevance(m.content, keywords)
-          + (conversationId !== undefined && m.conversationId === conversationId ? 0.15 : 0),
+          + (conversationId !== undefined && m.conversationId === conversationId ? 0.15 : 0)
+          + this.recencyBoost(m.createdAt, now),
       }))
       .filter(s => s.score > 0)
       .sort((a, b) => (b.score - a.score) || (b.entry.importance - a.entry.importance))
       .slice(0, limit)
       .map(s => s.entry);
+  }
+
+  /** Exponential recency weight in [0, 0.3]; ~30-day decay constant. NaN dates contribute nothing. */
+  private recencyBoost(createdAt: string, now: number): number {
+    const ts = Date.parse(createdAt);
+    if (!Number.isFinite(ts)) return 0;
+    const ageDays = Math.max(0, (now - ts) / 86_400_000);
+    return 0.3 * Math.exp(-ageDays / 30);
+  }
+
+  /**
+   * Short-term memories are written on every run but are never read back by retrieval (which only
+   * pulls long-term/semantic), so left unchecked they grow the table forever as pure dead weight.
+   * Keep only the newest `keep` short-term rows and drop the rest. Best-effort; a failure here never
+   * blocks a run.
+   */
+  async pruneShortTermMemories(keep = 200): Promise<number> {
+    try {
+      // keep <= 0 means "delete all short-term". This MUST be handled before the survivors query:
+      // drizzle/libsql treats `.limit(0)` as "no limit" (returns every row), so the survivor set would
+      // contain all rows and notInArray(...) would delete nothing - the exact bug behind a prune that
+      // reported success but removed 0 rows.
+      if (keep <= 0) {
+        const result = await this.db.delete(schema.memories).where(eq(schema.memories.type, "short-term")).run();
+        const removed = Number((result as { rowsAffected?: number } | undefined)?.rowsAffected ?? 0);
+        if (removed > 0) this.logger.debug("Pruned short-term memories", { removed, kept: 0 });
+        return removed;
+      }
+
+      const survivors = await this.db
+        .select({ id: schema.memories.id })
+        .from(schema.memories)
+        .where(eq(schema.memories.type, "short-term"))
+        .orderBy(desc(schema.memories.id))
+        .limit(keep)
+        .all();
+      const keepIds = survivors.map((r) => r.id);
+      const result = keepIds.length > 0
+        ? await this.db.delete(schema.memories)
+            .where(and(eq(schema.memories.type, "short-term"), notInArray(schema.memories.id, keepIds)))
+            .run()
+        : await this.db.delete(schema.memories).where(eq(schema.memories.type, "short-term")).run();
+      const removed = Number((result as { rowsAffected?: number } | undefined)?.rowsAffected ?? 0);
+      if (removed > 0) this.logger.debug("Pruned short-term memories", { removed, kept: keepIds.length });
+      return removed;
+    } catch (error) {
+      this.logger.warn("Failed to prune short-term memories", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
+    }
   }
 
   // ============================================================

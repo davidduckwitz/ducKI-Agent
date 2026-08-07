@@ -411,6 +411,11 @@ export const translations: Record<Language, TranslationTree> = {
       deleteConfirm: "Diesen Memory-Eintrag wirklich loeschen?",
       deleteSuccess: "Memory-Eintrag geloescht.",
       deleteFailed: "Loeschen fehlgeschlagen",
+      pruneShortTerm: "Short-Term aufraeumen",
+      pruneConfirm: "Alle Short-Term-Memories loeschen? Long-Term, Semantic und Einstellungen bleiben unberuehrt.",
+      pruneSuccess: "{count} Short-Term-Memories aufgeraeumt.",
+      pruneFailed: "Aufraeumen fehlgeschlagen",
+      pruneNone: "Keine Short-Term-Memories zum Aufraeumen.",
     },
     gatewayPage: {
       subtitle: "Externe Portal-Nachrichten laufen hier in echte Conversations ein und erscheinen danach im normalen Chat-Verlauf.",
@@ -1141,6 +1146,11 @@ export const translations: Record<Language, TranslationTree> = {
       deleteConfirm: "Delete this memory entry?",
       deleteSuccess: "Memory entry deleted.",
       deleteFailed: "Delete failed",
+      pruneShortTerm: "Clean short-term",
+      pruneConfirm: "Delete all short-term memories? Long-term, semantic and settings are left untouched.",
+      pruneSuccess: "Cleaned {count} short-term memories.",
+      pruneFailed: "Cleanup failed",
+      pruneNone: "No short-term memories to clean.",
     },
     gatewayPage: {
       subtitle: "External portal messages arrive as real conversations and then appear in regular chat history.",

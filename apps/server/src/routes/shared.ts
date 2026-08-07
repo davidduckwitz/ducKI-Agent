@@ -2,10 +2,11 @@ import { Router, type IRouter } from "express";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
+import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
 
 export const sharedRouter: IRouter = Router();
 
-const SHARED_ROOT = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
+const SHARED_ROOT = SHARED_WORKSPACE_ROOT;
 
 const TEXT_EXTENSIONS = new Set([
   ".txt", ".md", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".yml", ".yaml", ".xml", ".csv", ".html", ".css",

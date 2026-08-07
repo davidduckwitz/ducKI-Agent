@@ -4,11 +4,12 @@ import type { DatabaseService } from "@ducki/database";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
+import { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "@ducki/tools";
 
 export const codingRouter: IRouter = Router();
 
-const SHARED_ROOT = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
-export const CODING_ROOT = resolve(SHARED_ROOT, "coding");
+const SHARED_ROOT = SHARED_WORKSPACE_ROOT;
+export const CODING_ROOT = CODING_WORKSPACE_ROOT;
 
 const TEXT_EXTENSIONS = new Set([
   ".txt", ".md", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".yml", ".yaml", ".xml", ".csv", ".html", ".css",

@@ -52,8 +52,8 @@ Use this skill when the user asks to schedule, list, edit, enable, disable, or d
 
 ## Skill Interop
 
-- Fuer komplexe zeitgesteuerte Multi-Step-Faelle `workflow-orchestrator` als `targetType=skill` bevorzugen.
-- Fuer zeitbasierte Wissenspflege kann `llm-wiki` (z. B. Reindex-Flow) geplant werden.
-- Fuer Zeit-/Datumsantworten in festen Intervallen `datum-uhrzeit-tag` als Skill-Target nutzen.
+- For complex time-triggered multi-step cases, prefer `workflow-orchestrator` as `targetType=skill`.
+- For time-based knowledge maintenance, `llm-wiki` (e.g. a reindex flow) can be scheduled.
+- For time/date answers at fixed intervals, use `datum-uhrzeit-tag` as the skill target.
 
 

@@ -43,8 +43,8 @@ When using this skill, report:
 
 ## Skill Interop
 
-- Kombiniere mit `llm-wiki`, wenn neben Chat-Historie auch kuratierte Wissenseintraege gebraucht werden.
-- Ergebnisse in `plan` uebernehmen, damit Umsetzungsplaene auf realen Vorerfahrungen basieren.
-- Bei wiederkehrenden Fehlermustern `code-review` hinzuziehen.
+- Combine with `llm-wiki` when curated knowledge entries are needed alongside the chat history.
+- Carry results into `plan` so implementation plans are based on real prior experience.
+- Bring in `code-review` for recurring error patterns.
 
 

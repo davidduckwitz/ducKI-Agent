@@ -1,43 +1,43 @@
 # Security Checklist
 
-Nutze diese Kurz-Checkliste bei allen riskanten Aenderungen als Pflichtablauf.
+Use this short checklist as a mandatory procedure for all risky changes.
 
 ## 1. Scope
-- Was ist exakt im Scope?
-- Welche Systeme/Dateien sind explizit out-of-scope?
+- What exactly is in scope?
+- Which systems/files are explicitly out of scope?
 
 ## 2. Secrets
-- Werden Tokens, Keys, Passwoerter oder sensible Inhalte verarbeitet?
-- Sicherstellen: keine Ausgabe in Logs, Chat-Antworten oder Commits.
+- Are tokens, keys, passwords, or sensitive contents being processed?
+- Ensure: no output in logs, chat responses, or commits.
 
 ## 3. Input/Trust
-- Kommen Daten aus externer oder untrusted Quelle?
-- Validierung/Sanitizing vorhanden und ausreichend streng?
+- Does data come from an external or untrusted source?
+- Is validation/sanitizing present and strict enough?
 
 ## 4. Auth/Policy
-- Aendert die Aufgabe Auth, Rollen, Signaturen, Sessions oder CORS?
-- Gibt es eine moegliche Privileg-Eskalation?
+- Does the task change auth, roles, signatures, sessions, or CORS?
+- Is there a possible privilege escalation?
 
 ## 5. Execution Risk
-- Enthalten Shell/Tool-Schritte destruktive oder weitreichende Befehle?
-- Gibt es einen sicheren Dry-Run oder einen kleineren Testschritt vor Full-Run?
+- Do shell/tool steps contain destructive or far-reaching commands?
+- Is there a safe dry-run or a smaller test step before the full run?
 
 ## 6. Data Safety
-- Koennen Daten verloren gehen, ueberschrieben oder exfiltriert werden?
-- Backup/Rollback klar definiert?
+- Could data be lost, overwritten, or exfiltrated?
+- Is backup/rollback clearly defined?
 
 ## 7. Gateway/Discord
-- Bei Outbound: zuerst Gateway-Konfiguration pruefen (`list_configs`).
-- Kein Versand sensibler Daten bei unklarem Ziel.
+- For outbound: check the gateway configuration first (`list_configs`).
+- Do not send sensitive data when the destination is unclear.
 
 ## 8. Verification
-- Welche konkreten Checks belegen den Security-Fix (typecheck/tests/repro)?
-- Wurden nur die benoetigten Aenderungen gemacht?
+- Which concrete checks prove the security fix (typecheck/tests/repro)?
+- Were only the necessary changes made?
 
 ## 9. Incident Mode
-- Bei Verdacht auf Sicherheitsproblem: sofort stoppen.
-- Risiko, Auswirkung, Dringlichkeit und naechsten sicheren Schritt melden.
+- On suspicion of a security problem: stop immediately.
+- Report the risk, impact, urgency, and the next safe step.
 
-## 10. Abschluss
-- Rest-Risiko benennen.
-- Empfohlenen naechsten Schritt dokumentieren.
+## 10. Conclusion
+- Name the residual risk.
+- Document the recommended next step.

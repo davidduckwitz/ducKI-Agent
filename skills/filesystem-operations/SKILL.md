@@ -1,159 +1,159 @@
 # Skill: Filesystem Operations
 
-## Zusammenfassung
-Sicheres und effizientes Arbeiten mit dem Dateisystem über das `filesystem`-Tool.
-Alle Pfade sind auf `shared-workspace` beschränkt (ausser `basePath`/`safeMode:false` ist gesetzt).
+## Summary
+Work safely and efficiently with the file system via the `filesystem` tool.
+All paths are confined to `shared-workspace` (unless `basePath`/`safeMode:false` is set).
 
-## Verzeichnis oder Datei? (WICHTIG — häufigste Fehlerquelle)
+## Directory or file? (IMPORTANT — most common source of errors)
 
-Verzeichnisse und Dateien brauchen **unterschiedliche Actions**:
+Directories and files need **different actions**:
 
-| Ziel | Richtig | Falsch |
+| Target | Correct | Wrong |
 |---|---|---|
-| Ordnerinhalt sehen (`./shared-workspace`) | `list` | ~~`read`~~ |
-| Dateiinhalt lesen (`./shared-workspace/notes.md`) | `read` | ~~`list`~~ |
-| Unklar, was der Pfad ist | `stat` (liefert `isDirectory`) | raten |
+| See folder contents (`./shared-workspace`) | `list` | ~~`read`~~ |
+| Read file contents (`./shared-workspace/notes.md`) | `read` | ~~`list`~~ |
+| Unclear what the path is | `stat` (returns `isDirectory`) | guessing |
 
-Faustregel: **Pfad ohne Dateiendung → zuerst `list` oder `stat`.**
+Rule of thumb: **path without a file extension → `list` or `stat` first.**
 
 ```
-# Ordner erkunden
+# Explore a folder
 [TOOL:filesystem({"action": "list", "path": "./shared-workspace"})]
-# dann gezielt eine Datei daraus lesen
+# then read a specific file from it
 [TOOL:filesystem({"action": "read", "path": "./shared-workspace/report.md"})]
 ```
 
-`read` auf einem Verzeichnis liefert seit Kurzem hilfsweise die Ordnerliste plus einen
-Hinweis — verlasse dich aber nicht darauf, nimm gleich `list`.
+`read` on a directory now returns the folder listing plus a hint as a fallback —
+but don't rely on that, use `list` directly.
 
-## Alle Actions
+## All actions
 
-| Action | Zweck | Pflichtfelder |
+| Action | Purpose | Required fields |
 |---|---|---|
-| `read` | Dateiinhalt lesen | `path` |
-| `write` | Datei anlegen/komplett überschreiben | `path`, `content` |
-| `append` | Inhalt anhängen | `path`, `content` |
-| `edit` | Exakten Textabschnitt ersetzen | `path`, `oldString`, `newString` |
-| `delete` | Datei/Ordner löschen | `path` (Ordner: `recursive:true`) |
-| `list` | Ordnerinhalt auflisten | `path` |
-| `mkdir` | Ordner anlegen (rekursiv) | `path` |
-| `exists` | Existenz prüfen | `path` |
-| `stat` | Grösse, Zeitstempel, `isDirectory` | `path` |
-| `move` | Verschieben/umbenennen | `path`, `destination` |
-| `copy` | Einzelne Datei kopieren | `path`, `destination` |
-| `glob` | Dateien per Muster finden | `path`, `pattern` |
-| `grep` | Dateiinhalte per Regex durchsuchen | `path`, `pattern` |
+| `read` | Read file contents | `path` |
+| `write` | Create/fully overwrite a file | `path`, `content` |
+| `append` | Append content | `path`, `content` |
+| `edit` | Replace an exact text section | `path`, `oldString`, `newString` |
+| `delete` | Delete file/folder | `path` (folder: `recursive:true`) |
+| `list` | List folder contents | `path` |
+| `mkdir` | Create folder (recursive) | `path` |
+| `exists` | Check existence | `path` |
+| `stat` | Size, timestamps, `isDirectory` | `path` |
+| `move` | Move/rename | `path`, `destination` |
+| `copy` | Copy a single file | `path`, `destination` |
+| `glob` | Find files by pattern | `path`, `pattern` |
+| `grep` | Search file contents by regex | `path`, `pattern` |
 
-## Kernfunktionen
+## Core functions
 
-### Lesen — auch teilweise
+### Reading — also partial
 ```
 [TOOL:filesystem({"action": "read", "path": "config.json"})]
 ```
-Grosse Dateien abschnittsweise lesen statt alles auf einmal:
+Read large files in sections instead of all at once:
 ```
 [TOOL:filesystem({"action": "read", "path": "server.log", "offset": 200, "limit": 100})]
 ```
-- `offset` = erste Zeile (0-basiert), `limit` = Anzahl Zeilen
-- `maxBytes` (Default 262144) kappt die Ausgabe; die Antwort sagt dir, wenn gekürzt wurde
+- `offset` = first line (0-based), `limit` = number of lines
+- `maxBytes` (default 262144) caps the output; the response tells you if it was truncated
 
-### Ändern — `edit` statt `write` bevorzugen
+### Modifying — prefer `edit` over `write`
 ```
 [TOOL:filesystem({"action": "edit", "path": "src/main.ts", "oldString": "const port = 3000", "newString": "const port = 8080"})]
 ```
-- `oldString` muss **exakt einmal** vorkommen, sonst kommt ein Fehler mit der Trefferzahl
-  → mehr Kontext mitgeben oder `replaceAll:true` setzen
-- `write` überschreibt die **ganze** Datei — nur für neue Dateien oder Vollersatz
-- `write`/`append` legen ein `.bak` an und schreiben atomar; JSON wird vor dem Schreiben validiert
+- `oldString` must occur **exactly once**, otherwise you get an error with the match count
+  → provide more context or set `replaceAll:true`
+- `write` overwrites the **entire** file — only for new files or a full replacement
+- `write`/`append` create a `.bak` and write atomically; JSON is validated before writing
 
-### Anlegen
+### Creating
 ```
 [TOOL:filesystem({"action": "write", "path": "my-project/README.md", "content": "# My Project"})]
 ```
-Übergeordnete Ordner entstehen automatisch (`createDirs`, Default true) — separates `mkdir`
-ist nur nötig, wenn du einen leeren Ordner brauchst.
+Parent folders are created automatically (`createDirs`, default true) — a separate `mkdir`
+is only needed when you want an empty folder.
 
-### Suchen statt raten
+### Search instead of guess
 ```
 [TOOL:filesystem({"action": "glob", "path": "./shared-workspace", "pattern": "**/*.ts"})]
 [TOOL:filesystem({"action": "grep", "path": "./shared-workspace", "pattern": "TODO|FIXME", "filePattern": "**/*.ts"})]
 ```
-Nutze das, statt Ordner für Ordner mit `list` durchzugehen.
+Use this instead of walking folder by folder with `list`.
 
-### Verschieben, kopieren, löschen
+### Move, copy, delete
 ```
-[TOOL:filesystem({"action": "move", "path": "alt.txt", "destination": "neu.txt"})]
+[TOOL:filesystem({"action": "move", "path": "old.txt", "destination": "new.txt"})]
 [TOOL:filesystem({"action": "copy", "path": "config.json", "destination": "config.json.bak"})]
 [TOOL:filesystem({"action": "delete", "path": "tmp", "recursive": true})]
 ```
-- `move`/`copy` brauchen `path` **und** `destination` (nicht `from`/`to`)
-- `copy` kopiert nur einzelne Dateien — für Ordner das `shell`-Tool nehmen
-- `delete` auf einem Ordner ohne `recursive:true` wird abgelehnt
+- `move`/`copy` need `path` **and** `destination` (not `from`/`to`)
+- `copy` copies single files only — for folders use the `shell` tool
+- `delete` on a folder without `recursive:true` is rejected
 
-### Trockenlauf
-Fast alle schreibenden Actions akzeptieren `dryRun:true` — prüft und meldet, ohne etwas zu ändern.
+### Dry run
+Almost all writing actions accept `dryRun:true` — validates and reports without changing anything.
 
-## Sichere Workflows
+## Safe workflows
 
-### Bestehende Datei ändern
+### Modify an existing file
 ```
 1. [TOOL:filesystem({"action": "read", "path": "important.conf"})]
-2. [TOOL:filesystem({"action": "edit", "path": "important.conf", "oldString": "[exakter alter Abschnitt]", "newString": "[neuer Abschnitt]"})]
+2. [TOOL:filesystem({"action": "edit", "path": "important.conf", "oldString": "[exact old section]", "newString": "[new section]"})]
 ```
-Das `.bak` legt das Tool selbst an — ein extra `copy` ist nicht nötig.
+The tool creates the `.bak` itself — no extra `copy` is needed.
 
-### Unbekanntes Verzeichnis erkunden
+### Explore an unknown directory
 ```
 1. [TOOL:filesystem({"action": "list", "path": "./shared-workspace"})]
 2. [TOOL:filesystem({"action": "glob", "path": "./shared-workspace", "pattern": "**/*.md"})]
-3. [TOOL:filesystem({"action": "read", "path": "[konkrete Datei aus Schritt 1/2]"})]
+3. [TOOL:filesystem({"action": "read", "path": "[specific file from step 1/2]"})]
 ```
 
-## Fehler richtig lesen
+## Read errors correctly
 
-Das Tool antwortet mit klaren, handlungsfähigen Meldungen — folge ihnen, statt aufzugeben:
+The tool responds with clear, actionable messages — follow them instead of giving up:
 
-| Meldung | Was zu tun ist |
+| Message | What to do |
 |---|---|
-| `'…' is a file, not a directory` | `read` statt `list` |
-| `'…' is a directory, not a file` | `list` statt `read`/`edit`/`append` |
-| `oldString is not unique (N matches)` | mehr Kontext in `oldString`, oder `replaceAll:true` |
-| `oldString not found in file` | Datei erst `read`, exakten Text übernehmen |
-| `Path is outside shared workspace` | Pfad unter `shared-workspace` legen oder `basePath` setzen |
-| `is a directory. Pass recursive:true` | `recursive:true` ergänzen |
+| `'…' is a file, not a directory` | use `read` instead of `list` |
+| `'…' is a directory, not a file` | use `list` instead of `read`/`edit`/`append` |
+| `oldString is not unique (N matches)` | more context in `oldString`, or `replaceAll:true` |
+| `oldString not found in file` | `read` the file first, copy the exact text |
+| `Path is outside shared workspace` | put the path under `shared-workspace` or set `basePath` |
+| `is a directory. Pass recursive:true` | add `recursive:true` |
 
-## Grössen-Guidelines
+## Size guidelines
 
-- **Klein** (<256KB): direkt `read`
-- **Gross**: `read` mit `offset`/`limit` abschnittsweise, oder vorher `grep` zum Eingrenzen
-- **Schreiben grosser Dateien**: erst `write`, dann `append` in Teilen (siehe Skill `large-file-writing`)
-- **Binärdateien**: nicht mit `read`/`write` bearbeiten
+- **Small** (<256KB): `read` directly
+- **Large**: `read` with `offset`/`limit` in sections, or `grep` first to narrow down
+- **Writing large files**: `write` first, then `append` in parts (see skill `large-file-writing`)
+- **Binary files**: do not edit with `read`/`write`
 
-## Häufige Fehler
+## Common mistakes
 
-❌ `read` auf einen Ordner
+❌ `read` on a folder
 ```
 [TOOL:filesystem({"action": "read", "path": "./shared-workspace"})]
 ```
-✅ `list` benutzen
+✅ use `list`
 ```
 [TOOL:filesystem({"action": "list", "path": "./shared-workspace"})]
 ```
 
-❌ Ganze Datei überschreiben für eine Zeile
+❌ Overwrite the whole file for one line
 ```
-[TOOL:filesystem({"action": "write", "path": "config.json", "content": "[komplette Datei]"})]
+[TOOL:filesystem({"action": "write", "path": "config.json", "content": "[entire file]"})]
 ```
-✅ Gezielt ersetzen
+✅ Replace surgically
 ```
 [TOOL:filesystem({"action": "edit", "path": "config.json", "oldString": "\"port\": 3000", "newString": "\"port\": 8080"})]
 ```
 
-❌ `from`/`to` bei move/copy — diese Felder gibt es nicht
+❌ `from`/`to` for move/copy — those fields do not exist
 ✅ `path` + `destination`
 
-## Integration mit anderen Tools
+## Integration with other tools
 
-- **git:** Dateien ändern, dann `git add` + `git commit`
-- **shell:** Skripte erzeugen und ausführen, rekursives Kopieren
-- **http:** Heruntergeladene Inhalte in `shared-workspace` ablegen
+- **git:** modify files, then `git add` + `git commit`
+- **shell:** generate and run scripts, recursive copying
+- **http:** store downloaded content in `shared-workspace`

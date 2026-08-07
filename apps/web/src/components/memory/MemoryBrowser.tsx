@@ -204,6 +204,20 @@ export function MemoryBrowser() {
     },
   });
 
+  const pruneShortTerm = useMutation({
+    // keep:0 clears every short-term row. These are never read back by retrieval, so this only frees
+    // dead weight - long-term/semantic memories and settings are untouched (enforced server-side).
+    mutationFn: () => api.memory.action({ action: "prune_short_term", keep: 0 }) as Promise<{ removed?: number }>,
+    onSuccess: async (res) => {
+      await qc.invalidateQueries({ queryKey: ["memory"] });
+      setInlineToast({ type: "success", message: t("memoryPage.pruneSuccess").replace("{count}", String(res?.removed ?? 0)) });
+    },
+    onError: (error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      setInlineToast({ type: "error", message: `${t("memoryPage.pruneFailed")}: ${reason}` });
+    },
+  });
+
   useEffect(() => {
     if (!inlineToast) return;
     const timer = window.setTimeout(() => setInlineToast(null), 3500);
@@ -244,6 +258,11 @@ export function MemoryBrowser() {
     }
     return Array.from(stats.entries()).map(([type, count]) => ({ type, count }));
   }, [sortedMemories]);
+
+  const shortTermCount = useMemo(
+    () => sortedMemories.filter((entry) => entry.type === "short-term").length,
+    [sortedMemories]
+  );
 
   const timelineBuckets = useMemo(() => {
     const now = Date.now();
@@ -466,6 +485,23 @@ export function MemoryBrowser() {
             <option value="episodic">episodic</option>
             <option value="short-term">short-term</option>
           </select>
+          <button
+            className="btn-secondary flex items-center gap-2 ml-auto"
+            title={t("memoryPage.pruneConfirm")}
+            // Only gate on the in-flight state. Gating on shortTermCount coupled the button to the
+            // full memory-list query (a heavy 5s-refetch); while that was loading/empty the count read
+            // 0 and the button went dead - so a click during that window silently did nothing. The
+            // server reports the real removed count, so it is safe to always allow the click.
+            disabled={pruneShortTerm.isPending}
+            onClick={() => {
+              if (!window.confirm(t("memoryPage.pruneConfirm"))) return;
+              pruneShortTerm.mutate();
+            }}
+          >
+            <Trash2 className="w-4 h-4" />
+            {t("memoryPage.pruneShortTerm")}
+            {shortTermCount > 0 ? ` (${shortTermCount})` : ""}
+          </button>
         </div>
 
         <div className="space-y-2">

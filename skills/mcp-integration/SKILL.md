@@ -52,6 +52,6 @@ Runtime status fields:
 
 ## Skill Interop
 
-- Fuer Dokumentation von MCP-Outputs oder Konfig-Snapshots `shared-workspace-ops` nutzen.
-- Fuer geordnete, mehrstufige MCP-Tasks `workflow-orchestrator` einsetzen.
-- Wenn MCP-Ergebnisse Codeaenderungen ausloesen, mit `test-driven-development` umsetzen und mit `code-review` absichern.
+- Use `shared-workspace-ops` to document MCP outputs or config snapshots.
+- Use `workflow-orchestrator` for ordered, multi-step MCP tasks.
+- When MCP results trigger code changes, implement with `test-driven-development` and safeguard with `code-review`.

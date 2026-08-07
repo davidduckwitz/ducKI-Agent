@@ -1,54 +1,54 @@
 # Skill: Git Operations
 
-## Zusammenfassung
-Sichere und effektive Git-Workflows. Commits, Branches, Pushes - alles mit Best Practices für saubere Versionskontrolle und kollaboratives Arbeiten.
+## Summary
+Safe and effective Git workflows. Commits, branches, pushes - all with best practices for clean version control and collaborative work.
 
-## Kernfunktionen
+## Core functions
 
-### 1. Status überprüfen
+### 1. Check status
 ```
 [TOOL:git({"action": "status"})]
 ```
 
-**Wann nutzen:**
-- IMMER vor commits/pushes
-- Um zu sehen was sich geändert hat
-- Unerwartete Dateien finden
-- Branch-Status überprüfen
+**When to use:**
+- ALWAYS before commits/pushes
+- To see what changed
+- Find unexpected files
+- Check branch status
 
 **Workflow:**
 ```
 [TOOL:git({"action": "status"})]
-// Überprüfe: Welche Dateien changed? Untracked files? Branch?
-// DANN erst commit/push!
+// Check: Which files changed? Untracked files? Branch?
+// ONLY THEN commit/push!
 ```
 
-### 2. Änderungen stagen (add)
+### 2. Stage changes (add)
 ```
 [TOOL:git({"action": "add", "files": ["src/main.ts", "src/utils.ts"]})]
 ```
 
-**Wann nutzen:**
-- Spezifische Dateien für Commit vorbereiten
-- NICHT alle Dateien zusammen (nie `git add .`!)
-- Logische Gruppen zusammen stagen
+**When to use:**
+- Prepare specific files for a commit
+- NOT all files together (never `git add .`!)
+- Stage logical groups together
 
-⚠️ **WICHTIG:**
-- Immer spezifische Dateien nennen!
-- Nicht versehentlich Secrets/Credentials stagen!
-- Überprüfe staged files vor commit!
+⚠️ **IMPORTANT:**
+- Always name specific files!
+- Do not accidentally stage secrets/credentials!
+- Check staged files before commit!
 
-### 3. Commit erstellen
+### 3. Create a commit
 ```
 [TOOL:git({"action": "commit", "message": "Fix: authentication timeout issue\n\nDetails of the fix..."})]
 ```
 
-**Wann nutzen:**
-- Nach logische Änderungen durchführen
-- Gute Commit-Messages schreiben
-- Regelmäßig committen (nicht am Ende)
+**When to use:**
+- After making logical changes
+- Write good commit messages
+- Commit regularly (not only at the end)
 
-**Commit-Message Format:**
+**Commit message format:**
 ```
 [Type]: [Short description]
 
@@ -57,7 +57,7 @@ Sichere und effektive Git-Workflows. Commits, Branches, Pushes - alles mit Best 
 
 Types: `fix:`, `feat:`, `refactor:`, `docs:`, `test:`, `chore:`
 
-**GUTE Commits:**
+**GOOD commits:**
 ```
 fix: handle null pointer in user authentication
 
@@ -66,176 +66,176 @@ the system was throwing an unhandled exception.
 This fix gracefully handles missing fields.
 ```
 
-**SCHLECHTE Commits:**
+**BAD commits:**
 ```
 update
 fixed stuff
 bug fixes and improvements
 ```
 
-### 4. Branch erstellen
+### 4. Create a branch
 ```
 [TOOL:git({"action": "branch", "name": "feature/new-auth-system"})]
 ```
 
-**Wann nutzen:**
-- Für neue Features: `feature/name`
-- Für Fixes: `fix/description`
-- Für Experiments: `experiment/idea`
+**When to use:**
+- For new features: `feature/name`
+- For fixes: `fix/description`
+- For experiments: `experiment/idea`
 
-**Branch-Naming:**
-- `feature/` - neue Features
-- `fix/` - Bug-Fixes
-- `refactor/` - Code-Umbauten
-- `docs/` - Dokumentation
-- `test/` - Test-Verbesserungen
+**Branch naming:**
+- `feature/` - new features
+- `fix/` - bug fixes
+- `refactor/` - code refactors
+- `docs/` - documentation
+- `test/` - test improvements
 
-### 5. Branch wechseln
+### 5. Switch branch
 ```
 [TOOL:git({"action": "checkout", "branch": "feature/new-feature"})]
 ```
 
-**Wann nutzen:**
-- Zwischen Branches navigieren
-- Feature-Branches starten
-- Zurück zu main wechseln
+**When to use:**
+- Navigate between branches
+- Start feature branches
+- Switch back to main
 
-⚠️ **WARNUNG:**
-- Uncomitted changes checken!
-- Nicht über uncommitted work wechseln
-- `git status` vor checkout!
+⚠️ **WARNING:**
+- Check for uncommitted changes!
+- Do not switch over uncommitted work
+- `git status` before checkout!
 
-### 6. Push zu Remote
+### 6. Push to remote
 ```
 [TOOL:git({"action": "push", "branch": "feature/my-feature"})]
 ```
 
-**Wann nutzen:**
-- Nach lokalen Commits remote synchen
-- Backup der Arbeit in die Cloud
-- Andere können Code reviewen
+**When to use:**
+- Sync local commits to the remote
+- Back up your work to the cloud
+- So others can review the code
 
-**Sicherer Workflow:**
+**Safe workflow:**
 ```
-[TOOL:git({"action": "status"})]                    // Status checken
-[TOOL:git({"action": "add", "files": [...]})]       // Files stagen
-[TOOL:git({"action": "commit", "message": "..."})]  // Committen
-[TOOL:git({"action": "push", "branch": "..."})]     // Pushen
+[TOOL:git({"action": "status"})]                    // Check status
+[TOOL:git({"action": "add", "files": [...]})]       // Stage files
+[TOOL:git({"action": "commit", "message": "..."})]  // Commit
+[TOOL:git({"action": "push", "branch": "..."})]     // Push
 ```
 
-### 7. Pull von Remote
+### 7. Pull from remote
 ```
 [TOOL:git({"action": "pull", "branch": "main"})]
 ```
 
-**Wann nutzen:**
-- Änderungen von Teamkollegen holen
-- Auf main mit main synchen
-- Bevor man neue Branches erstellt
+**When to use:**
+- Fetch changes from teammates
+- Sync main with main
+- Before creating new branches
 
-### 8. Merge durchführen
+### 8. Perform a merge
 ```
 [TOOL:git({"action": "merge", "source": "feature/complete-feature", "into": "main"})]
 ```
 
-**Wann nutzen:**
-- Feature-Branches in main mergen
-- Nach Code-Review abgeschlossen
-- Pull Request merged
+**When to use:**
+- Merge feature branches into main
+- After code review is complete
+- Pull request merged
 
-⚠️ **VORSICHT:**
-- Merge-Konflikte sind möglich
-- Vor merge testen!
-- Immer code review vorher
+⚠️ **CAUTION:**
+- Merge conflicts are possible
+- Test before merging!
+- Always code-review beforehand
 
-### 9. Commits anschauen
+### 9. View commits
 ```
 [TOOL:git({"action": "log", "limit": 10})]
 ```
 
-**Wann nutzen:**
-- Historie verstehen
-- Letzte Commits sehen
-- Commit-Messages lesen
-- Wer was geändert hat
+**When to use:**
+- Understand the history
+- See recent commits
+- Read commit messages
+- Who changed what
 
-### 10. Änderungen anschauen
+### 10. View changes
 ```
 [TOOL:git({"action": "diff"})]
 ```
 
-**Wann nutzen:**
-- Unstaged Änderungen sehen
-- Vor commit überprüfen
-- Was genau hat sich geändert?
+**When to use:**
+- See unstaged changes
+- Check before commit
+- What exactly changed?
 
-## Sicherer Git-Workflow (Gold Standard)
+## Safe Git workflow (gold standard)
 
 ```
 1. [TOOL:git({"action": "status"})]
-   └─ Unerwartete Datei? Uncommitted work?
+   └─ Unexpected file? Uncommitted work?
 
 2. [TOOL:git({"action": "pull", "branch": "main"})]
-   └─ Mit main synchronisieren
+   └─ Sync with main
 
 3. [TOOL:git({"action": "branch", "name": "feature/my-work"})]
-   └─ Feature-Branch erstellen
+   └─ Create a feature branch
 
 4. [TOOL:git({"action": "checkout", "branch": "feature/my-work"})]
-   └─ Zur Branch wechseln
+   └─ Switch to the branch
 
-5. [... Arbeit durchführen ...]
-   └─ Code editieren, testen
+5. [... do the work ...]
+   └─ Edit code, test
 
 6. [TOOL:git({"action": "status"})]
-   └─ Was geändert?
+   └─ What changed?
 
 7. [TOOL:git({"action": "add", "files": ["specific", "files"]})]
-   └─ Relevante Dateien stagen
+   └─ Stage the relevant files
 
 8. [TOOL:git({"action": "commit", "message": "feat: implement new feature\n\nDetails..."})]
-   └─ Logical commit erstellen
+   └─ Create a logical commit
 
 9. [TOOL:git({"action": "push", "branch": "feature/my-work"})]
-   └─ Zu Remote pushen
+   └─ Push to remote
 
-10. [Pull Request erstellen via Web]
-    └─ Code Review anfordern
+10. [Create a pull request via web]
+    └─ Request code review
 
-11. [Nach Review approval]
+11. [After review approval]
     [TOOL:git({"action": "merge", "source": "feature/my-work", "into": "main"})]
-    └─ In main mergen
+    └─ Merge into main
 ```
 
-## Branching Strategy
+## Branching strategy
 
-### Main Branch
-- ✅ Immer deployable
-- ✅ Nur getesteter Code
-- ✅ Nur über Pull Requests
-- ❌ Direkte Commits auf main
+### Main branch
+- ✅ Always deployable
+- ✅ Only tested code
+- ✅ Only via pull requests
+- ❌ No direct commits to main
 
-### Feature Branches
+### Feature branches
 - Naming: `feature/descriptive-name`
-- Basiert auf: `main`
-- Merged in: `main` (via PR)
-- Kurz gelebt: max 1-2 Wochen
+- Based on: `main`
+- Merged into: `main` (via PR)
+- Short-lived: max 1-2 weeks
 
-### Hotfix Branches
+### Hotfix branches
 - Naming: `fix/critical-issue`
-- Für Production-Bugs
-- Schnell mergen
-- Sofort testen!
+- For production bugs
+- Merge quickly
+- Test immediately!
 
-## Häufige Fehler
+## Common mistakes
 
-❌ **Problem:** Alle Änderungen zusammen committen
+❌ **Problem:** Committing all changes together
 ```
-[TOOL:git({"action": "add", "files": ["."]})]  // NEIN!
+[TOOL:git({"action": "add", "files": ["."]})]  // NO!
 [TOOL:git({"action": "commit", "message": "update"})]
 ```
 
-✅ **Lösung:**
+✅ **Solution:**
 ```
 [TOOL:git({"action": "add", "files": ["src/feature.ts", "test/feature.test.ts"]})]
 [TOOL:git({"action": "commit", "message": "feat: implement feature X"})]
@@ -243,68 +243,68 @@ bug fixes and improvements
 [TOOL:git({"action": "commit", "message": "docs: update README with feature X"})]
 ```
 
-❌ **Problem:** Credentials committen
+❌ **Problem:** Committing credentials
 ```
-[TOOL:git({"action": "add", "files": [".env"]})]  // NEIN! SECRETS!
+[TOOL:git({"action": "add", "files": [".env"]})]  // NO! SECRETS!
 ```
 
-✅ **Lösung:**
-- `.env` in `.gitignore` eintragen
-- `.env.example` mit dummy values committen
-- Real `.env` lokal speichern
+✅ **Solution:**
+- Add `.env` to `.gitignore`
+- Commit `.env.example` with dummy values
+- Keep the real `.env` locally
 
-## Merge Konflikte
+## Merge conflicts
 
-Wenn Merge fehlschlägt:
+When a merge fails:
 
 ```
 1. [TOOL:git({"action": "status"})]
-   └─ Konflikt-Dateien sehen
+   └─ See conflicted files
 
 2. [TOOL:filesystem({"action": "read", "path": "conflicted-file.ts"})]
-   └─ Konflikt anschauen (<<<<<<< HEAD, =======, >>>>>>>)
+   └─ Inspect the conflict (<<<<<<< HEAD, =======, >>>>>>>)
 
-3. [Manuell den Konflikt lösen]
-   └─ Richtige Version wählen
+3. [Resolve the conflict manually]
+   └─ Choose the correct version
 
 4. [TOOL:filesystem({"action": "write", "path": "conflicted-file.ts", "content": "..."})]
-   └─ Gelöste Datei speichern
+   └─ Save the resolved file
 
 5. [TOOL:git({"action": "add", "files": ["conflicted-file.ts"]})]
-   └─ Gelöst markieren
+   └─ Mark as resolved
 
 6. [TOOL:git({"action": "commit", "message": "merge: resolve conflicts from main"})]
-   └─ Merge committen
+   └─ Commit the merge
 ```
 
-## Performance-Tips
+## Performance tips
 
-⚡ **Schnell:**
-- Häufige kleine Commits
-- Kurze Branch-Lifetimes
-- Pull Requests schnell reviewen
+⚡ **Fast:**
+- Frequent small commits
+- Short branch lifetimes
+- Review pull requests quickly
 
-🐌 **Langsam:**
-- Riesige Commits
-- Branches monatelang offen
-- Merge-Konflikte aufschieben
+🐌 **Slow:**
+- Huge commits
+- Branches open for months
+- Postponing merge conflicts
 
-## Integration mit anderem Skills
+## Integration with other skills
 
-- **filesystem:** Code editieren, dann git commit
-- **shell:** Tests laufen, dann git commit
-- **skill_manage:** Skills sind auch versionskontrolliert!
+- **filesystem:** edit code, then git commit
+- **shell:** run tests, then git commit
+- **skill_manage:** skills are version-controlled too!
 
-## Kritische Regeln
+## Critical rules
 
-🔴 **NIEMALS:**
-- `git push --force` (außer mit Grund)
-- Secrets/credentials committen
-- Uncommitted work nicht backen
-- Main ohne Tests pushen
+🔴 **NEVER:**
+- `git push --force` (except with a reason)
+- Commit secrets/credentials
+- Leave uncommitted work un-backed-up
+- Push to main without tests
 
-🟢 **IMMER:**
-- `git status` vor wichtigen Ops
-- Aussagekräftige Commit-Messages
-- Kurze Branches (max 2 Wochen)
-- Code reviewen lassen vor Merge
+🟢 **ALWAYS:**
+- `git status` before important ops
+- Meaningful commit messages
+- Short branches (max 2 weeks)
+- Get code reviewed before merge

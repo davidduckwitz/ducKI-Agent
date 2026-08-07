@@ -1,149 +1,149 @@
 # Skill: Shell Commands
 
-## Zusammenfassung
-Effiziente und sichere Shell-Befehle ausführen. Scripts, System-Tasks, Prozesse - alles mit Best Practices für Sicherheit und Zuverlässigkeit.
+## Summary
+Run shell commands efficiently and safely. Scripts, system tasks, processes - all with best practices for security and reliability.
 
-## Kernfunktionen
+## Core functions
 
-### 1. Einzelner Befehl ausführen
+### 1. Run a single command
 ```
 [TOOL:shell({"command": "ls -la"})]
 ```
 
-**Wann nutzen:**
+**When to use:**
 - Quick status checks
-- Files/directories auflisten
-- Prozesse überprüfen
-- System-Info anschauen
+- List files/directories
+- Check processes
+- View system info
 
-### 2. Arbeitsverzeichnis setzen
+### 2. Set the working directory
 ```
 [TOOL:shell({"command": "cd /path/to/project && npm install"})]
 ```
 
-**Wann nutzen:**
-- Befehle in bestimmtem Verzeichnis ausführen
-- Project-Kontext für Commands
-- Path-abhängige Operationen
+**When to use:**
+- Run commands in a specific directory
+- Project context for commands
+- Path-dependent operations
 
-**Best Practice:**
+**Best practice:**
 ```
 [TOOL:shell({"command": "cd /home/user/my-project && pwd"})]
-└─ Bestätige dass du im richtigen Dir bist!
+└─ Confirm you are in the right dir!
 ```
 
-### 3. Build-Befehle
+### 3. Build commands
 ```
 [TOOL:shell({"command": "npm run build"})]
 [TOOL:shell({"command": "cargo build --release"})]
 [TOOL:shell({"command": "python setup.py build"})]
 ```
 
-**Wann nutzen:**
-- Projekt kompilieren
-- Abhängigkeiten installieren
-- Artifacts generieren
+**When to use:**
+- Compile the project
+- Install dependencies
+- Generate artifacts
 
-⚠️ **WICHTIG:**
-- Immer build-output lesen
-- Auf Fehler prüfen
-- Build-Zeit beachten (kann lange dauern!)
+⚠️ **IMPORTANT:**
+- Always read the build output
+- Check for errors
+- Mind the build time (can take a while!)
 
-### 4. Tests ausführen
+### 4. Run tests
 ```
 [TOOL:shell({"command": "npm test"})]
 [TOOL:shell({"command": "cargo test"})]
 [TOOL:shell({"command": "pytest tests/"})]
 ```
 
-**Wann nutzen:**
-- Nach Code-Änderungen testen
-- Regression-Tests
-- Vor Push zum Remote
-- Sicherstellen dass nichts broken ist
+**When to use:**
+- Test after code changes
+- Regression tests
+- Before pushing to the remote
+- Make sure nothing is broken
 
-**GOLDENE REGEL:**
-- Tests IMMER vor Commit/Push
-- Grüne Tests = safe to commit
-- Failing Tests = nicht committen!
+**GOLDEN RULE:**
+- ALWAYS test before commit/push
+- Green tests = safe to commit
+- Failing tests = do not commit!
 
-### 5. Prozesse verwalten
+### 5. Manage processes
 ```
 [TOOL:shell({"command": "ps aux | grep node"})]
 [TOOL:shell({"command": "kill -9 <PID>"})]
 [TOOL:shell({"command": "lsof -i :3000"})]
 ```
 
-**Wann nutzen:**
-- Laufende Prozesse sehen
-- Server stoppen
-- Port-Konflikte checken
-- Debug-Prozesse beenden
+**When to use:**
+- See running processes
+- Stop a server
+- Check port conflicts
+- Terminate debug processes
 
-### 6. Dateien verarbeiten
+### 6. Process files
 ```
 [TOOL:shell({"command": "find . -name '*.tmp' -delete"})]
 [TOOL:shell({"command": "grep -r 'TODO' src/"})]
 [TOOL:shell({"command": "wc -l src/main.ts"})]
 ```
 
-**Wann nutzen:**
-- Bulk-Operationen
-- Pattern-Suche
-- File-Statistiken
+**When to use:**
+- Bulk operations
+- Pattern search
+- File statistics
 - Cleanup
 
-### 7. Environment-Variables
+### 7. Environment variables
 ```
 [TOOL:shell({"command": "echo $NODE_ENV"})]
 [TOOL:shell({"command": "export DEBUG=true && npm start"})]
 ```
 
-**Wann nutzen:**
-- Config überprüfen
-- Dynamische Werte setzen
-- Environment-spezifische Commands
+**When to use:**
+- Check config
+- Set dynamic values
+- Environment-specific commands
 
-### 8. Pipe & Redirection
+### 8. Pipe & redirection
 ```
 [TOOL:shell({"command": "npm list | grep lodash"})]
 [TOOL:shell({"command": "npm test > test-results.txt 2>&1"})]
 [TOOL:shell({"command": "cat config.json | jq '.database'"})]
 ```
 
-**Wann nutzen:**
-- Output filtern
-- Results in Dateien speichern
-- JSON parsen & manipulieren
-- Logs analysieren
+**When to use:**
+- Filter output
+- Save results to files
+- Parse & manipulate JSON
+- Analyze logs
 
-## Sichere Shell-Workflows
+## Safe shell workflows
 
-### Workflow 1: Build & Test
+### Workflow 1: build & test
 ```
 1. [TOOL:shell({"command": "cd my-project && pwd"})]
-   └─ Dir überprüfen
+   └─ Check the dir
 
 2. [TOOL:shell({"command": "npm install"})]
    └─ Dependencies
 
 3. [TOOL:shell({"command": "npm run build"})]
-   └─ Build durchführen
+   └─ Run the build
 
 4. [TOOL:shell({"command": "npm test"})]
-   └─ Tests run
+   └─ Run tests
 
-5. [Falls erfolgreich: SAFE TO COMMIT]
-   [Falls fehler: FIX FIRST!]
+5. [If successful: SAFE TO COMMIT]
+   [If errors: FIX FIRST!]
 ```
 
-### Workflow 2: Deployment Checklist
+### Workflow 2: deployment checklist
 ```
 1. [TOOL:shell({"command": "git status"})]
    └─ Uncommitted? Abort!
 
 2. [TOOL:shell({"command": "npm test"})]
-   └─ Tests grün?
+   └─ Tests green?
 
 3. [TOOL:shell({"command": "npm run build"})]
    └─ Build ok?
@@ -155,89 +155,89 @@ Effiziente und sichere Shell-Befehle ausführen. Scripts, System-Tasks, Prozesse
    └─ Verification in prod
 ```
 
-## Kommandos nach Typ
+## Commands by type
 
 ### Navigation
 ```bash
-pwd                    # aktuelles Verzeichnis
-cd /path/to/dir       # Verzeichnis wechseln
-ls -la                # Dateien auflisten (mit hidden)
-find . -name "*.js"   # Dateien finden
+pwd                    # current directory
+cd /path/to/dir       # change directory
+ls -la                # list files (incl. hidden)
+find . -name "*.js"   # find files
 ```
 
-### Dateien
+### Files
 ```bash
-cat file.txt          # Datei anschauen
-head -20 file.txt     # Erste 20 Zeilen
-tail -50 file.txt     # Letzte 50 Zeilen
-wc -l file.txt        # Zeilenanzahl
-grep "pattern" file   # Pattern suchen
+cat file.txt          # view a file
+head -20 file.txt     # first 20 lines
+tail -50 file.txt     # last 50 lines
+wc -l file.txt        # line count
+grep "pattern" file   # search for a pattern
 ```
 
-### Prozesse
+### Processes
 ```bash
-ps aux                 # Alle Prozesse
-ps aux | grep node    # Spezifischen Prozess finden
-kill -9 <PID>         # Prozess beenden (forceful)
-jobs                   # Background jobs
+ps aux                 # all processes
+ps aux | grep node    # find a specific process
+kill -9 <PID>         # terminate a process (forceful)
+jobs                   # background jobs
 ```
 
-### Netzwerk
+### Network
 ```bash
-netstat -tuln | grep 3000   # Port 3000 prüfen
-lsof -i :3000               # Was läuft auf Port 3000?
-curl http://localhost:3000  # HTTP Request
+netstat -tuln | grep 3000   # check port 3000
+lsof -i :3000               # what is running on port 3000?
+curl http://localhost:3000  # HTTP request
 ```
 
 ### System
 ```bash
-df -h                  # Disk space
-du -sh .               # Verzeichnis-Größe
+df -h                  # disk space
+du -sh .               # directory size
 free -h                # RAM info
-uname -a               # System info
+uname -a               # system info
 ```
 
 ## Best Practices
 
-✅ **TUN:**
-- Befehle vorher überprüfen
-- Output lesen (ganz wichtig!)
-- Error-Codes checken
-- Test vorher lokal
-- Logging aktivieren für wichtige Ops
+✅ **DO:**
+- Check commands beforehand
+- Read the output (very important!)
+- Check error codes
+- Test locally first
+- Enable logging for important ops
 
-❌ **NICHT TUN:**
-- `rm -rf /` ohne zu prüfen (😱)
-- Commands ohne Output-Überprüfung
-- Sudo ohne Grund
-- Destructive commands blind ausführen
-- Production-Commands ohne Backup
+❌ **DON'T:**
+- `rm -rf /` without checking (😱)
+- Commands without checking the output
+- Sudo without a reason
+- Run destructive commands blindly
+- Production commands without a backup
 
-## Error Handling
+## Error handling
 
-### Output überprüfen
+### Check the output
 ```
 [TOOL:shell({"command": "npm install"})]
-// Output lesen:
+// Read the output:
 // ✅ "added 123 packages"
 // ❌ "ERR! code E404"
 // ❌ "npm ERR!"
 ```
 
-### Exit-Code prüfen
+### Check the exit code
 ```bash
 npm test ; echo $?  # 0 = success, anything else = error
 ```
 
-### Stderr redirecten
+### Redirect stderr
 ```bash
-npm build 2>&1      # Stderr + Stdout zusammen
-npm build 2>/dev/null  # Errors ignorieren (sometimes ok)
+npm build 2>&1      # stderr + stdout together
+npm build 2>/dev/null  # ignore errors (sometimes ok)
 ```
 
-## Lange Befehle
+## Long commands
 
-Für sehr lange oder komplexe Commands:
+For very long or complex commands:
 ```
 npm run build && \
 npm test && \
@@ -245,7 +245,7 @@ git add . && \
 git commit -m "feat: new feature"
 ```
 
-Besser: Shell-Script schreiben
+Better: write a shell script
 ```bash
 #!/bin/bash
 cd /project
@@ -254,27 +254,27 @@ npm run build
 npm test
 ```
 
-## Performance-Tips
+## Performance tips
 
-⚡ **Schnell:**
-- Parallele Befehle `npm install & npm build`
-- Caching nutzen
-- Berechtigungen vor Ops überprüfen
+⚡ **Fast:**
+- Parallel commands `npm install & npm build`
+- Use caching
+- Check permissions before ops
 
-🐌 **Langsam:**
-- Große Dateien komplett lesen
-- Rekursive Operationen auf big trees
-- Netzwerk-Befehle ohne Timeout
+🐌 **Slow:**
+- Reading large files in full
+- Recursive operations on big trees
+- Network commands without a timeout
 
-## Integration mit anderen Tools
+## Integration with other tools
 
-- **git:** Code ändern, dann `npm test` vor commit
-- **filesystem:** Dateien erstellen, dann `npm build`
-- **skill_manage:** Skills sind auch ausführbar!
+- **git:** change code, then `npm test` before commit
+- **filesystem:** create files, then `npm build`
+- **skill_manage:** skills are executable too!
 
-## Kritische Regeln
+## Critical rules
 
-🔴 **NIEMALS BLIND AUSFÜHREN:**
+🔴 **NEVER RUN BLINDLY:**
 ```
 rm -rf /path
 git push --force
@@ -282,42 +282,42 @@ sudo reboot
 kill -9 $(pgrep node)
 ```
 
-🟢 **IMMER ERST:**
+🟢 **ALWAYS FIRST:**
 ```
-Befehl überprüfen
-Output lesen
-Sicherheit überprüfen
-Nur dann: Befehl ausführen
+Check the command
+Read the output
+Verify safety
+Only then: run the command
 ```
 
-## Common Issues
+## Common issues
 
 ### Port already in use
 ```
-lsof -i :3000        # Was läuft da?
-kill -9 <PID>        # Prozess killen
-npm start             # Restart
+lsof -i :3000        # what is running there?
+kill -9 <PID>        # kill the process
+npm start             # restart
 ```
 
-### Build fehlgeschlagen
+### Build failed
 ```
-npm run clean        # Cache löschen
-npm install          # Fresh dependencies
-npm run build        # Retry
+npm run clean        # clear cache
+npm install          # fresh dependencies
+npm run build        # retry
 ```
 
 ### Tests failing
 ```
-npm test -- --verbose  # Details sehen
-npm test -- one-test   # Einzelnen Test laufen
-Debug + Fix + Retry
+npm test -- --verbose  # see details
+npm test -- one-test   # run a single test
+Debug + fix + retry
 ```
 
-## Timeout Beachten
+## Mind the timeout
 
-Lange Operationen:
-- `npm install` auf großem Projekt: 5+ Minuten
-- `npm test` mit Coverage: 10+ Minuten
-- Build von großem Projekt: 15+ Minuten
+Long operations:
+- `npm install` on a large project: 5+ minutes
+- `npm test` with coverage: 10+ minutes
+- Build of a large project: 15+ minutes
 
-Immer Zeit einkalkulieren, nicht interrupt wenn noch läuft!
+Always budget the time, don't interrupt while it is still running!

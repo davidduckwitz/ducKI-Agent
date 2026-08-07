@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "./bootstrap-workspace.js";
 import * as readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { config as loadEnv } from "dotenv";

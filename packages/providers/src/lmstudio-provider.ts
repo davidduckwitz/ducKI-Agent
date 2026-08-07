@@ -76,93 +76,14 @@ export class LMStudioProvider extends OpenAIProvider {
         console.log("[DEBUG LMStudioProvider.customFetch] WARNING: No token to set!");
       }
 
-      let finalInit = { ...init, headers };
+      const finalInit = { ...init, headers };
 
-      // Parse and transform the request body
-      if (!init?.body || typeof init.body !== "string") {
-        console.log("[DEBUG LMStudioProvider.customFetch] No body to transform, sending as-is");
-        return fetch(input, finalInit);
-      }
-
-      try {
-        const body = JSON.parse(init.body) as any;
-        const messages = body.messages as any[];
-        if (!Array.isArray(messages)) {
-          return fetch(input, init);
-        }
-
-        // Transform messages: extract image_url and create separate images field
-        const transformedMessages = messages.map((msg) => {
-          if (msg.role !== "user" || !Array.isArray(msg.content)) {
-            return msg;
-          }
-
-          const images: string[] = [];
-          const contentWithoutImages: any[] = [];
-
-          // Separate images from content array
-          for (const part of msg.content) {
-            if (part.type === "image_url") {
-              const imgUrl = part.image_url?.url ?? "";
-              // Extract raw base64 from data: URL
-              const base64Match = imgUrl.match(/^data:[^;]*;base64,(.+)$/);
-              if (base64Match?.[1]) {
-                images.push(base64Match[1]);
-                console.log(`[DEBUG LMStudioProvider.customFetch] Extracted ${base64Match[1].substring(0, 50)}...`);
-              }
-            } else {
-              contentWithoutImages.push(part);
-            }
-          }
-
-          // If we found images, modify the message
-          if (images.length > 0) {
-            console.log(`[DEBUG LMStudioProvider.customFetch] Message has ${images.length} images, converting to images field`);
-            // IMPORTANT: content MUST be a string for LM Studio, not an array!
-            const textContent = contentWithoutImages.length > 0
-              ? contentWithoutImages.map((part: any) => part.text || "").filter(Boolean).join("\n")
-              : "Analyze the attached image";
-            return {
-              ...msg,
-              content: textContent,
-              images,
-            };
-          }
-
-          return msg;
-        });
-
-        // Rebuild request body with transformed messages
-        const newBody = JSON.stringify({ ...body, messages: transformedMessages });
-
-        console.log("[DEBUG LMStudioProvider.customFetch] Sending to LM Studio with transformed messages");
-
-        // DEBUG: Log the exact request structure for messages with images
-        const messagesWithImages = transformedMessages.filter((m: any) => m.images && m.images.length > 0);
-        if (messagesWithImages.length > 0) {
-          console.log("[DEBUG LMStudioProvider.customFetch] Messages with images:", {
-            count: messagesWithImages.length,
-            firstMessage: {
-              role: messagesWithImages[0].role,
-              contentType: typeof messagesWithImages[0].content,
-              imageCount: messagesWithImages[0].images?.length,
-              imageSizes: messagesWithImages[0].images?.map((img: string) => img.length),
-            }
-          });
-        }
-
-        // Update headers: fix Content-Length since body changed
-        // IMPORTANT: Use finalInit headers (which have Authorization) as base!
-        const newHeaders = new Headers(finalInit.headers);
-        newHeaders.set("Content-Length", Buffer.byteLength(newBody).toString());
-
-        // Send modified request with updated headers
-        return fetch(input, { ...finalInit, headers: newHeaders, body: newBody });
-      } catch (error) {
-        console.error("[DEBUG LMStudioProvider.customFetch] Error:", error);
-        // On error, still send with finalInit to preserve auth headers
-        return fetch(input, finalInit);
-      }
+      // LM Studio's OpenAI-compatible endpoint accepts the STANDARD OpenAI vision format directly:
+      //   content: [{ type: "text", ... }, { type: "image_url", image_url: { url: "data:image/..." } }]
+      // An earlier version rewrote images into a non-standard top-level `images` field and flattened
+      // content to a string. Current LM Studio ignores that shape, so the vision model silently
+      // received NO image. Pass the body through unchanged (standard format); only adjust auth headers.
+      return fetch(input, finalInit);
     };
 
     // Create new OpenAI client with custom fetch

@@ -14,8 +14,9 @@ import {
 import { resolve, dirname, join, extname } from "node:path";
 import { globFiles, grepFiles } from "./filesystem-search.js";
 import { randomBytes } from "node:crypto";
+import { SHARED_WORKSPACE_ROOT } from "./workspace-root.js";
 
-const SHARED_BASE_PATH = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
+const SHARED_BASE_PATH = SHARED_WORKSPACE_ROOT;
 
 export const FILESYSTEM_ACTIONS = [
   "read", "write", "append", "edit", "delete",
@@ -104,21 +105,58 @@ function atomicWrite(filePath: string, content: string): void {
   }
 }
 
+const ABSOLUTE_PATH_RE = /^[A-Za-z]:\\|^\\\\|^\//;
+
+const REDUNDANT_LEADING_SEGMENT = "shared-workspace";
+
+/**
+ * Strips a redundant leading `shared-workspace/` prefix from a relative path when the base it will be
+ * joined onto already ends in that segment.
+ *
+ * The model is told to address files as `./shared-workspace/scripts/foo.js`, but the workspace base is
+ * itself `…/shared-workspace`. Joining them naively produced `…/shared-workspace/shared-workspace/scripts`.
+ * Only the literal `shared-workspace` segment is stripped (not arbitrary base names) so a coding sandbox
+ * whose folder happens to be named like a real subdir — e.g. a project slug `src` — is never affected,
+ * and only when the base ends in that segment, so a legitimately nested `shared-workspace` folder is
+ * still reachable (address it twice).
+ */
+function stripRedundantBaseSegment(relative: string, base: string): string {
+  const normalized = relative.replace(/\\+/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "");
+  const baseTail = base.replace(/\\+/g, "/").replace(/\/+$/, "").split("/").pop()?.toLowerCase();
+  if (baseTail !== REDUNDANT_LEADING_SEGMENT) return normalized;
+  const segments = normalized.split("/");
+  if (segments[0]?.toLowerCase() === REDUNDANT_LEADING_SEGMENT) {
+    segments.shift();
+  }
+  return segments.join("/");
+}
+
 function resolvePath(inputPath: string, options: PathOptions): string {
   const trimmed = String(inputPath ?? "").trim();
   const scopedBase = options.basePath ? resolve(options.basePath) : undefined;
-  const resolved = scopedBase && !trimmed.match(/^[A-Za-z]:\\|^\\\\|^\//)
-    ? resolve(scopedBase, trimmed)
-    : resolve(trimmed);
+  const isAbsolute = ABSOLUTE_PATH_RE.test(trimmed);
 
-  if (!options.safeMode) return resolved;
-
+  // Coding agent: a basePath is always supplied and the path is confined to that sandbox.
   if (scopedBase) {
+    const resolved = isAbsolute
+      ? resolve(trimmed)
+      : resolve(scopedBase, stripRedundantBaseSegment(trimmed, scopedBase));
+
+    if (!options.safeMode) return resolved;
     if (!isInsideBase(scopedBase, resolved)) {
       throw new Error(`Path is outside basePath scope: ${trimmed}`);
     }
     return resolved;
   }
+
+  // Normal agent: no basePath. Rebase relative paths ONTO the workspace root (rather than resolving
+  // them against process.cwd() and merely rejecting the result) so a path like "scripts/foo.js" — or
+  // the "./shared-workspace/scripts" convention — always lands inside the workspace regardless of cwd.
+  const resolved = isAbsolute
+    ? resolve(trimmed)
+    : resolve(SHARED_BASE_PATH, stripRedundantBaseSegment(trimmed, SHARED_BASE_PATH));
+
+  if (!options.safeMode) return resolved;
 
   if (!isInsideBase(SHARED_BASE_PATH, resolved)) {
     throw new Error(`Path is outside shared workspace: ${trimmed}. Use /api/shared or a path under ${SHARED_BASE_PATH}`);

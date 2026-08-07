@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { Agent } from "@ducki/agent";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { parseMarkdownToPlan } from "@ducki/planer";
+import { CODING_WORKSPACE_ROOT } from "@ducki/tools";
 
 export const plansRouter: IRouter = Router();
 
@@ -137,7 +138,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
     const stepList = steps
       .map((step, index) => {
-        const toolHint = step.tools.length > 0 ? `\n   Vorgeschlagene Tools: ${step.tools.join(", ")}` : "";
+        const toolHint = step.tools.length > 0 ? `\n   Suggested tools: ${step.tools.join(", ")}` : "";
         const description = step.description ? `\n   ${step.description}` : "";
         return `${index + 1}. ${step.title}${description}${toolHint}`;
       })
@@ -150,8 +151,8 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
         const project = await db.getProject(body.projectId) as ProjectData | null;
         if (project) {
           const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
-          const sandboxRoot = resolve("./shared-workspace/coding", projectSlug);
-          projectSandboxInfo = `\n\nPROJEKT-VERZEICHNIS: ${sandboxRoot}\nAlle Dateipfade sind relativ zu diesem Verzeichnis.`;
+          const sandboxRoot = resolve(CODING_WORKSPACE_ROOT, projectSlug);
+          projectSandboxInfo = `\n\nPROJECT DIRECTORY: ${sandboxRoot}\nAll file paths are relative to this directory.`;
         }
       } catch {
         // Silently ignore project lookup errors
@@ -159,26 +160,26 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     }
 
     const executionPrompt = [
-      "**PLAN-AUSFÜHRUNG**",
+      "**PLAN EXECUTION**",
       "",
-      "Setze den folgenden, bereits vom Nutzer bestätigten Plan jetzt tatsächlich um.",
+      "Now actually carry out the following plan, which the user has already confirmed.",
       "",
-      `ZIEL: ${goal}`,
+      `GOAL: ${goal}`,
       projectSandboxInfo,
       "",
-      "SCHRITTE:",
+      "STEPS:",
       stepList,
       "",
-      "ARBEITSWEISE:",
-      "- Arbeite die Schritte in der angegebenen Reihenfolge ab und respektiere Abhängigkeiten.",
-      "- Führe pro Schritt die tatsächlich nötigen Tools aus; erfinde keine Ergebnisse.",
-      "- Prüfe nach jedem Schritt das Resultat. Bei Fehlern: Ursache aus der echten Fehlermeldung ableiten und maximal 3x gezielt neu versuchen.",
-      "- Wenn ein Schritt endgültig scheitert, brich ab und melde, welche Schritte fertig sind und welcher blockiert.",
-      "- Abschließend: kurze Zusammenfassung pro Schritt (erledigt / übersprungen / fehlgeschlagen) inklusive Verifikation.",
+      "HOW TO WORK:",
+      "- Work through the steps in the given order and respect dependencies.",
+      "- For each step, run the tools actually needed; do not fabricate results.",
+      "- Check the result after each step. On errors: derive the cause from the real error message and retry in a targeted way at most 3 times.",
+      "- If a step ultimately fails, stop and report which steps are done and which one is blocked.",
+      "- Finally: a short summary per step (done / skipped / failed) including verification.",
       "",
-      "WICHTIG für Dateien:",
-      "- Nutze ECHTE Newlines in Dateiinhalten, NICHT escaped Strings wie \\n",
-      "- Schreibe mehrzeilige Inhalte mit echter Zeilenumbruch, z.B. im filesystem-Tool action:write",
+      "IMPORTANT for files:",
+      "- Use REAL newlines in file contents, NOT escaped strings like \\n",
+      "- Write multi-line content with real line breaks, e.g. in the filesystem tool action:write",
     ].join("\n");
 
     // Return immediately - execution happens asynchronously with WebSocket updates
@@ -198,7 +199,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             const project = await db.getProject(body.projectId) as ProjectData | null;
             if (project) {
               const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
-              const sandboxRoot = resolve("./shared-workspace/coding", projectSlug);
+              const sandboxRoot = resolve(CODING_WORKSPACE_ROOT, projectSlug);
 
               // Persist the resolved sandbox path onto the project and link the
               // conversation to it, so a later "improve this plan" round on the same

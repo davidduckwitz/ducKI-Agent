@@ -71,8 +71,8 @@ Return these fields in final summary:
 
 ## Skill Interop
 
-- Verwende diesen Skill als striktes Gegenstueck zu `shared-workspace-ops`, wenn API-Paritaet Prioritaet hat.
-- Wenn `browser-control` Dateien erzeugt (Download/PDF/Screenshot), hiermit den finalen API-basierten Persistenzpfad absichern.
-- Bei groesseren Datei-Workflows mit mehreren Schritten kann `workflow-orchestrator` die Sequenz steuern.
+- Use this skill as the strict counterpart to `shared-workspace-ops` when API parity has priority.
+- When `browser-control` produces files (download/PDF/screenshot), use this to secure the final API-based persistence path.
+- For larger file workflows with multiple steps, `workflow-orchestrator` can control the sequence.
 
 

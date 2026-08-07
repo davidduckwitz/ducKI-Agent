@@ -67,7 +67,14 @@ function convertLLMContentToOpenAI(content: string | LLMContent[]): string | Cha
 function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] {
   return messages.map((m): ChatCompletionMessageParam => {
     if (m.role === "tool") {
-      return { role: "tool", content: typeof m.content === "string" ? m.content : "tool result", tool_call_id: m.toolCallId ?? "unknown" };
+      // This agent drives tools with a TEXT protocol ([TOOL:...]); assistant messages therefore never
+      // carry a matching `tool_calls` array. An OpenAI/LM Studio `role:"tool"` message MUST answer a
+      // preceding assistant tool_call with the same id - without it the message is an orphaned tool
+      // response that the API rejects or silently drops, so the model never sees the tool output and
+      // falls back to hallucinating (e.g. inventing today's date instead of reading the shell result).
+      // Deliver the result as a normal user message so every OpenAI-compatible backend reliably sees it.
+      const text = typeof m.content === "string" ? m.content : "tool result";
+      return { role: "user", content: `[Tool result]\n${text}` };
     }
     if (m.role === "assistant") {
       return { role: "assistant", content: typeof m.content === "string" ? m.content : "assistant response" };

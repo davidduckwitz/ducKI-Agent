@@ -44,6 +44,54 @@ describe("filesystem tool (PR3)", () => {
     });
   });
 
+  // ── Redundant base-segment stripping (double-nesting guard) ──────────────────
+
+  describe("redundant base-segment stripping", () => {
+    it("does not double-nest when the path repeats the base's trailing segment", async () => {
+      const base = join(dir, "shared-workspace");
+      mkdirSync(base, { recursive: true });
+      const result = await exec({
+        action: "write",
+        path: "shared-workspace/notes.txt",
+        content: "hi",
+        basePath: base,
+        safeMode: true,
+      });
+      expect(result.success).toBe(true);
+      // Must land directly under base, NOT base/shared-workspace/notes.txt
+      expect(existsSync(join(base, "notes.txt"))).toBe(true);
+      expect(existsSync(join(base, "shared-workspace", "notes.txt"))).toBe(false);
+    });
+
+    it("handles a leading ./ before the redundant segment", async () => {
+      const base = join(dir, "shared-workspace");
+      mkdirSync(base, { recursive: true });
+      const result = await exec({
+        action: "write",
+        path: "./shared-workspace/sub/x.txt",
+        content: "hi",
+        basePath: base,
+        safeMode: true,
+      });
+      expect(result.success).toBe(true);
+      expect(existsSync(join(base, "sub", "x.txt"))).toBe(true);
+    });
+
+    it("leaves paths untouched when they do not repeat the base segment", async () => {
+      const base = join(dir, "project");
+      mkdirSync(base, { recursive: true });
+      const result = await exec({
+        action: "write",
+        path: "src/app.ts",
+        content: "//",
+        basePath: base,
+        safeMode: true,
+      });
+      expect(result.success).toBe(true);
+      expect(existsSync(join(base, "src", "app.ts"))).toBe(true);
+    });
+  });
+
   // ── JSON validation ────────────────────────────────────────────────────────
 
   describe("JSON validation", () => {

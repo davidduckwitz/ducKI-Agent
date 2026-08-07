@@ -92,6 +92,11 @@ export const memories = sqliteTable("memories", {
   conversationId: integer("conversation_id").references(() => conversations.id),
   type: text("type").notNull().default("short-term"), // short-term, long-term, episodic, semantic
   content: text("content").notNull(),
+  // German-folded copy of `content` (ä→ae, whole string lowercased via foldGerman) used ONLY as a
+  // SQL prefilter for keyword retrieval. Because the keyword scorer matches a term iff a folded
+  // content token starts with the folded term, `content_folded LIKE '%folded_term%'` is a guaranteed
+  // superset of what the scorer would keep - so it narrows rows without changing ranking results.
+  contentFolded: text("content_folded"),
   importance: integer("importance").notNull().default(1),
   status: text("status").notNull().default("approved"), // approved, pending
   createdAt: text("created_at").notNull(),

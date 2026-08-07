@@ -50,6 +50,12 @@ export class MemorySystem {
     }
 
     await this.db.addMemory({ content, importance, type: "short-term", conversationId });
+
+    // Short-term rows are never read back by retrieval, so cap the table here (once per run, cheap)
+    // instead of letting them accumulate forever as dead weight.
+    await this.db.pruneShortTermMemories().catch(() => {
+      // Best-effort hygiene - never let it fail a run.
+    });
   }
 
   async addLongTerm(content: string, importance = 5, conversationId?: number): Promise<void> {

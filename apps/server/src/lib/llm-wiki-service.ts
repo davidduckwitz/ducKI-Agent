@@ -4,6 +4,7 @@ import { extname, join, relative, resolve } from "node:path";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { buildMatchSnippet, scoreKeywordRelevance, tokenizeText } from "@ducki/shared";
+import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
 
 const ALLOWED_EXTENSIONS = new Set([".md", ".txt", ".json"]);
 
@@ -300,7 +301,7 @@ export class LlmWikiService {
   }
 
   private resolveWikiRoot(): string {
-    const sharedRoot = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
+    const sharedRoot = SHARED_WORKSPACE_ROOT;
     const configured = process.env["WIKI_SHARED_SOURCE_PATH"]?.trim() || "llm-wiki";
     const clean = configured.replaceAll("\\", "/").replace(/^\/+/, "");
     return resolve(sharedRoot, clean);

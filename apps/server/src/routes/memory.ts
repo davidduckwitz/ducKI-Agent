@@ -261,6 +261,18 @@ memoryRouter.post("/actions", async (req, res, next) => {
       return;
     }
 
+    if (action === "prune_short_term") {
+      // Short-term memories are never read back by retrieval, so they are safe to trim. `keep` caps how
+      // many of the newest short-term rows to retain (default 200, matching the automatic prune); pass
+      // keep:0 to clear all of them. Long-term/semantic memories and settings are never touched.
+      const keepRaw = Number(req.body?.keep);
+      const keep = Number.isFinite(keepRaw) && keepRaw >= 0 ? Math.floor(keepRaw) : 200;
+      const removed = await db.pruneShortTermMemories(keep);
+      const remaining = (await db.getMemories(undefined, "short-term")).length;
+      res.json(createApiResponse({ pruned: true, removed, remaining, keep }));
+      return;
+    }
+
     res.status(400).json({ success: false, error: `Unknown action '${action}'`, timestamp: new Date().toISOString() });
   } catch (e) { next(e); }
 });

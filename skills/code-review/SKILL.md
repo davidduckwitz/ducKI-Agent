@@ -11,29 +11,29 @@ source: "Inspired by Hermes review/reporting conventions"
 
 # Code Review Mode
 
-## Ziel
-Bewerte Aenderungen auf Korrektheit, Risiko und Wartbarkeit. Fokus auf echte Findings statt Zusammenfassung.
+## Goal
+Assess changes for correctness, risk, and maintainability. Focus on real findings rather than a summary.
 
-## Priorisierung
-- Kritisch: Datenverlust, Security, harte Laufzeitfehler.
-- Hoch: funktionale Regressionen, API-Brueche.
-- Mittel: robuste Fehlerbehandlung, Edge Cases.
-- Niedrig: Stil, Lesbarkeit, kleinere Verbesserungen.
+## Prioritization
+- Critical: data loss, security, hard runtime errors.
+- High: functional regressions, API breaks.
+- Medium: robust error handling, edge cases.
+- Low: style, readability, minor improvements.
 
-## Ausgabe
-1. Findings (nach Schweregrad, mit Dateireferenz).
-2. Offene Fragen / Annahmen.
-3. Kurze Aenderungszusammenfassung.
+## Output
+1. Findings (by severity, with a file reference).
+2. Open questions / assumptions.
+3. Short change summary.
 
-## Mindestchecks
-- Betroffene Tests vorhanden und sinnvoll?
-- Backward-Compatibility intakt?
-- Konfiguration und Defaults konsistent?
+## Minimum checks
+- Affected tests present and meaningful?
+- Backward compatibility intact?
+- Configuration and defaults consistent?
 
 ## Skill Interop
 
-- Nutze `plan`, um Review-Erwartung gegen den geplanten Scope zu validieren.
-- Nutze `test-driven-development`, um sicherzustellen, dass Findings testbar reproduziert sind.
-- Bei historischen Regressionen `history-search` heranziehen, um bekannte Fehlerbilder zu vergleichen.
+- Use `plan` to validate the review expectation against the planned scope.
+- Use `test-driven-development` to ensure findings are reproduced in a testable way.
+- For historical regressions, bring in `history-search` to compare known failure patterns.
 
 

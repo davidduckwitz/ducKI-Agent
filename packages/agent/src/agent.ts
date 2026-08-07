@@ -2370,10 +2370,10 @@ export class Agent {
 
     if (normalizedTool === "shell") {
       if (/(grep|sed|awk|tail|head)/.test(String(toolInput["command"] ?? "")) && /(not found|konnte nicht gefunden|wurde nicht gefunden)/.test(normalizedError)) {
-        return "Shell-Hinweis: Verwende auf Windows PowerShell-kompatible Kommandos oder fuehre den Befehl via bash aus. Keine Linux-Pfade wie /home/... verwenden.";
+        return "Shell hint: On Windows use PowerShell-compatible commands or run the command via bash. Do not use Linux paths like /home/...";
       }
       if (/(\/home\/|\/dev\/null)/.test(String(toolInput["command"] ?? ""))) {
-        return "Shell-Hinweis: Linux-Pfade erkannt. Passe Pfade auf Windows an (z. B. C:/... oder relative Workspace-Pfade).";
+        return "Shell hint: Linux path detected. Adjust paths for Windows (e.g. C:/... or relative workspace paths).";
       }
     }
 
@@ -2403,15 +2403,15 @@ export class Agent {
     }
 
     if (normalizedTool === "task" && /unknown task action/.test(normalizedError)) {
-      return "Task-Hinweis: Erlaubte Aktionen sind create, list, get, update, start, complete, fail, delete.";
+      return "Task hint: Allowed actions are create, list, get, update, start, complete, fail, delete.";
     }
 
     if (normalizedTool === "history" && /unknown history action/.test(normalizedError)) {
-      return "History-Hinweis: Erlaubte Aktionen sind search, list_conversations, get_messages, get_conversation.";
+      return "History hint: Allowed actions are search, list_conversations, get_messages, get_conversation.";
     }
 
     if (/unknown tool/.test(normalizedError)) {
-      return "Tool-Hinweis: Pruefe den Tool-Namen gegen die verfuegbaren Tools und verwende ggf. bekannte Aliases.";
+      return "Tool hint: Check the tool name against the available tools and use a known alias if applicable.";
     }
 
     return undefined;
@@ -2960,9 +2960,13 @@ export class Agent {
     toolResult: ToolResult
   ): Promise<void> {
     if (!toolResult.success || toolName !== "browser") return;
-    const action = toolInput.action as string;
-    if (action !== "screenshot") return;
 
+    // Screenshots arrive on many browser actions (navigate/click/type/wait), not only
+    // action:"screenshot" - the browser tool embeds the image in the result and the UI preview
+    // already renders it. Gating on action:"screenshot" here meant those images were shown to the
+    // user but NEVER handed to the vision model, so the LLM analyzed a page it could not see. Gate
+    // instead on the presence of actual screenshot DATA below (screenshotUrl/screenshot/savedTo);
+    // actions without an image fall through to the `if (!buffer) return` guard and cost nothing.
     const data = toolResult.data as Record<string, unknown> | undefined;
     if (!data) return;
 
@@ -4313,6 +4317,13 @@ export class Agent {
     let toolsJustExecuted = false; // Track if tools were executed in previous iteration
     let emptyResponseAfterTools = false; // Track if we got empty response after tool execution
 
+    // Dynamic memory retrieval used to run a full memory scan on EVERY iteration even though the
+    // keyword set barely changes within a run. Cache it by keyword signature so a multi-iteration run
+    // hits the database roughly once instead of once per iteration. Identical keywords always yield
+    // the identical context, so this changes nothing the model sees - only how often we recompute it.
+    let cachedMemoryKeywordSig: string | undefined;
+    let cachedDynamicMemoryContext = "";
+
     this.logger.info("[RUNLOOP] Starting iteration loop", {
       maxIterations: adjustedControls.maxIterations,
       hasTaskTool,
@@ -4338,13 +4349,21 @@ export class Agent {
       let dynamicMemoryContext = "";
       try {
         const memoryKeywords = this.extractMemoryKeywords(dynamicMemorySignals);
-        dynamicMemoryContext = memoryKeywords.length > 0
-          ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 5)
-          : "";
-        if (dynamicMemoryContext) {
-          emit("reasoning", "Memory-Kontext abgerufen.", {
-            keywords: memoryKeywords.slice(0, 5),
-          });
+        const keywordSig = memoryKeywords.join("|");
+        if (keywordSig === cachedMemoryKeywordSig) {
+          // Same keywords as the previous iteration - reuse the already-retrieved context.
+          dynamicMemoryContext = cachedDynamicMemoryContext;
+        } else {
+          dynamicMemoryContext = memoryKeywords.length > 0
+            ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 5)
+            : "";
+          cachedMemoryKeywordSig = keywordSig;
+          cachedDynamicMemoryContext = dynamicMemoryContext;
+          if (dynamicMemoryContext) {
+            emit("reasoning", "Memory-Kontext abgerufen.", {
+              keywords: memoryKeywords.slice(0, 5),
+            });
+          }
         }
       } catch (memoryError) {
         this.logger.warn("Failed to build dynamic memory context", {

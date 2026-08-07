@@ -8,6 +8,7 @@ import { createPublicKey, verify } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import { join, resolve } from "node:path";
+import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
 
 export const gatewayRouter: IRouter = Router();
 
@@ -68,7 +69,6 @@ interface DiscordInteractionPayload {
   applicationId: string;
 }
 
-const SHARED_WORKSPACE_ROOT = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
 const GATEWAY_UPLOAD_ROOT = resolve(SHARED_WORKSPACE_ROOT, "chat-uploads", "gateway");
 const AUDIO_EXTENSIONS = [".mp3", ".wav", ".m4a", ".ogg", ".oga", ".webm", ".flac", ".aac", ".opus"];
 

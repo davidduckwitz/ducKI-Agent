@@ -1,4 +1,4 @@
-﻿---
+---
 name: fast-answer
 description: "Check if no Skill is needed for fast answers"
 related_skills: [datum-uhrzeit-tag, llm-wiki, history-search, browser-control, plan]
@@ -10,20 +10,17 @@ version: 1.0.0
 
 # Fast Answer
 
-## Zweck
-Pruefe, ob eine direkte Antwort ohne komplexe Skill-Kette moeglich ist.
+## Purpose
+Check whether a direct answer is possible without a complex skill chain.
 
-## Entscheidung
-1. Wenn die Frage mit vorhandenem Kontext sofort sicher beantwortbar ist: direkt antworten.
-2. Wenn ein Spezialfall erkannt wird, an den passenden Skill delegieren.
-3. Wenn die Aufgabe umfangreich ist, `plan` oder `workflow-orchestrator` aktivieren.
+## Decision
+1. If the question can be answered immediately and reliably with the available context: answer directly.
+2. If a special case is detected, delegate to the appropriate skill.
+3. If the task is extensive, activate `plan` or `workflow-orchestrator`.
 
 ## Skill Interop
 
-- Zeit-/Datum-Fragen immer an `datum-uhrzeit-tag` delegieren.
-- Wissens-/Doku-Fragen bevorzugt ueber `llm-wiki` und optional `history-search` absichern.
-- Browser-/UI-Aufgaben an `browser-control` delegieren; Dateiablage dabei ueber `shared-workspace-ops`.
-- Review-/Qualitaetsfragen an `code-review`, Implementierungslaeufe an `test-driven-development` delegieren.
-
-
-
+- Always delegate time/date questions to `datum-uhrzeit-tag`.
+- Prefer `llm-wiki` for knowledge/documentation questions, and optionally cross-check with `history-search`.
+- Delegate browser/UI tasks to `browser-control`; store any files via `shared-workspace-ops`.
+- Delegate review/quality questions to `code-review`, and implementation runs to `test-driven-development`.

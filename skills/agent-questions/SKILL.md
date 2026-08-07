@@ -6,186 +6,186 @@ version: 1.0.0
 
 # Agent Question System Skill
 
-## Zweck
-Ermöglicht es dem Agent, Rückfragen an den Benutzer zu stellen mit verschiedenen Antworttypen (Multiple Choice, Text, Kombiniert). Diese Fragen werden in speziellen formattierten Boxen angezeigt.
+## Purpose
+Lets the agent ask the user follow-up questions with different answer types (multiple choice, text, combined). These questions are shown in specially formatted boxes.
 
-## Anwendung
+## Usage
 
-### Einfache Text-Frage
-Wenn du eine offene Frage stellen möchtest:
+### Simple text question
+When you want to ask an open question:
 
 ```json
 {
   "type": "question",
   "question": {
     "id": "unique-id",
-    "question": "Was ist dein Name?",
-    "description": "Gib deinen Namen ein für die Personalisierung",
+    "question": "What is your name?",
+    "description": "Enter your name for personalization",
     "type": "text",
-    "placeholder": "z.B. Max Mustermann",
+    "placeholder": "e.g. Jane Doe",
     "required": true
   }
 }
 ```
 
-### Multiple Choice Frage
-Wenn der Benutzer zwischen vordefinierten Optionen wählen soll:
+### Multiple choice question
+When the user should choose between predefined options:
 
 ```json
 {
   "type": "question",
   "question": {
     "id": "unique-id",
-    "question": "Welche Programmiersprache bevorzugst du?",
+    "question": "Which programming language do you prefer?",
     "type": "multiple-choice",
     "options": [
       {
         "id": "js",
         "label": "JavaScript/TypeScript",
-        "description": "Web-Entwicklung und Node.js"
+        "description": "Web development and Node.js"
       },
       {
         "id": "py",
         "label": "Python",
-        "description": "Data Science und Automation"
+        "description": "Data science and automation"
       },
       {
         "id": "go",
         "label": "Go",
-        "description": "Backend und Systemtools"
+        "description": "Backend and system tools"
       }
     ]
   }
 }
 ```
 
-### Kombinierte Frage (Choices + Custom Input)
-Wenn Benutzer aus Optionen wählen ODER eigene Eingabe machen können:
+### Combined question (choices + custom input)
+When users can pick from options OR provide their own input:
 
 ```json
 {
   "type": "question",
   "question": {
     "id": "unique-id",
-    "question": "Welche Verbesserungen möchtest du am Plan?",
-    "description": "Wähle eine Option oder gib deine eigene Idee ein",
+    "question": "What improvements would you like to the plan?",
+    "description": "Choose an option or enter your own idea",
     "type": "combined",
     "options": [
       {
         "id": "more-details",
-        "label": "Mehr Details",
-        "description": "Füge detaillierte Schritte hinzu"
+        "label": "More detail",
+        "description": "Add detailed steps"
       },
       {
         "id": "simplify",
-        "label": "Vereinfachen",
-        "description": "Reduziere Komplexität"
+        "label": "Simplify",
+        "description": "Reduce complexity"
       },
       {
         "id": "add-error-handling",
-        "label": "Fehlerbehandlung",
-        "description": "Füge Error Handling hinzu"
+        "label": "Error handling",
+        "description": "Add error handling"
       }
     ],
-    "placeholder": "Oder eigene Idee eingeben...",
+    "placeholder": "Or enter your own idea...",
     "required": true
   }
 }
 ```
 
-## Antwort-Verarbeitung
+## Answer processing
 
-Der Benutzer antwortet auf die Frage, und die Antwort wird dir zurückgegeben. Du kannst die Antwort dann verwenden, um deine nächsten Schritte zu gestalten.
+The user answers the question, and the answer is returned to you. You can then use the answer to shape your next steps.
 
-### Beispiel-Workflow für Plan-Verbesserung:
+### Example workflow for plan improvement:
 
-1. **Du stellst eine Frage:**
+1. **You ask a question:**
 ```json
 {
   "type": "question",
   "question": {
     "id": "plan-improvement",
-    "question": "Welche Aspekte des Plans sollen verbessert werden?",
+    "question": "Which aspects of the plan should be improved?",
     "type": "combined",
     "options": [
-      { "id": "clarity", "label": "Klarheit", "description": "Mache den Plan verständlicher" },
-      { "id": "efficiency", "label": "Effizienz", "description": "Reduziere Anzahl der Schritte" },
-      { "id": "robustness", "label": "Robustheit", "description": "Füge Fehlerbehandlung hinzu" }
+      { "id": "clarity", "label": "Clarity", "description": "Make the plan easier to understand" },
+      { "id": "efficiency", "label": "Efficiency", "description": "Reduce the number of steps" },
+      { "id": "robustness", "label": "Robustness", "description": "Add error handling" }
     ],
-    "placeholder": "Oder anderer Verbesserungsvorschlag...",
+    "placeholder": "Or another improvement suggestion...",
     "required": true
   }
 }
 ```
 
-2. **Der Benutzer antwortet** (entweder Wahl oder Custom-Text)
+2. **The user answers** (either a choice or custom text)
 
-3. **Du erhältst die Antwort** und verarbeitest sie:
-   - Wenn Option: `{ "option": "clarity", "custom": "" }`
-   - Wenn Custom: `{ "option": "", "custom": "Mach den Plan kürzer" }`
-   - Wenn Beide: `{ "option": "clarity", "custom": "und noch spezifischer" }`
+3. **You receive the answer** and process it:
+   - If option: `{ "option": "clarity", "custom": "" }`
+   - If custom: `{ "option": "", "custom": "Make the plan shorter" }`
+   - If both: `{ "option": "clarity", "custom": "and even more specific" }`
 
-4. **Du überarbeitest den Plan** basierend auf der Antwort
+4. **You revise the plan** based on the answer
 
-5. **Du fragst erneut**, ob weitere Verbesserungen gewünscht sind
+5. **You ask again** whether further improvements are wanted
 
 ## Best Practices
 
-### ✅ Gute Fragen
-- Präzise und eindeutig formuliert
-- Mit hilfreichen Optionen, die reale Entscheidungen abbilden
-- Mit Fallback (Custom Input) für Benutzer-Ideen
-- Mit aussagekräftigen Descriptions für jede Option
+### ✅ Good questions
+- Precise and unambiguous wording
+- With helpful options that reflect real decisions
+- With a fallback (custom input) for the user's ideas
+- With meaningful descriptions for each option
 
-### ❌ Schlechte Fragen
-- Zu offen oder mehrdeutig
-- Zu viele Optionen (max. 4-5 empfohlen)
-- Keine Option für Benutzer-Input bei Multiple Choice
-- Fehlende Beschreibungen für Optionen
+### ❌ Bad questions
+- Too open or ambiguous
+- Too many options (max. 4-5 recommended)
+- No option for user input in multiple choice
+- Missing descriptions for options
 
-## Integration mit anderen Komponenten
+## Integration with other components
 
-Diese Fragen werden nahtlos in den Chat-Fluss integriert:
-- Sie erscheinen als formatierte Boxen mit blauer Färbung
-- Der Benutzer kann direkt in der Box antworten
-- Nach der Antwort wird die Box grün gefärbt
-- Deine Folge-Aktion wird direkt in den Chat geschrieben
+These questions are seamlessly integrated into the chat flow:
+- They appear as formatted boxes with a blue tint
+- The user can answer directly in the box
+- After the answer, the box turns green
+- Your follow-up action is written directly into the chat
 
-## Beispiel: Iterativer Plan-Verbesserungs-Prozess
+## Example: iterative plan-improvement process
 
 ```
-1. Agent zeigt aktuellen Plan
-2. Agent stellt Frage: "Was soll verbessert werden?"
-   [Multiple Choice Box mit Optionen + Custom Input]
-3. Benutzer antwortet
-4. Agent: "Verstanden! Ich überarbeite den Plan mit Fokus auf [Antwort]..."
-5. Agent zeigt verbesserten Plan
-6. Agent fragt: "Möchtest du weitere Verbesserungen?"
-   [Ja / Nein / Eigene Idee]
-7. Falls ja: zurück zu Schritt 2
-8. Falls nein: "Perfekt! Plan ist bereit zur Umsetzung."
+1. Agent shows the current plan
+2. Agent asks: "What should be improved?"
+   [Multiple choice box with options + custom input]
+3. User answers
+4. Agent: "Understood! I'll revise the plan with a focus on [answer]..."
+5. Agent shows the improved plan
+6. Agent asks: "Would you like further improvements?"
+   [Yes / No / Own idea]
+7. If yes: back to step 2
+8. If no: "Perfect! The plan is ready to implement."
 ```
 
-## Technische Details
+## Technical details
 
-- Frage-ID muss eindeutig sein (für Tracking)
-- `required: true` bedeutet, dass mindestens ein Feld gefüllt sein muss
-- Kombinierte Fragen erlauben Wahl ODER Custom-Input oder BEIDE
-- Questions sind asynchron - der Agent wartet auf die Antwort des Benutzers
+- The question ID must be unique (for tracking)
+- `required: true` means at least one field must be filled
+- Combined questions allow a choice OR custom input, or BOTH
+- Questions are asynchronous - the agent waits for the user's answer
 
-## Verwendungsbeispiele
+## Usage examples
 
-### Plan-Verbesserung (bereits implementiert)
-Agent fragt nach Verbesserungen und überarbeitet den Plan iterativ.
+### Plan improvement (already implemented)
+The agent asks for improvements and revises the plan iteratively.
 
-### Feature-Klärung
-Agent fragt, welche Features priorisiert werden sollen.
+### Feature clarification
+The agent asks which features should be prioritized.
 
-### Konfiguration
-Agent fragt nach Benutzer-Präferenzen (z.B. Programmiersprache, Framework).
+### Configuration
+The agent asks for user preferences (e.g. programming language, framework).
 
-### Fehlerbehandlung
-Agent fragt, wie mit Fehlern umgegangen werden soll.
+### Error handling
+The agent asks how errors should be handled.
 
-### Code-Review-Entscheidungen
-Agent fragt nach Code-Style-Präferenzen.
+### Code-review decisions
+The agent asks for code-style preferences.
