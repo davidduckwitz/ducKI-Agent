@@ -19,11 +19,15 @@ export function CodingPlanPanel({
   messages,
   conversationId,
   isLoading,
+  overridePlan,
+  onExecutePlan,
   onRefine,
 }: {
   messages: RenderedChatMessage[];
   conversationId?: number;
   isLoading: boolean;
+  overridePlan?: Plan | null;
+  onExecutePlan?: (plan: Plan) => Promise<void>;
   onRefine: (prompt: string) => void;
 }) {
   const { t } = useI18n();
@@ -31,7 +35,7 @@ export function CodingPlanPanel({
   const [error, setError] = useState<string | null>(null);
   const [showRefinement, setShowRefinement] = useState(false);
 
-  const { plan, planIndex } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
+  const { plan: derivedPlan, planIndex } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const msg = messages[i];
       if (!msg || msg.eventType !== "plan" || !msg.eventData) continue;
@@ -45,6 +49,10 @@ export function CodingPlanPanel({
     }
     return { plan: null, planIndex: -1 };
   }, [messages]);
+
+  // Prefer a plan from this conversation's messages; fall back to a plan handed
+  // over from the chat page (which lives in a different conversation).
+  const plan = derivedPlan ?? overridePlan ?? null;
 
   // Rough live progress: count tool activity after the plan announcement. Enough to see
   // that something is happening without pretending to know which step is running.
@@ -74,12 +82,18 @@ export function CodingPlanPanel({
     setError(null);
     setExecuting(true);
     try {
-      await api.plans.execute(plan.id, {
-        goal: plan.goal,
-        steps,
-        markdown: plan.markdown,
-        conversationId,
-      });
+      if (onExecutePlan) {
+        // Robust path: parent guarantees a coding project + conversation exist and
+        // passes the project slug through so files land in the project sandbox.
+        await onExecutePlan(plan);
+      } else {
+        await api.plans.execute(plan.id, {
+          goal: plan.goal,
+          steps,
+          markdown: plan.markdown,
+          conversationId,
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

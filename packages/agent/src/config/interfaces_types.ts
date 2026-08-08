@@ -226,6 +226,15 @@ export interface AgentRuntimeControls {
    */
   verifyDeriveConstraints: boolean;
 
+  // Vision ("Observer" — Phase 4)
+  /**
+   * Enable the analyze_ui_layout vision tool. Needs a vision-capable model in
+   * the active provider; when off, the tool returns a disabled notice instead of
+   * calling the model. Default true.
+   * Settings key: AGENT_ENABLE_VISION
+   */
+  enableVision: boolean;
+
   // Reasoning & Tools
   reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;

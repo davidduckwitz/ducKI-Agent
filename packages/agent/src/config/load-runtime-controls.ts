@@ -35,6 +35,7 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     enableVerify: (process.env["AGENT_ENABLE_VERIFY"] ?? "false").toLowerCase() === "true",
     verifyMaxFixAttempts: parseInt(process.env["AGENT_VERIFY_MAX_FIX_ATTEMPTS"] ?? "1"),
     verifyDeriveConstraints: (process.env["AGENT_VERIFY_DERIVE_CONSTRAINTS"] ?? "true").toLowerCase() !== "false",
+    enableVision: (process.env["AGENT_ENABLE_VISION"] ?? "true").toLowerCase() !== "false",
 
     reasonerUseToolMinConfidence: parseFloat(process.env["AGENT_REASONER_MIN_CONFIDENCE"] ?? "0.7"),
     maxConsecutiveToolFailures: parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3"),

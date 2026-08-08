@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
-import { Planner } from "./planner/planner.js";
+import { Planner, type Plan } from "./planner/planner.js";
 import { createPlanTool, formatPlanAsMarkdown, toPlanEventPayload } from "./planner/plan-tool.js";
 import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
@@ -23,6 +23,7 @@ import { resolveToolAlias, resolveToolAction, resolveCanonicalAction } from "./t
 import { summarizeToolCall } from "./tools/tool-summary.js";
 import { loadToolManifests, isToolActive, createToolExecutorRegistry, type ToolManifestEntry, type ToolExecutorRegistry } from "./tools/tool-registry.js";
 import { createScriptTools } from "./tools/script-tools.js";
+import { createVisionTools } from "./vision/vision-tools.js";
 import { ToolExecutionGraph } from "./executor/tool-graph.js";
 import { skillSelector } from "./skill-selector/selector.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
@@ -198,6 +199,7 @@ export class Agent {
   private reflection: Reflection;
   private verifier: Verifier;
   private costTracker?: CostTracker;
+  private visionEnabled = true;
   private history: History;
   private thinkBlockParser: ThinkBlockParser;
   private logger: Logger;
@@ -364,6 +366,11 @@ export class Agent {
     for (const tool of createScriptTools(() => this.provider, this.logger)) {
       this.executor.registerTool(tool);
     }
+    // Phase 4 "Observer": visual reasoning over screenshots (needs a vision model).
+    // Gated by AGENT_ENABLE_VISION via the visionEnabled getter, refreshed per run.
+    for (const tool of createVisionTools(() => this.provider, this.logger, () => this.visionEnabled)) {
+      this.executor.registerTool(tool);
+    }
     this.executor.registerTool(createPlanTool(() => this.provider, this.logger));
     this.toolRegistry = createToolExecutorRegistry(
       (name) => this.executor.getTool(name),
@@ -424,6 +431,31 @@ export class Agent {
     }
 
     const result = await this.executor.execute(resolved.toolName, preflight.input);
+
+    // A plan produced by directly running the "plan" tool (chat "Tools" menu) must
+    // reach the UI's plan panel just like plan mode does, otherwise the plan is
+    // buried in the tool-result JSON and can't be viewed or executed. Emit the same
+    // source:"plan_mode" event on the shared bus the websocket handler forwards.
+    if (resolved.toolName === "plan" && result.success) {
+      const data = result.data as { plan?: unknown; markdown?: string } | undefined;
+      if (data?.plan && typeof data.plan === "object") {
+        try {
+          const markdown = typeof data.markdown === "string"
+            ? data.markdown
+            : formatPlanAsMarkdown(data.plan as Plan);
+          this.eventEmitterV2.emitEvent({
+            type: "plan" as AgentRunEventType,
+            message: "Plan erstellt",
+            data: { ...toPlanEventPayload(data.plan as Plan, markdown), phase: "done", iteration: 0 },
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          this.logger.warn("Failed to emit plan panel event for direct plan tool", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
 
     if (this.conversation.id !== undefined) {
       try {
@@ -2776,6 +2808,7 @@ export class Agent {
       enableVerify: false,
       verifyMaxFixAttempts: 1,
       verifyDeriveConstraints: true,
+      enableVision: true,
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
@@ -2863,6 +2896,7 @@ export class Agent {
         enableVerify: this.parseBooleanSetting(get("AGENT_ENABLE_VERIFY"), defaults.enableVerify),
         verifyMaxFixAttempts: this.parseNumberSetting(get("AGENT_VERIFY_MAX_FIX_ATTEMPTS"), defaults.verifyMaxFixAttempts, 0, 3),
         verifyDeriveConstraints: this.parseBooleanSetting(get("AGENT_VERIFY_DERIVE_CONSTRAINTS"), defaults.verifyDeriveConstraints),
+        enableVision: this.parseBooleanSetting(get("AGENT_ENABLE_VISION"), defaults.enableVision),
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
@@ -3606,6 +3640,30 @@ export class Agent {
         resultMap.set(executed.id, executed.result);
 
         const toolCall = callsById.get(executed.id);
+
+        // The standalone "plan" tool returns the plan as JSON but — unlike plan
+        // mode — never surfaced it to the UI's plan panel, so users couldn't find
+        // or execute it. Re-emit the same source:"plan_mode" panel event plan mode
+        // uses, so a plan created via the tool is displayed and runnable too.
+        if (toolCall?.toolName === "plan" && executed.result.success) {
+          const data = executed.result.data as { plan?: unknown; markdown?: string } | undefined;
+          if (data?.plan && typeof data.plan === "object") {
+            try {
+              const markdown = typeof data.markdown === "string"
+                ? data.markdown
+                : formatPlanAsMarkdown(data.plan as Plan);
+              emit("plan", "Plan erstellt", {
+                ...toPlanEventPayload(data.plan as Plan, markdown),
+                phase: "done",
+              });
+            } catch (error) {
+              this.logger.warn("Failed to emit plan panel event for plan tool", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+        }
+
         this.logger.info("[TOOL-CALLS] Tool execution result", {
           callId: executed.id,
           toolName: toolCall?.toolName,
@@ -4083,6 +4141,8 @@ export class Agent {
 
     // Phase 2 cost governor: fresh per-run accumulator using the effective budget.
     this.costTracker = new CostTracker(adjustedControls.costBudgetUsd, this.logger);
+    // Phase 4: refresh the vision gate from settings for this run.
+    this.visionEnabled = adjustedControls.enableVision;
 
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);
@@ -5060,14 +5120,18 @@ export class Agent {
           // If we also have a screenshot, ask about that specifically
           analyzePrompt = {
             role: "user",
-            content: "Please analyze the screenshot and other tool results provided above. What information did they provide? How do they answer my original question? Provide a clear summary.",
+            content:
+              "Answer my original question directly, using the screenshot and tool results above. Reply in the same language I used. Give only the answer I asked for — do not describe the tools, commands, or exit codes, and do not add headings like 'Analysis' or 'Summary'. Keep it as short as the question needs.",
             metadata: { internal: true, kind: "screenshot_analysis" },
           };
         } else {
-          // For non-browser tools, ask for analysis of results
+          // For non-browser tools, ask for a direct answer — NOT a meta-analysis.
+          // Requesting "analyze the results / provide a summary" made the model wrap
+          // trivial answers (e.g. the current time) in Analysis/How-this-answers/Summary
+          // sections. Ask for the plain answer in the user's language instead.
           analyzePrompt = {
             role: "user",
-            content: `Please analyze the results from the ${toolNames} tool(s) that just executed. What information did they provide? How do they answer my original question? Provide a clear summary based on these results.`,
+            content: `Answer my original question directly, using the results from the ${toolNames} tool(s) that just executed. Reply in the same language I used. Give only the answer I asked for — do not describe the tool, the command run, or exit codes, and do not add headings like 'Analysis' or 'Summary'. Keep it as short as the question needs (for a simple question, one sentence).`,
             metadata: { internal: true, kind: "tool_analysis", toolNames },
           };
         }

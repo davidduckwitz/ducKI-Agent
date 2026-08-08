@@ -118,9 +118,14 @@ export class Reflection {
   "improvedResponse": "optional improved version (only if shouldRetry=true and changes made)"
 }
 
+OUTPUT RULES (strict):
+- Output ONLY the raw JSON object. Nothing before it, nothing after it.
+- No markdown code fences, no step-by-step reasoning, no numbered plan, no "Self-Correction" notes, no explanation of how you built the JSON. Do not think out loud in the output.
+
 Guidelines:
 - quality: Assess how well the response addresses the original request
-- shouldRetry: true only if you can meaningfully improve the response
+- shouldRetry: true only if you can meaningfully improve the response — do NOT retry just to make a fine answer longer or more detailed
+- Match the expected length to the request: a simple question deserves a short answer. Do not flag a concise, correct response as "poor" for lacking extra detail
 - improvedResponse: Provide only if you have concrete improvements to suggest`,
       },
       {
@@ -142,7 +147,13 @@ Return JSON evaluation only.`,
         maxTokens: 1000,
       });
 
-      const result = JSON.parse(response.content) as ReflectionResult;
+      const result = this.parseReflectionJSON(response.content);
+      if (!result) {
+        // The model narrated instead of returning clean JSON. Treat as "no
+        // actionable evaluation" rather than surfacing the narration.
+        this.logger.debug("Reflection returned no parseable JSON, using neutral result");
+        return { quality: "adequate", issues: [], suggestions: [], shouldRetry: false };
+      }
       result.inputTokens = response.usage.promptTokens;
       result.outputTokens = response.usage.completionTokens;
       result.totalTokens = response.usage.totalTokens;
@@ -164,5 +175,51 @@ Return JSON evaluation only.`,
         shouldRetry: false,
       };
     }
+  }
+
+  /**
+   * Extract the reflection JSON even when the model wraps it in markdown fences or
+   * pads it with reasoning/narration (common with smaller local models). Tries a
+   * direct parse, then a fenced block, then the outermost balanced {...} object.
+   */
+  private parseReflectionJSON(content: string): ReflectionResult | null {
+    const tryParse = (text: string): ReflectionResult | null => {
+      try {
+        const parsed = JSON.parse(text) as ReflectionResult;
+        return parsed && typeof parsed === "object" && "quality" in parsed ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const trimmed = content.trim();
+    const direct = tryParse(trimmed);
+    if (direct) return direct;
+
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) {
+      const fromFence = tryParse(fenced[1].trim());
+      if (fromFence) return fromFence;
+    }
+
+    // Outermost balanced object: from the first "{" to its matching "}".
+    const start = trimmed.indexOf("{");
+    if (start >= 0) {
+      let depth = 0;
+      for (let i = start; i < trimmed.length; i++) {
+        const ch = trimmed[i];
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) {
+            const candidate = tryParse(trimmed.slice(start, i + 1));
+            if (candidate) return candidate;
+            break;
+          }
+        }
+      }
+    }
+
+    return null;
   }
 }

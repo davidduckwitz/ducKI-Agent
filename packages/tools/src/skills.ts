@@ -119,6 +119,8 @@ export const skillsTool: ToolExecutor = {
       properties: {
         action: {
           type: "string",
+          description:
+            "Skill management action. NOTE: 'execute' only runs skills that embed a JavaScript script — it does NOT run shell commands. To run a shell command use the 'shell' tool; most skills (e.g. shell-commands) are documentation only.",
           enum: ["list", "list_skills", "get_skills", "view", "create", "patch", "edit", "edit_skill", "rename", "delete", "write_file", "remove_file", "execute"],
         },
         name: { type: "string", description: "Skill name/slug" },
@@ -276,7 +278,16 @@ export const skillsTool: ToolExecutor = {
           const runtimeContext = input["context"];
 
           const resolved = resolveScriptSource(dir, content, { explicitRelativePath: directScriptFile });
-          if (!resolved.ok) return fail(resolved.error);
+          if (!resolved.ok) {
+            // Most skills are documentation/reference (SKILL.md guidance), not runnable
+            // JS. Models sometimes try to "execute" a doc skill like shell-commands
+            // instead of using the real tool. Redirect them rather than dead-ending.
+            return fail(
+              `Skill '${slugify(name)}' is a documentation/reference skill with no executable script — do NOT try to execute it. ` +
+              `To actually perform the action, call the matching tool directly: use the 'shell' tool (with a 'command') for shell commands, ` +
+              `the filesystem tools for files, the 'http' tool for requests, etc. Read this skill's SKILL.md for guidance if needed.`
+            );
+          }
 
           const executed = runScriptInSandbox(resolved.script, { input: runtimeInput, context: runtimeContext });
           return ok({

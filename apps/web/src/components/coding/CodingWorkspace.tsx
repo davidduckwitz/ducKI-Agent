@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerQuery } from "../../lib/useServerQuery";
 import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
@@ -111,7 +112,26 @@ export function CodingWorkspace() {
     setCodingAgentOpen,
     setCodingAgentWidth,
     setCodingSplitPreview,
+    setCodingAgentTab,
   } = useUiStore();
+
+  // A plan created in the chat page hands itself over via router state on the
+  // auto-switch to /coding. The coding Plan panel otherwise derives its plan from
+  // the coding project's own conversation, which never contains that chat plan.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [handoffPlan, setHandoffPlan] = useState<Plan | null>(null);
+  useEffect(() => {
+    const incoming = (location.state as { handoffPlan?: Plan } | null)?.handoffPlan;
+    if (incoming && incoming.goal && Array.isArray(incoming.steps)) {
+      setHandoffPlan(incoming);
+      setCodingAgentOpen(true);
+      setCodingAgentTab("plan");
+      // Consume the state so it isn't re-applied on back/forward or reload.
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   const [newProjectName, setNewProjectName] = useState("");
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
@@ -519,6 +539,43 @@ export function CodingWorkspace() {
     setIsEnsuringConversation(false);
   };
 
+  // Robust plan execution: guarantees a coding project + conversation exist before
+  // running, so "Execute" works even for a plan handed over from chat with nothing
+  // selected yet. The project slug travels to the backend so files land in its sandbox.
+  const executePlan = async (plan: Plan) => {
+    let project = selectedProject;
+    if (!project) {
+      const base = String(plan.goal || plan.title || "plan").trim();
+      const name = (base.slice(0, 40) || `plan-${Date.now()}`);
+      const created = await api.coding.createProject(name);
+      project = created.slug;
+      setSelectedProject(project);
+    }
+
+    let convId = projectConversationMap[project];
+    if (!convId) {
+      const created = await api.chat.createConversation({ name: `[Coding] ${project}` });
+      convId = created.conversationId;
+      const ensuredProject = project;
+      setProjectConversationMap((prev) => ({ ...prev, [ensuredProject]: convId as number }));
+      setConversationId(convId);
+    }
+
+    const steps = (plan.steps ?? []).map((s) => ({
+      title: s.title,
+      description: s.description ?? "",
+      tools: s.tools,
+    }));
+
+    await api.plans.execute(plan.id, {
+      goal: plan.goal,
+      steps,
+      markdown: plan.markdown,
+      conversationId: convId,
+      projectSlug: project,
+    });
+  };
+
   if (!codingSettingReady) {
     return (
       <div className="page">
@@ -742,6 +799,8 @@ export function CodingWorkspace() {
                 conversationId={activeConversationId}
                 activeFilePath={selectedPath}
                 disabled={!selectedProject}
+                overridePlan={handoffPlan}
+                onExecutePlan={executePlan}
                 onSend={(text, options) => {
                   void sendCodingPrompt(text, options);
                 }}

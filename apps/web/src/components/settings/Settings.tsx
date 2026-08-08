@@ -445,6 +445,18 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "AGENT_ENABLE_VISION",
+    label: "Vision-Analyse (Observer)",
+    description: "Aktiviert das analyze_ui_layout-Tool zur visuellen Analyse von Screenshots. Benoetigt ein vision-faehiges Modell im aktiven Provider (z. B. multimodales GGUF in LM Studio). Aus = Tool meldet sich deaktiviert.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "true",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_TIMEOUT_MS",
     label: "Timeout (ms)",
     description: "Inaktivitaets-Timeout fuer einen Agent-Run; wird bei Fortschritt zurueckgesetzt.",

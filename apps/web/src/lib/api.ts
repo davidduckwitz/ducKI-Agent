@@ -200,6 +200,7 @@ export const api = {
         markdown?: string;
         conversationId?: number;
         projectId?: number;
+        projectSlug?: string;
       }
     ) =>
       request<{ message: string; planId: number | null; executionResult?: unknown }>(

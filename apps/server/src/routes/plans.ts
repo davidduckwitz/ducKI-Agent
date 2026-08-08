@@ -91,6 +91,17 @@ interface ExecutePlanBody {
   markdown?: string;
   conversationId?: number;
   projectId?: number;
+  /** Coding project slug (folder name) — resolves the sandbox without a numeric DB id. */
+  projectSlug?: string;
+}
+
+/** Sanitize a slug to a safe single-segment folder name (no traversal). */
+function safeProjectSlug(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }
 
 interface ProjectData {
@@ -144,20 +155,30 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       })
       .join("\n");
 
-    // Check if this is a coding project
-    let projectSandboxInfo = "";
+    // Resolve the coding sandbox from either a numeric project id (DB) or a slug
+    // (coding projects are folder/slug based and have no numeric id). Either way we
+    // end up with a sandbox root the CodingAgent can be scoped to.
+    let codingSandboxRoot: string | undefined;
+    let codingProjectDbId: number | undefined;
     if (body.projectId && db) {
       try {
         const project = await db.getProject(body.projectId) as ProjectData | null;
         if (project) {
-          const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
-          const sandboxRoot = resolve(CODING_WORKSPACE_ROOT, projectSlug);
-          projectSandboxInfo = `\n\nPROJECT DIRECTORY: ${sandboxRoot}\nAll file paths are relative to this directory.`;
+          const projectSlug = safeProjectSlug(project.name);
+          codingSandboxRoot = resolve(CODING_WORKSPACE_ROOT, projectSlug);
+          codingProjectDbId = project.id;
         }
       } catch {
         // Silently ignore project lookup errors
       }
     }
+    if (!codingSandboxRoot && body.projectSlug) {
+      const slug = safeProjectSlug(String(body.projectSlug));
+      if (slug) codingSandboxRoot = resolve(CODING_WORKSPACE_ROOT, slug);
+    }
+    const projectSandboxInfo = codingSandboxRoot
+      ? `\n\nPROJECT DIRECTORY: ${codingSandboxRoot}\nAll file paths are relative to this directory.`
+      : "";
 
     const executionPrompt = [
       "**PLAN EXECUTION**",
@@ -193,59 +214,53 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     // Start async execution - don't wait for it
     (async () => {
       try {
-        if (body.projectId && createCodingAgent && db) {
-          // Use CodingAgent for projects but with the same conversation + execution prompt
+        if (codingSandboxRoot && createCodingAgent) {
+          // Use CodingAgent scoped to the resolved sandbox (from projectId OR slug),
+          // on the same conversation + execution prompt.
           try {
-            const project = await db.getProject(body.projectId) as ProjectData | null;
-            if (project) {
-              const projectSlug = project.name.toLowerCase().replace(/\s+/g, "-");
-              const sandboxRoot = resolve(CODING_WORKSPACE_ROOT, projectSlug);
+            const sandboxRoot = codingSandboxRoot;
 
-              // Persist the resolved sandbox path onto the project and link the
-              // conversation to it, so a later "improve this plan" round on the same
-              // conversation can find and reuse this exact project/folder instead of the
-              // frontend spinning up a brand-new one each time a plan gets (re-)executed.
-              if (project.folder !== sandboxRoot) {
-                await db.updateProject(project.id, { folder: sandboxRoot }).catch(() => {
-                  // Non-critical - execution can proceed even if this bookkeeping write fails.
-                });
-              }
-              const conversation = await db.getConversation(conversationId).catch(() => undefined);
-              if (conversation && conversation.projectId !== project.id) {
-                await db.updateConversation(conversationId, { projectId: project.id }).catch(() => {
-                  // Non-critical - execution can proceed even if this bookkeeping write fails.
-                });
-              }
-
-              const codingAgent = createCodingAgent({ sandboxRoot });
-              await codingAgent.loadConversation(conversationId);
-
-              // Emit start event
-              if (io) {
-                io.emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
-              }
-
-              const result = await codingAgent.runOnExistingConversation(executionPrompt, {
-                stream: true,
-                onChunk: (chunk) => {
-                  io?.emit("chat:chunk", { content: chunk, conversationId });
-                },
-                onEvent: (event) => {
-                  io?.emit("chat:event", { ...event, conversationId });
-                },
+            // Persist bookkeeping only when we have a real DB project row.
+            if (db && codingProjectDbId) {
+              await db.updateProject(codingProjectDbId, { folder: sandboxRoot }).catch(() => {
+                // Non-critical - execution can proceed even if this bookkeeping write fails.
               });
-
-              // Emit completion event
-              if (io) {
-                io.emit("chat:complete", {
-                  response: `Plan execution finished.\n\n${result.response}`,
-                  conversationId
+              const conversation = await db.getConversation(conversationId).catch(() => undefined);
+              if (conversation && conversation.projectId !== codingProjectDbId) {
+                await db.updateConversation(conversationId, { projectId: codingProjectDbId }).catch(() => {
+                  // Non-critical - execution can proceed even if this bookkeeping write fails.
                 });
               }
-              return;
             }
+
+            const codingAgent = createCodingAgent({ sandboxRoot });
+            await codingAgent.loadConversation(conversationId);
+
+            // Emit start event
+            if (io) {
+              io.emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
+            }
+
+            const result = await codingAgent.runOnExistingConversation(executionPrompt, {
+              stream: true,
+              onChunk: (chunk) => {
+                io?.emit("chat:chunk", { content: chunk, conversationId });
+              },
+              onEvent: (event) => {
+                io?.emit("chat:event", { ...event, conversationId });
+              },
+            });
+
+            // Emit completion event
+            if (io) {
+              io.emit("chat:complete", {
+                response: `Plan execution finished.\n\n${result.response}`,
+                conversationId
+              });
+            }
+            return;
           } catch (projectError) {
-            console.warn("Could not load project for plan execution, falling back to regular agent:", projectError);
+            console.warn("Could not run coding agent for plan execution, falling back to regular agent:", projectError);
           }
         }
 

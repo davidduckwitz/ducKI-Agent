@@ -6,6 +6,7 @@ import { DuckyMascot } from "../chat/DuckyMascot";
 import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
 import { ToolSkillSelector } from "../chat/ToolSkillSelector";
 import type { RenderedChatMessage } from "../chat/chatTypes";
+import type { Plan } from "../chat/PlanExecutionPanel";
 import { PanelEmpty } from "../ui/panel";
 import { CodingPlanPanel } from "./CodingPlanPanel";
 
@@ -16,6 +17,8 @@ export function CodingAgentPanel({
   conversationId,
   activeFilePath,
   disabled,
+  overridePlan,
+  onExecutePlan,
   onSend,
 }: {
   messages: RenderedChatMessage[];
@@ -24,6 +27,8 @@ export function CodingAgentPanel({
   conversationId?: number;
   activeFilePath: string;
   disabled: boolean;
+  overridePlan?: Plan | null;
+  onExecutePlan?: (plan: Plan) => Promise<void>;
   onSend: (text: string, options: { planMode: boolean; includeFile: string | null }) => void;
 }) {
   const { t } = useI18n();
@@ -146,6 +151,8 @@ export function CodingAgentPanel({
           messages={messages}
           conversationId={conversationId}
           isLoading={isLoading}
+          overridePlan={overridePlan}
+          onExecutePlan={onExecutePlan}
           onRefine={(prompt) => {
             setCodingAgentTab("chat");
             setPlanMode(true);

@@ -1114,10 +1114,12 @@ ${summary}`;
       setExecutionProgress(0);
       setPlanExecuting(false);
 
-      // Auto-switch to Coding Area when plan is created in chat
-      // This allows the user to immediately continue with execution in the dedicated Coding workspace
+      // Auto-switch to Coding Area when plan is created in chat, handing the plan
+      // over via router state. The coding Plan panel derives its plan from the
+      // coding project's own conversation messages — which do NOT contain this
+      // chat-created plan — so without the handoff the panel shows "Noch kein Plan".
       setTimeout(() => {
-        navigate("/coding");
+        navigate("/coding", { state: { handoffPlan: planData } });
       }, 300);
     }
   };

@@ -216,6 +216,13 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       ],
     },
     {
+      name: "Vision (Observer)",
+      icon: Monitor,
+      keys: [
+        "AGENT_ENABLE_VISION",
+      ],
+    },
+    {
       name: "Skill-Auswahl",
       icon: Sparkles,
       keys: [
