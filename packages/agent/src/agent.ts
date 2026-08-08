@@ -1,3 +1,4 @@
+import { jsonrepair } from "jsonrepair";
 import type { LLMProvider } from "@ducki/providers";
 import { isProviderConnectionError } from "@ducki/providers";
 import type { LLMMessage, ToolResult, LLMContent } from "@ducki/shared";
@@ -1938,6 +1939,22 @@ export class Agent {
       }
     } catch {
       // Will try fixes below
+    }
+
+    // Primary repair: the jsonrepair library is purpose-built for broken/partial
+    // JSON from LLMs — missing brackets, wrong terminators, unescaped control chars,
+    // single quotes, unquoted keys, truncation. It handles the bulk of malformed
+    // tool calls; the hand-rolled fixes below remain as a backup for anything it
+    // can't salvage. Runs on the pre-control-char-escaped text so it never has to
+    // guess about raw newlines inside string values.
+    try {
+      const parsed = JSON.parse(jsonrepair(candidate));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        this.logger.debug("[PARSER] Repaired tool call JSON via jsonrepair");
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // jsonrepair couldn't salvage it — fall through to the hand-rolled fixes.
     }
 
     // Local models routinely truncate the JSON one character early - almost always the

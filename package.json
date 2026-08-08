@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.15.0",
   "scripts": {
     "dev": "node dev.js",
     "build": "pnpm -r --filter=!@ducki/tauri-desktop --filter=!@ducki/tauri-server run build",

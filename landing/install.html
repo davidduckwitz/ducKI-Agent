@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Installation - DucKI Agent</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+    <!-- Navigation -->
+    <nav class="sticky top-0 z-50 bg-white dark:bg-slate-900 shadow-sm">
+        <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center text-white font-bold text-lg">🦆</div>
+                <a href="/" class="text-xl font-bold text-slate-900 dark:text-white">DucKI Agent</a>
+            </div>
+            <div class="flex items-center gap-4">
+                <a href="install.html" class="text-sm font-medium text-blue-600">Installation</a>
+                <a href="tools.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Tools</a>
+                <a href="skills.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Skills</a>
+                <a href="documentation.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">Docs</a>
+                <a href="about.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600">About</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Header -->
+    <section class="bg-gradient-to-br from-slate-900 to-slate-800 text-white py-12 px-4">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-4xl font-bold mb-3">Installation & Update</h1>
+            <p class="text-lg opacity-90">Ein Befehl — alles Weitere übernimmt das Skript: Voraussetzungen, Clone, Build, Autostart.</p>
+        </div>
+    </section>
+
+    <section class="py-12 px-4">
+        <div class="max-w-4xl mx-auto space-y-8">
+
+            <!-- OS Tabs -->
+            <div class="bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">🚀 1-Klick-Installation</h2>
+                <div class="flex flex-wrap gap-2 mb-5" id="os-tabs">
+                    <button data-os="unix" class="os-tab px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white">macOS / Linux / WSL / Raspberry&nbsp;Pi</button>
+                    <button data-os="win" class="os-tab px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">Windows</button>
+                </div>
+
+                <div class="os-panel" data-os="unix">
+                    <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">In ein Terminal einfügen:</p>
+                    <div class="cmd-box">
+                        <code>curl -fsSL https://ducki-ai-agent.davidduckwitz.de/install/install.sh | bash</code>
+                        <button class="copy-btn">Kopieren</button>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-3">Update später: <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded">./install/update.sh</code> im Projektordner.</p>
+                </div>
+
+                <div class="os-panel hidden" data-os="win">
+                    <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">In eine PowerShell einfügen:</p>
+                    <div class="cmd-box">
+                        <code>irm https://ducki-ai-agent.davidduckwitz.de/install/install.ps1 | iex</code>
+                        <button class="copy-btn">Kopieren</button>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-3">Update später: <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded">.\install\update.ps1</code> im Projektordner.</p>
+                </div>
+            </div>
+
+            <!-- Was passiert -->
+            <div class="bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">Was der Installer macht</h2>
+                <ol class="space-y-3">
+                    <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">1</span><span>Prüft & installiert <b>git</b>, <b>Node ≥ 20</b> und <b>pnpm ≥ 9</b> (via NodeSource / winget / Homebrew).</span></li>
+                    <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">2</span><span>Klont das Repository — oder aktualisiert eine vorhandene Installation per <code>git pull --ff-only</code>.</span></li>
+                    <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">3</span><span>Führt <code>pnpm install</code> und <code>pnpm build</code> aus.</span></li>
+                    <li class="flex gap-3"><span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">4</span><span>Optional (Linux/Pi): richtet einen <b>systemd-Autostart-Dienst</b> ein.</span></li>
+                </ol>
+            </div>
+
+            <!-- Direkt-Downloads -->
+            <div class="bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-lg border border-slate-200 dark:border-slate-800">
+                <h2 class="text-2xl font-bold mb-4">📥 Skripte direkt herunterladen</h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <a href="install/install.sh" download class="p-3 rounded-lg border border-slate-200 dark:border-slate-800 hover:shadow-md flex items-center justify-between"><span>install.sh <span class="text-xs text-slate-500">(Unix/Pi)</span></span><span class="text-blue-600">↓</span></a>
+                    <a href="install/install.ps1" download class="p-3 rounded-lg border border-slate-200 dark:border-slate-800 hover:shadow-md flex items-center justify-between"><span>install.ps1 <span class="text-xs text-slate-500">(Windows)</span></span><span class="text-blue-600">↓</span></a>
+                    <a href="install/update.sh" download class="p-3 rounded-lg border border-slate-200 dark:border-slate-800 hover:shadow-md flex items-center justify-between"><span>update.sh <span class="text-xs text-slate-500">(Unix/Pi)</span></span><span class="text-blue-600">↓</span></a>
+                    <a href="install/update.ps1" download class="p-3 rounded-lg border border-slate-200 dark:border-slate-800 hover:shadow-md flex items-center justify-between"><span>update.ps1 <span class="text-xs text-slate-500">(Windows)</span></span><span class="text-blue-600">↓</span></a>
+                </div>
+                <p class="text-xs text-slate-500 mt-4">Konfigurierbar über Env-Variablen: <code>DUCKI_REPO</code>, <code>DUCKI_BRANCH</code>, <code>DUCKI_DIR</code>, <code>DUCKI_SERVICE=1</code>.</p>
+            </div>
+        </div>
+    </section>
+
+    <style>
+        .cmd-box { position: relative; display: flex; align-items: center; gap: .5rem; background:#0f172a; color:#e2e8f0; border-radius:.5rem; padding:.85rem 1rem; overflow-x:auto; }
+        .cmd-box code { font-family: ui-monospace, monospace; font-size: .85rem; white-space: nowrap; }
+        .copy-btn { margin-left:auto; flex-shrink:0; background:#2563eb; color:#fff; border:none; border-radius:.375rem; padding:.35rem .7rem; font-size:.75rem; cursor:pointer; }
+        .copy-btn:hover { background:#1d4ed8; }
+    </style>
+    <script>
+        // OS-Tabs
+        document.querySelectorAll('.os-tab').forEach(function(tab){
+            tab.addEventListener('click', function(){
+                var os = tab.dataset.os;
+                document.querySelectorAll('.os-tab').forEach(function(t){
+                    var active = t.dataset.os === os;
+                    t.classList.toggle('bg-blue-600', active);
+                    t.classList.toggle('text-white', active);
+                    t.classList.toggle('bg-slate-100', !active);
+                    t.classList.toggle('dark:bg-slate-800', !active);
+                    t.classList.toggle('text-slate-700', !active);
+                    t.classList.toggle('dark:text-slate-300', !active);
+                });
+                document.querySelectorAll('.os-panel').forEach(function(p){
+                    p.classList.toggle('hidden', p.dataset.os !== os);
+                });
+            });
+        });
+        // Auto-Detect Windows
+        if (navigator.userAgent.indexOf('Windows') !== -1) {
+            var winTab = document.querySelector('.os-tab[data-os="win"]');
+            if (winTab) winTab.click();
+        }
+        // Copy-Buttons
+        document.querySelectorAll('.copy-btn').forEach(function(btn){
+            btn.addEventListener('click', function(){
+                var code = btn.parentElement.querySelector('code').innerText;
+                navigator.clipboard.writeText(code).then(function(){
+                    var old = btn.innerText; btn.innerText = 'Kopiert ✓';
+                    setTimeout(function(){ btn.innerText = old; }, 1500);
+                });
+            });
+        });
+    </script>
+</body>
+</html>

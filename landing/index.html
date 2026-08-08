@@ -17,6 +17,7 @@
                 <a href="/" class="text-xl font-bold text-slate-900 dark:text-white">DucKI Agent</a>
             </div>
             <div class="flex items-center gap-4">
+                <a href="install.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Installation</a>
                 <a href="tools.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Tools</a>
                 <a href="skills.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Skills</a>
                 <a href="documentation.html" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400">Docs</a>
@@ -31,7 +32,7 @@
 
     <!-- Hero Section -->
     <section class="bg-gradient-to-br from-blue-50 dark:from-slate-900 to-purple-50 dark:to-slate-800 py-20 px-4">
-        <div class="max-w-6xl mx-auto text-center">
+        <div class="max-w-6xl mx-auto text-center mb-2">
             <div class="mb-6 inline-block">
                 <span class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium">
                     <span class="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
@@ -45,13 +46,14 @@
                 DucKI ist ein selbstverwalteter AI Agent für produktive Arbeit: mit Planung, Recherche, Workflows, persistentem Memory und über 16 Tools + 23 Skills.
             </p>
             <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                <a href="tools.html" class="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors">
+                <a href="install.html" class="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors">
+                    Jetzt installieren
+                </a>
+                <a href="tools.html" class="px-6 py-3 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-medium transition-colors">
                     Tools & Skills erkunden
                 </a>
-                <a href="documentation.html" class="px-6 py-3 rounded-lg bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-medium transition-colors">
-                    Dokumentation lesen
-                </a>
             </div>
+			<img src="./ducki-v1-chat.jpg" style="width: 1000px; margin-top: 20px; margin-bottom: 20px; margin: 0 auto; border-radius: 20opx;" />
         </div>
     </section>
 
@@ -221,6 +223,8 @@
                             <span>Memory / Skill / Tool Registry</span>
                         </li>
                     </ul>
+					<br>
+					<img src="./ducki-v1-coding.jpg" style="width: 1000px; margin-top: 20px; margin: 0 auto; border-radius: 20opx;" />
                 </div>
             </div>
         </div>
@@ -230,40 +234,46 @@
     <section class="py-20 px-4 bg-white dark:bg-slate-900">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-12">
-                <h2 class="text-3xl sm:text-4xl font-bold mb-4">Quickstart in 3 Minuten</h2>
-                <p class="text-lg text-slate-600 dark:text-slate-400">Setup ist leichtgewichtig</p>
+                <h2 class="text-3xl sm:text-4xl font-bold mb-4">In 1 Minute installiert</h2>
+                <p class="text-lg text-slate-600 dark:text-slate-400">Ein Befehl — der Installer erledigt Voraussetzungen, Clone und Build automatisch</p>
             </div>
             <div class="bg-slate-50 dark:bg-slate-800 p-8 rounded-lg border border-slate-200 dark:border-slate-700">
-                <div class="space-y-4 mb-8">
-                    <div class="flex gap-4">
-                        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">1</div>
-                        <div>
-                            <p class="font-semibold mb-2">Clone Repository</p>
-                            <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-2 rounded block overflow-x-auto">git clone https://github.com/davidduckwitz/ducKI-Agent</code>
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                    <!-- macOS / Linux / WSL / Raspberry Pi -->
+                    <div>
+                        <div class="flex items-center gap-2 mb-3">
+                            <span class="text-xl">🍎🐧</span>
+                            <p class="font-semibold">macOS · Linux · WSL · Raspberry Pi</p>
                         </div>
+                        <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">In ein Terminal einfügen:</p>
+                        <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-3 rounded block overflow-x-auto">curl -fsSL https://ducki-ai-agent.davidduckwitz.de/install/install.sh | bash</code>
+                        <p class="text-xs text-slate-500 mt-2">Update: <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">./install/update.sh</code></p>
                     </div>
-                    <div class="flex gap-4">
-                        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">2</div>
-                        <div>
-                            <p class="font-semibold mb-2">Install & Configure</p>
-                            <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-2 rounded block overflow-x-auto">cd ducKI-Agent && pnpm install && cp .env.example .env</code>
+                    <!-- Windows -->
+                    <div>
+                        <div class="flex items-center gap-2 mb-3">
+                            <span class="text-xl">🪟</span>
+                            <p class="font-semibold">Windows (PowerShell)</p>
                         </div>
-                    </div>
-                    <div class="flex gap-4">
-                        <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">3</div>
-                        <div>
-                            <p class="font-semibold mb-2">Start Development Server</p>
-                            <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-2 rounded block overflow-x-auto">pnpm run dev</code>
-                        </div>
+                        <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">In eine PowerShell einfügen:</p>
+                        <code class="text-sm bg-slate-900 dark:bg-slate-950 text-slate-100 p-3 rounded block overflow-x-auto">irm https://ducki-ai-agent.davidduckwitz.de/install/install.ps1 | iex</code>
+                        <p class="text-xs text-slate-500 mt-2">Update: <code class="bg-slate-100 dark:bg-slate-700 px-1 rounded">.\install\update.ps1</code></p>
                     </div>
                 </div>
-                <div class="bg-white dark:bg-slate-900 p-4 rounded border border-slate-200 dark:border-slate-700">
-                    <p class="text-sm font-semibold mb-3">Server läuft auf:</p>
-                    <ul class="space-y-1 text-sm text-slate-600 dark:text-slate-400">
-                        <li>🌐 Web UI: <code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">http://localhost:3000</code></li>
-                        <li>🔌 API: <code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">http://localhost:3001</code></li>
-                        <li>💚 Health: <code class="bg-slate-100 dark:bg-slate-800 px-2 py-1 rounded">http://localhost:3001/health</code></li>
-                    </ul>
+
+                <div class="bg-white dark:bg-slate-900 p-4 rounded border border-slate-200 dark:border-slate-700 mb-6">
+                    <p class="text-sm font-semibold mb-3">Der Installer übernimmt in 3 Schritten:</p>
+                    <ol class="space-y-2 text-sm text-slate-600 dark:text-slate-400">
+                        <li class="flex gap-2"><span class="font-bold text-blue-600">1.</span> Voraussetzungen prüfen &amp; installieren (git, Node ≥ 20, pnpm ≥ 9)</li>
+                        <li class="flex gap-2"><span class="font-bold text-blue-600">2.</span> Repository klonen (oder per <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded">git pull</code> aktualisieren) &amp; bauen</li>
+                        <li class="flex gap-2"><span class="font-bold text-blue-600">3.</span> Start mit <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded">pnpm dev</code> — Web UI auf <code class="bg-slate-100 dark:bg-slate-800 px-1 rounded">http://localhost:3000</code></li>
+                    </ol>
+                </div>
+
+                <div class="text-center">
+                    <a href="install.html" class="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium transition-colors">
+                        Alle Installationswege &amp; Downloads →
+                    </a>
                 </div>
             </div>
         </div>
@@ -326,6 +336,7 @@
                 <div>
                     <h3 class="font-semibold text-white mb-4">Dokumentation</h3>
                     <ul class="space-y-2 text-sm">
+                        <li><a href="install.html" class="hover:text-white transition-colors">Installation</a></li>
                         <li><a href="documentation.html" class="hover:text-white transition-colors">Doku lesen</a></li>
                         <li><a href="tools.html" class="hover:text-white transition-colors">Tools</a></li>
                         <li><a href="skills.html" class="hover:text-white transition-colors">Skills</a></li>
