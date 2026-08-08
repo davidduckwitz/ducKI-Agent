@@ -244,6 +244,24 @@ export const api = {
     list: () => request<{ key: string; value: string }[]>("/settings"),
     get: (key: string) => request<{ key: string; value: string | null }>(`/settings/${key}`),
     set: (key: string, value: string) => request<unknown>(`/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) }),
+    testDatabase: (payload: {
+      engine?: string;
+      host?: string;
+      port?: number | string;
+      user?: string;
+      password?: string;
+      database?: string;
+    }) => request<{
+      ok: boolean;
+      engine?: string;
+      error?: string;
+      message?: string;
+      serverVersion?: string;
+      latencyMs?: number;
+      database?: string;
+      totalTablesInDb?: number;
+      tables?: { expected: number; present: string[]; missing: string[]; allPresent: boolean } | null;
+    }>("/settings/database/test", { method: "POST", body: JSON.stringify(payload) }),
   },
 
   coding: {

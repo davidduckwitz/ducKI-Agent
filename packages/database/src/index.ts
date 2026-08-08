@@ -38,6 +38,8 @@ export type { LibSQLDatabase };
 export type Database = LibSQLDatabase<typeof schema>;
 export * from "./schema.js";
 export * from "./cron.js";
+export { testMysqlConnection, EXPECTED_APP_TABLES } from "./mysql-tester.js";
+export type { MysqlTestConfig, MysqlTestResult } from "./mysql-tester.js";
 
 export class DatabaseService {
   private db!: LibSQLDatabase<typeof schema>;

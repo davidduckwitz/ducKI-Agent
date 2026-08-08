@@ -74,7 +74,10 @@ export function ToolEventsDisplay({
         });
       }
 
-      // Track active tools
+      // Track active tools. The updater MUST stay pure - it runs during React's render phase, so
+      // calling another component's setState (setRunningTools, which RecentChatsSection subscribes to)
+      // from inside it triggered "Cannot update a component while rendering a different component".
+      // The global store is synced from activeTools in the effect below instead.
       setActiveTools((prev) => {
         const next = new Set(prev);
         if (eventWithDate.type === "tool-start") {
@@ -82,15 +85,18 @@ export function ToolEventsDisplay({
         } else if (eventWithDate.type === "tool-complete" || eventWithDate.type === "tool-error") {
           next.delete(eventWithDate.toolName);
         }
-        // Update global running tools in store
-        setRunningTools(next);
         return next;
       });
     };
 
     socket.on("chat:tool-event", handleToolEvent);
     return () => socket.off("chat:tool-event", handleToolEvent);
-  }, [socket, conversationId, setRunningTools]);
+  }, [socket, conversationId]);
+
+  // Mirror the local active-tools set into the global store AFTER commit, never during render.
+  useEffect(() => {
+    setRunningTools(activeTools);
+  }, [activeTools, setRunningTools]);
 
   // When all tools finish, save summary to chat
   useEffect(() => {

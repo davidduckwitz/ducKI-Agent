@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import type { Request } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import type { DatabaseService } from "@ducki/database";
+import { testMysqlConnection } from "@ducki/database";
 import { createApiResponse } from "@ducki/shared";
 import { ProviderSettingsService } from "../lib/provider-settings-service.js";
 import { broadcastSettingsChanged } from "../websocket/index.js";
@@ -64,6 +65,45 @@ settingsRouter.put("/:key", async (req, res, next) => {
 
     notifySettingsChanged(req, [key]);
     res.json(createApiResponse({ updated: true, providerReloaded }));
+  } catch (e) { next(e); }
+});
+
+// ============================================================
+// Database connection test / inspection (MariaDB / MySQL)
+// ============================================================
+
+/**
+ * Read-only connection test + table check for an external MariaDB/MySQL database. Delegates to the
+ * database package's `testMysqlConnection` (which owns the mysql2 driver): it connects, reads the
+ * server version and existing tables via information_schema, then disconnects. It runs ONLY SELECTs
+ * and never touches the live SQLite database, so it is safe to call at any time. Failures are returned
+ * as `{ ok: false, error }` with HTTP 200 so the UI can render them inline.
+ */
+settingsRouter.post("/database/test", async (req, res, next) => {
+  try {
+    const body = (req.body ?? {}) as {
+      engine?: string; url?: string;
+      host?: string; port?: number | string; user?: string; password?: string; database?: string;
+    };
+    const engine = String(body.engine ?? "").toLowerCase();
+
+    if (engine === "sqlite" || (typeof body.url === "string" && body.url.startsWith("file:"))) {
+      res.json(createApiResponse({
+        ok: true, engine: "sqlite",
+        message: "SQLite is the built-in engine and always available - no external connection to test.",
+        tables: null,
+      }));
+      return;
+    }
+
+    const result = await testMysqlConnection({
+      host: String(body.host ?? ""),
+      port: Number(body.port) || 3306,
+      user: String(body.user ?? "root"),
+      password: String(body.password ?? ""),
+      database: String(body.database ?? ""),
+    });
+    res.json(createApiResponse({ engine: engine === "mariadb" ? "mariadb" : "mysql", ...result }));
   } catch (e) { next(e); }
 });
 

@@ -176,9 +176,18 @@ export function ChatContainer() {
     const items: RenderItem[] = [];
     let currentGroup: ToolGroup | null = null;
 
+    // The same toolBatchId can legitimately produce more than one group (a non-batch event splitting a
+    // run, or the live→persisted merge briefly holding both copies), which would emit two React children
+    // with the same key. Suffix any repeat of a base id so keys stay unique; the first occurrence keeps
+    // the stable base id, so open/closed state is preserved for the common (non-colliding) case.
+    const idCounts = new Map<string, number>();
     const flushGroup = () => {
       if (currentGroup && currentGroup.events.length > 0) {
-        items.push({ kind: "toolGroup", id: currentGroup.id, events: currentGroup.events });
+        const base = currentGroup.id;
+        const seen = (idCounts.get(base) ?? 0) + 1;
+        idCounts.set(base, seen);
+        const uniqueId = seen === 1 ? base : `${base}#${seen}`;
+        items.push({ kind: "toolGroup", id: uniqueId, events: currentGroup.events });
       }
       currentGroup = null;
     };
