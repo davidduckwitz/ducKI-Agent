@@ -180,6 +180,29 @@ export interface AgentRuntimeControls {
    */
   chatbotMaxIterations: number;
 
+  // Cost Governor ("Manager" — Phase 2)
+  /**
+   * Budget ceiling per run in USD. When the accumulated LLM cost reaches this,
+   * the agent warns the user (and stops only if costGovernorStop is true).
+   * 0 disables the governor (costs are still tracked). Local models cost 0.
+   * Settings key: AGENT_COST_BUDGET_USD
+   */
+  costBudgetUsd: number;
+  /**
+   * When the budget is exceeded: true = stop the run, false = warn only.
+   * Default false — the agent surfaces the overrun but keeps working, matching
+   * the "no autonomous cost decisions without opt-in" principle.
+   * Settings key: AGENT_COST_GOVERNOR_STOP
+   */
+  costGovernorStop: boolean;
+  /**
+   * Whether the agent may autonomously switch to a cheaper model when a plan's
+   * estimated cost exceeds the budget. Default false — the agent only *suggests*
+   * a downgrade and leaves the decision to the user.
+   * Settings key: AGENT_AUTO_DOWNGRADE
+   */
+  autoDowngrade: boolean;
+
   // Verification ("Critic" — Phase 1)
   /**
    * Enable structured verification of the final response against concrete,

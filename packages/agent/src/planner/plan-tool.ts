@@ -36,6 +36,10 @@ export interface PlanEventPayload {
   complexityScore?: number;
   stepCount: number;
   executionStrategy?: "sequential" | "parallel" | "hybrid";
+  overallRiskLevel?: "low" | "medium" | "high";
+  totalEstimatedTokens?: number;
+  totalEstimatedCostUsd?: number;
+  downgradeSuggestion?: string;
   steps: Array<{
     id: string;
     title: string;
@@ -43,6 +47,9 @@ export interface PlanEventPayload {
     tools?: string[];
     priority?: string;
     duration?: number;
+    riskLevel?: "low" | "medium" | "high";
+    estimatedTokens?: number;
+    estimatedCostUsd?: number;
     parallelizable?: string[];
     subtasks?: Array<{ id: string; title: string; description: string; tools?: string[] }>;
   }>;
@@ -59,6 +66,10 @@ export function toPlanEventPayload(plan: Plan, markdown: string): PlanEventPaylo
     complexityScore: plan.estimatedComplexityScore,
     stepCount: plan.steps.length,
     executionStrategy: plan.executionStrategy,
+    ...(plan.overallRiskLevel ? { overallRiskLevel: plan.overallRiskLevel } : {}),
+    ...(typeof plan.totalEstimatedTokens === "number" ? { totalEstimatedTokens: plan.totalEstimatedTokens } : {}),
+    ...(typeof plan.totalEstimatedCostUsd === "number" ? { totalEstimatedCostUsd: plan.totalEstimatedCostUsd } : {}),
+    ...(plan.downgradeSuggestion ? { downgradeSuggestion: plan.downgradeSuggestion } : {}),
     steps: plan.steps.map((step) => ({
       id: step.id,
       title: step.title,
@@ -66,6 +77,9 @@ export function toPlanEventPayload(plan: Plan, markdown: string): PlanEventPaylo
       ...(step.toolsNeeded?.length ? { tools: step.toolsNeeded } : {}),
       priority: step.priority,
       duration: step.estimatedDuration,
+      ...(step.riskLevel ? { riskLevel: step.riskLevel } : {}),
+      ...(typeof step.estimatedTokens === "number" ? { estimatedTokens: step.estimatedTokens } : {}),
+      ...(typeof step.estimatedCostUsd === "number" ? { estimatedCostUsd: step.estimatedCostUsd } : {}),
       ...(step.canParallelizeWith?.length ? { parallelizable: step.canParallelizeWith } : {}),
       ...(step.subtasks?.length ? {
         subtasks: step.subtasks.map((sub) => ({
@@ -100,7 +114,21 @@ export function formatPlanAsMarkdown(plan: Plan): string {
   if (plan.executionStrategy) {
     lines.push(`**Ausführungs-Strategie:** ${plan.executionStrategy}`);
   }
+  if (plan.overallRiskLevel) {
+    const riskLabel = { low: "Niedrig", medium: "Mittel", high: "Hoch" }[plan.overallRiskLevel];
+    lines.push(`**Gesamt-Risiko:** ${riskLabel}`);
+  }
+  if (typeof plan.totalEstimatedCostUsd === "number") {
+    lines.push(`**Geschätzte Kosten:** ${plan.totalEstimatedCostUsd.toFixed(4)} USD${plan.totalEstimatedTokens ? ` (~${plan.totalEstimatedTokens} Tokens)` : ""}`);
+  } else if (typeof plan.totalEstimatedTokens === "number") {
+    lines.push(`**Geschätzte Tokens:** ~${plan.totalEstimatedTokens}`);
+  }
   lines.push("");
+
+  if (plan.downgradeSuggestion) {
+    lines.push(`💸 **Budget-Hinweis:** ${plan.downgradeSuggestion}`);
+    lines.push("");
+  }
 
   // Add validation issues if any
   if (plan.validationResult?.issues?.length) {
@@ -121,6 +149,12 @@ export function formatPlanAsMarkdown(plan: Plan): string {
     if (step.estimatedDuration) {
       const mins = Math.round(step.estimatedDuration / 60);
       metadata.push(`Est. ${mins}min`);
+    }
+    if (step.riskLevel && step.riskLevel !== "low") {
+      metadata.push(`Risk: ${step.riskLevel}`);
+    }
+    if (typeof step.estimatedCostUsd === "number" && step.estimatedCostUsd > 0) {
+      metadata.push(`~$${step.estimatedCostUsd.toFixed(4)}`);
     }
     if (metadata.length) {
       lines.push(`   _${metadata.join(" | ")}_`);

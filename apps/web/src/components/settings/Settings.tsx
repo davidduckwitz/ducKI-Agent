@@ -413,6 +413,38 @@ const PREDEFINED_FIELDS: SettingField[] = [
     defaultValue: "5",
   },
   {
+    key: "AGENT_COST_BUDGET_USD",
+    label: "Kostenbudget pro Lauf (USD)",
+    description: "Warnt (bzw. stoppt) sobald die geschaetzten LLM-Kosten eines Laufs diesen Betrag erreichen. 0 = nur mitzaehlen, keine Grenze. Lokale Modelle kosten 0.",
+    type: "number",
+    section: "Agent",
+    defaultValue: "0",
+  },
+  {
+    key: "AGENT_COST_GOVERNOR_STOP",
+    label: "Bei Budget-Ueberschreitung stoppen",
+    description: "Aus (Standard) = nur warnen und weiterarbeiten. Aktiv = Lauf beim Erreichen des Budgets abbrechen. Der Agent trifft keine autonome Kostenentscheidung ohne diese Freigabe.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv (stoppen)", value: "true" },
+      { label: "Aus (nur warnen)", value: "false" },
+    ],
+  },
+  {
+    key: "AGENT_AUTO_DOWNGRADE",
+    label: "Automatischer Modell-Downgrade",
+    description: "Aus (Standard) = der Agent schlaegt bei Budget-Ueberschreitung nur ein guenstigeres Modell vor. Aktiv = kuenftig autonomer Wechsel erlaubt. Standardmaessig trifft der Agent KEINE Modellentscheidung selbst.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv (autonom)", value: "true" },
+      { label: "Aus (nur Vorschlag)", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_TIMEOUT_MS",
     label: "Timeout (ms)",
     description: "Inaktivitaets-Timeout fuer einen Agent-Run; wird bei Fortschritt zurueckgesetzt.",

@@ -16,6 +16,7 @@ import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
 import { Reflection } from "./reflection/reflection.js";
 import { Verifier } from "./verification/verifier.js";
+import { CostTracker } from "./cost/cost-tracker.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
 import { resolveToolAlias, resolveToolAction, resolveCanonicalAction } from "./tools/tool-aliases.js";
@@ -196,6 +197,7 @@ export class Agent {
   private reasoner: Reasoner;
   private reflection: Reflection;
   private verifier: Verifier;
+  private costTracker?: CostTracker;
   private history: History;
   private thinkBlockParser: ThinkBlockParser;
   private logger: Logger;
@@ -2768,6 +2770,9 @@ export class Agent {
       reflectionPostIterationMinQuality: "adequate",
       lightweightMaxIterations: 10,
       chatbotMaxIterations: 5,
+      costBudgetUsd: 0,
+      costGovernorStop: false,
+      autoDowngrade: false,
       enableVerify: false,
       verifyMaxFixAttempts: 1,
       verifyDeriveConstraints: true,
@@ -2850,6 +2855,9 @@ export class Agent {
         reflectionMetaReview: this.parseBooleanSetting(get("AGENT_REFLECTION_META_REVIEW"), defaults.reflectionMetaReview),
         reflectionPostIteration: this.parseBooleanSetting(get("AGENT_REFLECTION_POST_ITERATION"), defaults.reflectionPostIteration),
         reflectionPostIterationMinQuality: (get("AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY") ?? defaults.reflectionPostIterationMinQuality) as "poor" | "adequate" | "good" | "excellent",
+        costBudgetUsd: this.parseFloatSetting(get("AGENT_COST_BUDGET_USD"), defaults.costBudgetUsd, 0, 1000),
+        costGovernorStop: this.parseBooleanSetting(get("AGENT_COST_GOVERNOR_STOP"), defaults.costGovernorStop),
+        autoDowngrade: this.parseBooleanSetting(get("AGENT_AUTO_DOWNGRADE"), defaults.autoDowngrade),
         lightweightMaxIterations: this.parseNumberSetting(get("AGENT_LIGHTWEIGHT_MAX_ITERATIONS"), defaults.lightweightMaxIterations, 1, 50),
         chatbotMaxIterations: this.parseNumberSetting(get("AGENT_CHATBOT_MAX_ITERATIONS"), defaults.chatbotMaxIterations, 1, 50),
         enableVerify: this.parseBooleanSetting(get("AGENT_ENABLE_VERIFY"), defaults.enableVerify),
@@ -3314,7 +3322,9 @@ export class Agent {
     emit("plan", "Erstelle Plan...", { source: "plan_mode", phase: "start", goal: userInput });
 
     const availableToolNames = this.executor.listTools().map((tool) => tool.name);
-    const plan = await this.planner.createPlan(userInput, availableToolNames);
+    const plan = await this.planner.createPlan(userInput, availableToolNames, {
+      currentModel: this.provider.model,
+    });
     const response = formatPlanAsMarkdown(plan);
 
     if (options.stream && options.onChunk) {
@@ -4071,6 +4081,9 @@ export class Agent {
       adjustedControls.enableVerify = false;
     }
 
+    // Phase 2 cost governor: fresh per-run accumulator using the effective budget.
+    this.costTracker = new CostTracker(adjustedControls.costBudgetUsd, this.logger);
+
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);
 
@@ -4307,7 +4320,10 @@ export class Agent {
       : "";
     const enablePlanningInMode = this.enablePlanning && effectiveMode === "full";
     let planContext = enablePlanningInMode
-      ? await this.planner.createPlan(effectiveInput, availableTools.map((tool) => tool.name))
+      ? await this.planner.createPlan(effectiveInput, availableTools.map((tool) => tool.name), {
+          currentModel: this.provider.model,
+          budgetUsd: adjustedControls.costBudgetUsd,
+        })
       : undefined;
     if (planContext) {
       // source:"auto" marks this as internal run-loop context, not a user-facing plan:
@@ -4316,8 +4332,19 @@ export class Agent {
       emit("plan", `Plan erstellt mit ${planContext.steps.length} Schritt(en).`, {
         source: "auto",
         complexity: planContext.estimatedComplexity,
+        overallRiskLevel: planContext.overallRiskLevel,
+        totalEstimatedCostUsd: planContext.totalEstimatedCostUsd,
+        totalEstimatedTokens: planContext.totalEstimatedTokens,
         steps: planContext.steps.map((step) => ({ id: step.id, title: step.title })),
       });
+      // Surface the (non-binding) downgrade suggestion when the plan exceeds budget.
+      // We never switch models autonomously (AGENT_AUTO_DOWNGRADE defaults off).
+      if (planContext.downgradeSuggestion) {
+        emit("guardrail", "Plan exceeds budget — downgrade suggested", {
+          suggestion: planContext.downgradeSuggestion,
+          autoDowngrade: adjustedControls.autoDowngrade,
+        });
+      }
     }
     const installedSkillsContext = installedSkillManifests.length > 0
       ? `\n\n## Installed Skills\n${installedSkillManifests
@@ -4841,6 +4868,36 @@ export class Agent {
           total: (totalInputTokens ?? 0) + (currentResponseTokens.output ?? 0),
         },
       });
+
+      // Phase 2 cost governor: accumulate this call's cost and surface the running
+      // total. When the budget is crossed we warn once; we only stop the run if
+      // the user explicitly opted into costGovernorStop.
+      if (this.costTracker) {
+        const decision = this.costTracker.record({
+          inputTokens: currentResponseTokens.input ?? 0,
+          outputTokens: currentResponseTokens.output ?? 0,
+          model: this.provider.model,
+        });
+        emit("decision", "Cost usage updated", {
+          costUsd: decision.totals.costUsd,
+          totalTokens: decision.totals.totalTokens,
+          calls: decision.totals.calls,
+          thresholdUsd: decision.thresholdUsd,
+          overBudget: decision.overBudget,
+          model: this.provider.model,
+        });
+        if (decision.justCrossed) {
+          emit("guardrail", "Cost budget threshold reached", {
+            costUsd: decision.totals.costUsd,
+            thresholdUsd: decision.thresholdUsd,
+            action: adjustedControls.costGovernorStop ? "stopping" : "warning_only",
+          });
+        }
+        if (decision.overBudget && adjustedControls.costGovernorStop) {
+          finalResponse = this.buildBudgetStopMessage(decision.totals.costUsd, decision.thresholdUsd);
+          break;
+        }
+      }
 
       // CRITICAL: Detect and handle empty responses after tool execution
       // This is a common issue with smaller/local models that go silent after seeing tool results
@@ -5452,6 +5509,14 @@ export class Agent {
    * visibly executed tools and then simply never answered, with no error to explain it.
    * Reporting what actually ran is both honest and more useful than silence.
    */
+  /** User-facing message when the cost governor stops a run over budget. */
+  private buildBudgetStopMessage(costUsd: number, thresholdUsd: number): string {
+    return [
+      `Ich habe diesen Lauf gestoppt: die geschätzten Kosten (${costUsd.toFixed(4)} USD) haben das eingestellte Budget von ${thresholdUsd.toFixed(2)} USD erreicht.`,
+      "Erhöhe das Budget in den Einstellungen (Agent → Kosten-Governor) oder deaktiviere den Stopp, wenn ich weiterarbeiten soll.",
+    ].join(" ");
+  }
+
   private buildNonEmptyResponse(response: string, toolsUsed: string[], iterations: number): string {
     if (!this.isBlankResponse(response)) return response;
 

@@ -25,6 +25,10 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     reflectionPostIteration: (process.env["AGENT_REFLECTION_POST_ITERATION"] ?? "true").toLowerCase() !== "false",
     reflectionPostIterationMinQuality: (process.env["AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY"] ?? "adequate") as "poor" | "adequate" | "good" | "excellent",
 
+    costBudgetUsd: parseFloat(process.env["AGENT_COST_BUDGET_USD"] ?? "0"),
+    costGovernorStop: (process.env["AGENT_COST_GOVERNOR_STOP"] ?? "false").toLowerCase() === "true",
+    autoDowngrade: (process.env["AGENT_AUTO_DOWNGRADE"] ?? "false").toLowerCase() === "true",
+
     lightweightMaxIterations: parseInt(process.env["AGENT_LIGHTWEIGHT_MAX_ITERATIONS"] ?? "10"),
     chatbotMaxIterations: parseInt(process.env["AGENT_CHATBOT_MAX_ITERATIONS"] ?? "5"),
 

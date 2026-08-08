@@ -23,7 +23,52 @@ export interface ModelTokenConfig {
  */
 export class TokenCounter {
   private static readonly MODEL_CONFIGS: Map<string, ModelTokenConfig> = new Map([
-    // Anthropic Claude models
+    // Anthropic Claude models — current generation (pricing per 1M tokens, USD)
+    [
+      "claude-opus-5",
+      {
+        model: "claude-opus-5",
+        maxTokens: 1000000,
+        inputTokensPerMillion: 5.0,
+        outputTokensPerMillion: 25.0,
+        estimatedTokensPerMessage: 50,
+        estimatedTokensPerWord: 0.33,
+      },
+    ],
+    [
+      "claude-sonnet-5",
+      {
+        model: "claude-sonnet-5",
+        maxTokens: 1000000,
+        inputTokensPerMillion: 3.0,
+        outputTokensPerMillion: 15.0,
+        estimatedTokensPerMessage: 50,
+        estimatedTokensPerWord: 0.33,
+      },
+    ],
+    [
+      "claude-haiku-4-5",
+      {
+        model: "claude-haiku-4-5",
+        maxTokens: 200000,
+        inputTokensPerMillion: 1.0,
+        outputTokensPerMillion: 5.0,
+        estimatedTokensPerMessage: 50,
+        estimatedTokensPerWord: 0.33,
+      },
+    ],
+    [
+      "claude-fable-5",
+      {
+        model: "claude-fable-5",
+        maxTokens: 1000000,
+        inputTokensPerMillion: 10.0,
+        outputTokensPerMillion: 50.0,
+        estimatedTokensPerMessage: 50,
+        estimatedTokensPerWord: 0.33,
+      },
+    ],
+    // Anthropic Claude models — legacy
     [
       "claude-3-5-sonnet",
       {
@@ -223,6 +268,22 @@ export class TokenCounter {
     const totalCost = inputCost + outputCost;
 
     return { inputCost, outputCost, totalCost };
+  }
+
+  /**
+   * Estimate cost in USD directly from token counts (no message array needed).
+   * Used by the cost governor, which accumulates the provider's reported
+   * per-call usage. Local/unknown models resolve to the zero-cost "local" config.
+   */
+  static estimateCostFromTokens(
+    modelName: string,
+    inputTokens: number,
+    outputTokens: number
+  ): { inputCost: number; outputCost: number; totalCost: number } {
+    const config = this.getModelConfig(modelName);
+    const inputCost = (inputTokens / 1000000) * config.inputTokensPerMillion;
+    const outputCost = (outputTokens / 1000000) * config.outputTokensPerMillion;
+    return { inputCost, outputCost, totalCost: inputCost + outputCost };
   }
 
   /**

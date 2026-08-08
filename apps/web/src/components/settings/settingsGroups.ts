@@ -207,6 +207,15 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       ],
     },
     {
+      name: "Kosten-Governor",
+      icon: Gauge,
+      keys: [
+        "AGENT_COST_BUDGET_USD",
+        "AGENT_COST_GOVERNOR_STOP",
+        "AGENT_AUTO_DOWNGRADE",
+      ],
+    },
+    {
       name: "Skill-Auswahl",
       icon: Sparkles,
       keys: [

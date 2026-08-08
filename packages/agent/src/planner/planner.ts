@@ -1,6 +1,22 @@
 import type { LLMProvider } from "@ducki/providers";
 import type { LLMMessage } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
+import { TokenCounter } from "../context/token-counter.js";
+
+export type RiskLevel = "low" | "medium" | "high";
+
+/**
+ * Optional cost/risk context for planning (Phase 3 "Strategist"). When a model
+ * and budget are supplied, the planner converts each step's estimated tokens to
+ * USD via the Phase 2 price table and, if the total exceeds the budget, attaches
+ * a *downgrade suggestion* — it never switches models itself.
+ */
+export interface PlanCostOptions {
+  /** Model the run currently uses, for token→USD conversion + downgrade hints. */
+  currentModel?: string;
+  /** Per-run budget in USD; 0/undefined disables the downgrade suggestion. */
+  budgetUsd?: number;
+}
 
 export interface Plan {
   goal: string;
@@ -10,6 +26,12 @@ export interface Plan {
   totalSteps?: number;
   executionStrategy?: "sequential" | "parallel" | "hybrid";
   validationResult?: PlanValidationResult;
+  // Phase 3 cost/risk
+  totalEstimatedTokens?: number;
+  totalEstimatedCostUsd?: number;
+  overallRiskLevel?: RiskLevel;
+  /** Non-binding advice when the estimate exceeds the budget. Never auto-applied. */
+  downgradeSuggestion?: string;
 }
 
 export interface PlanStep {
@@ -24,6 +46,10 @@ export interface PlanStep {
   result?: string;
   estimatedDuration?: number;
   priority?: "critical" | "high" | "medium" | "low";
+  // Phase 3 cost/risk
+  estimatedTokens?: number;
+  estimatedCostUsd?: number;
+  riskLevel?: RiskLevel;
 }
 
 export interface PlanSubtask {
@@ -63,6 +89,8 @@ Return ONLY valid JSON with this exact structure (no markdown, no extra text):
       "dependsOn": [],
       "priority": "high|medium|low",
       "estimatedDuration": 300,
+      "estimatedTokens": 1500,
+      "riskLevel": "low|medium|high",
       "subtasks": [
         {
           "id": "step_1_a",
@@ -85,7 +113,9 @@ CRITICAL RULES:
 5. Identify true dependencies - steps that MUST wait for others
 6. Mark steps that CAN run in parallel (no dependencies between them)
 7. Use realistic duration estimates in seconds (60=1min, 300=5min, 600=10min)
-8. Always return valid, parseable JSON`;
+8. Estimate total LLM tokens each step will consume (input+output), realistic per step
+9. Assess riskLevel per step: "high" = irreversible/destructive/external side effects or high uncertainty, "medium" = moderate, "low" = safe/read-only
+10. Always return valid, parseable JSON`;
 
 const VALIDATION_PROMPT = `Validate this plan and suggest improvements:
 ${JSON.stringify({}, null, 2)}
@@ -108,7 +138,11 @@ export class Planner {
     private readonly logger: Logger
   ) {}
 
-  async createPlan(goal: string, availableTools: string[] = []): Promise<Plan> {
+  async createPlan(
+    goal: string,
+    availableTools: string[] = [],
+    costOptions?: PlanCostOptions
+  ): Promise<Plan> {
     this.logger.info("Creating plan", { goal: goal.substring(0, 200) });
 
     const toolsContext =
@@ -143,6 +177,7 @@ export class Planner {
           parsedPlan = this.initializePlanSteps(parsedPlan);
           parsedPlan = await this.analyzeDependencies(parsedPlan);
           parsedPlan = await this.validatePlan(parsedPlan);
+          parsedPlan = this.computeCostAndRisk(parsedPlan, costOptions);
 
           this.logger.info("Plan created successfully", {
             goal,
@@ -409,6 +444,69 @@ export class Planner {
     }
 
     plan.validationResult = validation;
+    return plan;
+  }
+
+  /**
+   * Phase 3: aggregate per-step token estimates into a total, convert to USD via
+   * the current model's price table, roll up an overall risk level, and — only
+   * when over budget — attach a downgrade *suggestion*. Never switches models.
+   */
+  private computeCostAndRisk(plan: Plan, options?: PlanCostOptions): Plan {
+    const rank: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2 };
+    const model = options?.currentModel;
+
+    let totalTokens = 0;
+    let maxRisk: RiskLevel = "low";
+
+    for (const step of plan.steps) {
+      const tokens = typeof step.estimatedTokens === "number" && step.estimatedTokens > 0
+        ? Math.round(step.estimatedTokens)
+        : undefined;
+      if (tokens) {
+        step.estimatedTokens = tokens;
+        totalTokens += tokens;
+        if (model) {
+          // Split heuristically ~70% input / 30% output for a rough per-step cost.
+          const { totalCost } = TokenCounter.estimateCostFromTokens(
+            model,
+            Math.round(tokens * 0.7),
+            Math.round(tokens * 0.3)
+          );
+          step.estimatedCostUsd = Number(totalCost.toFixed(6));
+        }
+      }
+      const risk: RiskLevel = step.riskLevel === "high" || step.riskLevel === "medium" ? step.riskLevel : "low";
+      step.riskLevel = risk;
+      if (rank[risk] > rank[maxRisk]) maxRisk = risk;
+    }
+
+    plan.overallRiskLevel = maxRisk;
+    if (totalTokens > 0) {
+      plan.totalEstimatedTokens = totalTokens;
+      if (model) {
+        const { totalCost } = TokenCounter.estimateCostFromTokens(
+          model,
+          Math.round(totalTokens * 0.7),
+          Math.round(totalTokens * 0.3)
+        );
+        plan.totalEstimatedCostUsd = Number(totalCost.toFixed(6));
+      }
+    }
+
+    const budget = options?.budgetUsd ?? 0;
+    if (budget > 0 && (plan.totalEstimatedCostUsd ?? 0) > budget) {
+      plan.downgradeSuggestion =
+        `Die geschätzten Kosten (${plan.totalEstimatedCostUsd!.toFixed(4)} USD) übersteigen das Budget von ${budget.toFixed(2)} USD. ` +
+        `Erwäge ein günstigeres/kleineres Modell für Teile dieses Plans. ` +
+        `Hinweis: Ich wechsle das Modell NICHT automatisch — das ist deine Entscheidung.`;
+      this.logger.info("Plan exceeds budget, downgrade suggested (not applied)", {
+        totalEstimatedCostUsd: plan.totalEstimatedCostUsd,
+        budgetUsd: budget,
+        model,
+      });
+    }
+
     return plan;
   }
 
