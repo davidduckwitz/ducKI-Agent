@@ -165,6 +165,44 @@ export interface AgentRuntimeControls {
    */
   reflectionPostIterationMinQuality: "poor" | "adequate" | "good" | "excellent";
 
+  /**
+   * Iteration cap applied when the agent runs in "lightweight" mode (short,
+   * non-technical queries). Full mode uses maxIterations directly; this lets the
+   * user tune the lightweight ceiling instead of the previously hard-coded 10.
+   * Settings key: AGENT_LIGHTWEIGHT_MAX_ITERATIONS
+   */
+  lightweightMaxIterations: number;
+  /**
+   * Iteration cap applied when the agent runs in "chatbot" mode (trivial
+   * queries). Tool round-trips (task/browser/date-time) still raise the floor so
+   * a tool call and its answer both fit. Replaces the hard-coded 5/8/10 caps.
+   * Settings key: AGENT_CHATBOT_MAX_ITERATIONS
+   */
+  chatbotMaxIterations: number;
+
+  // Verification ("Critic" — Phase 1)
+  /**
+   * Enable structured verification of the final response against concrete,
+   * per-constraint acceptance criteria (distinct from Reflection's fuzzy score).
+   * When a check fails, up to verifyMaxFixAttempts fix passes are attempted.
+   * Cost: ~1 LLM call to derive constraints + ~1 to grade them, per run.
+   * Settings key: AGENT_ENABLE_VERIFY
+   */
+  enableVerify: boolean;
+  /**
+   * Maximum fix attempts after a failed verification (0-3). 0 = verify and
+   * report only, never rewrite the response.
+   * Settings key: AGENT_VERIFY_MAX_FIX_ATTEMPTS
+   */
+  verifyMaxFixAttempts: number;
+  /**
+   * When no explicit constraints are supplied, let the Verifier derive an
+   * acceptance checklist from the user request. If false and no constraints are
+   * given, verification is skipped.
+   * Settings key: AGENT_VERIFY_DERIVE_CONSTRAINTS
+   */
+  verifyDeriveConstraints: boolean;
+
   // Reasoning & Tools
   reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;

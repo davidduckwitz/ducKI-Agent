@@ -83,5 +83,36 @@ describe("Tool Call Parser – Bracket Payload Handling (PR1-A1)", () => {
       expect(result).toBeDefined();
       expect(result!.body).toContain("action");
     });
+
+    it("keeps full multi-line body on unterminated payload (does not cut at first newline)", () => {
+      const agent = createAgentForParserTests();
+      // Real newlines inside content, and truncated before the closing `})` -
+      // mirrors the write_file failure where the body was cut at line one.
+      const text = `write_file({"path":"a.md","content":"# Title\nsecond line\nthird line`;
+
+      const result = (agent as any).scanBracketPayload(text, 0);
+
+      expect(result).toBeDefined();
+      expect(result!.body).toContain("second line");
+      expect(result!.body).toContain("third line");
+    });
+  });
+
+  describe("literal newlines inside string values", () => {
+    it("parses write_file whose content has raw (unescaped) newlines", () => {
+      const agent = createAgentForParserTests();
+      const content = "# Konzept\n\n## 1. Einleitung\nText mit (Klammern) und Umlauten.";
+      const response = `[TOOL:write_file({"path":"./shared-workspace/x.md","content":"${content}"})]`;
+
+      const result = (agent as any).extractAllToolCalls(response);
+
+      expect(result.markerCount).toBe(1);
+      expect(result.calls).toHaveLength(1);
+      // write_file resolves onto the filesystem tool with action "write"
+      expect(result.calls[0].toolName).toBe("filesystem");
+      expect(result.calls[0].input.action).toBe("write");
+      expect(result.calls[0].input.content).toBe(content);
+      expect(result.unparsed).toHaveLength(0);
+    });
   });
 });

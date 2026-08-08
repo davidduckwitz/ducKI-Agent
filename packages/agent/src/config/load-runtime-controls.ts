@@ -25,6 +25,13 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     reflectionPostIteration: (process.env["AGENT_REFLECTION_POST_ITERATION"] ?? "true").toLowerCase() !== "false",
     reflectionPostIterationMinQuality: (process.env["AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY"] ?? "adequate") as "poor" | "adequate" | "good" | "excellent",
 
+    lightweightMaxIterations: parseInt(process.env["AGENT_LIGHTWEIGHT_MAX_ITERATIONS"] ?? "10"),
+    chatbotMaxIterations: parseInt(process.env["AGENT_CHATBOT_MAX_ITERATIONS"] ?? "5"),
+
+    enableVerify: (process.env["AGENT_ENABLE_VERIFY"] ?? "false").toLowerCase() === "true",
+    verifyMaxFixAttempts: parseInt(process.env["AGENT_VERIFY_MAX_FIX_ATTEMPTS"] ?? "1"),
+    verifyDeriveConstraints: (process.env["AGENT_VERIFY_DERIVE_CONSTRAINTS"] ?? "true").toLowerCase() !== "false",
+
     reasonerUseToolMinConfidence: parseFloat(process.env["AGENT_REASONER_MIN_CONFIDENCE"] ?? "0.7"),
     maxConsecutiveToolFailures: parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3"),
     maxRepeatedToolCall: parseInt(process.env["AGENT_MAX_REPEATED_TOOL_CALL"] ?? "3"),

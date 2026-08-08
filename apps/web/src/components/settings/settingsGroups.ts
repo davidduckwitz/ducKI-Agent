@@ -165,6 +165,8 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       icon: Gauge,
       keys: [
         "AGENT_MAX_ITERATIONS",
+        "AGENT_LIGHTWEIGHT_MAX_ITERATIONS",
+        "AGENT_CHATBOT_MAX_ITERATIONS",
         "AGENT_TIMEOUT_MS",
         "AGENT_MAX_TOOL_FAILURES",
         "AGENT_MAX_REPEATED_TOOL_CALL",
@@ -193,6 +195,15 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_REFLECTION_META_REVIEW",
         "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
         "AGENT_AUTO_MEMORY",
+      ],
+    },
+    {
+      name: "Verifikation (Critic)",
+      icon: Target,
+      keys: [
+        "AGENT_ENABLE_VERIFY",
+        "AGENT_VERIFY_MAX_FIX_ATTEMPTS",
+        "AGENT_VERIFY_DERIVE_CONSTRAINTS",
       ],
     },
     {

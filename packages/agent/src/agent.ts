@@ -15,6 +15,7 @@ import { createPlanTool, formatPlanAsMarkdown, toPlanEventPayload } from "./plan
 import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
 import { Reflection } from "./reflection/reflection.js";
+import { Verifier } from "./verification/verifier.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
 import { resolveToolAlias, resolveToolAction, resolveCanonicalAction } from "./tools/tool-aliases.js";
@@ -194,6 +195,7 @@ export class Agent {
   private toolRegistry: ToolExecutorRegistry;
   private reasoner: Reasoner;
   private reflection: Reflection;
+  private verifier: Verifier;
   private history: History;
   private thinkBlockParser: ThinkBlockParser;
   private logger: Logger;
@@ -368,6 +370,10 @@ export class Agent {
     );
     this.reasoner = new Reasoner(provider, this.logger);
     this.reflection = new Reflection(provider, this.logger);
+    // Phase 1 "Critic": structured per-constraint verification. No shell executor
+    // is wired in yet, so shell-check/unit-test constraints report as "skipped"
+    // rather than running arbitrary commands outside the tool sandbox.
+    this.verifier = new Verifier(provider, this.logger);
     this.history = new History();
     this.thinkBlockParser = new ThinkBlockParser();
     this.toolGraph = new ToolExecutionGraph();
@@ -559,6 +565,57 @@ export class Agent {
   }
 
   /**
+   * Escapes raw control characters (newline, carriage return, tab) that appear *inside*
+   * double-quoted string literals, converting them to their JSON escape sequences
+   * (`\n`, `\r`, `\t`). Control characters outside strings (formatting between tokens)
+   * are left untouched. String state honours backslash escaping so an already-escaped
+   * `\"` does not prematurely close a string and a literal `\\` is not misread.
+   *
+   * This exists because local models routinely put real line breaks into large string
+   * values (typically a write_file `content`) instead of `\n`, which makes JSON.parse
+   * reject the payload even when it is otherwise complete and balanced.
+   */
+  private escapeControlCharsInStrings(text: string): string {
+    let out = "";
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+
+      if (inString) {
+        if (escaped) {
+          out += char;
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          out += char;
+          escaped = true;
+          continue;
+        }
+        if (char === '"') {
+          out += char;
+          inString = false;
+          continue;
+        }
+        if (char === "\n") { out += "\\n"; continue; }
+        if (char === "\r") { out += "\\r"; continue; }
+        if (char === "\t") { out += "\\t"; continue; }
+        out += char;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+      }
+      out += char;
+    }
+
+    return out;
+  }
+
+  /**
    * Strip residual LLM special tokens from the final response so raw markup
    * is never shown to the user (e.g. Hermes <|tool_call|> fragments, im_start/end, etc.)
    */
@@ -571,6 +628,43 @@ export class Agent {
       .replace(/<\/?tool_call[^>]*>/gi, "")
       // Remove leading/trailing whitespace that may remain
       .trim();
+  }
+
+  /**
+   * True when a response carries no readable content even though it is not
+   * literally the empty string. Small local models (e.g. gemma-4) sometimes
+   * answer with a lone markdown separator like "---", "***" or "___", or with
+   * nothing but punctuation/whitespace. Those pass a naive `.trim().length > 0`
+   * check yet render as an empty bubble in the UI, so the run appears to hang.
+   * Treating them as blank lets the fallback generator produce a real message.
+   */
+  /**
+   * Per-pass timeout for the post-response quality passes (reflection, verify,
+   * post-iteration). These run AFTER the visible answer is streamed but BEFORE
+   * run() resolves and the frontend receives chat:complete. A single local-model
+   * call that stalls (LM Studio occasionally does) would otherwise freeze the
+   * whole turn until the global no-progress timeout (minutes). Bounding each pass
+   * lets a stalled call be abandoned so the turn still completes promptly.
+   */
+  private static readonly QUALITY_PASS_TIMEOUT_MS = 45000;
+
+  /**
+   * Resolve `promise`, or reject with a labelled timeout error after `ms`.
+   * The underlying promise keeps running but its result is ignored on timeout.
+   */
+  private withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+    let handle: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      handle = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(handle)) as Promise<T>;
+  }
+
+  private isBlankResponse(text: string): boolean {
+    const sanitized = this.sanitizeFinalResponse(text);
+    if (sanitized.length === 0) return true;
+    // Only markdown horizontal-rule characters / punctuation / whitespace left.
+    return /^[-*_=~`.\s]+$/.test(sanitized);
   }
 
   private truncateText(value: string, maxChars: number): string {
@@ -1792,7 +1886,13 @@ export class Agent {
     const normalized = this.normalizeToolCallText(text);
     if (!normalized || normalized.trim().length === 0) return {};
 
-    const candidate = normalized.startsWith("{") ? normalized : `{${normalized}}`;
+    // Local models frequently emit raw newlines/tabs inside string values (e.g. a
+    // write_file `content` with real line breaks instead of `\n`). Standard JSON.parse
+    // rejects unescaped control characters inside a string literal, so escape them
+    // before any parse attempt - otherwise a perfectly complete, well-formed-looking
+    // payload still fails to parse and the whole tool call is silently dropped.
+    const escaped = this.escapeControlCharsInStrings(normalized);
+    const candidate = escaped.startsWith("{") ? escaped : `{${escaped}}`;
 
     // First attempt: Try parsing as-is (might already be valid JSON)
     try {
@@ -2013,21 +2113,16 @@ export class Agent {
       }
     }
 
-    // Fallback: if no proper closing found, try to extract at least a reasonable chunk
-    // Don't just take the rest of the string (too greedy for large documents)
-    // Instead, look for a natural boundary (newline or max 5000 chars)
-    let fallbackEndIndex = startPos;
-    for (let i = startPos; i < response.length && i < startPos + 5000; i++) {
-      if (response[i] === "\n") {
-        fallbackEndIndex = i;
-        break;
-      }
-      fallbackEndIndex = i;
-    }
-
+    // Fallback: no depth-0 terminator was found, which means the payload is unterminated -
+    // almost always because the model's output was truncated mid-call (token limit) before
+    // it could emit the closing `})]`. In that case the entire remainder of the response
+    // belongs to this one call, so return all of it and let the downstream repair logic
+    // (closeUnbalancedBrackets / parseLooseObject) attempt a salvage. The previous version
+    // cut the body at the first newline, which corrupted every multi-line payload (e.g. a
+    // write_file `content` with real line breaks) by discarding everything after line one.
     return {
-      body: response.slice(startPos, fallbackEndIndex).trim(),
-      endIndex: fallbackEndIndex
+      body: response.slice(startPos).trim(),
+      endIndex: response.length - 1
     };
   }
 
@@ -2309,10 +2404,19 @@ export class Agent {
    * multi-call batch path in extractAllToolCalls above.
    */
   private parseBracketBody(body: string): { toolName: string; input: Record<string, unknown> } | undefined {
-    const callMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(([^]*?)\)/);
-    if (callMatch?.[1]) {
-      const args = this.parseLooseObject(callMatch[2] ?? "{}");
-      if (args) return this.resolveToolNameAndInput(callMatch[1], args);
+    // name(...) form. The old regex `\(([^]*?)\)` matched lazily up to the *first* `)`,
+    // which truncated any argument value containing parentheses (e.g. a document with
+    // "(HTN)" or "(Agent Evolution)") mid-string and dropped the whole call. Extract the
+    // argument span manually instead: everything after the first `(`, minus an optional
+    // trailing `)`. Note scanBracketPayload accepts `)` as a depth-0 terminator, so `body`
+    // usually already ends at the object's closing `}` with the call's `)` stripped - the
+    // optional-strip handles both that case and a body that still carries the `)`.
+    const parenNameMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*\(/);
+    if (parenNameMatch?.[1]) {
+      let inner = body.slice(body.indexOf("(") + 1).trim();
+      if (inner.endsWith(")")) inner = inner.slice(0, -1).trim();
+      const args = this.parseLooseObject(inner || "{}");
+      if (args) return this.resolveToolNameAndInput(parenNameMatch[1], args);
     }
 
     const equalsMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*(\{[^]*\})/);
@@ -2662,6 +2766,11 @@ export class Agent {
       reflectionMetaReview: false,
       reflectionPostIteration: true,
       reflectionPostIterationMinQuality: "adequate",
+      lightweightMaxIterations: 10,
+      chatbotMaxIterations: 5,
+      enableVerify: false,
+      verifyMaxFixAttempts: 1,
+      verifyDeriveConstraints: true,
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
@@ -2741,6 +2850,11 @@ export class Agent {
         reflectionMetaReview: this.parseBooleanSetting(get("AGENT_REFLECTION_META_REVIEW"), defaults.reflectionMetaReview),
         reflectionPostIteration: this.parseBooleanSetting(get("AGENT_REFLECTION_POST_ITERATION"), defaults.reflectionPostIteration),
         reflectionPostIterationMinQuality: (get("AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY") ?? defaults.reflectionPostIterationMinQuality) as "poor" | "adequate" | "good" | "excellent",
+        lightweightMaxIterations: this.parseNumberSetting(get("AGENT_LIGHTWEIGHT_MAX_ITERATIONS"), defaults.lightweightMaxIterations, 1, 50),
+        chatbotMaxIterations: this.parseNumberSetting(get("AGENT_CHATBOT_MAX_ITERATIONS"), defaults.chatbotMaxIterations, 1, 50),
+        enableVerify: this.parseBooleanSetting(get("AGENT_ENABLE_VERIFY"), defaults.enableVerify),
+        verifyMaxFixAttempts: this.parseNumberSetting(get("AGENT_VERIFY_MAX_FIX_ATTEMPTS"), defaults.verifyMaxFixAttempts, 0, 3),
+        verifyDeriveConstraints: this.parseBooleanSetting(get("AGENT_VERIFY_DERIVE_CONSTRAINTS"), defaults.verifyDeriveConstraints),
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
@@ -3897,8 +4011,10 @@ export class Agent {
     });
 
     if (effectiveMode === "lightweight") {
-      // Lightweight mode: Up to 10 iterations for faster responses while maintaining context
-      adjustedControls.maxIterations = Math.min(10, controls.maxIterations);
+      // Lightweight mode: cap at the configurable lightweight ceiling
+      // (AGENT_LIGHTWEIGHT_MAX_ITERATIONS, default 10) while never exceeding the
+      // user's global maxIterations. Previously this 10 was hard-coded.
+      adjustedControls.maxIterations = Math.min(adjustedControls.lightweightMaxIterations, controls.maxIterations);
       // Reflection disabled in lightweight mode:
       // - Reflection adds 1+ LLM calls per retry, consuming significant iteration budget
       // - With only 5 iterations total, reflection could consume 20%+ of the budget
@@ -3906,6 +4022,11 @@ export class Agent {
       // - Note: This can be revisited if lightweight mode responses need quality improvement
       adjustedControls.enableReflection = false;
       adjustedControls.reflectionMaxRetries = 0;
+      // Verify is disabled here for the same reason as reflection: it adds
+      // several slow LLM round-trips (grade + fix-loop) after the visible answer,
+      // which on local models can add minutes of apparent "hang" on exactly the
+      // short/tool-heavy queries lightweight mode is meant to keep fast.
+      adjustedControls.enableVerify = false;
     } else if (effectiveMode === "chatbot") {
       // chatbot mode's normal cap of 1 iteration means "make a tool call" and "read the
       // tool's result back to the user" can never both happen - the loop exits right after
@@ -3924,15 +4045,21 @@ export class Agent {
                           userInput.toLowerCase().includes("project") ||
                           userInput.toLowerCase().includes("tracked");
 
+      // Chatbot mode: the configurable chatbot ceiling
+      // (AGENT_CHATBOT_MAX_ITERATIONS, default 5) is the base. Tool round-trips
+      // raise the floor so a tool call and its answer both fit, but the result
+      // never exceeds the user's global maxIterations.
+      // Preserve the previous per-tool floors (task 10, browser/date-time 8) so a
+      // tool call and its answer both fit; the configured ceiling only *raises*
+      // them, never drops below the round-trip minimum.
+      const chatbotCap = adjustedControls.chatbotMaxIterations;
       if (hasTaskTool) {
-        // Task execution needs 5+ iterations minimum
-        adjustedControls.maxIterations = Math.min(10, controls.maxIterations);
+        adjustedControls.maxIterations = Math.min(Math.max(chatbotCap, 10), controls.maxIterations);
       } else if (isDateTimeQuery || hasBrowserTool) {
-        // Browser/Date-time queries need 4+ iterations
-        adjustedControls.maxIterations = Math.min(8, controls.maxIterations);
+        adjustedControls.maxIterations = Math.min(Math.max(chatbotCap, 8), controls.maxIterations);
       } else {
-        // Other simple queries need 3+ iterations
-        adjustedControls.maxIterations = Math.min(5, controls.maxIterations);
+        // Other simple queries: use the configured chatbot ceiling directly
+        adjustedControls.maxIterations = Math.min(chatbotCap, controls.maxIterations);
       }
       // Reflection disabled in chatbot mode:
       // - Chatbot mode has only 1-5 iterations total (vs 50 in full mode)
@@ -3940,6 +4067,8 @@ export class Agent {
       // - No room for tool calls + reflection + response generation
       adjustedControls.enableReflection = false;
       adjustedControls.reflectionMaxRetries = 0;
+      // Verify disabled in chatbot mode for the same latency reason as lightweight.
+      adjustedControls.enableVerify = false;
     }
 
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
@@ -4545,13 +4674,19 @@ export class Agent {
           structure: messageStructure,
         });
 
+        // Give the main reasoning/tool-call turn enough room to emit large payloads
+        // (e.g. a write_file `content` with a full document) without being cut off
+        // mid-JSON, which produces an unterminated [TOOL:...] call the parser cannot
+        // read. The adapter clamps this down to the model's real output limit, and any
+        // admin-configured maxTokensOverride still takes precedence over it.
+        const mainGenOptions = { maxTokens: 8192 };
         if (options.stream && this.provider.supportsStreaming()) {
           try {
             // The provider streams internally and resolves with the full response.
             // The completed response is emitted to the caller once via the break
             // paths below (options.onChunk(response)), so we do not forward per-delta
             // chunks here to avoid duplicating the content.
-            const result = await this.provider.generateStream(messages, {});
+            const result = await this.provider.generateStream(messages, mainGenOptions);
             currentResponseTokens = {
               input: result.usage.promptTokens,
               output: result.usage.completionTokens,
@@ -4568,7 +4703,7 @@ export class Agent {
               throw e;
             }
             this.logger.warn(`Streaming failed for LLM response: ${String(e)}. Falling back to synchronous generation.`);
-            const syncResult = await this.provider.generate(messages);
+            const syncResult = await this.provider.generate(messages, mainGenOptions);
             currentResponseTokens = {
               input: syncResult.usage.promptTokens,
               output: syncResult.usage.completionTokens,
@@ -4578,7 +4713,7 @@ export class Agent {
             return syncResult.content;
           }
         }
-        const result = await this.provider.generate(messages);
+        const result = await this.provider.generate(messages, mainGenOptions);
         currentResponseTokens = {
           input: result.usage.promptTokens,
           output: result.usage.completionTokens,
@@ -4935,9 +5070,11 @@ export class Agent {
       continue; // Go to next iteration with tool results in conversation
     }
 
-    // Phase 3: Ensure agent always responds - generate fallback if needed
-    if (finalResponse.trim().length === 0) {
-      this.logger.warn("[PHASE3] Final response is empty, generating fallback response", {
+    // Phase 3: Ensure agent always responds - generate fallback if needed.
+    // isBlankResponse also catches content-free separators like "---" that a
+    // naive length check would let through (see isBlankResponse).
+    if (this.isBlankResponse(finalResponse)) {
+      this.logger.warn("[PHASE3] Final response is empty/blank, generating fallback response", {
         iterations,
         maxIterations: adjustedControls.maxIterations,
         toolsUsedCount: toolsUsed.length,
@@ -4980,11 +5117,24 @@ export class Agent {
     if (adjustedControls.enableReflection && adjustedControls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
       // Normal reflection pass: evaluate response and optionally improve it
       for (let reflectionAttempt = 1; reflectionAttempt <= adjustedControls.reflectionMaxRetries; reflectionAttempt++) {
-        const reflectionResult = await this.reflection.evaluate(
-          effectiveInput,
-          this.sanitizeFinalResponse(finalResponse),
-          `attempt=${reflectionAttempt}; toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
-        );
+        let reflectionResult;
+        try {
+          reflectionResult = await this.withTimeout(
+            this.reflection.evaluate(
+              effectiveInput,
+              this.sanitizeFinalResponse(finalResponse),
+              `attempt=${reflectionAttempt}; toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
+            ),
+            Agent.QUALITY_PASS_TIMEOUT_MS,
+            "reflection"
+          );
+        } catch (error) {
+          emit("guardrail", "Reflection skipped (timeout)", {
+            attempt: reflectionAttempt,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          break;
+        }
         reflectionQuality = reflectionResult.quality;
         reflectionIssues = Array.isArray(reflectionResult.issues) ? reflectionResult.issues.slice(0, 5) : [];
         reflectionSuggestions = Array.isArray(reflectionResult.suggestions) ? reflectionResult.suggestions.slice(0, 3) : [];
@@ -5039,12 +5189,25 @@ export class Agent {
     let metaReflectionSuggestions: string[] = [];
 
     if (adjustedControls.enableReflection && adjustedControls.reflectionMetaReview && finalResponse.trim().length > 0) {
-      const metaReflection = await this.reflection.evaluate(
-        effectiveInput,
-        this.sanitizeFinalResponse(finalResponse),
-        `type=meta-review; priorQuality=${reflectionQuality ?? "unknown"}; priorIssueCount=${reflectionIssues.length}`
-      );
+      let metaReflection;
+      try {
+        metaReflection = await this.withTimeout(
+          this.reflection.evaluate(
+            effectiveInput,
+            this.sanitizeFinalResponse(finalResponse),
+            `type=meta-review; priorQuality=${reflectionQuality ?? "unknown"}; priorIssueCount=${reflectionIssues.length}`
+          ),
+          Agent.QUALITY_PASS_TIMEOUT_MS,
+          "meta-reflection"
+        );
+      } catch (error) {
+        emit("guardrail", "Meta reflection skipped (timeout)", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        metaReflection = undefined;
+      }
 
+      if (metaReflection) {
       metaReflectionQuality = metaReflection.quality;
       metaReflectionIssues = Array.isArray(metaReflection.issues) ? metaReflection.issues.slice(0, 5) : [];
       metaReflectionSuggestions = Array.isArray(metaReflection.suggestions) ? metaReflection.suggestions.slice(0, 3) : [];
@@ -5069,6 +5232,81 @@ export class Agent {
           reflectionSuggestions = metaReflectionSuggestions;
         }
       }
+      }
+    }
+
+    // Verification Pass ("Critic" — Phase 1)
+    // Checks the final response against concrete per-constraint acceptance
+    // criteria. Unlike Reflection's fuzzy score, this yields a pass/fail
+    // checklist; failing checks drive up to verifyMaxFixAttempts fix passes.
+    if (adjustedControls.enableVerify && finalResponse.trim().length > 0) {
+      try {
+        const constraints = adjustedControls.verifyDeriveConstraints
+          ? await this.withTimeout(
+              this.verifier.deriveConstraints(effectiveInput),
+              Agent.QUALITY_PASS_TIMEOUT_MS,
+              "verify-derive"
+            )
+          : [];
+
+        if (constraints.length > 0) {
+          for (let fixAttempt = 0; fixAttempt <= adjustedControls.verifyMaxFixAttempts; fixAttempt++) {
+            const verifyResult = await this.withTimeout(
+              this.verifier.verify(
+                effectiveInput,
+                this.sanitizeFinalResponse(finalResponse),
+                constraints
+              ),
+              Agent.QUALITY_PASS_TIMEOUT_MS,
+              "verify"
+            );
+
+            emit("decision", "Verification complete", {
+              attempt: fixAttempt,
+              passed: verifyResult.passed,
+              checks: verifyResult.checks.map((c) => ({ status: c.status, description: c.description })),
+              failures: verifyResult.failures.slice(0, 3),
+              totalTokens: verifyResult.totalTokens,
+            });
+
+            if (verifyResult.passed || !verifyResult.shouldFix) break;
+            if (fixAttempt >= adjustedControls.verifyMaxFixAttempts) {
+              emit("guardrail", "Verification failed after fix attempts", {
+                failures: verifyResult.failures.slice(0, 5),
+              });
+              break;
+            }
+
+            // Ask the model to fix specifically the failing constraints.
+            const fixMessages: LLMMessage[] = [
+              {
+                role: "system",
+                content:
+                  "You revise a previous answer so it satisfies the listed failing requirements. Return only the corrected answer, no commentary.",
+              },
+              {
+                role: "user",
+                content: `Original request:\n${effectiveInput}\n\nPrevious answer:\n${finalResponse}\n\nFailing requirements to fix:\n${verifyResult.failures.map((f) => `- ${f}`).join("\n")}`,
+              },
+            ];
+            const fixResponse = await this.withTimeout(
+              this.provider.generate(fixMessages, { temperature: 0.3, maxTokens: 2000 }),
+              Agent.QUALITY_PASS_TIMEOUT_MS,
+              "verify-fix"
+            );
+            const fixed = fixResponse.content?.trim();
+            if (!fixed || fixed === finalResponse.trim()) {
+              emit("guardrail", "Verification fix skipped", { reason: "no_change" });
+              break;
+            }
+            finalResponse = fixed;
+          }
+        }
+      } catch (error) {
+        this.logger.warn("Verification pass failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Post-Iteration Reflection Assessment
@@ -5078,11 +5316,26 @@ export class Agent {
     let postIterationSuggestions: string[] = [];
 
     if (adjustedControls.enableReflection && adjustedControls.reflectionPostIteration && finalResponse.trim().length > 0) {
-      const postAssessment = await this.reflection.evaluate(
-        effectiveInput,
-        this.sanitizeFinalResponse(finalResponse),
-        `type=post-iteration; reason=max_iterations_reached; totalIterations=${iterations}; qualityIfNormal=${reflectionQuality ?? "unevaluated"}`
-      );
+      let postAssessment;
+      try {
+        postAssessment = await this.withTimeout(
+          this.reflection.evaluate(
+            effectiveInput,
+            this.sanitizeFinalResponse(finalResponse),
+            `type=post-iteration; reason=max_iterations_reached; totalIterations=${iterations}; qualityIfNormal=${reflectionQuality ?? "unevaluated"}`
+          ),
+          Agent.QUALITY_PASS_TIMEOUT_MS,
+          "post-iteration"
+        );
+      } catch (error) {
+        // Neutral result: the rest of the block then does nothing (no issues to
+        // store, no improvedResponse to apply), so a stalled call cannot freeze
+        // the turn on its way out.
+        emit("guardrail", "Post-iteration assessment skipped (timeout)", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        postAssessment = { quality: "adequate" as const, issues: [], suggestions: [], shouldRetry: false };
+      }
 
       postIterationQuality = postAssessment.quality;
       postIterationIssues = Array.isArray(postAssessment.issues) ? postAssessment.issues.slice(0, 5) : [];
@@ -5096,6 +5349,22 @@ export class Agent {
         outputTokens: postAssessment.outputTokens,
         totalTokens: postAssessment.totalTokens,
       });
+
+      // Apply the post-iteration improvement when the delivered answer is blank
+      // or was rated "poor". This pass used to only *assess* and then discard a
+      // perfectly good improvedResponse — so a "---"/empty answer stayed empty
+      // even though the assessor had already written a usable reply. We only
+      // adopt it in these weak cases to avoid overwriting an otherwise fine
+      // answer at the very end of the run.
+      const postImproved = postAssessment.improvedResponse?.trim();
+      const currentIsWeak = this.isBlankResponse(finalResponse) || postIterationQuality === "poor";
+      if (postImproved && currentIsWeak && postImproved !== finalResponse.trim()) {
+        emit("decision", "Post-iteration improvement applied", {
+          reason: this.isBlankResponse(finalResponse) ? "blank_response" : "poor_quality",
+          improvedLength: postImproved.length,
+        });
+        finalResponse = postImproved;
+      }
 
       // Store post-iteration learnings if quality is below threshold
       const qualityRanking = { poor: 0, adequate: 1, good: 2, excellent: 3 };
@@ -5184,7 +5453,7 @@ export class Agent {
    * Reporting what actually ran is both honest and more useful than silence.
    */
   private buildNonEmptyResponse(response: string, toolsUsed: string[], iterations: number): string {
-    if (response.trim().length > 0) return response;
+    if (!this.isBlankResponse(response)) return response;
 
     this.logger.warn("Run produced no text response", { iterations, toolsUsed });
 
