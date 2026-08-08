@@ -25,6 +25,10 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     reflectionPostIteration: (process.env["AGENT_REFLECTION_POST_ITERATION"] ?? "true").toLowerCase() !== "false",
     reflectionPostIterationMinQuality: (process.env["AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY"] ?? "adequate") as "poor" | "adequate" | "good" | "excellent",
 
+    codingMaxIterations: parseInt(process.env["AGENT_CODING_MAX_ITERATIONS"] ?? "60"),
+    codingEnableReflection: (process.env["AGENT_CODING_ENABLE_REFLECTION"] ?? "false").toLowerCase() === "true",
+    codingEnableVerify: (process.env["AGENT_CODING_ENABLE_VERIFY"] ?? "false").toLowerCase() === "true",
+
     costBudgetUsd: parseFloat(process.env["AGENT_COST_BUDGET_USD"] ?? "0"),
     costGovernorStop: (process.env["AGENT_COST_GOVERNOR_STOP"] ?? "false").toLowerCase() === "true",
     autoDowngrade: (process.env["AGENT_AUTO_DOWNGRADE"] ?? "false").toLowerCase() === "true",

@@ -268,6 +268,15 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "CODING_AGENT_TIMEOUT_MS",
       ],
     },
+    {
+      name: "Coding-Laeufe (Chat & Plan)",
+      icon: Terminal,
+      keys: [
+        "AGENT_CODING_MAX_ITERATIONS",
+        "AGENT_CODING_ENABLE_REFLECTION",
+        "AGENT_CODING_ENABLE_VERIFY",
+      ],
+    },
   ],
   Memory: [
     {

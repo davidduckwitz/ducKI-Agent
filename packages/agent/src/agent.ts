@@ -189,6 +189,7 @@ export class Agent {
   private enableReflection: boolean;
   private enablePlanning: boolean;
   private enableAutoMemory: boolean;
+  private disableQualityPasses: boolean;
 
   private conversation: ConversationManager;
   private memory: MemorySystem;
@@ -257,6 +258,7 @@ export class Agent {
     this.enableReflection = options.enableReflection ?? (process.env["AGENT_ENABLE_REFLECTION"] ?? "true").toLowerCase() !== "false";
     this.enablePlanning = options.enablePlanning ?? true;
     this.enableAutoMemory = options.enableAutoMemory ?? (process.env["AGENT_AUTO_MEMORY"] ?? "true").toLowerCase() !== "false";
+    this.disableQualityPasses = options.disableQualityPasses ?? false;
 
     this.logger = getRootLogger().child(`Agent:${this.name}`);
     const configuredSkillsPath = process.env["SKILLS_PATH"]?.trim();
@@ -1956,6 +1958,27 @@ export class Agent {
       }
     }
 
+    // Salvage a botched closing sequence. Local models (e.g. gemma) sometimes end
+    // a write call with the wrong terminators — "]]" or ")]" instead of "})]" — so
+    // the JSON object's own "}" is missing and a stray "]"/")" trails the last
+    // string value. A JSON object can never legally end in "]" or ")", so trailing
+    // ones (outside any string) are spurious: strip them, then let
+    // closeUnbalancedBrackets add the real "}". This rescues large HTML/JS writes
+    // whose content was otherwise complete and correctly quoted.
+    const tailStripped = candidate.replace(/[\s\])]+$/, "");
+    if (tailStripped !== candidate && tailStripped.length > 1) {
+      const reclosed = this.closeUnbalancedBrackets(tailStripped);
+      try {
+        const parsed = JSON.parse(reclosed);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          this.logger.debug("[PARSER] Salvaged tool call by stripping spurious trailing brackets");
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Fall through to the looser fixes below.
+      }
+    }
+
     // Second attempt: Fix common issues
     // 1. Convert unquoted keys to quoted keys: key: value => "key": value
     // 2. Handle Hermes quote marks
@@ -2800,6 +2823,9 @@ export class Agent {
       reflectionMetaReview: false,
       reflectionPostIteration: true,
       reflectionPostIterationMinQuality: "adequate",
+      codingMaxIterations: 60,
+      codingEnableReflection: false,
+      codingEnableVerify: false,
       lightweightMaxIterations: 10,
       chatbotMaxIterations: 5,
       costBudgetUsd: 0,
@@ -2891,6 +2917,9 @@ export class Agent {
         costBudgetUsd: this.parseFloatSetting(get("AGENT_COST_BUDGET_USD"), defaults.costBudgetUsd, 0, 1000),
         costGovernorStop: this.parseBooleanSetting(get("AGENT_COST_GOVERNOR_STOP"), defaults.costGovernorStop),
         autoDowngrade: this.parseBooleanSetting(get("AGENT_AUTO_DOWNGRADE"), defaults.autoDowngrade),
+        codingMaxIterations: this.parseNumberSetting(get("AGENT_CODING_MAX_ITERATIONS"), defaults.codingMaxIterations, 1, 300),
+        codingEnableReflection: this.parseBooleanSetting(get("AGENT_CODING_ENABLE_REFLECTION"), defaults.codingEnableReflection),
+        codingEnableVerify: this.parseBooleanSetting(get("AGENT_CODING_ENABLE_VERIFY"), defaults.codingEnableVerify),
         lightweightMaxIterations: this.parseNumberSetting(get("AGENT_LIGHTWEIGHT_MAX_ITERATIONS"), defaults.lightweightMaxIterations, 1, 50),
         chatbotMaxIterations: this.parseNumberSetting(get("AGENT_CHATBOT_MAX_ITERATIONS"), defaults.chatbotMaxIterations, 1, 50),
         enableVerify: this.parseBooleanSetting(get("AGENT_ENABLE_VERIFY"), defaults.enableVerify),
@@ -4143,6 +4172,32 @@ export class Agent {
     this.costTracker = new CostTracker(adjustedControls.costBudgetUsd, this.logger);
     // Phase 4: refresh the vision gate from settings for this run.
     this.visionEnabled = adjustedControls.enableVision;
+
+    // Disable the slow post-response quality passes for coding work: on long code
+    // responses with a local model each pass repeatedly hits its timeout, wasting
+    // minutes for little value. This covers two cases WITHOUT touching the normal
+    // chat agent: the dedicated CodingAgent (disableQualityPasses), and interactive
+    // coding-area runs, which route through the regular agent but carry the
+    // [CODING_CONTEXT] marker the coding page prepends to every prompt.
+    // Coding runs get their own configurable settings (Agent tab → Coding Agent),
+    // applied ONLY here so the normal chat agent is untouched. Covers the coding-area
+    // chat (regular agent + [CODING_CONTEXT] marker) and the dedicated CodingAgent.
+    const isCodingContextRun = typeof userInput === "string" && userInput.includes("[CODING_CONTEXT]");
+    const codingRun = this.disableQualityPasses || isCodingContextRun;
+    if (codingRun) {
+      // Quality passes: off by default for coding (they time out on slow local models),
+      // but re-enableable via settings.
+      if (!adjustedControls.codingEnableReflection) {
+        adjustedControls.enableReflection = false;
+        adjustedControls.reflectionMaxRetries = 0;
+        adjustedControls.reflectionMetaReview = false;
+        adjustedControls.reflectionPostIteration = false;
+      }
+      adjustedControls.enableVerify = adjustedControls.codingEnableVerify;
+      // Coding is multi-step; use the configurable coding iteration budget instead
+      // of the general mode caps (5-10) that cut large tasks short.
+      adjustedControls.maxIterations = adjustedControls.codingMaxIterations;
+    }
 
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
     const { slugs: requestedSkillSlugs, stripped: effectiveInput } = this.extractRequestedSkillSlugs(userInput);

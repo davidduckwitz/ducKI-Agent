@@ -7,8 +7,33 @@ import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
 import { ToolSkillSelector } from "../chat/ToolSkillSelector";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import type { Plan } from "../chat/PlanExecutionPanel";
+import { extractChangedFiles } from "../../lib/extractChangedFiles";
 import { PanelEmpty } from "../ui/panel";
 import { CodingPlanPanel } from "./CodingPlanPanel";
+
+/**
+ * Strip raw tool-call markers from an assistant message for the coding CHAT tab.
+ * The agent's stored assistant text still contains the `[TOOL:...]` / `<|tool_call>`
+ * markers it emitted before a tool ran; those belong in the Activity tab, not the
+ * conversation. Tool calls end the turn, so cutting from the first marker keeps the
+ * agent's narrative and drops the raw call. (Activity tab is untouched.)
+ */
+function stripToolMarkers(text: string): string {
+  let out = text;
+  for (const marker of ["[TOOL:", "<|tool_call>", "<tool_call>"]) {
+    const idx = out.indexOf(marker);
+    if (idx >= 0) out = out.slice(0, idx);
+  }
+  return out.trim();
+}
+
+/** A message body that is just a tool-result JSON payload (not something to read in chat). */
+function looksLikeToolResultJson(text: string): boolean {
+  const t = text.trim();
+  if (!t.startsWith("{")) return false;
+  return /"disposition"\s*:/.test(t) || (/"success"\s*:/.test(t) && /"toolName"\s*:/.test(t));
+}
+
 
 export function CodingAgentPanel({
   messages,
@@ -19,6 +44,7 @@ export function CodingAgentPanel({
   disabled,
   overridePlan,
   onExecutePlan,
+  onOpenFile,
   onSend,
 }: {
   messages: RenderedChatMessage[];
@@ -29,6 +55,7 @@ export function CodingAgentPanel({
   disabled: boolean;
   overridePlan?: Plan | null;
   onExecutePlan?: (plan: Plan) => Promise<void>;
+  onOpenFile?: (path: string) => void;
   onSend: (text: string, options: { planMode: boolean; includeFile: string | null }) => void;
 }) {
   const { t } = useI18n();
@@ -46,7 +73,26 @@ export function CodingAgentPanel({
 
   // Conversation and tool noise are separated so a run with 40 tool calls does not
   // bury the two sentences the agent actually said.
-  const conversation = useMemo(() => messages.filter((msg) => msg.role !== "event"), [messages]);
+  // Chat tab: real conversation only. Exclude activity ("event") and raw tool-result
+  // ("tool") messages; for assistant messages strip the tool-call markers and instead
+  // surface which files were changed as chips (opened in the editor on click). A message
+  // that is only a tool call is kept solely for its file chip.
+  const conversation = useMemo(() => {
+    const out: Array<{ msg: RenderedChatMessage; changedFiles: string[] }> = [];
+    for (const original of messages) {
+      if (original.role === "event" || original.role === "tool") continue;
+      if (original.role !== "assistant") {
+        out.push({ msg: original, changedFiles: [] });
+        continue;
+      }
+      if (looksLikeToolResultJson(original.content)) continue;
+      const stripped = stripToolMarkers(original.content);
+      const changedFiles = extractChangedFiles(original.content);
+      if (stripped.length === 0 && changedFiles.length === 0) continue;
+      out.push({ msg: { ...original, content: stripped }, changedFiles });
+    }
+    return out;
+  }, [messages]);
   const events = useMemo(() => messages.filter((msg) => msg.role === "event"), [messages]);
 
   useEffect(() => {
@@ -139,7 +185,27 @@ export function CodingAgentPanel({
           {conversation.length === 0 && !isLoading ? (
             <PanelEmpty icon={<MessageSquare className="h-8 w-8" />} title={t("codingPage.noAgentOutput")} />
           ) : (
-            conversation.map((msg) => <MessageRow key={msg.id} msg={msg} compactMode dense t={t} />)
+            conversation.map(({ msg, changedFiles }) => (
+              <div key={msg.id} className="space-y-1">
+                {msg.content.trim().length > 0 && <MessageRow msg={msg} compactMode dense t={t} />}
+                {changedFiles.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pl-1">
+                    {changedFiles.map((path) => (
+                      <button
+                        key={path}
+                        type="button"
+                        onClick={() => onOpenFile?.(path)}
+                        className="chip hover:border-primary/50 hover:text-primary"
+                        title={`${path} im Editor oeffnen`}
+                      >
+                        <FileCode2 className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{path.split("/").pop()}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))
           )}
           {isLoading && <StreamingRow compactMode streamingContent={streamingContent} t={t} />}
           <div ref={chatBottomRef} />

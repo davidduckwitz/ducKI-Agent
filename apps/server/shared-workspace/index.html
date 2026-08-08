@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Globaler Zeitplan & Weltuhr</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+</pre>
+</head>
+<body class="bg-slate-950 text-white min-h-screen flex items-center justify-center p-6 font-sans">
+
+    <div class="max-w-4xl w-full grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch">
+        
+        <!-- Linke Spalte: Uhr & Steuerung -->
+        <div class="bg-slate-900 p-8 rounded-3xl shadow-2xl border border-slate-800 flex flex-col justify-between space-y-8 transition-all duration-500 hover:border-blue-500/50">
+            <div class="text-center">
+                <h1 class="text-xs font-bold uppercase tracking-[0.3em] text-blue-500 mb-4">Globaler Zeit-Monitor</h1>
+                
+                <!-- Uhr-Anzeige -->
+                <div id="clock-display" class="text-6xl md:text-7xl font-mono font-black text-white py-2 drop-shadow-[0_0_25px_rgba(59,130,246,0.4)]">
+                    00:00:00
+                </div>
+                <div class="text-slate-500 text-sm mt-2 uppercase tracking-widest">Aktuelle Zeit</div>
+            </div>
+
+            <!-- Zeitzonen-Auswahl -->
+            <div class="space-y-4">
+                <label for="timezone-select" class="block text-xs font-medium text-slate-400 uppercase tracking-wider ml-1">Region auswählen</label>
+                <div class="relative group">
+                    <select id="timezone-select" class="block w-full bg-slate-800 border border-slate-700 text-white py-4 px-5 rounded-2xl appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all cursor-pointer hover:bg-slate-700/50">
+                        <!-- Dynamisch durch script.js -->
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-500 group-hover:text-blue-400 transition-colors">
+                        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 8.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pt-6 border-t border-slate-800 flex justify-between items-center">
+                <span class="text-[10px] text-slate-500 uppercase tracking-widest">System Status</span>
+                <span class="flex items-center gap-2 text-[10px] text-green-400 font-bold">
+                    <span class="relative flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-</strong>full h-2 w-2 bg-green-500"></span>
+                    </span>
+                    LIVE
+                </span>
+            </div>
+        </div>
+
+        <!-- Rechte Spalte: Visuelle Weltkarte (SVG Globe)
+             Hier integrieren wir die interaktive Komponente -->
+        <div class="bg-slate-900 rounded-3xl shadow-2xl border border-slate-800 p-6 flex items-center justify-center relative overflow-hidden group">
+            <!-- Hintergrund-Animation/Grid -->
+            <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(#3b82f6 1px, transparent 1px); background-size: 30px 30px;"></div>
+            
+            <!-- Der 'Globus' / Die Visualisierung -->
+            <div id="map-container" class="relative w-full h-full flex items-center justify-center">
+                <svg id="world-orb" viewBox="0 0 200 200" class="w-64 h-64 md:w-80 md:h-80 transition-all duration-1000 ease-out">
+                    <!-- Innerer Kern des Globus -->
+                    <circle cx="100" cy="100" r="80" fill="#1e293b" class="transition-colors duration-700 text-slate-800" />
+                    <!-- Leuchtender Ring (Orbit) -->
+                    <circle cx="100" cy="100" r="95" fill="none" stroke="#3b82f6" stroke-width="0.5" stroke-dasharray="4 4" class="animate-[spin_20s_linear_infinite] opacity-30" />
+                    <!-- Der interaktive Punkt (der die Zeitzone repräsentiert) -->
+                    <circle id="orb-marker" cx="100" cy="100" r="8" fill="#3b82f6" class="shadow-[0_0_20px_rgba(59,130,246,1)] transition-all duration-700">
+                        <animate attributeName="r" values="8;12;8" dur="3s" repeatCount="indefinite" />
+                    </circle>
+                    <!-- Dekorative Linien (Breitengrade/Längengrade) -->
+                    <ellipse cx="100" cy="100" rx="100" ry="40" fill="none" stroke="#334155" stroke-width="0.5" opacity="0.5" />
+                    <ellipse cx="10" cy="100" rx="40" ry="100" fill="none" stroke="#334155" stroke-width="0.5" opacity="0.5" />
+                </svg>
+            </div>
+            
+            <!-- Overlay Text für den aktuellen Standort -->
+            <div class="absolute bottom-6 left-0 right-0 text-center">
+                <p id="location-label" class="text-xs font-medium text-slate-500 uppercase tracking-[0.2em] transition-all duration-500">Globaler Standard</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

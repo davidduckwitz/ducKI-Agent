@@ -159,6 +159,9 @@ export class CodingAgent {
       systemPrompt: basePrompt,
       maxIterations: options.maxIterations ?? 100,
       hooks: disciplineHooks,
+      // Code responses are long and slow to re-evaluate; the reflection/verify
+      // passes repeatedly hit their timeout with a local model. Skip them here.
+      disableQualityPasses: true,
     });
 
     const fsTool = options.sandboxRoot ? createScopedFilesystemTool(options.sandboxRoot) : filesystemTool;

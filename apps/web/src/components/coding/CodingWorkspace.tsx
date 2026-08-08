@@ -22,6 +22,7 @@ import { useAppStore } from "../../lib/store";
 import { useCodingSession } from "../../lib/codingSessionStore";
 import { useUiStore, CODING_AGENT_MIN_WIDTH, CODING_AGENT_MAX_WIDTH } from "../../lib/uiStore";
 import { useTheme } from "../theme/ThemeProvider";
+import { extractChangedFiles } from "../../lib/extractChangedFiles";
 import { PanelEmpty } from "../ui/panel";
 import { SplitHandle } from "../ui/split-handle";
 import { CodingEditorTabs } from "./CodingEditorTabs";
@@ -132,6 +133,30 @@ export function CodingWorkspace() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
+
+  // Auto-open the most recently written file in the editor. We open only the LAST
+  // changed file (not every one) to avoid spamming tabs / stealing focus on
+  // multi-file runs, and refresh the tree + content so it shows the fresh bytes.
+  const autoOpenedRef = useRef<string>("");
+  useEffect(() => {
+    if (!selectedProject) return;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (!m || m.role !== "assistant") continue;
+      const files = extractChangedFiles(typeof m.content === "string" ? m.content : "");
+      if (files.length === 0) continue;
+      const latest = files[files.length - 1];
+      const key = `${m.id}:${latest}`;
+      if (latest && autoOpenedRef.current !== key) {
+        autoOpenedRef.current = key;
+        openFile(latest);
+        void qc.invalidateQueries({ queryKey: ["coding", "files", selectedProject] });
+        void qc.invalidateQueries({ queryKey: ["coding", "read", selectedProject, latest] });
+      }
+      break;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, selectedProject]);
 
   const [newProjectName, setNewProjectName] = useState("");
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
@@ -801,6 +826,7 @@ export function CodingWorkspace() {
                 disabled={!selectedProject}
                 overridePlan={handoffPlan}
                 onExecutePlan={executePlan}
+                onOpenFile={openFile}
                 onSend={(text, options) => {
                   void sendCodingPrompt(text, options);
                 }}

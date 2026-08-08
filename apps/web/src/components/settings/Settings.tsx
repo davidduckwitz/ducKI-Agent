@@ -457,6 +457,38 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "AGENT_CODING_MAX_ITERATIONS",
+    label: "Coding: Max Iterations",
+    description: "Iterations-Budget fuer Coding-Laeufe (Coding-Area-Chat & Plan-Ausfuehrung). Coding ist mehrstufig (schreiben -> pruefen -> fixen); der normale Modus-Cap (5-10) reicht fuer grosse Tasks nicht. Betrifft NUR Coding, nicht den normalen Chat.",
+    type: "number",
+    section: "Agent",
+    defaultValue: "60",
+  },
+  {
+    key: "AGENT_CODING_ENABLE_REFLECTION",
+    label: "Coding: Reflection",
+    description: "Qualitaets-Reflection waehrend Coding-Laeufen. Standard aus: auf langen Code-Antworten mit lokalem Modell laufen diese Pässe regelmaessig in den Timeout. Nur bei schnellen Modellen sinnvoll zu aktivieren.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus (empfohlen)", value: "false" },
+    ],
+  },
+  {
+    key: "AGENT_CODING_ENABLE_VERIFY",
+    label: "Coding: Verify",
+    description: "Verify-Pass waehrend Coding-Laeufen. Standard aus (gleicher Grund wie Reflection). Fuer Code liefert der eingebaute Typecheck/Build meist die bessere Pruefung.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus (empfohlen)", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_TIMEOUT_MS",
     label: "Timeout (ms)",
     description: "Inaktivitaets-Timeout fuer einen Agent-Run; wird bei Fortschritt zurueckgesetzt.",

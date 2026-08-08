@@ -16,6 +16,13 @@ export interface AgentOptions {
   enableReflection?: boolean;
   enablePlanning?: boolean;
   enableAutoMemory?: boolean;
+  /**
+   * Hard-disable the post-response quality passes (reflection, meta-review,
+   * post-iteration, verify) regardless of DB settings. Used by the coding agent,
+   * whose long, code-heavy responses make these passes slow to the point of
+   * repeatedly hitting the per-pass timeout while adding little value.
+   */
+  disableQualityPasses?: boolean;
   /** Hooks for intercepting agent lifecycle events (Phase 1) */
   hooks?: AgentHook[];
 }
@@ -164,6 +171,26 @@ export interface AgentRuntimeControls {
    * Settings key: AGENT_REFLECTION_POST_ITERATION_MIN_QUALITY
    */
   reflectionPostIterationMinQuality: "poor" | "adequate" | "good" | "excellent";
+
+  // Coding runs ("[CODING_CONTEXT]" chat + CodingAgent). These override the general
+  // controls ONLY for coding work, so the normal chat agent stays untouched.
+  /**
+   * Iteration budget for coding runs. Coding is multi-step (write → verify → fix
+   * across files); the general mode caps (5-10) cut large tasks short.
+   * Settings key: AGENT_CODING_MAX_ITERATIONS
+   */
+  codingMaxIterations: number;
+  /**
+   * Run the reflection quality passes during coding. Default off: on long code
+   * responses with a local model these repeatedly hit their timeout.
+   * Settings key: AGENT_CODING_ENABLE_REFLECTION
+   */
+  codingEnableReflection: boolean;
+  /**
+   * Run the verify pass during coding. Default off (same reason as reflection).
+   * Settings key: AGENT_CODING_ENABLE_VERIFY
+   */
+  codingEnableVerify: boolean;
 
   /**
    * Iteration cap applied when the agent runs in "lightweight" mode (short,
