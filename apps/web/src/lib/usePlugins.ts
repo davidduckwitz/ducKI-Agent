@@ -11,6 +11,11 @@ export function usePlugins() {
     queryKey: ["plugins"],
     queryFn: () => api.plugins.list(),
     staleTime: 30_000,
+    // The plugin list changes only on enable/disable/install and is invalidated explicitly
+    // there - it must NOT poll. Without this it inherits the app's activity volatility and
+    // refetches every ~1.5s, hammering loadPlugins() (file reads, plugin DB opens, secret
+    // decryption) and making the UI unresponsive.
+    refetchInterval: false,
   });
 }
 
