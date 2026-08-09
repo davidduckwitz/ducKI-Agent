@@ -48,6 +48,11 @@ const MemoryBrowser = lazy(async () => {
   return { default: module.MemoryBrowser };
 });
 
+const PluginsPage = lazy(async () => {
+  const module = await import("./components/plugins/PluginsPage");
+  return { default: module.PluginsPage };
+});
+
 const AgentsLiveView = lazy(async () => {
   const module = await import("./components/agents/AgentsLiveView");
   return { default: module.AgentsLiveView };
@@ -126,6 +131,7 @@ function AppContent() {
           <Route path="mcp" element={<LazyRoute><McpManager /></LazyRoute>} />
           <Route path="tools" element={<LazyRoute><ToolRegistry /></LazyRoute>} />
           <Route path="skills" element={<LazyRoute><SkillManager /></LazyRoute>} />
+          <Route path="plugins" element={<LazyRoute><PluginsPage /></LazyRoute>} />
           <Route path="shared" element={<LazyRoute><SharedWorkspace /></LazyRoute>} />
           <Route
             path="memory"

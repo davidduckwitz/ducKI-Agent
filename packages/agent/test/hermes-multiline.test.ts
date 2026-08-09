@@ -82,7 +82,9 @@ describe("Hermes Call Parsing – Multiline Handling (PR1-A2)", () => {
 
     it("handles escaped quotes", () => {
       const agent = createAgentForParserTests();
-      expect((agent as any).isBracketBalanced('{"content":"\\\"not a close\""}')).toBe(true);
+      // A valid JSON with an escaped quote inside the string value: the \" must NOT be
+      // treated as a string delimiter, so the braces read as balanced.
+      expect((agent as any).isBracketBalanced('{"content":"a \\" b"}')).toBe(true);
     });
   });
 });

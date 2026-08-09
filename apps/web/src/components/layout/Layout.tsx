@@ -16,6 +16,7 @@ import {
   GitBranch,
   CalendarClock,
   PlugZap,
+  Puzzle,
   Code2,
   Wallet,
 } from "lucide-react";
@@ -100,6 +101,7 @@ export function Layout() {
         { to: "/mcp", icon: PlugZap, label: t("nav.mcp") },
         { to: "/tools", icon: Wrench, label: t("nav.tools") },
         { to: "/skills", icon: BookOpen, label: t("nav.skills") },
+        { to: "/plugins", icon: Puzzle, label: t("nav.plugins") },
       ],
     },
     {

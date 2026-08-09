@@ -146,6 +146,21 @@ export {
 } from "./skill-selector/frontmatter.js";
 export type { NormalizedSkillFrontmatter, ParsedFrontmatter } from "./skill-selector/frontmatter.js";
 export { validateSkillContent, validateSkillDirectory } from "./skill-selector/validate.js";
+
+// Plugin system (file-first bundles: data-source/script tools + skills + mappings + settings)
+export {
+  loadPlugins,
+  setPluginEnabled,
+  readDisabledState,
+  pluginsRoot,
+  parsePluginManifest,
+  PluginManifestSchema,
+  type PluginLoadResult,
+  type LoadedPluginInfo,
+  type PluginManifest,
+  type PluginToolMapping,
+  type PluginSettingSpec,
+} from "./plugins/index.js";
 export type { SkillValidationResult, SkillValidationIssue } from "./skill-selector/validate.js";
 
 // Bitcoin Puzzle Solver

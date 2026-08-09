@@ -1,0 +1,4 @@
+# Per-plugin SQLite databases (created at runtime, not source)
+*/data/
+# User enable/disable overrides (local state, not source)
+.state.json

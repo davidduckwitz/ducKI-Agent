@@ -1,0 +1,12 @@
+{
+  "name": "exchange-rates",
+  "version": "1.0.0",
+  "description": "Aktuelle Wechselkurse ueber eine keyless API. Data-source plugin - reine Config, kein Code.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "provides": {
+    "dataSourceTools": ["tools/exchange-rates.datasource.json"],
+    "skills": ["skills/exchange-rates-usage"]
+  },
+  "enabled": true
+}

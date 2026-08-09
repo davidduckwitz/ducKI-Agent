@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updated": "2026-08-09T14:54:09.933Z",
+  "plugins": [
+    {
+      "id": "exchange-rates",
+      "name": "exchange-rates",
+      "description": "Aktuelle Wechselkurse ueber eine keyless API. Data-source plugin - reine Config, kein Code.",
+      "version": "1.0.0",
+      "author": "DucKI",
+      "license": "Proprietary",
+      "hasStorage": false,
+      "origin": "builtin",
+      "source_url": "https://ducki-ai-agent.davidduckwitz.de/api/v1.php?action=download&type=plugin&id=exchange-rates",
+      "status": "active"
+    },
+    {
+      "id": "notes",
+      "name": "notes",
+      "description": "Persistente Notizen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank).",
+      "version": "1.0.0",
+      "author": "DucKI",
+      "license": "Proprietary",
+      "hasStorage": true,
+      "origin": "builtin",
+      "source_url": "https://ducki-ai-agent.davidduckwitz.de/api/v1.php?action=download&type=plugin&id=notes",
+      "status": "active"
+    }
+  ]
+}

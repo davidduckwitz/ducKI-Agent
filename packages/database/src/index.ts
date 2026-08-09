@@ -37,6 +37,8 @@ import type {
 export type { LibSQLDatabase };
 export type Database = LibSQLDatabase<typeof schema>;
 export * from "./schema.js";
+export { openPluginDb, closeAllPluginDbs } from "./plugin-storage.js";
+export type { PluginStorage } from "./plugin-storage.js";
 export * from "./cron.js";
 export { testMysqlConnection, EXPECTED_APP_TABLES } from "./mysql-tester.js";
 export type { MysqlTestConfig, MysqlTestResult } from "./mysql-tester.js";

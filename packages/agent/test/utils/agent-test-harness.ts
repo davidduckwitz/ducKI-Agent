@@ -32,6 +32,11 @@ export function createAgentForParserTests(): Agent {
 
   const db = {
     getAllSettings: async () => [],
+    // The executor's DB-backed dynamic-tool resolver looks tools up here when they are not
+    // in its in-memory map (e.g. during preflight/gating of an unknown tool). The stub
+    // returns none so resolution cleanly reports "unknown tool" instead of throwing.
+    getDynamicToolByName: async () => undefined,
+    getSetting: async () => undefined,
   } as unknown as ConstructorParameters<typeof Agent>[1];
 
   return new Agent(provider, db, undefined, { enablePlanning: false, enableReflection: false });

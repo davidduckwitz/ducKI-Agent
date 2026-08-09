@@ -10,6 +10,24 @@ describe("agent tool-call parser", () => {
     expect(parsed?.input).toEqual({ action: "list_configs" });
   });
 
+  it("maps an aliased tool name to its canonical tool (browser_control -> browser)", () => {
+    const agent = createAgentForParserTests();
+    const parsed = parseToolCall(agent, '[TOOL:browser_control({"action":"navigate","url":"https://example.com"})]');
+
+    expect(parsed?.toolName).toBe("browser");
+    // and the action is canonicalized: navigate -> goto
+    expect(parsed?.input["action"]).toBe("goto");
+    expect(parsed?.input["url"]).toBe("https://example.com");
+  });
+
+  it("canonicalizes a browser action even when the tool name is already canonical", () => {
+    const agent = createAgentForParserTests();
+    const parsed = parseToolCall(agent, '[TOOL:browser({"action":"open","url":"https://example.com"})]');
+
+    expect(parsed?.toolName).toBe("browser");
+    expect(parsed?.input["action"]).toBe("goto");
+  });
+
   it("parses bracket format with equals object", () => {
     const agent = createAgentForParserTests();
     const parsed = parseToolCall(agent, '[TOOL:gateway={"action":"list_configs"}]');

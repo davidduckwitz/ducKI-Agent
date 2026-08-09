@@ -8,6 +8,15 @@ import { skillsTool } from "./skills.js";
 import { weatherTool } from "./weather.js";
 
 export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool };
+export {
+  createDataSourceTool,
+  fetchJson,
+  TtlCache,
+  hostAllowed,
+  getPath,
+  interpolate,
+} from "./data-source-tool.js";
+export type { DataSourceToolConfig, DataSourceRequestStep, DataSourceParamSpec } from "./data-source-tool.js";
 export { FILESYSTEM_ACTIONS } from "./filesystem.js";
 export type { FilesystemAction } from "./filesystem.js";
 export { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "./workspace-root.js";

@@ -26,6 +26,7 @@ $category = $_GET['category'] ?? null;
 $data_dir = __DIR__ . '/data';
 $tools_file = $data_dir . '/tools.json';
 $skills_file = $data_dir . '/skills.json';
+$plugins_file = $data_dir . '/plugins.json';
 
 /**
  * Helper: Load JSON file
@@ -182,6 +183,50 @@ switch ($action) {
         json_response($skill);
         break;
 
+    case 'plugins':
+        // List installable plugins (file-first bundles the Node agent can install).
+        $data = load_json($plugins_file);
+        if (!$data) {
+            json_response(['plugins' => [], 'count' => 0]);
+            break;
+        }
+        $plugins = $data['plugins'] ?? [];
+        if ($category) {
+            $plugins = array_filter($plugins, function($p) use ($category) {
+                return ($p['category'] ?? null) === $category;
+            });
+        }
+        if ($search) {
+            $needle = strtolower($search);
+            $plugins = array_filter($plugins, function($p) use ($needle) {
+                $text = strtolower(($p['name'] ?? '') . ' ' . ($p['description'] ?? ''));
+                return strpos($text, $needle) !== false;
+            });
+        }
+        json_response([
+            'plugins' => array_values($plugins),
+            'count' => count($plugins)
+        ]);
+        break;
+
+    case 'plugin':
+        if (!$id) {
+            error_response('Plugin ID required', 'MISSING_ID', 400);
+        }
+        $data = load_json($plugins_file);
+        $plugin = null;
+        foreach ($data['plugins'] ?? [] as $p) {
+            if (($p['id'] ?? null) === $id) {
+                $plugin = $p;
+                break;
+            }
+        }
+        if (!$plugin) {
+            error_response('Plugin not found: ' . $id, 'NOT_FOUND', 404);
+        }
+        json_response($plugin);
+        break;
+
     case 'categories':
         $tools_data = load_json($tools_file);
         $skills_data = load_json($skills_file);
@@ -213,13 +258,27 @@ switch ($action) {
         break;
 
     case 'download':
-        // Serve a skill's tar.gz bundle for the Node importer.
+        // Serve a bundle for the Node importer. For plugins we return a JSON bundle
+        // ({name, files:[{path,content}]}) the agent writes into plugins/<name>/; for skills
+        // we stream the legacy tar.gz.
         if (!$id) {
-            error_response('Skill ID required', 'MISSING_ID', 400);
+            error_response('ID required', 'MISSING_ID', 400);
         }
         // Strict id sanitization to prevent path traversal.
         if (!preg_match('/^[a-z0-9][a-z0-9-]*$/', $id)) {
-            error_response('Invalid skill ID', 'INVALID_ID', 400);
+            error_response('Invalid ID', 'INVALID_ID', 400);
+        }
+        if ($type === 'plugin') {
+            $bundle_file = $data_dir . '/plugin-bundles/' . $id . '.json';
+            $real = realpath($bundle_file);
+            $bundles_root = realpath($data_dir . '/plugin-bundles');
+            if ($real === false || $bundles_root === false || strpos($real, $bundles_root) !== 0) {
+                error_response('Plugin bundle not found: ' . $id, 'NOT_FOUND', 404);
+            }
+            // Return the raw bundle object (NOT wrapped) so the agent can consume it directly.
+            header('Content-Type: application/json; charset=utf-8');
+            readfile($real);
+            exit();
         }
         $bundle_file = $data_dir . '/bundles/' . $id . '.tar.gz';
         $real = realpath($bundle_file);

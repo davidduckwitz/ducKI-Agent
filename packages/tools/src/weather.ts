@@ -1,5 +1,6 @@
 import type { ToolResult, ToolExecutor } from "@ducki/shared";
 import { z } from "zod";
+import { fetchJson, TtlCache } from "./data-source-tool.js";
 
 /**
  * First-class weather tool. Fetches CURRENT weather (and a short daily outlook) for a
@@ -23,6 +24,7 @@ const GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search";
 const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 const FETCH_TIMEOUT_MS = 8000;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min: weather changes slowly; repeats stay instant + free.
+const cache = new TtlCache<Record<string, unknown>>(CACHE_TTL_MS);
 
 /** WMO weather interpretation codes -> short German description. */
 const WEATHER_CODE_DE: Record<number, string> = {
@@ -38,24 +40,9 @@ const WEATHER_CODE_DE: Record<number, string> = {
   95: "Gewitter", 96: "Gewitter mit leichtem Hagel", 99: "Gewitter mit starkem Hagel",
 };
 
-interface CacheEntry { at: number; data: unknown; }
-const cache = new Map<string, CacheEntry>();
-
-async function fetchJson(url: string): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`HTTP ${res.status} from ${new URL(url).host}`);
-    return await res.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function geocode(name: string, language: string): Promise<{ lat: number; lon: number; label: string } | null> {
   const url = `${GEOCODE_URL}?name=${encodeURIComponent(name)}&count=1&language=${encodeURIComponent(language)}&format=json`;
-  const json = (await fetchJson(url)) as { results?: Array<{ latitude: number; longitude: number; name: string; country?: string; admin1?: string }> };
+  const json = (await fetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS })) as { results?: Array<{ latitude: number; longitude: number; name: string; country?: string; admin1?: string }> };
   const hit = json.results?.[0];
   if (!hit) return null;
   const label = [hit.name, hit.admin1, hit.country].filter(Boolean).join(", ");
@@ -107,8 +94,8 @@ export const weatherTool: ToolExecutor = {
 
       const roundedKey = `${lat.toFixed(2)},${lon.toFixed(2)},${days}`;
       const cached = cache.get(roundedKey);
-      if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
-        return { success: true, data: { ...(cached.data as object), cached: true } };
+      if (cached) {
+        return { success: true, data: { ...cached, cached: true } };
       }
 
       const params = new URLSearchParams({
@@ -121,7 +108,7 @@ export const weatherTool: ToolExecutor = {
         params.set("daily", "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum");
         params.set("forecast_days", String(days));
       }
-      const forecast = (await fetchJson(`${FORECAST_URL}?${params.toString()}`)) as {
+      const forecast = (await fetchJson(`${FORECAST_URL}?${params.toString()}`, { timeoutMs: FETCH_TIMEOUT_MS })) as {
         current?: Record<string, number>;
         current_units?: Record<string, string>;
         daily?: { time?: string[]; weather_code?: number[]; temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_sum?: number[] };
@@ -150,7 +137,7 @@ export const weatherTool: ToolExecutor = {
         + `, Wind ${current.windKmh ?? "?"} km/h, Niederschlag ${current.precipitationMm ?? 0} mm.`;
 
       const data = { location: label, latitude: lat, longitude: lon, summary, current, outlook };
-      cache.set(roundedKey, { at: Date.now(), data });
+      cache.set(roundedKey, data);
       return { success: true, data };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

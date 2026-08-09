@@ -7,7 +7,8 @@ import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, basename } from "node:path";
+import { listPluginSkillDirs } from "./plugins/index.js";
 import { randomUUID } from "node:crypto";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
@@ -20,7 +21,7 @@ import { Verifier } from "./verification/verifier.js";
 import { CostTracker } from "./cost/cost-tracker.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
-import { resolveToolAlias, resolveToolAction, resolveCanonicalAction } from "./tools/tool-aliases.js";
+import { resolveToolAlias, resolveToolAction, resolveCanonicalAction, TOOL_ACTION_ALIAS_MAP } from "./tools/tool-aliases.js";
 import { summarizeToolCall } from "./tools/tool-summary.js";
 import { loadToolManifests, isToolActive, createToolExecutorRegistry, type ToolManifestEntry, type ToolExecutorRegistry } from "./tools/tool-registry.js";
 import { createScriptTools } from "./tools/script-tools.js";
@@ -951,6 +952,30 @@ export class Agent {
       });
     }
 
+    // Merge skills provided by enabled plugins (plugins/<name>/skills/<skill>). This is how a
+    // plugin extends the agent's behavior/UX without any frontend injection - its skills join
+    // progressive disclosure like built-in ones. Re-read each call for hot-reload.
+    try {
+      for (const skillDir of listPluginSkillDirs()) {
+        const skillPath = join(skillDir, "SKILL.md");
+        if (!existsSync(skillPath)) continue;
+        const slug = basename(skillDir);
+        if (result.some((s) => s.slug === slug)) continue; // built-in wins on slug clash
+        const fm = this.parseFrontmatter(readFileSync(skillPath, "utf8"));
+        result.push({
+          slug,
+          name: fm.name ?? slug,
+          description: fm.description,
+          path: skillPath,
+          primarySkills: fm.primarySkills ?? [],
+          relatedSkills: fm.relatedSkills ?? [],
+          fallbackSkills: fm.fallbackSkills ?? [],
+        });
+      }
+    } catch {
+      // plugin skill scan is best-effort; never block the built-in skills
+    }
+
     return result;
   }
 
@@ -1138,8 +1163,13 @@ export class Agent {
     ];
 
     for (const [from, to] of PARAM_ALIASES) {
-      if (normalizedInput[from] !== undefined && normalizedInput[to] === undefined) {
-        normalizedInput[to] = normalizedInput[from];
+      if (normalizedInput[from] !== undefined) {
+        // Copy to the canonical key only when it isn't already set (canonical wins), then
+        // drop the alias key so tools never receive both old_string AND oldString.
+        if (normalizedInput[to] === undefined) {
+          normalizedInput[to] = normalizedInput[from];
+        }
+        delete normalizedInput[from];
       }
     }
 
@@ -1356,7 +1386,19 @@ export class Agent {
       };
     }
 
-    return { toolName: normalized, input: normalizedInput };
+    // Generic tool-name alias resolution (e.g. browser_control -> browser, task_split -> task)
+    // applied at EXTRACTION time so batch execution never receives an unknown tool name. The
+    // per-tool action is canonicalized too (e.g. browser navigate -> goto), which the earlier
+    // tool-specific branches only did for project/task. Only names that are NOT already a real
+    // registered tool are alias-resolved, so a genuine tool call is never remapped.
+    const isRealTool = this.executor.listTools().some((tool) => tool.name === normalized);
+    const targetTool = isRealTool ? normalized : resolveToolAlias(normalized);
+
+    if (typeof normalizedInput["action"] === "string" && TOOL_ACTION_ALIAS_MAP[targetTool]) {
+      normalizedInput["action"] = resolveCanonicalAction(targetTool, normalizedInput["action"]);
+    }
+
+    return { toolName: targetTool, input: normalizedInput };
   }
 
   private async preflightToolInput(
@@ -1930,16 +1972,38 @@ export class Agent {
       return { toolName, args };
     }
 
-    // Fallback: extract first valid {..} block and tool name before it
+    // Fallback: extract the tool name (leading identifier before "(" or "{") and everything
+    // from the first "{" onward as args. Works even when the brackets NEVER close - a
+    // truncated tool call (token limit) still yields the partial args, which the downstream
+    // repair (closeUnbalancedBrackets/parseLooseObject) can then salvage. Without this a
+    // cut-off call was silently dropped.
     const firstBrace = callBody.indexOf("{");
-    const lastBrace = callBody.lastIndexOf("}");
-    if (firstBrace < 0 || lastBrace <= firstBrace) return undefined;
+    if (firstBrace < 0) return undefined;
 
-    const toolName = callBody.slice(0, firstBrace).trim();
+    const nameMatch = callBody.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*[({]/);
+    const toolName = (nameMatch?.[1] ?? callBody.slice(0, firstBrace).trim()).trim();
     if (!toolName || !/^[A-Za-z_][A-Za-z0-9_\-]*$/.test(toolName)) return undefined;
 
-    const args = callBody.slice(firstBrace + 1, lastBrace);
+    const lastBrace = callBody.lastIndexOf("}");
+    const args = lastBrace > firstBrace
+      ? callBody.slice(firstBrace + 1, lastBrace)
+      : callBody.slice(firstBrace + 1); // unclosed -> take the rest of the string
     return { toolName, args };
+  }
+
+  /** Models frequently wrap the real arguments in a single {"json": {...}} or {"args": {...}}
+   *  envelope. jsonrepair happily returns that wrapper as a valid object, so unwrap it here -
+   *  a one-key object whose only key is "json"/"args" and whose value is an object is always
+   *  the envelope mistake, never a genuine argument set. */
+  private unwrapArgsWrapper(obj: Record<string, unknown>): Record<string, unknown> {
+    const keys = Object.keys(obj);
+    if (keys.length === 1 && (keys[0] === "json" || keys[0] === "args")) {
+      const inner = obj[keys[0]];
+      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+        return inner as Record<string, unknown>;
+      }
+    }
+    return obj;
   }
 
   private parseLooseObject(text: string): Record<string, unknown> | undefined {
@@ -1958,7 +2022,7 @@ export class Agent {
     try {
       const parsed = JSON.parse(candidate);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
+        return this.unwrapArgsWrapper(parsed as Record<string, unknown>);
       }
     } catch {
       // Will try fixes below
@@ -1974,7 +2038,7 @@ export class Agent {
       const parsed = JSON.parse(jsonrepair(candidate));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         this.logger.debug("[PARSER] Repaired tool call JSON via jsonrepair");
-        return parsed as Record<string, unknown>;
+        return this.unwrapArgsWrapper(parsed as Record<string, unknown>);
       }
     } catch {
       // jsonrepair couldn't salvage it — fall through to the hand-rolled fixes.
@@ -3369,12 +3433,21 @@ export class Agent {
     }
   }
 
+  /** Both the built-in `browser` tool and the `browser-control` MCP tool produce screenshots
+   *  in the same result shape; the chat preview + vision-analysis paths must treat them alike
+   *  (otherwise a screenshot from browser-control is shown as raw JSON and never reaches the
+   *  vision model, so it "sees" nothing). */
+  private isBrowserTool(toolName: string | undefined): boolean {
+    const n = (toolName ?? "").trim().toLowerCase();
+    return n === "browser" || n === "browser-control" || n === "browser_control";
+  }
+
   private async handleScreenshotCapture(
     toolName: string,
     toolInput: Record<string, unknown>,
     toolResult: ToolResult
   ): Promise<void> {
-    if (!toolResult.success || toolName !== "browser") return;
+    if (!toolResult.success || !this.isBrowserTool(toolName)) return;
 
     // Screenshots arrive on many browser actions (navigate/click/type/wait), not only
     // action:"screenshot" - the browser tool embeds the image in the result and the UI preview
@@ -3953,7 +4026,7 @@ export class Agent {
         // blob in the tool result would waste tokens and add nothing since the model
         // will see the same image in the vision message with better context.
         const rawResultData = executed.result.data as Record<string, unknown> | undefined;
-        const screenshotBase64 = toolCall?.toolName === "browser" && executed.result.success
+        const screenshotBase64 = this.isBrowserTool(toolCall?.toolName) && executed.result.success
           ? (rawResultData?.["screenshot"] as string | undefined)
           : undefined;
 
@@ -4091,7 +4164,7 @@ export class Agent {
     });
 
     // Count browser tools for iteration control
-    const browserToolsCount = toolCalls.filter(c => c.toolName === "browser").length;
+    const browserToolsCount = toolCalls.filter(c => this.isBrowserTool(c.toolName)).length;
 
     return { resultMap, cleanedResponse, browserToolsCount };
   }

@@ -73,6 +73,9 @@ export class ErrorClassifier {
         "TransientError",
         "ContextWindowExceeded",
         "Timeout",
+        // Unclassified errors are transient by default: a single bounded retry is the safer
+        // bet than failing the run outright on an error we couldn't categorize.
+        "UnknownError",
       ],
       maxRetryAttempts: 3,
       retryBackoffMs: 1000,
@@ -105,7 +108,11 @@ export class ErrorClassifier {
    * Classify an error (9-step pipeline)
    */
   classify(error: unknown, context?: any): ErrorClassification {
-    const message = this.extractMessage(error);
+    // Lowercase for matching: every classify* step tests against lowercase literals
+    // (e.g. message.includes("thinking block")), so a capitalized provider message like
+    // "Thinking block budget exceeded" or "OAuth rate limit exceeded" would otherwise fall
+    // through to UnknownError. Status-code regexes match digits and are unaffected.
+    const message = this.extractMessage(error).toLowerCase();
     const statusCode = this.extractStatusCode(error);
 
     // Log classification for debugging
@@ -470,7 +477,7 @@ export class ErrorClassifier {
    * STEP 5: SSL/Certificate Errors (Fail-Fast)
    */
   private classifySSLErrors(message: string): ErrorClassification | null {
-    if (message.includes("ssl") || message.includes("certificate") || message.includes("cert")) {
+    if (message.includes("ssl") || message.includes("certificate") || message.includes("cert") || message.includes("tls") || message.includes("handshake")) {
       if (message.includes("verify") || message.includes("self-signed")) {
         return {
           category: ErrorCategory.SSLCertificateError,

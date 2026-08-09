@@ -1,0 +1,16 @@
+{
+  "name": "exchange_rates",
+  "description": "Aktuelle Wechselkurse fuer eine Basiswaehrung (z.B. EUR). Keyless, gecached.",
+  "params": {
+    "base": { "type": "string", "description": "ISO-Waehrungscode der Basis, z.B. EUR, USD" }
+  },
+  "defaults": { "base": "EUR" },
+  "requests": [
+    { "urlTemplate": "https://open.er-api.com/v6/latest/{base}" }
+  ],
+  "response": {
+    "summaryTemplate": "1 {base} = {rates.USD} USD, {rates.GBP} GBP, {rates.CHF} CHF (Stand: {time_last_update_utc})"
+  },
+  "allowedHosts": ["open.er-api.com"],
+  "cacheTtlMs": 3600000
+}

@@ -55,6 +55,8 @@ import { logsRouter } from "./routes/logs.js";
 import { mcpRouter } from "./routes/mcp.js";
 import { memoryRouter } from "./routes/memory.js";
 import { plansRouter } from "./routes/plans.js";
+import { pluginsRouter } from "./routes/plugins.js";
+import { PluginManager } from "./lib/plugin-manager.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
 import { credentialRouter, setupCredentialRoutes } from "./routes/credentials.js";
@@ -71,7 +73,6 @@ import { screenshotRouter } from "./routes/screenshots.js";
 import { bitcoinPuzzleRouter } from "./routes/bitcoin-puzzle.js";
 import { createProviderModelsRouter } from "./routes/provider-models.js";
 import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
-import { createBrowserControlMcpTool } from "./browser/mcp-browser-server.js";
 import { createTasksMcpTool } from "./tasks/mcp-tasks-server.js";
 import { createWorkflowMcpTool } from "./workflow/mcp-workflow-server.js";
 import { createCronjobsMcpTool } from "./cronjobs/mcp-cronjobs-server.js";
@@ -410,7 +411,8 @@ function buildAgentFactory(
 	db: Awaited<ReturnType<typeof getDatabase>>,
 	workflowEngineRef: { current: WorkflowEngine },
 	runtimeTools: ToolExecutor[],
-	wikiServiceRef: { current?: LlmWikiService }
+	wikiServiceRef: { current?: LlmWikiService },
+	pluginManager: PluginManager
 ) {
 	return async () => {
 		// Load database settings for agent configuration
@@ -427,6 +429,11 @@ function buildAgentFactory(
 		// Wrap tools to broadcast events and handle response staging
 		const wrappedTools = wrapTools(runtimeTools);
 		for (const tool of wrappedTools) {
+			agent.executor.registerTool(tool);
+		}
+		// Plugin tools are registered here (per request) from the PluginManager's CURRENT set,
+		// so enable/disable/install take effect for the NEXT agent without touching running ones.
+		for (const tool of wrapTools(pluginManager.getTools())) {
 			agent.executor.registerTool(tool);
 		}
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
@@ -447,6 +454,7 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/tasks", tasksRouter);
 	app.use("/api/projects", projectsRouter);
 	app.use("/api/plans", plansRouter);
+	app.use("/api/plugins", pluginsRouter);
 	app.use("/api/tools", toolsRouter);
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);
@@ -636,11 +644,22 @@ async function bootstrap(): Promise<void> {
 	const mcpRegistry = new MCPRegistry();
 	const mcpServers = parseMcpServerConfigs(await db.getSetting(MCP_SERVERS_SETTING));
 	await mcpRegistry.syncServers(mcpServers);
+	// File-first plugins (plugins/<name>/): the PluginManager owns the current tool set and
+	// hot-reloads it on enable/disable/install WITHOUT interrupting running agents (it defers
+	// the swap until no agent is active). Per-request agents register these via the factory.
+	const pluginManager = new PluginManager();
+	logger.info("Plugins loaded at startup", {
+		enabled: pluginManager.getPlugins().filter((p) => p.enabled && !p.error).length,
+		tools: pluginManager.getTools().length,
+	});
 	const runtimeTools: ToolExecutor[] = [
 		...allTools,
 		createMcpTool(mcpRegistry),
 		createCryptoPaymentMcpTool(db),
-		createBrowserControlMcpTool(),
+		// Browser automation is handled by the real `browser` tool (in allTools, Puppeteer in an
+		// isolated worker) plus the browser-control SKILL. A former `browser-control` MCP stub was
+		// removed: it returned a 1x1 mock screenshot yet reported success, so the model picked it
+		// over the real tool and "browsed" nothing.
 		createTasksMcpTool(db),
 		createWorkflowMcpTool(db),
 		createCronjobsMcpTool(db),
@@ -654,6 +673,11 @@ async function bootstrap(): Promise<void> {
 	// Wrap tools for event broadcasting and response staging
 	const wrappedRuntimeTools = wrapTools(runtimeTools);
 	for (const tool of wrappedRuntimeTools) {
+		workflowExecutor.registerTool(tool);
+	}
+	// Plugin tools for the persistent workflow executor are wired once at boot; workflows pick
+	// up plugin enable/disable on the next server start (the per-request chat agent hot-reloads).
+	for (const tool of wrapTools(pluginManager.getTools())) {
 		workflowExecutor.registerTool(tool);
 	}
 	workflowExecutor.registerTool(createCronjobManagementTool(db));
@@ -692,7 +716,7 @@ async function bootstrap(): Promise<void> {
 	// Filled in a few lines below, once the wiki service exists - the agent factory only
 	// dereferences it when a run actually calls the wiki tool.
 	const wikiServiceRef: { current?: LlmWikiService } = {};
-	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef);
+	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager);
 	const defaultAgent = await createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
 	cronjobManager.start();
@@ -727,6 +751,7 @@ async function bootstrap(): Promise<void> {
 		return reloaded.providerName;
 	};
 	app.locals["agentRegistry"] = agentRegistry;
+	app.locals["pluginManager"] = pluginManager;
 	app.locals["discordGatewayStatus"] = discordGatewayStatus;
 	app.locals["cronjobManager"] = cronjobManager;
 	app.locals["updateManager"] = updateManager;

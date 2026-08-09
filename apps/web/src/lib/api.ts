@@ -22,6 +22,26 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.data;
 }
 
+export interface PluginReload {
+  applied: boolean;
+  deferred: boolean;
+}
+
+export interface PluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  author?: string;
+  license?: string;
+  enabled: boolean;
+  hasStorage: boolean;
+  toolNames: string[];
+  skillDirs: string[];
+  mappings: Array<{ alias: string; tool: string }>;
+  settings: Array<{ key: string; default?: string | number | boolean; type?: string; description?: string }>;
+  error?: string;
+}
+
 export const api = {
   chat: {
     listConversations: (projectId?: number) =>
@@ -263,6 +283,18 @@ export const api = {
       totalTablesInDb?: number;
       tables?: { expected: number; present: string[]; missing: string[]; allPresent: boolean } | null;
     }>("/settings/database/test", { method: "POST", body: JSON.stringify(payload) }),
+  },
+
+  plugins: {
+    list: () => request<PluginInfo[]>("/plugins"),
+    get: (name: string) => request<PluginInfo & { manifest: unknown }>(`/plugins/${name}`),
+    enable: (name: string) => request<{ name: string; enabled: boolean; reload: PluginReload }>(`/plugins/${name}/enable`, { method: "POST" }),
+    disable: (name: string) => request<{ name: string; enabled: boolean; reload: PluginReload }>(`/plugins/${name}/disable`, { method: "POST" }),
+    install: (payload: { url?: string; name?: string; files?: Array<{ path: string; content: string }> }) =>
+      request<{ name: string; installed: boolean; files: number; reload: PluginReload }>("/plugins/install", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
   },
 
   coding: {

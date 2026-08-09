@@ -1,0 +1,18 @@
+{
+  "name": "notes",
+  "version": "1.0.0",
+  "files": [
+    {
+      "path": "plugin.json",
+      "content": "{\n  \"name\": \"notes\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Persistente Notizen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank).\",\n  \"author\": \"DucKI\",\n  \"license\": \"Proprietary\",\n  \"storage\": { \"sqlite\": true },\n  \"provides\": {\n    \"scriptTools\": [\"tools/notes.tool.json\"],\n    \"skills\": [\"skills/notes-usage\"]\n  },\n  \"enabled\": true\n}\n"
+    },
+    {
+      "path": "skills/notes-usage/SKILL.md",
+      "content": "---\nname: notes-usage\ndescription: How to store and recall persistent notes with the notes tool. Use when the user asks to remember a note, save a reminder, jot something down, or list previously saved notes.\n---\n\n# Notes (persistent)\n\nThe `notes` tool stores notes in this plugin's OWN SQLite database (separate from the main app database, so it never bloats it).\n\nSave a note:\n```\n[TOOL:notes({\"action\": \"add\", \"text\": \"Zahnarzttermin am Freitag 10 Uhr\"})]\n```\n\nList the most recent notes:\n```\n[TOOL:notes({\"action\": \"list\"})]\n```\n\n- `add` requires `text`; `list` returns up to the 20 most recent notes in `result.notes`.\n- Report saved/listed notes back plainly; the data persists across restarts.\n"
+    },
+    {
+      "path": "tools/notes.tool.json",
+      "content": "{\n  \"name\": \"notes\",\n  \"description\": \"Persistente Notizen (add/list) in der plugin-eigenen SQLite-DB, getrennt von der Hauptdatenbank.\",\n  \"parameters\": {\n    \"type\": \"object\",\n    \"properties\": {\n      \"action\": { \"type\": \"string\", \"enum\": [\"add\", \"list\"], \"description\": \"add = Notiz speichern, list = letzte Notizen\" },\n      \"text\": { \"type\": \"string\", \"description\": \"Notiztext (fuer action=add)\" }\n    },\n    \"required\": [\"action\"]\n  },\n  \"async\": true,\n  \"script\": \"const s = toolContext.storage; if (!s) return { error: 'plugin storage not enabled' }; await s.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT NOT NULL)'); if (toolInput.action === 'add') { const text = String(toolInput.text || '').trim(); if (!text) return { error: 'text is required for action=add' }; await s.exec('INSERT INTO notes (text, created_at) VALUES (?, ?)', [text, new Date().toISOString()]); return { added: true, text }; } const rows = await s.query('SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 20'); return { count: rows.length, notes: rows };\"\n}\n"
+    }
+  ]
+}

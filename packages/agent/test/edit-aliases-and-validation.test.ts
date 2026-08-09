@@ -1,6 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { createAgentForParserTests } from "./utils/agent-test-harness";
 
+/** preflightToolInput rejects unknown tools before its action-specific validation, so the
+ *  filesystem tool must be registered for the edit-validation branch to be reached. */
+function registerFilesystem(agent: ReturnType<typeof createAgentForParserTests>): void {
+  (agent as any).executor.registerTool({
+    name: "filesystem",
+    description: "test filesystem",
+    definition: { name: "filesystem", description: "test filesystem", parameters: { type: "object", properties: {} } },
+    execute: async () => ({ success: true, data: null }),
+  });
+}
+
 describe("Edit Aliases & Validation (PR2-A3,A4,A5)", () => {
   describe("edit action alias mapping", () => {
     it("resolves 'edit' as valid filesystem action", () => {
@@ -106,9 +117,10 @@ describe("Edit Aliases & Validation (PR2-A3,A4,A5)", () => {
   });
 
   describe("edit action preflight validation", () => {
-    it("rejects edit without oldString", () => {
+    it("rejects edit without oldString", async () => {
       const agent = createAgentForParserTests();
-      const result = (agent as any).preflightToolInput("filesystem", {
+      registerFilesystem(agent);
+      const result = await (agent as any).preflightToolInput("filesystem", {
         action: "edit",
         path: "file.txt",
         newString: "new",
@@ -118,9 +130,10 @@ describe("Edit Aliases & Validation (PR2-A3,A4,A5)", () => {
       expect(result.error).toContain("oldString");
     });
 
-    it("rejects edit without newString", () => {
+    it("rejects edit without newString", async () => {
       const agent = createAgentForParserTests();
-      const result = (agent as any).preflightToolInput("filesystem", {
+      registerFilesystem(agent);
+      const result = await (agent as any).preflightToolInput("filesystem", {
         action: "edit",
         path: "file.txt",
         oldString: "old",
@@ -130,9 +143,10 @@ describe("Edit Aliases & Validation (PR2-A3,A4,A5)", () => {
       expect(result.error).toContain("newString");
     });
 
-    it("allows edit with both oldString and newString", () => {
+    it("allows edit with both oldString and newString", async () => {
       const agent = createAgentForParserTests();
-      const result = (agent as any).preflightToolInput("filesystem", {
+      registerFilesystem(agent);
+      const result = await (agent as any).preflightToolInput("filesystem", {
         action: "edit",
         path: "file.txt",
         oldString: "old",
@@ -142,10 +156,10 @@ describe("Edit Aliases & Validation (PR2-A3,A4,A5)", () => {
       expect(result.ok).toBe(true);
     });
 
-    it("includes 'edit' in error message for unknown action", () => {
+    it("lists valid actions (incl. 'edit') when the action is missing", async () => {
       const agent = createAgentForParserTests();
-      const result = (agent as any).preflightToolInput("filesystem", {
-        action: "unknown_action",
+      registerFilesystem(agent);
+      const result = await (agent as any).preflightToolInput("filesystem", {
         path: "file.txt",
       }, { enabledOptionalTools: [] });
 
@@ -177,7 +191,7 @@ describe("Edit Aliases & Validation (PR2-A3,A4,A5)", () => {
       );
 
       expect(hint).toBeDefined();
-      expect(hint).toContain("expand");
+      expect(hint).toContain("Expand");
     });
 
     it("provides hint for path outside scope", () => {
