@@ -16,6 +16,8 @@ export class PluginManager {
   private tools: ToolExecutor[] = [];
   private plugins: LoadedPluginInfo[] = [];
   private pending = false;
+  private debounceTimer: NodeJS.Timeout | undefined;
+  private readonly debounceMs = Number.parseInt(process.env["PLUGIN_RELOAD_DEBOUNCE_MS"] ?? "300", 10);
   private readonly logger = getRootLogger().child("PluginManager");
 
   private constructor() {
@@ -44,12 +46,20 @@ export class PluginManager {
   }
 
   /**
-   * Request a reload. Applies immediately if idle, otherwise defers until no agent is
-   * active. Returns whether it applied now or was deferred.
+   * Request a reload. Rapid successive requests (enable/disable/settings-save bursts) are
+   * COALESCED via a short debounce so we run at most one loadPlugins() per burst instead of one
+   * per call. If agents are busy the reload is deferred until the system next goes idle.
+   * Returns whether it applied now or was deferred.
    */
   requestReload(): { applied: boolean; deferred: boolean } {
     if (agentRegistry.snapshot().runningCount === 0) {
-      void this.apply("request");
+      if (this.debounceTimer) clearTimeout(this.debounceTimer);
+      this.debounceTimer = setTimeout(() => {
+        this.debounceTimer = undefined;
+        // Re-check at fire time: never swap the tool set out from under a run that just started.
+        if (agentRegistry.snapshot().runningCount === 0) void this.apply("request");
+        else this.pending = true;
+      }, this.debounceMs);
       return { applied: true, deferred: false };
     }
     this.pending = true;

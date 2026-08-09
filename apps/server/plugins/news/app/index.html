@@ -3,79 +3,118 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>News</title>
+<title>World Events viewer</title>
 <style>
-  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  :root {
+    color-scheme: light dark;
+    --bg: transparent; --panel: #ffffff; --panel-2: #f6f7f9; --border: #e3e4ea;
+    --text: #16181d; --muted: #6b7280; --accent: #2563eb;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --panel: #16181d; --panel-2: #1e2128; --border: #2a2e37; --text: #e7e9ee; --muted: #98a1b3; --accent: #6366f1; }
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 1.1rem; line-height: 1.5; }
-  h1 { font-size: 1.15rem; margin: 0 0 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
-  .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
-  select, input, button { font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #8884; border-radius: 7px; background: transparent; color: inherit; }
-  input[type=number] { width: 5rem; }
-  button { cursor: pointer; font-weight: 600; }
-  button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
-  button.ghost { background: #8881; }
-  .layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 1.1rem; align-items: start; }
-  @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
-  .panel { border: 1px solid #8883; border-radius: 10px; padding: 0.7rem; }
-  .panel h2 { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; margin: 0 0 0.6rem; }
-  .digest { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.4rem 0.3rem; border-top: 1px solid #8882; cursor: pointer; }
+  body { margin: 0; padding: 1rem 1.1rem 1.5rem; color: var(--text); line-height: 1.45; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 0.9rem; }
+  h1 { font-size: 1.2rem; margin: 0; display: flex; align-items: center; gap: 0.5rem; letter-spacing: -0.01em; }
+  .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .tabs button { border: 0; background: var(--panel); color: var(--text); padding: 0.4rem 0.9rem; cursor: pointer; font: inherit; font-weight: 600; }
+  .tabs button.active { background: var(--accent); color: #fff; }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.9rem; }
+  select, input, .btn { font: inherit; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }
+  input[type=number] { width: 4.8rem; }
+  .btn { cursor: pointer; font-weight: 600; }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.ghost { background: var(--panel-2); }
+  .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 1rem; align-items: start; }
+  @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem; }
+  .panel h2 { font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.6rem; }
+  .digest { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; padding: 0.45rem 0.35rem; border-top: 1px solid var(--border); cursor: pointer; border-radius: 7px; }
   .digest:first-of-type { border-top: 0; }
-  .digest:hover { background: #8881; border-radius: 6px; }
-  .digest.active { background: #2563eb22; border-radius: 6px; }
-  .digest .d { font-size: 0.82rem; }
-  .digest .s { font-size: 0.72rem; opacity: 0.6; }
-  .del { border: 0; background: #dc26261a; color: #dc2626; padding: 0.2rem 0.45rem; font-size: 0.72rem; border-radius: 5px; }
-  article { border-top: 1px solid #8882; padding: 0.6rem 0; }
+  .digest:hover { background: var(--panel-2); }
+  .digest.active { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .digest .d { font-size: 0.82rem; font-weight: 600; }
+  .digest .s { font-size: 0.71rem; color: var(--muted); }
+  .del { border: 0; background: color-mix(in srgb, #dc2626 12%, transparent); color: #dc2626; padding: 0.22rem 0.5rem; font-size: 0.71rem; border-radius: 6px; cursor: pointer; }
+  .content-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.7rem; }
+  .content-head h2 { margin: 0; font-size: 1.02rem; letter-spacing: -0.01em; color: var(--text); text-transform: none; }
+  .content-head .sub { font-size: 0.74rem; color: var(--muted); }
+  article { border-top: 1px solid var(--border); padding: 0.6rem 0; display: flex; gap: 0.6rem; }
   article:first-of-type { border-top: 0; }
-  article .t { font-weight: 600; font-size: 0.95rem; }
+  .adot { width: 8px; height: 8px; border-radius: 50%; margin-top: 0.42rem; flex: 0 0 8px; }
+  .adot.high { background: #ef4444; } .adot.med { background: #f59e0b; } .adot.low { background: #9ca3af; }
+  article .t { font-weight: 600; font-size: 0.93rem; }
   article .t a { color: inherit; text-decoration: none; }
   article .t a:hover { text-decoration: underline; }
-  article .m { font-size: 0.72rem; opacity: 0.55; margin: 0.15rem 0; }
-  article .sum { font-size: 0.86rem; opacity: 0.9; }
-  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.6rem; }
-  .head h2 { margin: 0; font-size: 1rem; }
-  .head .when { font-size: 0.72rem; opacity: 0.6; }
-  #status { margin: 0.6rem 0; font-size: 0.85rem; min-height: 1.2em; }
+  article .m { font-size: 0.71rem; color: var(--muted); margin: 0.15rem 0; }
+  article .sum { font-size: 0.85rem; color: var(--text); opacity: 0.92; }
+  #status { margin: 0 0 0.6rem; font-size: 0.84rem; min-height: 1.1em; }
   .ok { color: #16a34a; } .err { color: #dc2626; }
-  .empty { opacity: 0.6; font-size: 0.9rem; padding: 0.5rem 0; }
-  pre { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; background: #8881; padding: 0.7rem; border-radius: 8px; }
+  .empty { color: var(--muted); font-size: 0.9rem; padding: 0.5rem 0; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; background: var(--panel-2); padding: 0.7rem; border-radius: 8px; }
+  #map { height: 62vh; min-height: 380px; border-radius: 10px; overflow: hidden; }
+  .mapwrap { display: none; }
+  .mapwrap.show { display: block; }
+  .listwrap.hide { display: none; }
+  .legend { display: flex; gap: 0.9rem; flex-wrap: wrap; margin-top: 0.5rem; font-size: 0.74rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .leaflet-popup-content { font: inherit; font-size: 0.82rem; }
+  .leaflet-popup-content a { color: var(--accent); }
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
-  <h1>📰 News</h1>
+  <div class="topbar">
+    <h1>🌍 World Events viewer</h1>
+    <div class="tabs">
+      <button id="tabList" class="active">Liste</button>
+      <button id="tabMap">🗺 Karte</button>
+    </div>
+  </div>
 
   <div class="controls">
     <select id="source">
       <option value="all">Alle Quellen</option>
-      <option value="tagesschau">Tagesschau</option>
-      <option value="tagesschau-ausland">Tagesschau Ausland</option>
-      <option value="bbc">BBC</option>
-      <option value="bbc-world">BBC World</option>
-      <option value="spiegel">Spiegel</option>
     </select>
-    <input id="count" type="number" min="1" max="30" value="10" title="Anzahl" />
-    <input id="query" type="text" placeholder="Filter (optional)" />
-    <button class="primary" id="fetchBtn">Abrufen</button>
-    <button class="ghost" id="forceBtn" title="Tages-Cache ignorieren">Neu laden</button>
-    <button class="ghost" id="mdBtn" title="Markdown anzeigen">Markdown</button>
+    <input id="count" type="number" min="1" max="50" value="10" title="Anzahl" />
+    <input id="query" type="text" placeholder="Filter / Stichwort" />
+    <button class="btn primary" id="fetchBtn">Abrufen</button>
+    <button class="btn ghost" id="forceBtn" title="Tages-Cache ignorieren">Neu laden</button>
+    <button class="btn ghost" id="mdBtn" title="Markdown anzeigen">Markdown</button>
   </div>
 
   <div id="status"></div>
 
   <div class="layout">
     <div class="panel">
-      <h2>Gespeicherte Digests</h2>
+      <h2>Verlauf</h2>
       <div id="digests"><div class="empty">—</div></div>
     </div>
 
     <div class="panel">
-      <div class="head">
-        <h2 id="viewTitle">Meldungen</h2>
-        <span class="when" id="viewWhen"></span>
+      <div class="content-head">
+        <h2>World Events viewer</h2>
+        <span class="sub" id="sub"></span>
       </div>
-      <div id="view"><div class="empty">Noch nichts geladen. Klicke „Abrufen".</div></div>
-      <pre id="md" style="display:none"></pre>
+      <div class="listwrap" id="listwrap">
+        <div id="view"><div class="empty">Noch nichts geladen. Klicke „Abrufen".</div></div>
+        <pre id="md" style="display:none"></pre>
+      </div>
+      <div class="mapwrap" id="mapwrap">
+        <div id="map"></div>
+        <div class="legend">
+          <span><i style="background:#ef4444"></i> Hohe Relevanz</span>
+          <span><i style="background:#f59e0b"></i> Erhöht</span>
+          <span><i style="background:#9ca3af"></i> Normal</span>
+          <span><i style="background:#3b82f6"></i> Militärbasis</span>
+          <span><i style="background:#eab308"></i> Nuklearanlage</span>
+          <span><i style="background:#14b8a6"></i> Undersee-Kabel</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -83,14 +122,12 @@
   const INVOKE = "/api/plugins/news/invoke";
   const $ = (id) => document.getElementById(id);
   const status = (msg, ok) => { const s = $("status"); s.textContent = msg || ""; s.className = ok ? "ok" : "err"; };
+  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
   let current = { source: null, date: null, markdown: "" };
-  let mdVisible = false;
+  let mdVisible = false, mapVisible = false;
 
   async function invoke(input) {
-    const res = await fetch(INVOKE, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool: "news", input }),
-    });
+    const res = await fetch(INVOKE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: "news", input }) });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
     const payload = (json.data && json.data.result) || json.result || {};
@@ -98,63 +135,78 @@
     return payload;
   }
 
+  // ---- Quellen-Dropdown ----
+  async function populateSources() {
+    try {
+      const r = await invoke({ action: "sources" });
+      const sel = $("source"); const cur = sel.value || "all";
+      sel.innerHTML = '<option value="all">Alle Quellen</option>';
+      (r.sources || []).forEach((s) => {
+        const o = document.createElement("option"); o.value = s;
+        o.textContent = s + (r.custom && r.custom.indexOf(s) !== -1 ? " (eigen)" : "");
+        sel.appendChild(o);
+      });
+      sel.value = cur;
+    } catch (e) {}
+  }
+
+  // ---- Liste ----
+  function setSub(r) { $("sub").textContent = (r.source ? r.source + " · " : "") + (r.date || "") + (r.cached ? " · Cache" : r.fetchedNow ? " · neu" : ""); }
+
   function renderView(r) {
     current = { source: r.source, date: r.date, markdown: r.markdown || "" };
-    $("viewTitle").textContent = "Meldungen · " + (r.source || "");
-    $("viewWhen").textContent = (r.date || "") + (r.cached ? " · Cache" : r.fetchedNow ? " · neu geladen" : "");
+    setSub(r);
     $("md").textContent = current.markdown;
     $("md").style.display = mdVisible ? "block" : "none";
-    const view = $("view");
-    view.innerHTML = "";
+    const view = $("view"); view.innerHTML = "";
     const arts = r.articles || [];
     if (arts.length === 0) { view.innerHTML = '<div class="empty">Keine Meldungen.</div>'; return; }
     for (const a of arts) {
       const el = document.createElement("article");
+      const dot = document.createElement("div"); dot.className = "adot " + (a.alert || "low");
+      const body = document.createElement("div"); body.style.minWidth = "0"; body.style.flex = "1";
       const t = document.createElement("div"); t.className = "t";
       if (a.link) { const link = document.createElement("a"); link.href = a.link; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = a.title; t.appendChild(link); }
       else { t.textContent = a.title; }
       const m = document.createElement("div"); m.className = "m"; m.textContent = (a.source ? a.source + " · " : "") + (a.pubDate || "");
-      el.appendChild(t); el.appendChild(m);
-      if (a.summary) { const sm = document.createElement("div"); sm.className = "sum"; sm.textContent = a.summary; el.appendChild(sm); }
-      view.appendChild(el);
+      body.appendChild(t); body.appendChild(m);
+      if (a.summary) { const sm = document.createElement("div"); sm.className = "sum"; sm.textContent = a.summary; body.appendChild(sm); }
+      el.appendChild(dot); el.appendChild(body); view.appendChild(el);
     }
   }
 
   async function refreshDigests() {
     try {
       const r = await invoke({ action: "list" });
-      const box = $("digests");
-      box.innerHTML = "";
+      const box = $("digests"); box.innerHTML = "";
       const rows = r.digests || [];
       if (rows.length === 0) { box.innerHTML = '<div class="empty">Noch keine.</div>'; return; }
       for (const d of rows) {
         const row = document.createElement("div");
         row.className = "digest" + (d.date === current.date && d.source === current.source ? " active" : "");
         const info = document.createElement("div");
-        info.innerHTML = '<div class="d">' + d.date + '</div><div class="s">' + d.source + " · " + d.count + " Meldungen</div>";
+        info.innerHTML = '<div class="d">' + esc(d.date) + '</div><div class="s">' + esc(d.source) + " · " + d.count + " Meldungen</div>";
         info.onclick = () => openDigest(d);
-        const del = document.createElement("button");
-        del.className = "del"; del.textContent = "Löschen";
+        const del = document.createElement("button"); del.className = "del"; del.textContent = "Löschen";
         del.onclick = (e) => { e.stopPropagation(); removeDigest(d); };
-        row.appendChild(info); row.appendChild(del);
-        box.appendChild(row);
+        row.appendChild(info); row.appendChild(del); box.appendChild(row);
       }
     } catch (e) { status("Liste fehlgeschlagen: " + e.message, false); }
   }
 
   async function openDigest(d) {
-    try { const r = await invoke({ action: "get", date: d.date, source: d.source, count: 30 }); renderView(r); refreshDigests(); status(""); }
+    try { const r = await invoke({ action: "get", date: d.date, source: d.source, count: 30 }); if (mapVisible) showTab(false); renderView(r); refreshDigests(); status(""); }
     catch (e) { status("Öffnen fehlgeschlagen: " + e.message, false); }
   }
 
   async function removeDigest(d) {
-    try { await invoke({ action: "delete", id: d.id }); status("Gelöscht.", true); if (current.date === d.date && current.source === d.source) { $("view").innerHTML = '<div class="empty">Gelöscht.</div>'; current = { source: null, date: null, markdown: "" }; } refreshDigests(); }
+    try { await invoke({ action: "delete", id: d.id }); status("Gelöscht.", true); refreshDigests(); }
     catch (e) { status("Löschen fehlgeschlagen: " + e.message, false); }
   }
 
   async function doFetch(force) {
     const source = $("source").value;
-    let count = parseInt($("count").value, 10); if (!Number.isFinite(count) || count < 1) count = 10; if (count > 30) count = 30;
+    let count = parseInt($("count").value, 10); if (!Number.isFinite(count) || count < 1) count = 10; if (count > 50) count = 50;
     const query = $("query").value.trim() || undefined;
     status(force ? "Lade neu …" : "Abrufen …", true);
     try {
@@ -162,14 +214,93 @@
       renderView(r);
       status(r.fetchedNow ? "Neu abgerufen." : "Aus Cache (heute bereits geladen).", true);
       refreshDigests();
+      if (mapVisible) loadMap();
     } catch (e) { status("Abruf fehlgeschlagen: " + e.message, false); }
   }
 
+  // ---- Karte ----
+  let lmap = null, tileLayer = null, layerControl = null, sourceLayers = {}, staticLayers = null;
+  const mq = window.matchMedia("(prefers-color-scheme: dark)");
+  const DARK = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+  const LIGHT = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+  const alertColor = (a) => a === "high" ? "#ef4444" : a === "med" ? "#f59e0b" : "#9ca3af";
+  const alertRadius = (a) => a === "high" ? 9 : a === "med" ? 7 : 5;
+
+  function applyTiles() {
+    if (!lmap) return;
+    const url = mq.matches ? DARK : LIGHT;
+    if (tileLayer) lmap.removeLayer(tileLayer);
+    tileLayer = L.tileLayer(url, { maxZoom: 19, subdomains: "abcd", attribution: "© OpenStreetMap © CARTO" }).addTo(lmap);
+  }
+  function ensureMap() {
+    if (lmap || typeof L === "undefined") return;
+    lmap = L.map("map", { worldCopyJump: true }).setView([28, 20], 2);
+    applyTiles();
+  }
+  if (mq.addEventListener) mq.addEventListener("change", applyTiles);
+
+  async function ensureStaticLayers() {
+    if (staticLayers) return staticLayers;
+    const out = { bases: L.layerGroup(), nuclear: L.layerGroup(), cables: L.layerGroup() };
+    try {
+      const L2 = await invoke({ action: "layers" });
+      (L2.military_bases || []).forEach((b) => L.circleMarker([b.lat, b.lng], { radius: 5, color: "#3b82f6", weight: 2, fillColor: "#3b82f6", fillOpacity: 0.5 }).bindPopup("<b>" + esc(b.name) + "</b><br>Militärbasis · " + esc(b.country)).addTo(out.bases));
+      (L2.nuclear_sites || []).forEach((n) => L.circleMarker([n.lat, n.lng], { radius: 5, color: "#eab308", weight: 2, fillColor: "#eab308", fillOpacity: 0.6 }).bindPopup("<b>" + esc(n.name) + "</b><br>☢ Nuklearanlage · " + esc(n.country)).addTo(out.nuclear));
+      (L2.undersea_cables || []).forEach((c) => L.polyline((c.path || []).map((p) => [p[0], p[1]]), { color: "#14b8a6", weight: 2, opacity: 0.7, dashArray: "5,6" }).bindPopup("<b>" + esc(c.name) + "</b><br>Undersee-Kabel").addTo(out.cables));
+    } catch (e) {}
+    staticLayers = out;
+    return out;
+  }
+
+  async function loadMap() {
+    ensureMap();
+    if (!lmap) { status("Karte konnte nicht geladen werden (Leaflet fehlt).", false); return; }
+    const source = $("source").value;
+    let count = parseInt($("count").value, 10); if (!Number.isFinite(count)) count = 40;
+    const query = $("query").value.trim() || undefined;
+    Object.values(sourceLayers).forEach((l) => lmap.removeLayer(l)); sourceLayers = {};
+    if (layerControl) { lmap.removeControl(layerControl); layerControl = null; }
+    status("Karte lädt …", true);
+    try {
+      const stat = await ensureStaticLayers();
+      const r = await invoke({ action: "map", source, count: Math.max(count, 40), query });
+      const pts = r.points || []; const bounds = [];
+      for (const p of pts) {
+        if (!sourceLayers[p.source]) sourceLayers[p.source] = L.layerGroup().addTo(lmap);
+        const col = alertColor(p.alert);
+        const m = L.circleMarker([p.lat, p.lng], { radius: alertRadius(p.alert), color: col, weight: 2, fillColor: col, fillOpacity: 0.65 });
+        m.bindPopup("<b>" + esc(p.title) + "</b><br>" + esc(p.place) + " · " + esc(p.source) + " · " + esc(p.alert) + "<br><small>" + esc(p.pubDate) + "</small>" + (p.link ? '<br><a href="' + esc(p.link) + '" target="_blank" rel="noopener noreferrer">Öffnen</a>' : ""));
+        sourceLayers[p.source].addLayer(m); bounds.push([p.lat, p.lng]);
+      }
+      const overlays = Object.assign({}, sourceLayers, { "🛡 Militärbasen": stat.bases, "☢ Nuklearanlagen": stat.nuclear, "🔌 Undersee-Kabel": stat.cables });
+      layerControl = L.control.layers(null, overlays, { collapsed: false }).addTo(lmap);
+      if (bounds.length) lmap.fitBounds(bounds, { padding: [30, 30], maxZoom: 5 });
+      setTimeout(() => lmap.invalidateSize(), 60);
+      current = { source: r.source, date: r.date, markdown: r.markdown || "" };
+      setSub(r);
+      status(r.located + " von " + r.count + " Meldungen verortet.", true);
+      refreshDigests();
+    } catch (e) { status("Karte fehlgeschlagen: " + e.message, false); }
+  }
+
+  // ---- Tabs ----
+  function showTab(map) {
+    mapVisible = map;
+    $("tabMap").classList.toggle("active", map);
+    $("tabList").classList.toggle("active", !map);
+    $("mapwrap").classList.toggle("show", map);
+    $("listwrap").classList.toggle("hide", map);
+    if (map) loadMap();
+  }
+
+  $("tabList").onclick = () => showTab(false);
+  $("tabMap").onclick = () => showTab(true);
   $("fetchBtn").onclick = () => doFetch(false);
   $("forceBtn").onclick = () => doFetch(true);
-  $("mdBtn").onclick = () => { mdVisible = !mdVisible; $("md").style.display = mdVisible ? "block" : "none"; };
+  $("mdBtn").onclick = () => { mdVisible = !mdVisible; $("md").style.display = (mdVisible && !mapVisible) ? "block" : "none"; };
 
   (async () => {
+    await populateSources();
     await refreshDigests();
     try { const r = await invoke({ action: "latest", count: 30 }); if (r.found) renderView(r); } catch (e) {}
   })();

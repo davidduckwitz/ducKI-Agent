@@ -1,0 +1,14 @@
+{
+  "name": "clock",
+  "version": "1.0.0",
+  "files": [
+    {
+      "path": "plugin.json",
+      "content": "{\n  \"name\": \"clock\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Zeigt Uhrzeit, Datum und Wochentag als kleines Widget in Sidebar und Dashboard.\",\n  \"author\": \"DucKI\",\n  \"license\": \"Proprietary\",\n  \"icon\": \"🕐\",\n  \"category\": \"overview\",\n  \"provides\": {\n    \"widgetPage\": \"widget/index.html\",\n    \"widgetPlacement\": \"both\"\n  },\n  \"enabled\": true\n}\n"
+    },
+    {
+      "path": "widget/index.html",
+      "content": "<!doctype html>\n<html lang=\"de\">\n<head>\n<meta charset=\"utf-8\" />\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n<title>Uhr</title>\n<style>\n  :root { color-scheme: light dark; }\n  html, body { margin: 0; height: 100%; }\n  body {\n    display: flex; flex-direction: column; align-items: center; justify-content: center;\n    gap: 0.15rem; font-family: system-ui, sans-serif; text-align: center;\n    color: #111; background: transparent;\n  }\n  @media (prefers-color-scheme: dark) { body { color: #f3f4f6; } }\n  #time { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; line-height: 1.1; }\n  #day { font-size: 0.9rem; font-weight: 600; opacity: 0.9; }\n  #date { font-size: 0.8rem; opacity: 0.65; }\n</style>\n</head>\n<body>\n  <div id=\"time\">--:--:--</div>\n  <div id=\"day\">—</div>\n  <div id=\"date\">—</div>\n<script>\n  const timeEl = document.getElementById(\"time\");\n  const dayEl = document.getElementById(\"day\");\n  const dateEl = document.getElementById(\"date\");\n  const days = [\"Sonntag\", \"Montag\", \"Dienstag\", \"Mittwoch\", \"Donnerstag\", \"Freitag\", \"Samstag\"];\n  function pad(n) { return String(n).padStart(2, \"0\"); }\n  function tick() {\n    const now = new Date();\n    timeEl.textContent = pad(now.getHours()) + \":\" + pad(now.getMinutes()) + \":\" + pad(now.getSeconds());\n    dayEl.textContent = days[now.getDay()];\n    dateEl.textContent = now.toLocaleDateString(\"de-DE\", { day: \"2-digit\", month: \"long\", year: \"numeric\" });\n  }\n  tick();\n  setInterval(tick, 1000);\n</script>\n</body>\n</html>\n"
+    }
+  ]
+}

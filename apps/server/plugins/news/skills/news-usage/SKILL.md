@@ -1,11 +1,15 @@
 ---
 name: news-usage
-description: How to fetch, store, and retrieve current headlines with the news tool. Use whenever the user asks for the news, latest headlines, "die neuesten Nachrichten", a news digest, news about a topic, or to re-read earlier news — instead of scraping a website with the browser tool.
+description: PRIMARY way to get news/current events. Use the `news` tool for ANY request about the news, latest headlines, "die neuesten/wichtigsten Nachrichten", a news digest, world/current events, or news about a country/topic (e.g. "was passiert in der Ukraine"). Always try the `news` tool FIRST — do not scrape sites with the browser tool for news unless the `news` tool cannot answer.
 ---
 
 # News (daily digests, API-style)
 
-The `news` tool fetches headlines from curated, keyless RSS feeds and stores one **Markdown digest per day and source** in the plugin's OWN SQLite database. Prefer it over the `browser` tool: it returns a full list in one call and persists it, so you can re-read it later.
+**This is the primary news source for the agent.** Whenever the user wants news, headlines, a briefing, world events, or news on a topic/country, use the `news` tool — NOT the `browser`/web-scraping tool. Only fall back to the browser if the user needs a *specific* article/site the feeds don't cover, or explicitly asks to open a page.
+
+The `news` tool fetches headlines from curated, keyless RSS/Atom feeds (plus any user-configured custom feeds) and stores one **Markdown digest per day and source** in the plugin's OWN SQLite database. It returns a full list in one call, persists it (so you can re-read it later), searches across many sources at once, and can geolocate stories.
+
+**Quick recipe:** most "what's the news / what's happening" requests → `[TOOL:news({"action":"fetch","source":"all","count":10})]`. Topic/country → add `"query"`. "On a map" → `action:"map"`.
 
 Every action is chosen via `action`. Results are consistent objects; article lists live in `articles` (`title`, `link`, `pubDate`, `summary`), and each digest also has a ready-to-save `markdown` field beginning with a dated `# Nachrichten – <source> – <YYYY-MM-DD>` heading.
 
@@ -27,7 +31,14 @@ Every action is chosen via `action`. Results are consistent objects; article lis
   ```
 - **list** — metadata of all stored digests (`id`, `date`, `source`, `count`, `created_at`).
 - **delete** — remove a digest by `id`, or by `date` + `source`.
-- **sources** — the available source keys.
+- **map** — like `fetch`, but each returned article is geolocated via a built-in gazetteer (major countries/cities). Returns a `points` array `[{lat, lng, place, title, source, link, pubDate}]` for map display, plus `located` (how many were placed). Use for "show the news on a map" / location-based questions.
+  ```
+  [TOOL:news({"action": "map", "source": "all", "count": 40})]
+  ```
+- **sources** — the available source keys (`builtin`, `custom`, `default`).
+
+## Custom sources
+Users can add their own RSS/Atom feeds in the plugin settings (`custom_feeds` = JSON `{"key":"https://…"}`). Those keys then work everywhere a `source` is accepted. Only public `http(s)` hosts are allowed (localhost/private IPs are blocked). Built-in keys cannot be overridden.
 
 ## Parameters
 `source`: `tagesschau` (DE) · `tagesschau-ausland` (DE world) · `bbc` (EN) · `bbc-world` (EN world) · `spiegel` (DE). Omitted → the plugin's configured default. `count`: 1–30 (default 10). `query`: case-insensitive filter over title + summary (applied to the returned list; the full day is still stored).

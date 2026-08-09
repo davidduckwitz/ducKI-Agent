@@ -5,69 +5,102 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>News</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light dark; --text: #14161b; --muted: #6b7280; --accent: #2563eb; --line: #0000001a; }
+  @media (prefers-color-scheme: dark) { :root { --text: #eef0f5; --muted: #9aa3b2; --accent: #8b93ff; --line: #ffffff1f; } }
   html, body { margin: 0; height: 100%; }
-  body { font-family: system-ui, sans-serif; color: #111; background: transparent; padding: 0.6rem 0.7rem; box-sizing: border-box; }
-  @media (prefers-color-scheme: dark) { body { color: #f3f4f6; } }
-  h2 { margin: 0 0 0.5rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.6; }
-  ol { margin: 0; padding: 0 0 0 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; }
-  li { font-size: 0.84rem; line-height: 1.3; }
-  li a { color: inherit; text-decoration: none; }
-  li a:hover { text-decoration: underline; }
-  .empty { font-size: 0.82rem; opacity: 0.6; list-style: none; margin-left: -1.1rem; }
-  .meta { margin-top: 0.5rem; font-size: 0.68rem; opacity: 0.5; }
+  body { font-family: system-ui, sans-serif; color: var(--text); background: transparent; padding: 0.55rem 0.65rem; box-sizing: border-box; display: flex; flex-direction: column; gap: 0.45rem; overflow: hidden; }
+  .head { display: flex; align-items: center; justify-content: space-between; }
+  .head h2 { margin: 0; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  .head .dt { font-size: 0.62rem; color: var(--muted); }
+
+  .feature { position: relative; flex: 1; min-height: 76px; display: flex; align-items: center; }
+  .card { transition: opacity 0.5s ease, transform 0.5s ease; opacity: 1; width: 100%; }
+  .feature.fading .card { opacity: 0; transform: translateY(-6px); }
+  .card .meta { display: flex; align-items: center; gap: 0.4rem; font-size: 0.66rem; color: var(--muted); margin-bottom: 0.2rem; }
+  .card .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
+  .dot.high { background: #ef4444; } .dot.med { background: #f59e0b; } .dot.low { background: #9ca3af; }
+  .card .src { font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .ttl { font-size: 0.98rem; font-weight: 600; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card .ttl a { color: inherit; text-decoration: none; }
+  .card .ttl a:hover { text-decoration: underline; }
+
+  .tickerwrap { position: relative; overflow: hidden; border-top: 1px solid var(--line); padding-top: 0.4rem; white-space: nowrap; }
+  .ticker { display: inline-flex; white-space: nowrap; will-change: transform; animation: scroll linear infinite; }
+  .ticker:hover { animation-play-state: paused; }
+  .ticker .it { font-size: 0.74rem; color: var(--text); opacity: 0.85; padding: 0 0.5rem; }
+  .ticker .it a { color: inherit; text-decoration: none; }
+  .ticker .it .s { color: var(--accent); font-weight: 700; }
+  .ticker .sep { color: var(--muted); opacity: 0.5; }
+  @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  .empty { font-size: 0.82rem; color: var(--muted); }
 </style>
 </head>
 <body>
-  <h2>📰 Schlagzeilen</h2>
-  <ol id="list"><li class="empty">Lädt …</li></ol>
-  <div class="meta" id="meta"></div>
+  <div class="head"><h2>📰 World Events</h2><span class="dt" id="dt"></span></div>
+  <div class="feature" id="feature"><div class="card"><div class="empty">Lädt …</div></div></div>
+  <div class="tickerwrap"><div class="ticker" id="ticker"></div></div>
+
 <script>
   const INVOKE = "/api/plugins/news/invoke";
-  const list = document.getElementById("list");
-  const meta = document.getElementById("meta");
+  const feature = document.getElementById("feature");
+  const ticker = document.getElementById("ticker");
+  const card = feature.querySelector(".card");
+  let items = [], idx = 0, rotTimer = null;
+  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const shortTime = (v) => { const d = new Date(v); return isNaN(d) ? "" : d.toLocaleString("de-DE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); };
 
   async function invoke(input) {
-    const res = await fetch(INVOKE, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool: "news", input }),
-    });
+    const res = await fetch(INVOKE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: "news", input }) });
     const json = await res.json().catch(() => ({}));
     const payload = (json.data && json.data.result) || json.result || {};
     if (payload.error) throw new Error(payload.error);
     return payload;
   }
 
-  function render(r) {
-    list.innerHTML = "";
-    const arts = r.articles || [];
-    if (arts.length === 0) {
-      list.innerHTML = '<li class="empty">Keine Meldungen.</li>';
-      return;
-    }
-    for (const a of arts) {
-      const li = document.createElement("li");
-      if (a.link) {
-        const link = document.createElement("a");
-        link.href = a.link; link.target = "_blank"; link.rel = "noopener noreferrer";
-        link.textContent = a.title;
-        li.appendChild(link);
-      } else {
-        li.textContent = a.title;
-      }
-      list.appendChild(li);
-    }
-    meta.textContent = r.source + (r.cached ? " · Cache" : " · aktualisiert") + " · " + (r.date || "");
+  function showFeature(i) {
+    const a = items[i]; if (!a) return;
+    const link = a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener noreferrer">' + esc(a.title) + '</a>' : esc(a.title);
+    card.innerHTML =
+      '<div class="meta"><span class="dot ' + (a.alert || "low") + '"></span>' +
+      '<span class="src">' + esc(a.source || "") + '</span><span>' + esc(shortTime(a.pubDate)) + '</span></div>' +
+      '<div class="ttl">' + link + '</div>';
+  }
+
+  function rotate() {
+    if (items.length < 2) return;
+    feature.classList.add("fading");
+    setTimeout(() => { idx = (idx + 1) % items.length; showFeature(idx); feature.classList.remove("fading"); }, 500);
+  }
+
+  function buildTicker() {
+    const one = items.map((a) => {
+      const label = '<span class="s">' + esc(a.source || "") + "</span> " + esc(a.title);
+      const inner = a.link ? '<a href="' + esc(a.link) + '" target="_blank" rel="noopener noreferrer">' + label + "</a>" : label;
+      return '<span class="it">' + inner + '</span><span class="sep">•</span>';
+    }).join("");
+    // Zweimal aneinander für nahtlose Endlosschleife (-50%).
+    ticker.innerHTML = one + one;
+    const secs = Math.max(24, items.length * 3.2);
+    ticker.style.animationDuration = secs + "s";
   }
 
   async function load() {
-    // fetch nutzt den Tages-Cache: höchstens ein Netzabruf pro Tag/Quelle.
-    try { render(await invoke({ action: "fetch", count: 5 })); }
-    catch (e) { list.innerHTML = '<li class="empty">Fehler: ' + e.message + '</li>'; }
+    try {
+      const r = await invoke({ action: "fetch", source: "all", count: 15 });
+      items = (r.articles || []).slice(0, 15);
+      document.getElementById("dt").textContent = r.date || "";
+      if (items.length === 0) { card.innerHTML = '<div class="empty">Keine Meldungen.</div>'; ticker.innerHTML = ""; return; }
+      idx = 0; showFeature(0); buildTicker();
+      if (rotTimer) clearInterval(rotTimer);
+      rotTimer = setInterval(rotate, 5000);
+    } catch (e) {
+      card.innerHTML = '<div class="empty">Fehler: ' + esc(e.message) + "</div>";
+    }
   }
+
   load();
-  // Alle 30 Min. neu rendern; dank Cache ohne erneuten Netzabruf.
-  setInterval(load, 1800000);
+  // Alle 15 Min. Daten erneuern (dank Tages-Cache i. d. R. ohne Netzabruf).
+  setInterval(load, 900000);
 </script>
 </body>
 </html>

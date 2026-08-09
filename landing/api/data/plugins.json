@@ -1,7 +1,31 @@
 {
   "version": 1,
-  "updated": "2026-08-09T14:54:09.933Z",
+  "updated": "2026-08-09T23:14:00.210Z",
   "plugins": [
+    {
+      "id": "calendar",
+      "name": "calendar",
+      "description": "Persistenter Kalender mit Terminen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank). Eigene Frontend-Seite (FullCalendar), Widget mit den nächsten Terminen und ein Tool, mit dem der Agent Termine anlegen, lesen, ändern und löschen kann.",
+      "version": "2.0.0",
+      "author": "DucKI",
+      "license": "Proprietary",
+      "hasStorage": true,
+      "origin": "builtin",
+      "source_url": "https://ducki-ai-agent.davidduckwitz.de/api/v1.php?action=download&type=plugin&id=calendar",
+      "status": "active"
+    },
+    {
+      "id": "clock",
+      "name": "clock",
+      "description": "Zeigt Uhrzeit, Datum und Wochentag als kleines Widget in Sidebar und Dashboard.",
+      "version": "1.0.0",
+      "author": "DucKI",
+      "license": "Proprietary",
+      "hasStorage": false,
+      "origin": "builtin",
+      "source_url": "https://ducki-ai-agent.davidduckwitz.de/api/v1.php?action=download&type=plugin&id=clock",
+      "status": "active"
+    },
     {
       "id": "exchange-rates",
       "name": "exchange-rates",
@@ -15,10 +39,34 @@
       "status": "active"
     },
     {
+      "id": "github-connector",
+      "name": "github-connector",
+      "description": "GitHub-Connector: Profil und Repositories über die GitHub-API abfragen. Auth per Personal Access Token oder OAuth-Flow.",
+      "version": "1.0.0",
+      "author": "DucKI",
+      "license": "Proprietary",
+      "hasStorage": false,
+      "origin": "builtin",
+      "source_url": "https://ducki-ai-agent.davidduckwitz.de/api/v1.php?action=download&type=plugin&id=github-connector",
+      "status": "active"
+    },
+    {
+      "id": "news",
+      "name": "news",
+      "description": "Aktuelle Schlagzeilen aus kuratierten, keyless RSS-Feeds (Tagesschau, BBC, Spiegel). Speichert pro Tag und Quelle ein Markdown-Digest in einer plugin-eigenen SQLite-DB (getrennt von der Hauptdatenbank). Abruf höchstens einmal pro Tag (Cache) oder manuell erzwungen; der Agent kann Digests wie über eine API abrufen und weiterverarbeiten.",
+      "version": "2.1.0",
+      "author": "DucKI",
+      "license": "Proprietary",
+      "hasStorage": true,
+      "origin": "builtin",
+      "source_url": "https://ducki-ai-agent.davidduckwitz.de/api/v1.php?action=download&type=plugin&id=news",
+      "status": "active"
+    },
+    {
       "id": "notes",
       "name": "notes",
-      "description": "Persistente Notizen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank).",
-      "version": "1.0.0",
+      "description": "Persistente Notizen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank). Eigene Frontend-Seite zum Lesen, Hinzufügen und Löschen.",
+      "version": "1.2.0",
       "author": "DucKI",
       "license": "Proprietary",
       "hasStorage": true,

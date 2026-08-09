@@ -6,72 +6,150 @@
 <title>News — Einstellungen</title>
 <style>
   :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  * { box-sizing: border-box; }
   body { margin: 0; padding: 1.25rem; line-height: 1.5; }
-  h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
-  p.hint { margin: 0 0 1rem; opacity: 0.75; font-size: 0.85rem; }
-  label { display: block; margin: 0.9rem 0 0.3rem; font-weight: 600; font-size: 0.85rem; }
-  select, input { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; }
-  .row { display: flex; gap: 0.5rem; margin-top: 1.25rem; }
-  button { padding: 0.5rem 0.9rem; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  h1 { font-size: 1.15rem; margin: 0 0 0.25rem; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin: 1.4rem 0 0.5rem; }
+  p.hint { margin: 0 0 0.5rem; opacity: 0.75; font-size: 0.82rem; }
+  label { display: block; margin: 0.7rem 0 0.25rem; font-weight: 600; font-size: 0.82rem; }
+  select, input { width: 100%; padding: 0.45rem 0.55rem; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.6rem; }
+  button { padding: 0.45rem 0.8rem; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; font: inherit; }
   .primary { background: #2563eb; color: #fff; }
-  #status { margin-top: 0.75rem; font-size: 0.85rem; min-height: 1.2em; }
+  .ghost { background: #8882; color: inherit; }
+  .del { background: #dc26261a; color: #dc2626; padding: 0.32rem 0.55rem; }
+  .src { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.4rem 0.15rem; border-top: 1px solid #8883; }
+  .src:first-of-type { border-top: 0; }
+  .src .info { min-width: 0; }
+  .src .k { font-weight: 600; font-size: 0.86rem; }
+  .src .u { font-size: 0.72rem; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46ch; }
+  .src .tag { font-size: 0.66rem; opacity: 0.6; border: 1px solid #8884; border-radius: 5px; padding: 0 0.35rem; }
+  .addrow { display: grid; grid-template-columns: 130px 1fr 130px auto; gap: 0.4rem; align-items: center; margin-top: 0.6rem; }
+  .row { display: flex; gap: 0.5rem; margin-top: 1.3rem; align-items: center; }
+  #status { font-size: 0.85rem; min-height: 1.2em; }
   .ok { color: #16a34a; } .err { color: #dc2626; }
+  code { background: #8881; padding: 0 0.25rem; border-radius: 4px; }
+  @media (max-width: 620px) { .addrow { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
   <h1>📰 News-Einstellungen</h1>
-  <p class="hint">Standardwerte für den Nachrichtenabruf. Meldungen werden pro Tag und Quelle einmal geladen (Cache) und in der Plugin-Datenbank gespeichert.</p>
+  <p class="hint">Standardwerte und Nachrichtenquellen. Meldungen werden pro Tag und Quelle einmal geladen (Cache) und je Quelle bis zu 30 gespeichert.</p>
 
-  <label for="default_source">Standard-Quelle</label>
-  <select id="default_source">
-    <option value="tagesschau">Tagesschau (DE)</option>
-    <option value="tagesschau-ausland">Tagesschau Ausland (DE)</option>
-    <option value="bbc">BBC (EN)</option>
-    <option value="bbc-world">BBC World (EN)</option>
-    <option value="spiegel">Spiegel (DE)</option>
-  </select>
-
-  <label for="default_count">Standard-Anzahl (1–30)</label>
-  <input id="default_count" type="number" min="1" max="30" />
-
-  <div class="row">
-    <button class="primary" id="save">Speichern</button>
+  <div class="grid">
+    <div>
+      <label for="default_source">Standard-Quelle</label>
+      <select id="default_source"></select>
+    </div>
+    <div>
+      <label for="default_count">Standard-Anzahl (1–50)</label>
+      <input id="default_count" type="number" min="1" max="50" />
+    </div>
+    <div>
+      <label for="retention_days">Aufbewahrung (Tage)</label>
+      <input id="retention_days" type="number" min="1" max="365" />
+    </div>
   </div>
-  <div id="status"></div>
+  <div class="row">
+    <button class="primary" id="save">Standardwerte speichern</button>
+  </div>
+
+  <h2>Quellen</h2>
+  <p class="hint">Quellen liegen in der Plugin-Datenbank. Eingebaute Quellen sind fest; eigene Feeds (RSS/Atom) kannst du ergänzen oder löschen. Nur öffentliche <code>http(s)</code>-Adressen (localhost/private IPs werden blockiert). Änderungen wirken sofort.</p>
+  <div id="sources"><div class="hint">Lädt …</div></div>
+  <div class="addrow">
+    <input id="newKey" placeholder="schluessel" />
+    <input id="newUrl" placeholder="https://…/rss" />
+    <input id="newLabel" placeholder="Anzeigename (optional)" />
+    <button class="ghost" id="addBtn">+ Hinzufügen</button>
+  </div>
+
+  <div class="row"><span id="status"></span></div>
 
 <script>
   const BASE = "/api/plugins/news";
   const $ = (id) => document.getElementById(id);
   const status = (msg, ok) => { const s = $("status"); s.textContent = msg || ""; s.className = ok ? "ok" : "err"; };
+  const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  async function load() {
+  async function invoke(input) {
+    const res = await fetch(BASE + "/invoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: "news", input }) });
+    const json = await res.json().catch(() => ({}));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  async function loadSources() {
+    try {
+      const r = await invoke({ action: "sources" });
+      // Quellenliste
+      const box = $("sources"); box.innerHTML = "";
+      const rows = r.list || [];
+      for (const s of rows) {
+        const el = document.createElement("div"); el.className = "src";
+        const info = document.createElement("div"); info.className = "info";
+        info.innerHTML = '<div class="k">' + esc(s.label || s.key) + ' <span class="tag">' + (s.builtin ? "eingebaut" : "eigen") + '</span></div><div class="u">' + esc(s.key) + " · " + esc(s.url) + "</div>";
+        el.appendChild(info);
+        if (!s.builtin) {
+          const del = document.createElement("button"); del.className = "del"; del.textContent = "Löschen";
+          del.onclick = () => removeSource(s.key);
+          el.appendChild(del);
+        }
+        box.appendChild(el);
+      }
+      // Standard-Quelle Dropdown
+      const sel = $("default_source"); const cur = sel.value; sel.innerHTML = "";
+      (r.sources || []).forEach((k) => { const o = document.createElement("option"); o.value = k; o.textContent = (r.labels && r.labels[k]) ? r.labels[k] : k; sel.appendChild(o); });
+      if (cur) sel.value = cur;
+    } catch (e) { status("Quellen laden fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function addSource() {
+    const key = $("newKey").value.trim().toLowerCase();
+    const url = $("newUrl").value.trim();
+    const label = $("newLabel").value.trim();
+    if (!key || !url) { status("Schlüssel und URL angeben.", false); return; }
+    try {
+      await invoke({ action: "source_add", key, url, label: label || undefined });
+      $("newKey").value = ""; $("newUrl").value = ""; $("newLabel").value = "";
+      status("Quelle hinzugefügt.", true);
+      loadSources();
+    } catch (e) { status("Hinzufügen fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function removeSource(key) {
+    try { await invoke({ action: "source_delete", key }); status("Quelle gelöscht.", true); loadSources(); }
+    catch (e) { status("Löschen fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function loadDefaults() {
     try {
       const res = await fetch(BASE + "/settings");
       const json = await res.json();
       const v = (json.data && json.data.values) || json.values || {};
-      if (v.default_source) $("default_source").value = v.default_source;
       $("default_count").value = v.default_count != null ? v.default_count : 10;
-    } catch (e) { status("Konnte Einstellungen nicht laden: " + e.message, false); }
+      $("retention_days").value = v.retention_days != null ? v.retention_days : 7;
+      await loadSources();
+      if (v.default_source) $("default_source").value = v.default_source;
+    } catch (e) { status("Einstellungen laden fehlgeschlagen: " + e.message, false); }
   }
 
-  async function save() {
-    let count = parseInt($("default_count").value, 10);
-    if (!Number.isFinite(count) || count < 1) count = 1;
-    if (count > 30) count = 30;
-    const values = { default_source: $("default_source").value, default_count: count };
+  async function saveDefaults() {
+    let count = parseInt($("default_count").value, 10); if (!Number.isFinite(count) || count < 1) count = 1; if (count > 50) count = 50;
+    let retention = parseInt($("retention_days").value, 10); if (!Number.isFinite(retention) || retention < 1) retention = 7; if (retention > 365) retention = 365;
+    const values = { default_source: $("default_source").value, default_count: count, retention_days: retention };
     try {
-      const res = await fetch(BASE + "/settings", {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ values })
-      });
+      const res = await fetch(BASE + "/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values }) });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
-      status("Gespeichert.", true);
+      status("Standardwerte gespeichert.", true);
     } catch (e) { status("Speichern fehlgeschlagen: " + e.message, false); }
   }
 
-  $("save").onclick = save;
-  load();
+  $("addBtn").onclick = addSource;
+  $("save").onclick = saveDefaults;
+  loadDefaults();
 </script>
 </body>
 </html>
