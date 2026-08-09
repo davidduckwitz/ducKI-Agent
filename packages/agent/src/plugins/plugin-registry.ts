@@ -1,11 +1,38 @@
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
-import { createDataSourceTool, type DataSourceToolConfig } from "@ducki/tools";
+import { createDataSourceTool, hostAllowed, type DataSourceToolConfig } from "@ducki/tools";
 import { runScriptInSandbox } from "@ducki/tools";
-import { openPluginDb, type PluginStorage } from "@ducki/database";
-import { getRootLogger } from "@ducki/logger";
+import { openPluginDb, getPluginRuntimeConfig, type PluginStorage, type PluginRuntimeConfig } from "@ducki/database";
+import { getRootLogger, type Logger } from "@ducki/logger";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { parsePluginManifest, type PluginManifest, type PluginToolMapping, type PluginSettingSpec } from "./plugin-manifest.js";
+import { pathToFileURL } from "node:url";
+import { parsePluginManifest, parseOAuthConfig, type PluginManifest, type PluginToolMapping, type PluginSettingSpec, type OAuthConfig } from "./plugin-manifest.js";
+
+/**
+ * Runtime context handed to a plugin's async script tools and module tools. Sandboxed sync
+ * script tools deliberately do NOT receive this (no secrets, no fetch) - they stay locked to
+ * the vm surface. `settings`/`secrets` come from the plugin's own settings store; `fetch` is
+ * host-guarded by the manifest's allowedHosts; `logger` is namespaced to the plugin.
+ */
+export interface PluginToolContext {
+  pluginName: string;
+  storage?: PluginStorage;
+  settings: Record<string, unknown>;
+  secrets: Record<string, string>;
+  fetch: typeof fetch;
+  logger: Logger;
+}
+
+/** Wrap global fetch so a plugin can only reach hosts on its manifest allowlist. */
+function guardedFetch(allowedHosts?: string[]): typeof fetch {
+  return ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+    if (!hostAllowed(url, allowedHosts)) {
+      return Promise.reject(new Error(`Host '${(() => { try { return new URL(url).hostname; } catch { return url; } })()}' not in the plugin's allowedHosts`));
+    }
+    return fetch(input, init);
+  }) as typeof fetch;
+}
 
 /** One loaded plugin's public info (for the management page / diagnostics). */
 export interface LoadedPluginInfo {
@@ -20,6 +47,22 @@ export interface LoadedPluginInfo {
   skillDirs: string[];
   mappings: PluginToolMapping[];
   settings: PluginSettingSpec[];
+  /** Parsed OAuth connector configs (from provides.oauth). */
+  oauth: OAuthConfig[];
+  /** Relative path to a pure settings page, if the plugin ships one. */
+  settingsPage?: string;
+  /** Relative path to a frontend (mini-app) page, if the plugin ships one. */
+  frontendPage?: string;
+  /** Relative path to a widget (small tile) page, if the plugin ships one. */
+  widgetPage?: string;
+  /** Widget placement ("sidebar" | "dashboard" | "both"). */
+  widgetPlacement?: string;
+  /** Emoji/short icon for UI + sidebar. */
+  icon?: string;
+  /** Sidebar category ("overview" | "workspace" | "automation" | "knowledge" | "system"). */
+  category?: string;
+  /** Trust level ("sandboxed" | "node"). */
+  trust: string;
   error?: string;
 }
 
@@ -92,12 +135,12 @@ export function listPluginSkillDirs(root = pluginsRoot()): string[] {
 }
 
 /** Build a ToolExecutor from a plugin script-tool config. Async tools (with `async:true`)
- *  run in an AsyncFunction and receive `toolContext.storage` (the plugin's own SQLite DB);
- *  sync tools reuse the shared vm sandbox, matching dynamic (tool_factory) tools. */
+ *  run in an AsyncFunction and receive the enriched `toolContext` (storage, settings, secrets,
+ *  guarded fetch, logger); sync tools reuse the shared vm sandbox with only `{ pluginName }` -
+ *  no secrets, no fetch - matching dynamic (tool_factory) tools. */
 function buildScriptTool(
-  pluginName: string,
   cfg: { name: string; description: string; parameters?: Record<string, unknown>; script: string; async?: boolean },
-  storage: PluginStorage | undefined,
+  ctx: PluginToolContext,
 ): ToolExecutor {
   return {
     name: cfg.name,
@@ -107,11 +150,117 @@ function buildScriptTool(
       try {
         if (cfg.async) {
           const fn = new AsyncFunction("toolInput", "toolContext", cfg.script);
-          const result = await fn(input, { pluginName, storage });
+          const result = await fn(input, ctx);
           return { success: true, data: { result: result ?? null } };
         }
-        const executed = runScriptInSandbox(cfg.script, { input, context: { pluginName } }, { inputVar: "toolInput", contextVar: "toolContext" });
+        const executed = runScriptInSandbox(cfg.script, { input, context: { pluginName: ctx.pluginName } }, { inputVar: "toolInput", contextVar: "toolContext" });
         return { success: true, data: { result: executed.result ?? null, logs: executed.logs } };
+      } catch (error) {
+        return { success: false, data: null, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  };
+}
+
+/** Shape a module tool must export. */
+interface ModuleToolExports {
+  definition?: { name?: string; description?: string; parameters?: Record<string, unknown> };
+  name?: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  execute: (input: Record<string, unknown>, ctx: PluginToolContext) => Promise<unknown> | unknown;
+}
+
+/**
+ * Load an ESM module tool (.js/.mjs) from `absPath`. The module runs in the full Node scope
+ * and gets the enriched context. Only reached for trust: "node" plugins. Import is cache-busted
+ * with a query so a hot-reload picks up edited files.
+ */
+async function buildModuleTool(absPath: string, ctx: PluginToolContext): Promise<ToolExecutor> {
+  const url = `${pathToFileURL(absPath).href}?v=${Date.now()}`;
+  const mod = (await import(url)) as ModuleToolExports & { default?: ModuleToolExports };
+  const exports = (mod.default && typeof mod.default.execute === "function" ? mod.default : mod) as ModuleToolExports;
+  if (typeof exports.execute !== "function") {
+    throw new Error(`module tool '${absPath}' must export an execute() function`);
+  }
+  const name = exports.definition?.name ?? exports.name;
+  const description = exports.definition?.description ?? exports.description ?? "";
+  if (!name) throw new Error(`module tool '${absPath}' must export a name (via definition.name or name)`);
+  const parameters = exports.definition?.parameters ?? exports.parameters ?? { type: "object", properties: {} };
+
+  return {
+    name,
+    description,
+    definition: { name, description, parameters },
+    async execute(input: Record<string, unknown>): Promise<ToolResult> {
+      try {
+        const result = await exports.execute(input, ctx);
+        return { success: true, data: { result: result ?? null } };
+      } catch (error) {
+        return { success: false, data: null, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  };
+}
+
+/**
+ * Auto-generated storage tool for any plugin that opts into `storage.sqlite`. It gives the
+ * AGENT a first-class way to read/write the plugin's OWN private database (the same isolated
+ * file plugin-storage manages) without the plugin author hand-writing a tool. Scoped strictly
+ * to that one plugin's DB - it cannot reach the main database or another plugin's data.
+ */
+function buildStorageTool(pluginName: string, storage: PluginStorage): ToolExecutor {
+  const toolName = `${pluginName.replace(/-/g, "_")}_storage`;
+  return {
+    name: toolName,
+    description:
+      `Direktzugriff auf die private SQLite-Datenbank des Plugins '${pluginName}'. ` +
+      `actions: query (SELECT, gibt Zeilen), exec (INSERT/UPDATE/DELETE/DDL), ` +
+      `kv_get/kv_set/kv_list (einfacher Key-Value-Speicher). 'params' bindet ?-Platzhalter.`,
+    definition: {
+      name: toolName,
+      description: `Private SQLite-DB des Plugins '${pluginName}' lesen/schreiben.`,
+      parameters: {
+        type: "object",
+        properties: {
+          action: { type: "string", enum: ["query", "exec", "kv_get", "kv_set", "kv_list"] },
+          sql: { type: "string", description: "SQL für action=query/exec" },
+          params: { type: "array", description: "Werte für ?-Platzhalter im SQL" },
+          key: { type: "string", description: "Schlüssel für kv_get/kv_set" },
+          value: { type: "string", description: "Wert für kv_set" },
+        },
+        required: ["action"],
+      },
+    },
+    async execute(input: Record<string, unknown>): Promise<ToolResult> {
+      try {
+        const action = String(input["action"] ?? "");
+        const params = Array.isArray(input["params"]) ? (input["params"] as unknown[]) : [];
+        if (action === "query") {
+          const sql = String(input["sql"] ?? "").trim();
+          if (!/^\s*select\b/i.test(sql)) return { success: false, data: null, error: "query erlaubt nur SELECT (für Schreibzugriffe action=exec verwenden)" };
+          const rows = await storage.query(sql, params);
+          return { success: true, data: { result: { count: rows.length, rows } } };
+        }
+        if (action === "exec") {
+          const sql = String(input["sql"] ?? "").trim();
+          if (!sql) return { success: false, data: null, error: "sql ist erforderlich für action=exec" };
+          await storage.exec(sql, params);
+          return { success: true, data: { result: { ok: true } } };
+        }
+        if (action === "kv_get") {
+          const value = await storage.get(String(input["key"] ?? ""));
+          return { success: true, data: { result: { value: value ?? null } } };
+        }
+        if (action === "kv_set") {
+          await storage.set(String(input["key"] ?? ""), String(input["value"] ?? ""));
+          return { success: true, data: { result: { ok: true } } };
+        }
+        if (action === "kv_list") {
+          const rows = await storage.query("SELECT key, value FROM kv ORDER BY key");
+          return { success: true, data: { result: { count: rows.length, entries: rows } } };
+        }
+        return { success: false, data: null, error: `Unbekannte action: ${action}` };
       } catch (error) {
         return { success: false, data: null, error: error instanceof Error ? error.message : String(error) };
       }
@@ -122,11 +271,12 @@ function buildScriptTool(
 type LoadedPluginInternal = LoadedPluginInfo & { tools: ToolExecutor[] };
 
 /** Load one plugin directory into tools/skills/mappings/settings. Never throws. */
-function loadOnePlugin(root: string, name: string, enabled: boolean): LoadedPluginInternal {
+async function loadOnePlugin(root: string, name: string, enabled: boolean): Promise<LoadedPluginInternal> {
   const dir = join(root, name);
   const info: LoadedPluginInternal = {
     name, version: "?", description: "", enabled,
-    hasStorage: false, toolNames: [], skillDirs: [], mappings: [], settings: [], tools: [],
+    hasStorage: false, toolNames: [], skillDirs: [], mappings: [], settings: [],
+    oauth: [], trust: "sandboxed", tools: [],
   };
 
   const manifestPath = join(dir, "plugin.json");
@@ -151,6 +301,13 @@ function loadOnePlugin(root: string, name: string, enabled: boolean): LoadedPlug
   info.hasStorage = manifest.storage?.sqlite === true;
   info.mappings = manifest.provides.toolMappings ?? [];
   info.settings = manifest.provides.settings ?? [];
+  info.settingsPage = manifest.provides.settingsPage;
+  info.frontendPage = manifest.provides.frontendPage;
+  info.widgetPage = manifest.provides.widgetPage;
+  info.widgetPlacement = manifest.provides.widgetPlacement;
+  info.icon = manifest.icon;
+  info.category = manifest.category;
+  info.trust = manifest.trust;
 
   if (name !== manifest.name) {
     info.error = `manifest name '${manifest.name}' must match directory '${name}'`;
@@ -159,15 +316,47 @@ function loadOnePlugin(root: string, name: string, enabled: boolean): LoadedPlug
 
   try {
     const storage = manifest.storage?.sqlite ? openPluginDb(manifest.name) : undefined;
+    // Decrypted settings/secrets for the runtime context (falls back to defaults). Only read
+    // when the plugin declares settings, so a settings-less plugin never gets a data/ folder.
+    const runtime: PluginRuntimeConfig = info.settings.length > 0
+      ? await getPluginRuntimeConfig(manifest.name, info.settings)
+      : { settings: {}, secrets: {} };
+    const ctx: PluginToolContext = {
+      pluginName: manifest.name,
+      storage,
+      settings: runtime.settings,
+      secrets: runtime.secrets,
+      fetch: guardedFetch(manifest.allowedHosts),
+      logger: getRootLogger().child(`Plugin:${manifest.name}`),
+    };
+
+    // Every plugin with its own DB gets an auto storage tool the agent can call directly.
+    if (storage) {
+      const dbTool = buildStorageTool(manifest.name, storage);
+      info.tools.push(dbTool); info.toolNames.push(dbTool.name);
+    }
     for (const rel of manifest.provides.dataSourceTools ?? []) {
       const cfg = readJsonFile(join(dir, rel)) as DataSourceToolConfig;
-      const tool = createDataSourceTool(cfg);
+      const tool = createDataSourceTool(cfg, { settings: runtime.settings, secrets: runtime.secrets });
       info.tools.push(tool); info.toolNames.push(tool.name);
     }
     for (const rel of manifest.provides.scriptTools ?? []) {
       const cfg = readJsonFile(join(dir, rel)) as { name: string; description: string; parameters?: Record<string, unknown>; script: string; async?: boolean };
-      const tool = buildScriptTool(manifest.name, cfg, storage);
+      const tool = buildScriptTool(cfg, ctx);
       info.tools.push(tool); info.toolNames.push(tool.name);
+    }
+    const moduleTools = manifest.provides.moduleTools ?? [];
+    if (moduleTools.length > 0 && manifest.trust !== "node") {
+      throw new Error(`moduleTools require trust: "node" (plugin '${manifest.name}' is '${manifest.trust}')`);
+    }
+    for (const rel of moduleTools) {
+      const tool = await buildModuleTool(join(dir, rel), ctx);
+      info.tools.push(tool); info.toolNames.push(tool.name);
+    }
+    for (const rel of manifest.provides.oauth ?? []) {
+      const parsed = parseOAuthConfig(readFileSync(join(dir, rel), "utf8"));
+      if (!parsed.ok || !parsed.config) throw new Error(`invalid oauth config '${rel}': ${parsed.error}`);
+      info.oauth.push(parsed.config);
     }
     for (const rel of manifest.provides.skills ?? []) {
       const skillDir = join(dir, rel);
@@ -185,7 +374,7 @@ function loadOnePlugin(root: string, name: string, enabled: boolean): LoadedPlug
  * the source of truth, plugins/.state.json only carries user disable overrides. Returns the
  * combined tools, skill dirs, mappings and settings for the caller to wire in.
  */
-export function loadPlugins(root = pluginsRoot()): PluginLoadResult {
+export async function loadPlugins(root = pluginsRoot()): Promise<PluginLoadResult> {
   const logger = getRootLogger().child("Plugins");
   const result: PluginLoadResult = { tools: [], skillDirs: [], mappings: [], settings: [], plugins: [] };
 
@@ -202,7 +391,7 @@ export function loadPlugins(root = pluginsRoot()): PluginLoadResult {
 
   for (const name of entries) {
     const enabled = !disabled.has(name);
-    const { tools, ...info } = loadOnePlugin(root, name, enabled);
+    const { tools, ...info } = await loadOnePlugin(root, name, enabled);
     result.plugins.push(info);
     if (info.error) {
       logger.warn("Plugin skipped", { name, error: info.error });

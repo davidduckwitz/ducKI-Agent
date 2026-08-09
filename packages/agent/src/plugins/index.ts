@@ -9,13 +9,17 @@ export {
   pluginsRoot,
   type PluginLoadResult,
   type LoadedPluginInfo,
+  type PluginToolContext,
 } from "./plugin-registry.js";
 export {
   parsePluginManifest,
+  parseOAuthConfig,
   PluginManifestSchema,
+  OAuthConfigSchema,
   type PluginManifest,
   type PluginToolMapping,
   type PluginSettingSpec,
+  type OAuthConfig,
 } from "./plugin-manifest.js";
 
 /**

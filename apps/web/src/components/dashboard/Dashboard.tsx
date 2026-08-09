@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
 import { useI18n } from "../../lib/i18n";
+import { PluginWidgets } from "../plugins/PluginWidgets";
 
 interface ConversationItem {
   id: number;
@@ -77,6 +78,9 @@ export function Dashboard() {
           {t("setupWizard.openButton")}
         </button>
       </div>
+
+      {/* Plugin widgets (enabled plugins with a dashboard widget) */}
+      <PluginWidgets placement="dashboard" />
 
       {/* Status Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GitHub-Connector — Einstellungen</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 1.25rem; line-height: 1.5; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+  p.hint { margin: 0 0 1rem; opacity: 0.75; font-size: 0.85rem; }
+  label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; font-size: 0.85rem; }
+  input { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; }
+  .row { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+  button { padding: 0.5rem 0.9rem; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .primary { background: #2563eb; color: #fff; }
+  .ghost { background: #8882; color: inherit; }
+  #status { margin-top: 0.75rem; font-size: 0.85rem; min-height: 1.2em; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+  small { opacity: 0.7; }
+</style>
+</head>
+<body>
+  <h1>GitHub-Connector</h1>
+  <p class="hint">Hinterlege einen Personal Access Token (schnellster Weg) — oder trage eine OAuth-App ein und klicke „Mit GitHub verbinden“.</p>
+
+  <label for="access_token">Access Token <small>(Secret — wird verschlüsselt gespeichert)</small></label>
+  <input id="access_token" type="password" placeholder="ghp_… oder leer lassen bei OAuth" autocomplete="off" />
+
+  <label for="client_id">OAuth Client ID <small>(optional)</small></label>
+  <input id="client_id" type="text" placeholder="Iv1.…" autocomplete="off" />
+
+  <label for="client_secret">OAuth Client Secret <small>(optional, Secret)</small></label>
+  <input id="client_secret" type="password" placeholder="•••• (leer = unverändert)" autocomplete="off" />
+
+  <div class="row">
+    <button class="primary" id="save">Speichern</button>
+    <button class="ghost" id="connect">Mit GitHub verbinden</button>
+    <button class="ghost" id="disconnect">Token entfernen</button>
+  </div>
+  <div id="status"></div>
+
+<script>
+  const NAME = "github-connector";
+  const BASE = "/api/plugins/" + NAME;
+  const $ = (id) => document.getElementById(id);
+  const status = (msg, ok) => { const s = $("status"); s.textContent = msg; s.className = ok ? "ok" : "err"; };
+
+  async function load() {
+    try {
+      const res = await fetch(BASE + "/settings");
+      const json = await res.json();
+      const v = (json.data && json.data.values) || json.values || {};
+      // Secrets come back masked as "***"; show a placeholder, never the value.
+      $("access_token").value = v.access_token === "***" ? "" : "";
+      $("access_token").placeholder = v.access_token === "***" ? "•••• (gesetzt — leer lassen = unverändert)" : "ghp_… oder leer lassen bei OAuth";
+      $("client_id").value = typeof v.client_id === "string" ? v.client_id : "";
+      $("client_secret").placeholder = v.client_secret === "***" ? "•••• (gesetzt — leer = unverändert)" : "";
+    } catch (e) { status("Konnte Einstellungen nicht laden: " + e.message, false); }
+  }
+
+  async function save() {
+    const values = {};
+    if ($("access_token").value.trim()) values.access_token = $("access_token").value.trim();
+    values.client_id = $("client_id").value.trim();
+    if ($("client_secret").value.trim()) values.client_secret = $("client_secret").value.trim();
+    try {
+      const res = await fetch(BASE + "/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values }),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      status("Gespeichert.", true);
+      $("access_token").value = ""; $("client_secret").value = "";
+      load();
+    } catch (e) { status("Speichern fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function disconnect() {
+    try {
+      await fetch(BASE + "/oauth/github/disconnect", { method: "POST" });
+      status("Token entfernt.", true); load();
+    } catch (e) { status("Fehlgeschlagen: " + e.message, false); }
+  }
+
+  $("save").onclick = save;
+  $("connect").onclick = () => window.open(BASE + "/oauth/github/start", "_blank", "width=680,height=760");
+  $("disconnect").onclick = disconnect;
+  window.addEventListener("message", (ev) => {
+    if (ev.data && ev.data.type === "ducki:oauth") { status("OAuth: " + ev.data.title, ev.data.title === "Verbunden"); load(); }
+  });
+  load();
+</script>
+</body>
+</html>

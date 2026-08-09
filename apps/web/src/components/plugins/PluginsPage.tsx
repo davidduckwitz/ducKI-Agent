@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { api, type PluginInfo } from "../../lib/api";
 import { toastManager as toast } from "../../lib/toast";
 
@@ -22,6 +24,10 @@ export function PluginsPage() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [search, setSearch] = useState("");
+  // Name of the plugin whose iframe settings page is currently expanded (Phase 3), or null.
+  const [settingsFor, setSettingsFor] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -74,6 +80,8 @@ export function PluginsPage() {
           : "Neustart uebernimmt die Aenderung";
       toast.success(`${p.name} ${p.enabled ? "deaktiviert" : "aktiviert"} — ${applied}`);
       await refresh();
+      // Refresh the shared plugin cache so sidebar links + widgets update immediately.
+      await queryClient.invalidateQueries({ queryKey: ["plugins"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Aktion fehlgeschlagen");
     } finally {
@@ -134,6 +142,7 @@ export function PluginsPage() {
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
+                    {p.icon && <span>{p.icon}</span>}
                     <span className="font-semibold">{p.name}</span>
                     <span className="text-xs text-muted-foreground">v{p.version}</span>
                     {p.hasStorage && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">SQLite</span>}
@@ -150,14 +159,41 @@ export function PluginsPage() {
                     ))}
                   </div>
                 </div>
-                <button
-                  onClick={() => void toggle(p)}
-                  disabled={busy === p.name || !!p.error}
-                  className={`shrink-0 rounded px-3 py-1.5 text-sm ${p.enabled ? "bg-primary text-primary-foreground" : "border border-border"} disabled:opacity-50`}
-                >
-                  {p.enabled ? "Aktiv" : "Aus"}
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  {p.frontendPage && p.enabled && !p.error && (
+                    <button
+                      onClick={() => navigate(`/plugin/${p.name}`)}
+                      className="rounded border border-border px-3 py-1.5 text-sm"
+                    >
+                      ↗ Öffnen
+                    </button>
+                  )}
+                  {p.settingsPage && !p.error && (
+                    <button
+                      onClick={() => setSettingsFor((cur) => (cur === p.name ? null : p.name))}
+                      className="rounded border border-border px-3 py-1.5 text-sm"
+                    >
+                      {settingsFor === p.name ? "Schließen" : "⚙️ Einstellungen"}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => void toggle(p)}
+                    disabled={busy === p.name || !!p.error}
+                    className={`rounded px-3 py-1.5 text-sm ${p.enabled ? "bg-primary text-primary-foreground" : "border border-border"} disabled:opacity-50`}
+                  >
+                    {p.enabled ? "Aktiv" : "Aus"}
+                  </button>
+                </div>
               </div>
+
+              {p.settingsPage && settingsFor === p.name && (
+                <iframe
+                  title={`${p.name} Einstellungen`}
+                  src={`/api/plugins/${p.name}/ui/settings`}
+                  className="mt-3 w-full rounded-md border border-border bg-background"
+                  style={{ height: 520 }}
+                />
+              )}
             </div>
           ))}
         </div>

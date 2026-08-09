@@ -1,13 +1,16 @@
 {
   "name": "notes",
-  "version": "1.0.0",
-  "description": "Persistente Notizen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank).",
+  "version": "1.2.0",
+  "description": "Persistente Notizen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank). Eigene Frontend-Seite zum Lesen, Hinzufügen und Löschen.",
   "author": "DucKI",
   "license": "Proprietary",
+  "icon": "📝",
+  "category": "knowledge",
   "storage": { "sqlite": true },
   "provides": {
     "scriptTools": ["tools/notes.tool.json"],
-    "skills": ["skills/notes-usage"]
+    "skills": ["skills/notes-usage"],
+    "frontendPage": "app/index.html"
   },
   "enabled": true
 }

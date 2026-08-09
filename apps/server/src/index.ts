@@ -56,6 +56,7 @@ import { mcpRouter } from "./routes/mcp.js";
 import { memoryRouter } from "./routes/memory.js";
 import { plansRouter } from "./routes/plans.js";
 import { pluginsRouter } from "./routes/plugins.js";
+import { pluginOAuthRouter } from "./routes/plugin-oauth.js";
 import { PluginManager } from "./lib/plugin-manager.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
@@ -455,6 +456,7 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/projects", projectsRouter);
 	app.use("/api/plans", plansRouter);
 	app.use("/api/plugins", pluginsRouter);
+	app.use("/api/plugins", pluginOAuthRouter);
 	app.use("/api/tools", toolsRouter);
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);
@@ -647,7 +649,7 @@ async function bootstrap(): Promise<void> {
 	// File-first plugins (plugins/<name>/): the PluginManager owns the current tool set and
 	// hot-reloads it on enable/disable/install WITHOUT interrupting running agents (it defers
 	// the swap until no agent is active). Per-request agents register these via the factory.
-	const pluginManager = new PluginManager();
+	const pluginManager = await PluginManager.create();
 	logger.info("Plugins loaded at startup", {
 		enabled: pluginManager.getPlugins().filter((p) => p.enabled && !p.error).length,
 		tools: pluginManager.getTools().length,

@@ -9,6 +9,7 @@ import { CodingSidebarPanel } from "../coding/CodingSidebarPanel";
 import { SidebarHeader } from "./SidebarHeader";
 import { RecentChatsSection } from "./RecentChatsSection";
 import { MoreNavSection, type NavGroup } from "./MoreNavSection";
+import { PluginWidgets } from "../plugins/PluginWidgets";
 import { LiveAgentsFooter } from "./LiveAgentsFooter";
 
 function ModeSwitcher({ active, onSelect }: { active: "standard" | "coding"; onSelect: (mode: "standard" | "coding") => void }) {
@@ -193,6 +194,7 @@ export function Sidebar({
       {/* One scroll container for files + chats + "Mehr"; header and footer stay put. */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 pb-2">
         {isCodingRoute && codingEnabled && <CodingSidebarPanel />}
+        <PluginWidgets placement="sidebar" />
         <RecentChatsSection />
         <MoreNavSection groups={navGroups} />
       </div>

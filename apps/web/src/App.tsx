@@ -53,6 +53,11 @@ const PluginsPage = lazy(async () => {
   return { default: module.PluginsPage };
 });
 
+const PluginFrontendView = lazy(async () => {
+  const module = await import("./components/plugins/PluginFrontendView");
+  return { default: module.PluginFrontendView };
+});
+
 const AgentsLiveView = lazy(async () => {
   const module = await import("./components/agents/AgentsLiveView");
   return { default: module.AgentsLiveView };
@@ -132,6 +137,7 @@ function AppContent() {
           <Route path="tools" element={<LazyRoute><ToolRegistry /></LazyRoute>} />
           <Route path="skills" element={<LazyRoute><SkillManager /></LazyRoute>} />
           <Route path="plugins" element={<LazyRoute><PluginsPage /></LazyRoute>} />
+          <Route path="plugin/:name" element={<LazyRoute><PluginFrontendView /></LazyRoute>} />
           <Route path="shared" element={<LazyRoute><SharedWorkspace /></LazyRoute>} />
           <Route
             path="memory"

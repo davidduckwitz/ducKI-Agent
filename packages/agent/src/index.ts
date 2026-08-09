@@ -154,12 +154,16 @@ export {
   readDisabledState,
   pluginsRoot,
   parsePluginManifest,
+  parseOAuthConfig,
   PluginManifestSchema,
+  OAuthConfigSchema,
   type PluginLoadResult,
   type LoadedPluginInfo,
   type PluginManifest,
   type PluginToolMapping,
   type PluginSettingSpec,
+  type PluginToolContext,
+  type OAuthConfig,
 } from "./plugins/index.js";
 export type { SkillValidationResult, SkillValidationIssue } from "./skill-selector/validate.js";
 

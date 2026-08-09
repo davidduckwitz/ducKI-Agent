@@ -39,6 +39,18 @@ export interface PluginInfo {
   skillDirs: string[];
   mappings: Array<{ alias: string; tool: string }>;
   settings: Array<{ key: string; default?: string | number | boolean; type?: string; description?: string }>;
+  /** Relative path to a pure settings page, if the plugin ships one. */
+  settingsPage?: string;
+  /** Relative path to a frontend (mini-app) page shown as a sidebar link. */
+  frontendPage?: string;
+  /** Relative path to a widget tile rendered in sidebar/dashboard. */
+  widgetPage?: string;
+  /** Widget placement: "sidebar" | "dashboard" | "both". */
+  widgetPlacement?: string;
+  /** Emoji/short icon for UI + sidebar. */
+  icon?: string;
+  /** Sidebar category for a frontend page. */
+  category?: string;
   error?: string;
 }
 

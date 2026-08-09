@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Uhr</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 0.15rem; font-family: system-ui, sans-serif; text-align: center;
+    color: #111; background: transparent;
+  }
+  @media (prefers-color-scheme: dark) { body { color: #f3f4f6; } }
+  #time { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; line-height: 1.1; }
+  #day { font-size: 0.9rem; font-weight: 600; opacity: 0.9; }
+  #date { font-size: 0.8rem; opacity: 0.65; }
+</style>
+</head>
+<body>
+  <div id="time">--:--:--</div>
+  <div id="day">—</div>
+  <div id="date">—</div>
+<script>
+  const timeEl = document.getElementById("time");
+  const dayEl = document.getElementById("day");
+  const dateEl = document.getElementById("date");
+  const days = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function tick() {
+    const now = new Date();
+    timeEl.textContent = pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds());
+    dayEl.textContent = days[now.getDay()];
+    dateEl.textContent = now.toLocaleDateString("de-DE", { day: "2-digit", month: "long", year: "numeric" });
+  }
+  tick();
+  setInterval(tick, 1000);
+</script>
+</body>
+</html>

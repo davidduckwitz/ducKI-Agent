@@ -13,19 +13,25 @@ import { agentRegistry } from "./agent-registry.js";
  * moment the system next goes idle (via the agentRegistry subscription).
  */
 export class PluginManager {
-  private tools: ToolExecutor[];
-  private plugins: LoadedPluginInfo[];
+  private tools: ToolExecutor[] = [];
+  private plugins: LoadedPluginInfo[] = [];
   private pending = false;
   private readonly logger = getRootLogger().child("PluginManager");
 
-  constructor() {
-    const loaded = loadPlugins();
-    this.tools = loaded.tools;
-    this.plugins = loaded.plugins;
+  private constructor() {
     // Apply any deferred reload as soon as the last active agent finishes.
     agentRegistry.subscribe((snap) => {
-      if (this.pending && snap.runningCount === 0) this.apply("idle");
+      if (this.pending && snap.runningCount === 0) void this.apply("idle");
     });
+  }
+
+  /** Async factory - loadPlugins is async (module tools import ESM, settings read from disk). */
+  static async create(): Promise<PluginManager> {
+    const mgr = new PluginManager();
+    const loaded = await loadPlugins();
+    mgr.tools = loaded.tools;
+    mgr.plugins = loaded.plugins;
+    return mgr;
   }
 
   /** Current unwrapped plugin tools; the agent factory wraps + registers these per request. */
@@ -43,7 +49,7 @@ export class PluginManager {
    */
   requestReload(): { applied: boolean; deferred: boolean } {
     if (agentRegistry.snapshot().runningCount === 0) {
-      this.apply("request");
+      void this.apply("request");
       return { applied: true, deferred: false };
     }
     this.pending = true;
@@ -58,8 +64,8 @@ export class PluginManager {
     return this.pending;
   }
 
-  private apply(reason: string): void {
-    const loaded = loadPlugins();
+  private async apply(reason: string): Promise<void> {
+    const loaded = await loadPlugins();
     this.tools = loaded.tools;
     this.plugins = loaded.plugins;
     this.pending = false;

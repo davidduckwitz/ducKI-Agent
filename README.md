@@ -1,20 +1,41 @@
 # DucKI Node
 
-- Self-hosted coding and Task / Personal agent platform with web UI, REST API, WebSocket streaming, persistent memory, workflow graphs, CronJobs to running prompts/ Tasks / Skills, discord gateway with speech to text, and multi-agent execution.
-- Includes LLM-Wiki: optional shared-workspace knowledge ingestion (`shared-workspace/llm-wiki`) with chunking, moderation (`candidate/approved/rejected`), search, and memory integration.
-- Fully Developed in NodeJS! 
-- Tested Local with LM Studio & OpenRouter
-- Agent / Memory / Skill System / Task Management / KanBan Board / Log System / Discord Gateway -> ALL Full working!
-- Lightweight Code for easy Extending!
-- Fully Developed in the Heart of Germany, Fulda near Rhön!
-- This Agent is for Me and All :-) Contribute via Pull Requests or Tell me Issues / Give me Feedback. 
+**A self-hosted, pure-Node.js AI agent platform** — chat, tasks, coding, workflows, persistent memory and a file-first plugin system, all behind one web UI, REST API and WebSocket stream. No cloud lock-in: run it fully local against LM Studio, Ollama, OpenRouter or OpenAI.
 
-<img width="1427" height="946" alt="image" src="https://github.com/user-attachments/assets/44420dc1-d681-4ba6-8aaf-cc769a3e48b7" />
+[**🌐 Landing Page & Documentation**](https://ducki-ai-agent.davidduckwitz.de/) · [**⚡ Installation**](#quick-start) · [**🧩 Plugin System**](#plugin-system) · [**👤 Author**](https://www.davidduckwitz.de/)
 
-- Website: https://www.davidduckwitz.de/ducki-agent
-- Author Website: https://www.davidduckwitz.de/
-- Help & Contribute: Donation Links on the end of the ReadMe or contribute via Pull Request with new Features & Fixes
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Runtime: Node.js](https://img.shields.io/badge/Runtime-Node.js-339933.svg?logo=node.js&logoColor=white) ![Language: TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6.svg?logo=typescript&logoColor=white) ![Made in Fulda](https://img.shields.io/badge/Made%20in-Fulda%2C%20Germany-red.svg)
 
+<img width="1427" height="946" alt="DucKI Node dashboard" src="https://github.com/user-attachments/assets/44420dc1-d681-4ba6-8aaf-cc769a3e48b7" />
+
+## Why DucKI
+
+- **Truly self-hosted & private** — everything runs on your machine; point it at a local LLM (LM Studio / Ollama) and no data leaves your network.
+- **One platform, many jobs** — an assistant for chat, an executor for tasks & Kanban, a coding agent, and a workflow engine, sharing one memory and skill layer.
+- **Pure Node.js, lightweight core** — no heavyweight runtime, no framework sprawl. Easy to read, easy to extend.
+- **Extend without touching the core** — a file-first [plugin system](#plugin-system) adds tools, API connectors (OAuth), settings, and full UI pages (sidebar apps, dashboard widgets) as drop-in bundles.
+- **Provider-agnostic** — LM Studio, Ollama, OpenRouter and OpenAI, switchable at runtime from `/settings`.
+- **Reach it from anywhere** — messaging gateways (Discord, Telegram, Slack, Signal, custom webhooks) with optional local speech-to-text.
+- **Built in the heart of Germany** — Fulda, near the Rhön. This agent is for me and for all — contributions, issues and feedback are very welcome.
+
+## Key Features
+
+| Area | Highlights |
+| --- | --- |
+| 🤖 **Multi-agent core** | Parallel chat / task / websocket runs without global lock contention; live metrics on `/agents` |
+| 🧠 **Persistent memory** | Self-updating agent & user memory with profiles, approvals and curation flows |
+| 🧩 **Plugin system** | File-first bundles: agent tools, OAuth connectors, encrypted settings/secrets, and typed UI pages — see [below](#plugin-system) |
+| 🛠️ **Rich tooling** | Filesystem, HTTP, shell, git, browser automation, workflow, cronjob and memory tools — enable per tool |
+| 🕸️ **Workflow engine** | Build, run and resume graph workflows from the UI and from tools |
+| 📚 **Skills system** | Slash-skill loading, automatic skill selection, pin/enable management, markdown editor |
+| 📖 **LLM-Wiki** | Ingest shared-workspace files into searchable, moderated knowledge wired into memory |
+| ⏰ **CronJobs** | Schedule prompts, tasks and skills to run at a specific time |
+| 💬 **Messaging gateways** | Discord, Telegram, Slack, Signal & custom webhooks — with optional local speech-to-text |
+| 🔌 **MCP integration** | Register MCP servers, discover and call remote tools (one-shot or streamed) via `/mcp` |
+| 🖥️ **Desktop apps** | Two Tauri apps for Windows (frontend + tray-based backend server) |
+| 🦆 **Desk Pet** | A draggable companion that reacts to agent events, fully configurable |
+
+> 📘 Full documentation and guides live on the **[landing page](https://ducki-ai-agent.davidduckwitz.de/)**.
 
 ## Quick Start
 
@@ -36,46 +57,56 @@ pnpm dev
 
 After startup:
 
-- Web UI: `http://localhost:3000`
+- Web UI: `http://localhost:5173`
 - API: `http://localhost:3001`
 - Health check: `http://localhost:3001/health`
 
-## What You Get
-
-| Capability | Description |
-| --- | --- |
-| Multi-agent runs | Parallel agent executions (chat + tasks + websocket runs) without global lock contention |
-| Workflow orchestration | Create/update/run/resume graph workflows from UI and tools |
-| Persistent memory | Agent/user memory with profile entries, approvals, and curation actions | Self Updating Memory
-| Skills system | Slash-skill loading, auto-skill selection, pin/enable management, markdown skill editor |
-| LLM-Wiki | Optional knowledge pipeline from shared workspace files with chunk ingest, moderation, search, and controllable auto-memory |
-| Tooling | Filesystem, HTTP, shell, git, browser automation, skills management, workflow and memory tools |
-| Live operations | Agent live metrics and active run monitoring page |
-| CronJobs | Run at a specific Time for Tasks / skills and Prompts |
-| Desk Pet | Draggable companion that walks/flies through the UI and reacts to agent events, configurable in `/settings` -> `Character` |
-
-# Donation & Help
-
-Donations are Welcome and help to make this Agent get an Powerfull Assistant for your Life & Work - Thanks a lot.
-
--PayPal Me: https://www.paypal.me/davidduckwitz
-
--Bitcoin: 1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G
-
-
-## Getting Started
-
-```bash
-pnpm dev
-```
-
-Common workflows:
+Common first steps:
 
 1. Open `/settings` and set provider/model.
 2. Open `/skills` and enable only required skills.
 3. Use `/chat` for iterative work with tools.
 4. Use `/workflow` for graph-based execution.
 5. Monitor `/agents` for currently running agents.
+6. Open `/plugins` to enable extensions and their settings/frontend pages.
+
+## Plugin System
+
+DucKI can be extended **without touching the core** through file-first plugins. A plugin is a
+self-contained bundle in `plugins/<name>/` with a `plugin.json` manifest — **no npm dependency,
+no core code change, no database row required**. Drop a folder in, enable it on `/plugins`, and it
+hot-reloads without interrupting running agents.
+
+**What a plugin can provide**
+
+- **Agent tools** in three flavors:
+  - *Data-source tools* — declarative JSON that turns a public/keyed API into a first-class tool.
+  - *Script tools* — small sandboxed scripts (no network/filesystem) that transform data.
+  - *Module tools* — full Node.js ESM modules (`trust: "node"`) with a host-guarded `fetch`,
+    logger and access to the plugin's settings/secrets.
+- **Its own SQLite database** (`storage.sqlite`) — isolated per plugin, never bloating the main DB.
+  Every DB-backed plugin automatically gains a `<name>_storage` tool the agent can query directly.
+- **Encrypted settings & secrets** — declared in the manifest and edited from the UI. Secrets
+  (API tokens, OAuth tokens) are AES-256-GCM encrypted at rest and never returned in clear text.
+- **OAuth2 connectors** — a declarative `*.oauth.json` runs the full authorization-code flow and
+  stores the token as an encrypted plugin secret, so an authenticated tool just reads it.
+- **Typed UI pages**, rendered as sandboxed same-origin iframes:
+  - `settingsPage` — a pure configuration page on the plugin's card.
+  - `frontendPage` — a full mini-app that gets its own **sidebar link** (with `icon` + `category`)
+    and opens in the content area like a built-in route.
+  - `widgetPage` — a small tile rendered **inline in the sidebar and/or on the dashboard**.
+
+**Manage plugins** from the `/plugins` page or the `/api/plugins` API: list, enable/disable
+(hot-reloaded), install bundles, and read/write per-plugin settings.
+
+**Bundled example plugins**
+
+| Plugin | Demonstrates |
+| --- | --- |
+| `exchange-rates` | Declarative data-source tool (no code) |
+| `notes` | Own SQLite DB, auto `notes_storage` tool, and a **frontend** page in the sidebar |
+| `clock` | A **widget** (time / date / weekday) shown in the sidebar and on the dashboard |
+| `github-connector` | Node module tool + **OAuth2** connector + encrypted secrets + **settings** page |
 
 ## Configuration
 
@@ -130,6 +161,7 @@ packages/
 	logger/      Logging helpers
 	shared/      Shared types and API helpers
 skills/        User and system skill folders (SKILL.md per skill)
+plugins/       File-first plugin bundles (plugin.json per plugin)
 storage/       Runtime storage (DB, logs)
 ```
 
@@ -274,7 +306,7 @@ pnpm --filter @ducki/cli dev run "implement health endpoint"
 pnpm --filter @ducki/cli dev tools
 ```
 
-## Configuration
+## Agent & Provider Configuration
 
 Settings are stored in DB via `/api/settings` and can be edited from `/settings`.
 
@@ -373,7 +405,12 @@ Provider controls:
 - `DEFAULT_PROVIDER`
 - `*_MODEL`, `*_BASE_URL`, `*_API_KEY`
 
-Discord gateway and local STT controls:
+Messaging gateways and local STT controls:
+
+DucKI can receive and reply to messages across **Discord, Telegram, Slack, Signal and custom
+webhooks**. Configure endpoints on the `/gateway` page (each with its own portal, token/webhook
+and channel hints); inbound messages run the agent and the reply is sent back on the same channel.
+Discord additionally supports voice notes via local speech-to-text using the controls below.
 
 - `DISCORD_GATEWAY_ENABLED`
 - `DISCORD_BOT_TOKEN` (or gateway `authToken` in `/gateway` config)
@@ -707,9 +744,23 @@ If skills are not visible:
 
 ## Contributing
 
+Contributions, issues and feedback are very welcome — new features, connectors, plugins and fixes.
+
 1. Create a feature branch.
 2. Run `pnpm typecheck` and relevant tests.
-3. Open PR with a short change summary and validation steps.
+3. Open a PR with a short change summary and validation steps.
+
+## Support & Donations
+
+If DucKI helps you, a donation supports its development into a powerful assistant for everyone — thank you!
+
+- **PayPal:** https://www.paypal.me/davidduckwitz
+- **Bitcoin:** `1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G`
+
+## Links
+
+- **Landing Page & Documentation:** https://ducki-ai-agent.davidduckwitz.de/
+- **Author:** https://www.davidduckwitz.de/
 
 ## License
 

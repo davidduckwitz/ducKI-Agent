@@ -1,5 +1,5 @@
 import { Outlet } from "react-router-dom";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ComponentType } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
@@ -23,12 +23,26 @@ import {
 import { useAppStore } from "../../lib/store";
 import { useI18n } from "../../lib/i18n";
 import { useSettings, readFlag } from "../../lib/useSettings";
+import { usePlugins, frontendPlugins } from "../../lib/usePlugins";
 import { useSettingsChangeListener } from "../../lib/useServerQuery";
 import { SetupWizardModal } from "../setup/SetupWizardModal";
 import { PetLayer } from "../pet/PetLayer";
 import { Sidebar } from "./Sidebar";
 import { UpdateStatusBar } from "./UpdateStatusBar";
 import type { NavGroup } from "./MoreNavSection";
+
+/** Stable emoji-as-icon components keyed by emoji, so plugin nav items match the NavItem shape. */
+const emojiIconCache = new Map<string, ComponentType<{ className?: string }>>();
+function emojiIcon(emoji: string): ComponentType<{ className?: string }> {
+  let Cached = emojiIconCache.get(emoji);
+  if (!Cached) {
+    Cached = ({ className }: { className?: string }) => (
+      <span className={className} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{emoji}</span>
+    );
+    emojiIconCache.set(emoji, Cached);
+  }
+  return Cached;
+}
 
 export function Layout() {
   const { t } = useI18n();
@@ -59,6 +73,7 @@ export function Layout() {
 
   const settingsQuery = useSettings();
   const codingEnabled = readFlag(settingsQuery.data, "CODING_ENABLED");
+  const pluginsQuery = usePlugins();
 
   useEffect(() => {
     if (firstRunCheckDone.current) return;
@@ -117,6 +132,23 @@ export function Layout() {
       ],
     },
   ];
+
+  // Enabled plugins with a frontend page get a sidebar link under their category, opening the
+  // page in the content area (route /plugin/:name). Category falls back to "system".
+  const categoryTitle: Record<string, string> = {
+    overview: t("nav.groups.overview"),
+    workspace: t("nav.groups.workspace"),
+    automation: t("nav.groups.automation"),
+    knowledge: t("nav.groups.knowledge"),
+    system: t("nav.groups.system"),
+  };
+  for (const plugin of frontendPlugins(pluginsQuery.data)) {
+    const title = categoryTitle[plugin.category ?? "system"] ?? t("nav.groups.system");
+    const item = { to: `/plugin/${plugin.name}`, icon: emojiIcon(plugin.icon ?? "🧩"), label: plugin.name };
+    const group = navGroups.find((g) => g.title === title);
+    if (group) group.items.push(item);
+    else navGroups.push({ title, items: [item] });
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-background text-foreground">

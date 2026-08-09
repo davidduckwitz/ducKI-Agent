@@ -1,0 +1,14 @@
+{
+  "name": "clock",
+  "version": "1.0.0",
+  "description": "Zeigt Uhrzeit, Datum und Wochentag als kleines Widget in Sidebar und Dashboard.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🕐",
+  "category": "overview",
+  "provides": {
+    "widgetPage": "widget/index.html",
+    "widgetPlacement": "both"
+  },
+  "enabled": true
+}

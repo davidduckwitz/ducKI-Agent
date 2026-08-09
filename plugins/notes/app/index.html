@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Notizen — Verwaltung</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 1.25rem; line-height: 1.5; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+  .add { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  textarea { flex: 1; min-height: 2.4rem; padding: 0.5rem; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; resize: vertical; font: inherit; }
+  button { padding: 0.5rem 0.9rem; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .primary { background: #2563eb; color: #fff; }
+  .del { background: #dc26261a; color: #dc2626; padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.6rem 0; border-top: 1px solid #8883; }
+  li .body { flex: 1; min-width: 0; }
+  li .text { white-space: pre-wrap; word-break: break-word; }
+  li .meta { opacity: 0.6; font-size: 0.75rem; margin-top: 0.15rem; }
+  #status { margin-top: 0.75rem; font-size: 0.85rem; min-height: 1.2em; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+  .empty { opacity: 0.6; font-size: 0.9rem; padding: 0.5rem 0; }
+</style>
+</head>
+<body>
+  <h1>📝 Notizen</h1>
+
+  <div class="add">
+    <textarea id="text" placeholder="Neue Notiz …"></textarea>
+    <button class="primary" id="add">Hinzufügen</button>
+  </div>
+
+  <ul id="list"></ul>
+  <div id="status"></div>
+
+<script>
+  const NAME = "notes";
+  const INVOKE = "/api/plugins/" + NAME + "/invoke";
+  const $ = (id) => document.getElementById(id);
+  const status = (msg, ok) => { const s = $("status"); s.textContent = msg || ""; s.className = ok ? "ok" : "err"; };
+
+  async function invoke(input) {
+    const res = await fetch(INVOKE, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "notes", input }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+    // Endpoint returns the tool's data: { result: { ... } }
+    const payload = (json.data && json.data.result) || (json.result) || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  function render(notes) {
+    const list = $("list");
+    list.innerHTML = "";
+    if (!notes || notes.length === 0) {
+      list.innerHTML = '<li class="empty">Noch keine Notizen.</li>';
+      return;
+    }
+    for (const n of notes) {
+      const li = document.createElement("li");
+      const body = document.createElement("div");
+      body.className = "body";
+      const text = document.createElement("div");
+      text.className = "text";
+      text.textContent = n.text;
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = "#" + n.id + " · " + new Date(n.created_at).toLocaleString();
+      body.appendChild(text); body.appendChild(meta);
+      const del = document.createElement("button");
+      del.className = "del"; del.textContent = "Löschen";
+      del.onclick = () => remove(n.id);
+      li.appendChild(body); li.appendChild(del);
+      list.appendChild(li);
+    }
+  }
+
+  async function load() {
+    try { const r = await invoke({ action: "list" }); render(r.notes); status(""); }
+    catch (e) { status("Laden fehlgeschlagen: " + e.message, false); }
+  }
+  async function add() {
+    const text = $("text").value.trim();
+    if (!text) { status("Bitte Text eingeben.", false); return; }
+    try { await invoke({ action: "add", text }); $("text").value = ""; status("Hinzugefügt.", true); load(); }
+    catch (e) { status("Hinzufügen fehlgeschlagen: " + e.message, false); }
+  }
+  async function remove(id) {
+    try { await invoke({ action: "delete", id }); status("Gelöscht.", true); load(); }
+    catch (e) { status("Löschen fehlgeschlagen: " + e.message, false); }
+  }
+
+  $("add").onclick = add;
+  $("text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) add(); });
+  load();
+</script>
+</body>
+</html>

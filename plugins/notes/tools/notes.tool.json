@@ -1,14 +1,15 @@
 {
   "name": "notes",
-  "description": "Persistente Notizen (add/list) in der plugin-eigenen SQLite-DB, getrennt von der Hauptdatenbank.",
+  "description": "Persistente Notizen (add/list/delete) in der plugin-eigenen SQLite-DB, getrennt von der Hauptdatenbank.",
   "parameters": {
     "type": "object",
     "properties": {
-      "action": { "type": "string", "enum": ["add", "list"], "description": "add = Notiz speichern, list = letzte Notizen" },
-      "text": { "type": "string", "description": "Notiztext (fuer action=add)" }
+      "action": { "type": "string", "enum": ["add", "list", "delete"], "description": "add = Notiz speichern, list = letzte Notizen, delete = Notiz per id löschen" },
+      "text": { "type": "string", "description": "Notiztext (fuer action=add)" },
+      "id": { "type": "number", "description": "Notiz-id (fuer action=delete)" }
     },
     "required": ["action"]
   },
   "async": true,
-  "script": "const s = toolContext.storage; if (!s) return { error: 'plugin storage not enabled' }; await s.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT NOT NULL)'); if (toolInput.action === 'add') { const text = String(toolInput.text || '').trim(); if (!text) return { error: 'text is required for action=add' }; await s.exec('INSERT INTO notes (text, created_at) VALUES (?, ?)', [text, new Date().toISOString()]); return { added: true, text }; } const rows = await s.query('SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 20'); return { count: rows.length, notes: rows };"
+  "script": "const s = toolContext.storage; if (!s) return { error: 'plugin storage not enabled' }; await s.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT NOT NULL)'); if (toolInput.action === 'add') { const text = String(toolInput.text || '').trim(); if (!text) return { error: 'text is required for action=add' }; await s.exec('INSERT INTO notes (text, created_at) VALUES (?, ?)', [text, new Date().toISOString()]); return { added: true, text }; } if (toolInput.action === 'delete') { const id = Number(toolInput.id); if (!Number.isInteger(id) || id <= 0) return { error: 'valid id is required for action=delete' }; await s.exec('DELETE FROM notes WHERE id = ?', [id]); return { deleted: true, id }; } const rows = await s.query('SELECT id, text, created_at FROM notes ORDER BY id DESC LIMIT 100'); return { count: rows.length, notes: rows };"
 }

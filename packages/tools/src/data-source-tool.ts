@@ -126,7 +126,18 @@ export interface DataSourceToolConfig {
   timeoutMs?: number;
 }
 
-export function createDataSourceTool(config: DataSourceToolConfig): ToolExecutor {
+/**
+ * Runtime values injected into a plugin data-source tool's interpolation scope, so URL/header/
+ * body templates can reference plugin settings (`{settings.region}`) and secrets
+ * (`{secrets.token}`) resolved from the plugin's own settings store - without the model ever
+ * seeing them. Passed by the plugin registry; empty for the built-in data sources.
+ */
+export interface DataSourceRuntimeVars {
+  settings?: Record<string, unknown>;
+  secrets?: Record<string, string>;
+}
+
+export function createDataSourceTool(config: DataSourceToolConfig, runtimeVars?: DataSourceRuntimeVars): ToolExecutor {
   const cache = new TtlCache<unknown>(config.cacheTtlMs ?? 600_000);
   const properties: Record<string, unknown> = {};
   for (const [key, spec] of Object.entries(config.params ?? {})) {
@@ -145,7 +156,12 @@ export function createDataSourceTool(config: DataSourceToolConfig): ToolExecutor
       parameters: { type: "object", properties, ...(required.length ? { required } : {}) },
     },
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const vars: Record<string, unknown> = { ...(config.defaults ?? {}), ...input };
+      const vars: Record<string, unknown> = {
+        ...(config.defaults ?? {}),
+        ...input,
+        settings: runtimeVars?.settings ?? {},
+        secrets: runtimeVars?.secrets ?? {},
+      };
 
       for (const key of required) {
         if (vars[key] === undefined || vars[key] === "") {
