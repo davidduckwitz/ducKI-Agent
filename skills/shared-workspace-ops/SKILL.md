@@ -97,6 +97,16 @@ When done, return:
 ## Example Tool Calls
 - [TOOL:filesystem({"action":"write","path":"notes/todo.md","basePath":"./shared-workspace","safeMode":true,"createDirs":true,"overwrite":true,"content":"# Todo"})]
 - [TOOL:filesystem({"action":"delete","path":"notes/old.md","basePath":"./shared-workspace","safeMode":true,"dryRun":true})]
+
+**Multi-line content via `filesystem`:** use the block-write form so newlines/quotes need no escaping (content is taken verbatim):
+```
+[TOOL:filesystem action=write path=notes/todo.md basePath=./shared-workspace]
+# Todo
+- [ ] first item
+- [ ] second item
+[/TOOL]
+```
+(This applies to the `filesystem` tool only. The `http` `/api/shared/write` path below carries content in the JSON body, where normal escaping still applies.)
 - [TOOL:http({"action":"get","baseUrl":"http://localhost:3001","path":"/api/shared/files","allowedHosts":["localhost","127.0.0.1"]})]
 - [TOOL:http({"action":"get","baseUrl":"http://localhost:3001","path":"/api/shared/read","query":{"path":"docs/readme.md"},"allowedHosts":["localhost","127.0.0.1"]})]
 - [TOOL:http({"action":"post","baseUrl":"http://localhost:3001","path":"/api/shared/write","body":{"path":"docs/readme.md","content":"Hello"},"allowedHosts":["localhost","127.0.0.1"]})]

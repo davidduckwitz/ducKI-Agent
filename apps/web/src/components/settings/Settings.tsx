@@ -529,6 +529,14 @@ const PREDEFINED_FIELDS: SettingField[] = [
     defaultValue: "120000",
   },
   {
+    key: "AGENT_QUALITY_PASS_TIMEOUT_MS",
+    label: "Quality Pass Timeout (ms)",
+    description: "Timeout pro Qualitaets-Durchlauf: Reflection, Meta-Reflection und Verify/Critic. Ein haengender lokaler Modell-Aufruf wird nach dieser Zeit abgebrochen, damit der Turn trotzdem abschliesst. Erhoehen, wenn 'Reflection skipped (timeout)' erscheint. Default 45000.",
+    type: "number",
+    section: "Agent",
+    defaultValue: "45000",
+  },
+  {
     key: "AGENT_MAX_TOOL_FAILURES",
     label: "Max Tool Failures",
     description: "Nach dieser Anzahl aufeinanderfolgender Tool-Fehler stoppt der Agent.",

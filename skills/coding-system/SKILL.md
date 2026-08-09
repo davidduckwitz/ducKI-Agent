@@ -40,11 +40,24 @@ Use the integrated coding area for project-specific work with Chat + Editor, ins
    - optionally `read` for content check on text files
 5. Do not use absolute paths.
 6. Abort immediately on path or scope errors and revert the path to the project root.
+7. **Write multi-line code with the block-write form** — content is taken verbatim, so
+   there is no JSON escaping to corrupt the file and no tool-call syntax can leak into it:
+   ```
+   [TOOL:filesystem action=write path=src/app.js]
+   export function run() {
+     console.log("hello");
+   }
+   [/TOOL]
+   ```
+   Header args are strings, so keep boolean flags (`dryRun`) in the normal JSON form for the
+   dry run; the sandbox already enforces `basePath`/`safeMode` for the real write. See
+   `large-file-writing` for chunking large files. (When native tool calls are active, `content`
+   is passed as structured JSON — also escaping-free.)
 
 ## Minimal File Writing Pattern
 1. Determine target path: relative to `shared-workspace/coding/<project>`.
-2. Execute dry run (`dryRun: true`).
-3. Execute write (`dryRun: false`).
+2. Execute dry run (`dryRun: true`) via the normal JSON form.
+3. Execute the write — prefer the block-write form for multi-line content (`dryRun: false`).
 4. Verify result (`exists`/`stat`/`read`).
 
 ## API Flow

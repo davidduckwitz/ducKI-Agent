@@ -553,7 +553,9 @@ export function CodingWorkspace() {
     const contextPrefix = [
       "[CODING_CONTEXT]",
       `project=${selectedProject || "none"}`,
-      `workspaceRoot=shared-workspace/coding/${selectedProject || ""}`,
+      "Your working directory IS this project's root. Use file paths RELATIVE to it,",
+      "e.g. \"index.html\" or \"src/app.js\". Do NOT prefix paths with the project name,",
+      "\"coding/\", \"shared-workspace/\", or an absolute path.",
       ...(options.includeFile ? [`activeFile=${options.includeFile}`] : []),
       "Use files only inside this coding project.",
       "",

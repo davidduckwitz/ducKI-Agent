@@ -18,8 +18,8 @@ export function ChatComposer({
   onRemoveFile,
   analyzeImages,
   onToggleAnalyzeImages,
-  planMode,
-  onTogglePlanMode,
+  planKind,
+  onSelectPlanKind,
   conversationId,
   onInsertSkill,
   onToolExecuted,
@@ -36,8 +36,8 @@ export function ChatComposer({
   onRemoveFile: (index: number) => void;
   analyzeImages: boolean;
   onToggleAnalyzeImages: () => void;
-  planMode: boolean;
-  onTogglePlanMode: () => void;
+  planKind: "code" | "cowork" | null;
+  onSelectPlanKind: (kind: "code" | "cowork") => void;
   conversationId?: number;
   onInsertSkill: (slug: string) => void;
   onToolExecuted: (result: { toolName: string; success: boolean; data: unknown; error?: string }) => void;
@@ -434,11 +434,19 @@ export function ChatComposer({
           />
           <ComposerButton
             icon={<span className="text-xs font-bold leading-none">◇</span>}
-            label={t("chat.planMode")}
-            title={t("chat.planModeHint")}
+            label={t("chat.codePlan")}
+            title={t("chat.codePlanHint")}
             showLabel
-            active={planMode}
-            onClick={onTogglePlanMode}
+            active={planKind === "code"}
+            onClick={() => onSelectPlanKind("code")}
+          />
+          <ComposerButton
+            icon={<span className="text-xs font-bold leading-none">◈</span>}
+            label={t("chat.coworkPlan")}
+            title={t("chat.coworkPlanHint")}
+            showLabel
+            active={planKind === "cowork"}
+            onClick={() => onSelectPlanKind("cowork")}
           />
           <ComposerButton
             icon={<Zap className="h-4 w-4" />}

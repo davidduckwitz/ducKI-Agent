@@ -123,7 +123,7 @@ export {
 export { AgentBenchmark, type BenchmarkResult } from "./performance/benchmarks.js";
 export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
-export { createScopedFilesystemTool } from "./coding/scoped-filesystem-tool.js";
+export { createScopedFilesystemTool, sanitizeCodeContent } from "./coding/scoped-filesystem-tool.js";
 // Context compression & memory optimization
 export { TokenCounter } from "./context/token-counter.js";
 export type { ModelTokenConfig } from "./context/token-counter.js";

@@ -2,10 +2,24 @@ import { Agent } from "../../src/agent.ts";
 
 export type ParsedToolCall = { toolName: string; input: Record<string, unknown> } | undefined;
 
+export type ExtractResult = {
+  calls: Array<{ toolName: string; input: Record<string, unknown> }>;
+  markerCount: number;
+  unparsed: string[];
+};
+
+type NativeToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
 type PrivateAgentMethods = {
   extractToolCall: (response: string) => ParsedToolCall;
   extractHermesCall: (response: string) => { toolName: string; args: string } | undefined;
   parseLooseObject: (text: string) => Record<string, unknown> | undefined;
+  extractAllToolCalls: (response: string) => ExtractResult;
+  nativeToolCallsToExtractResult: (calls: NativeToolCall[]) => ExtractResult;
 };
 
 /** Builds a real Agent with stub provider/db so private parser methods can be exercised directly. */
@@ -37,4 +51,12 @@ export function extractHermesCall(agent: Agent, text: string): { toolName: strin
 
 export function parseLooseObject(agent: Agent, text: string): Record<string, unknown> | undefined {
   return asPrivate(agent).parseLooseObject(text);
+}
+
+export function extractAllToolCalls(agent: Agent, text: string): ExtractResult {
+  return asPrivate(agent).extractAllToolCalls(text);
+}
+
+export function nativeToolCallsToExtractResult(agent: Agent, calls: NativeToolCall[]): ExtractResult {
+  return asPrivate(agent).nativeToolCallsToExtractResult(calls);
 }

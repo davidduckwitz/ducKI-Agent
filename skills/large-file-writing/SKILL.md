@@ -1,142 +1,91 @@
 ---
 name: large-file-writing
-description: "Chunk strategy for writing files larger than token limits - split content across multiple API calls"
+description: "How to write files reliably - use the escaping-free block-write form for any multi-line file, and chunk with write+append only when a file is too large for one response. Use when writing HTML, CSS, JS/TS, JSON, or any multi-line file, especially large ones."
 ---
 
-# Large File Writing Strategy
+# Writing Files Reliably
 
-For files larger than 2000 tokens (~500+ lines), split writing into multiple sequential calls.
+Two things break file writes: (1) JSON-escaping multi-line content, and (2) exceeding the response token limit. Handle them separately.
 
-## Why
+## 1. Prefer the block-write form (no escaping - the safe default)
 
-LLM output is limited to ~4000 tokens per response. Large files get truncated mid-way if written as one action.
+For ANY multi-line file, write the content as a verbatim block instead of a JSON string. The body between the header and `[/TOOL]` is taken exactly as-is — no `\n`, no escaped quotes, no chance of the tool-call syntax leaking into the file:
 
-## When to Use
+```
+[TOOL:filesystem action=write path=index.html]
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>My App</title>
+</head>
+<body>
+  <h1>Hello</h1>
+</body>
+</html>
+[/TOOL]
+```
 
-Apply chunking when writing:
-- **HTML/CSS files**: > 300 lines
-- **JavaScript/TypeScript**: > 400 lines  
-- **JSON**: > 1000 lines
-- **Any file**: When approaching response token limit
+Rules:
+- Header line holds only simple `key=value` args (`action`, `path`, and for the coding agent `project`). No JSON, no `(` or `{` on the header line.
+- Everything until the `[/TOOL]` line is the literal file content.
+- Always close with a line containing exactly `[/TOOL]`.
 
-## How It Works
+> When the backend supports **native tool calls**, arguments (including `content`) are passed as structured JSON by the runtime — also escaping-free. The block form is the reliable equivalent for the text protocol and for weaker local models. Either way: never hand-escape a large document into a JSON string.
 
-Write files in 2-3 sequential parts, each using correct action:
+## 2. Chunk only when a file is too big for one response
+
+Model output is capped (~4-8k tokens per response). A file that won't fit in one turn must be split — this is the ONLY reason to chunk, and it is independent of escaping.
 
 | Part | Action | Content |
 |------|--------|---------|
-| 1 | `write` | File structure, head, setup |
-| 2 | `append` | Middle sections, main content |
-| 3 | `append` | Final sections, closing tags |
+| 1 | `write` | Structure / head / setup |
+| 2 | `append` | Main content |
+| 3 | `append` | Closing sections |
 
-## Example: Large HTML File (250+ lines)
+Use the block form for each part too:
 
-### Part 1: Create file with structure
 ```
-[TOOL:coding({
-  "action": "write",
-  "project": "my-project",
-  "path": "index.html",
-  "content": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>My App</title>\n  <style>\n    * { margin: 0; padding: 0; }\n    body { font-family: Arial; background: #f5f5f5; }\n    .container { max-width: 1200px; margin: 0 auto; }\n  </style>\n</head>\n<body>\n  <header>\n    <nav class=\"navbar\">\n      <h1>My App</h1>\n      <ul>\n        <li><a href=\"#\">Home</a></li>\n        <li><a href=\"#\">About</a></li>\n      </ul>\n    </nav>\n  </header>"
-})]
+[TOOL:filesystem action=write path=app.js]
+// Part 1: imports + setup
+import { init } from "./init.js";
+[/TOOL]
 ```
-
-**Response**: Part 1/3 written (head and header)
-
-### Part 2: Add main content
 ```
-[TOOL:coding({
-  "action": "append",
-  "project": "my-project",
-  "path": "index.html",
-  "content": "\n  <main class=\"container\">\n    <section class=\"hero\">\n      <h2>Welcome</h2>\n      <p>This is the main content section.</p>\n    </section>\n    <section class=\"features\">\n      <h3>Features</h3>\n      <ul>\n        <li>Feature 1</li>\n        <li>Feature 2</li>\n        <li>Feature 3</li>\n      </ul>\n    </section>\n  </main>"
-})]
+[TOOL:filesystem action=append path=app.js]
+// Part 2: main logic
+export function run() { /* ... */ }
+[/TOOL]
 ```
 
-**Response**: Part 2/3 appended (main content)
+Rough thresholds (only about fitting in one response):
+- < ~300 lines → single `write`
+- ~300-800 lines → 2-3 parts
+- 800+ lines → 4+ parts
 
-### Part 3: Close file
-```
-[TOOL:coding({
-  "action": "append",
-  "project": "my-project",
-  "path": "index.html",
-  "content": "\n  <footer>\n    <p>&copy; 2025 My App. All rights reserved.</p>\n  </footer>\n  <script>\n    // JavaScript here\n    console.log('Page loaded');\n  </script>\n</body>\n</html>"
-})]
-```
+## Legacy JSON form (only if you must inline content)
 
-**Response**: Part 3/3 completed (closing tags and scripts)
+If you write content inside a JSON string instead of a block, THEN — and only then — the old escaping rules apply: `\n` for newlines, `\"` for quotes, and close with `})]`. This is fragile with large content; prefer the block form above.
 
-## Key Rules
+## Key rules
 
-✅ **DO**:
-- Use `write` action for Part 1 (creates file)
-- Use `append` action for Parts 2+ (adds to existing file)
-- Split at logical boundaries (closing tags, section breaks)
-- Report progress: "Part X/Y: [description]"
-- Use proper newline escaping: `\n` not literal newlines
+✅ DO
+- Use the block form (`[TOOL:...]\n...\n[/TOOL]`) for multi-line files.
+- Chunk with `write` (Part 1) then `append` (Parts 2+) only to beat the response token limit.
+- Split at logical boundaries (closing tags, section breaks) and report "Part X/Y".
 
-❌ **DON'T**:
-- Write entire large file in one call (will truncate)
-- Mix `write` and `append` in same turn without waiting
-- Forget closing tags (will appear truncated)
-- Use literal newlines in JSON strings - escape them as `\n`
-
-## Example: Detecting When to Chunk
-
-**File size indicators:**
-```
-- Short file (< 200 lines) → Use single `write` call
-- Medium file (200-500 lines) → Split into 2-3 parts
-- Large file (500+ lines) → Split into 3-4 parts
-- Very large file (1000+ lines) → Split into 4+ parts
-```
-
-## Common Use Cases
-
-### Large CSS File
-```
-Part 1: Reset, variables, base styles
-Part 2: Layout, components
-Part 3: Utilities, media queries
-```
-
-### Large JavaScript File
-```
-Part 1: Imports, constants, setup
-Part 2: Main functions/classes
-Part 3: Event handlers, exports
-```
-
-### Large Configuration
-```
-Part 1: Environment setup, first half of config
-Part 2: Second half of config, settings
-Part 3: Validation, closings
-```
+❌ DON'T
+- Hand-escape a large document into a JSON `content` string.
+- Chunk a file that already fits in one response.
+- Mix `write` and `append` for the same file in one turn without waiting for each result.
 
 ## Troubleshooting
 
-**File appears truncated?**
-- Check for unclosed tags `{`, `[`, `<`, or quotes `"`
-- Ensure all parts were appended successfully
-- Verify final file structure is complete
+**File looks truncated** — the write exceeded the token limit; split into more parts with `append`.
+**`append` says "file not found"** — Part 1 must succeed with `write` before appending.
+**Stray `[/TOOL]`, `"})]`, or tool markers in the file** — you used the JSON form and it mis-closed; switch to the block form, which cannot leak these.
 
-**Append fails with "file not found"?**
-- Ensure Part 1 was created successfully with `write`
-- File must exist before using `append`
-- Check project path is correct
+## Related
 
-**Content missing?**
-- Each part is independent - verify all parts completed
-- Check for warnings about truncation in responses
-- Some lines might be lost between parts if boundaries not clear
-
-## Summary
-
-**Large files = multiple sequential calls:**
-1. **write** (Part 1) → creates file
-2. **append** (Part 2+) → adds content
-3. Report progress between parts
-
-This prevents token-limit truncation and ensures complete files.
+- `filesystem-operations` — full filesystem tool reference (read/edit/list/etc.).
+- `shell-commands-win` / `shell-commands-nix` — writing runnable `.ps1` / `.sh` scripts.

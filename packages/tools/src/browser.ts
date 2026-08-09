@@ -133,6 +133,12 @@ async function callWorker(input: Record<string, unknown>): Promise<ToolResult> {
   const id = `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   return await new Promise<ToolResult>((resolve, reject) => {
+    // The agent injects `timeoutMs` (= AGENT_TOOL_TIMEOUT_BROWSER_MS, default 120000) and
+    // the long-running actions (download/login/pdf) read it too. This outer round-trip
+    // guard must honor the SAME budget (+3s grace) or it kills those actions early - it
+    // previously only read `input["timeout"]`, capping every browser call at ~33s
+    // regardless of the configured browser timeout.
+    const workerBudgetMs = Number(input["timeoutMs"] ?? input["timeout"] ?? 30000);
     const timeout = setTimeout(() => {
       const entry = pending.get(id);
       if (entry && !entry.settled) {
@@ -140,7 +146,7 @@ async function callWorker(input: Record<string, unknown>): Promise<ToolResult> {
         pending.delete(id);
         reject(new Error("Browser worker timed out"));
       }
-    }, Number(input["timeout"] ?? 30000) + 3000);
+    }, workerBudgetMs + 3000);
 
     pending.set(id, { resolve, reject, timeout, settled: false });
 

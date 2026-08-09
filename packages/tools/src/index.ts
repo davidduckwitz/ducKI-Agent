@@ -5,8 +5,9 @@ import { gitTool } from "./git.js";
 import { browserTool } from "./browser.js";
 import { shellTool } from "./shell.js";
 import { skillsTool } from "./skills.js";
+import { weatherTool } from "./weather.js";
 
-export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool };
+export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool };
 export { FILESYSTEM_ACTIONS } from "./filesystem.js";
 export type { FilesystemAction } from "./filesystem.js";
 export { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "./workspace-root.js";
@@ -26,7 +27,7 @@ export {
 } from "./script-mappings.js";
 export type { ScriptMapping } from "./script-mappings.js";
 
-export const allTools: ToolExecutor[] = [filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool];
+export const allTools: ToolExecutor[] = [filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool];
 
 export function getToolByName(name: string): ToolExecutor | undefined {
   return allTools.find((t) => t.name === name);

@@ -32,6 +32,9 @@ export interface PlanEventPayload {
   source: "plan_mode";
   goal: string;
   title: string;
+  /** "coding" = software/implementation plan, "general" = non-code task plan. Lets the UI
+   *  label the plan and the executor decide whether to route it to the coding agent. */
+  planType?: "coding" | "general";
   complexity: number;
   complexityScore?: number;
   stepCount: number;
@@ -62,6 +65,7 @@ export function toPlanEventPayload(plan: Plan, markdown: string): PlanEventPaylo
     source: "plan_mode",
     goal: plan.goal,
     title: `Plan: ${plan.goal}`,
+    ...(plan.planType ? { planType: plan.planType } : {}),
     complexity: COMPLEXITY_SCORE[plan.estimatedComplexity] ?? 3,
     complexityScore: plan.estimatedComplexityScore,
     stepCount: plan.steps.length,
@@ -104,6 +108,9 @@ export function formatPlanAsMarkdown(plan: Plan): string {
   ];
 
   // Add header info
+  if (plan.planType) {
+    lines.push(`**Plan-Typ:** ${plan.planType === "coding" ? "Coding" : "Allgemein"}`);
+  }
   lines.push(`**Geschaetzte Komplexitaet:** ${COMPLEXITY_LABEL[plan.estimatedComplexity] ?? plan.estimatedComplexity}`);
   if (plan.estimatedComplexityScore) {
     lines.push(`**Komplexitaets-Punktzahl:** ${plan.estimatedComplexityScore}/5`);

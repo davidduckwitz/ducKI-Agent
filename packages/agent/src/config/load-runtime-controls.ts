@@ -16,6 +16,7 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     httpToolTimeoutMs: parseInt(process.env["AGENT_HTTP_TIMEOUT_MS"] ?? "30000"),
     browserToolTimeoutMs: parseInt(process.env["AGENT_BROWSER_TIMEOUT_MS"] ?? "60000"),
     gitToolTimeoutMs: parseInt(process.env["AGENT_GIT_TIMEOUT_MS"] ?? "30000"),
+    qualityPassTimeoutMs: parseInt(process.env["AGENT_QUALITY_PASS_TIMEOUT_MS"] ?? "45000"),
 
     enableAutoMemory: (process.env["AGENT_AUTO_MEMORY"] ?? "true").toLowerCase() !== "false",
     enableReflection: (process.env["AGENT_ENABLE_REFLECTION"] ?? "true").toLowerCase() !== "false",

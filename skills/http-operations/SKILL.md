@@ -388,7 +388,7 @@ Often important:
 ## Integration with other skills
 
 - **filesystem-operations:** save the response with `write`
-- **shell-commands:** process the API response with scripts
+- **shell-commands-win / shell-commands-nix:** process the API response with scripts (pick the one matching the host OS)
 - **git-operations:** commit API changes
 
 ## Timeout & limits

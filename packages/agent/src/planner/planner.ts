@@ -20,6 +20,14 @@ export interface PlanCostOptions {
 
 export interface Plan {
   goal: string;
+  /**
+   * Whether this is a software/CODING task (write or change code, files, apps, scripts —
+   * plan concrete files + implementation + verification) or a GENERAL task (research,
+   * writing, analysis, coordination, operations — plan general steps, no file/implementation
+   * assumptions). Decided by the planner so callers can route a coding plan to the coding
+   * agent and a general plan to the main agent, instead of always assuming coding.
+   */
+  planType?: "coding" | "general";
   steps: PlanStep[];
   estimatedComplexity: "low" | "medium" | "high";
   estimatedComplexityScore?: number;
@@ -77,9 +85,16 @@ export interface DependencyGraph {
 }
 
 const PLANNER_SYSTEM_PROMPT_V2 = `You are an expert task planning assistant. Break down goals into detailed, hierarchical steps.
+
+FIRST, decide the plan type:
+- "coding": the goal is to write or change software — create/edit code, files, apps, scripts, configs, run/build/test a codebase. Plan CONCRETE files to touch, implementation steps, and a verification step (build/test).
+- "general": the goal is NOT primarily software — research, writing, analysis, data gathering, communication, operations, planning. Plan general task steps; do NOT invent files, code, or build/test steps.
+Set "planType" accordingly and shape every step to match it. Do not produce a coding plan for a general task.
+
 Return ONLY valid JSON with this exact structure (no markdown, no extra text):
 {
   "goal": "the main goal",
+  "planType": "coding|general",
   "steps": [
     {
       "id": "step_1",
@@ -115,7 +130,8 @@ CRITICAL RULES:
 7. Use realistic duration estimates in seconds (60=1min, 300=5min, 600=10min)
 8. Estimate total LLM tokens each step will consume (input+output), realistic per step
 9. Assess riskLevel per step: "high" = irreversible/destructive/external side effects or high uncertainty, "medium" = moderate, "low" = safe/read-only
-10. Always return valid, parseable JSON`;
+10. Always return valid, parseable JSON
+11. "planType" MUST be "coding" or "general" and every step must match it (no file/build/test steps in a general plan)`;
 
 const VALIDATION_PROMPT = `Validate this plan and suggest improvements:
 ${JSON.stringify({}, null, 2)}
@@ -267,10 +283,38 @@ export class Planner {
       estimatedDuration: step.estimatedDuration || 300,
     }));
 
+    // Normalize planType: trust the model's decision when valid, else infer from the goal
+    // (+ the tools its steps reach for) so a plan is never left untyped.
+    plan.planType = plan.planType === "coding" || plan.planType === "general"
+      ? plan.planType
+      : this.classifyGoal(plan.goal, plan.steps);
+
     plan.totalSteps = plan.steps.length;
     plan.estimatedComplexityScore = this.calculateComplexityScore(plan);
 
     return plan;
+  }
+
+  /**
+   * Heuristic fallback when the model omits/mis-sets planType. A goal is "coding" only
+   * when it clearly involves building or changing software; everything else defaults to
+   * "general" so non-code work never gets a coding-shaped plan.
+   */
+  private classifyGoal(goal: string, steps: PlanStep[]): "coding" | "general" {
+    const text = `${goal} ${steps.map((s) => `${s.title} ${s.description ?? ""}`).join(" ")}`.toLowerCase();
+    const codingSignals = [
+      "code", "coding", "program", "programm", "implement", "implementier", "function", "funktion",
+      "class ", "klasse", "refactor", "bug", "debug", "compile", "kompilier", "build", "unit test",
+      "api endpoint", "component", "komponente", "script", "skript", "css", "html", "typescript",
+      "javascript", "python", "react", "repository", "repo", "git ", "npm ", "app ", "website", "webseite",
+      ".ts", ".js", ".tsx", ".py", ".json", ".html",
+    ];
+    // Only strongly code-specific tools count; filesystem/shell are too generic (a general
+    // task often saves a file too) and would over-classify as coding.
+    const codingToolSignals = new Set(["coding", "git"]);
+    const hasCodingTool = steps.some((s) => (s.toolsNeeded ?? []).some((t) => codingToolSignals.has(t.toLowerCase())));
+    const hasCodingWord = codingSignals.some((w) => text.includes(w));
+    return hasCodingWord || hasCodingTool ? "coding" : "general";
   }
 
   private async analyzeDependencies(plan: Plan): Promise<Plan> {
@@ -523,6 +567,7 @@ export class Planner {
   private createFallbackPlan(goal: string): Plan {
     return {
       goal,
+      planType: this.classifyGoal(goal, []),
       steps: [
         {
           id: "step_1",

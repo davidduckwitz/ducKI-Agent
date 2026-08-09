@@ -72,9 +72,25 @@ Read large files in sections instead of all at once:
 - `write`/`append` create a `.bak` and write atomically; JSON is validated before writing
 
 ### Creating
+Single-line / tiny content — inline JSON is fine:
 ```
 [TOOL:filesystem({"action": "write", "path": "my-project/README.md", "content": "# My Project"})]
 ```
+
+**Multi-line content — use the block-write form (no escaping).** The body between the
+header and `[/TOOL]` is written verbatim, so you never escape newlines/quotes and the
+tool-call syntax can't leak into the file:
+```
+[TOOL:filesystem action=write path=my-project/config.json]
+{
+  "name": "my-project",
+  "version": "1.0.0"
+}
+[/TOOL]
+```
+(When native tool calls are active, `content` is passed as structured JSON by the runtime —
+also escaping-free. The block form is the reliable equivalent for the text protocol.)
+
 Parent folders are created automatically (`createDirs`, default true) — a separate `mkdir`
 is only needed when you want an empty folder.
 

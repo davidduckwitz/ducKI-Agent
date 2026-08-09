@@ -1,6 +1,11 @@
 import OpenAI from "openai";
-import type { ChatCompletionMessageParam, ChatCompletionContentPart } from "openai/resources/chat/completions.js";
-import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
+import type {
+  ChatCompletionMessageParam,
+  ChatCompletionContentPart,
+  ChatCompletionTool,
+  ChatCompletionMessageToolCall,
+} from "openai/resources/chat/completions.js";
+import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent, ToolDefinition, ToolCall } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "./base.js";
 import { ProviderConnectionError, looksLikeConnectionFailure } from "./errors.js";
 import { estimateUsage } from "./token-estimate.js";
@@ -64,20 +69,85 @@ function convertLLMContentToOpenAI(content: string | LLMContent[]): string | Cha
   });
 }
 
-function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] {
+/**
+ * Convert our provider-agnostic ToolDefinition[] into OpenAI's `tools` param so the
+ * model can emit STRUCTURED tool calls instead of the text `[TOOL:...]` protocol.
+ * Native calls put arguments in a dedicated field the server validates, which removes
+ * the whole class of "tool-call syntax leaked into a written file" failures that the
+ * text protocol suffers with weaker local models.
+ */
+function toOpenAITools(tools: ToolDefinition[]): ChatCompletionTool[] {
+  return tools.map((t): ChatCompletionTool => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      // OpenAI expects a JSON-Schema object; our ToolDefinition.parameters already is one.
+      parameters: (t.parameters ?? { type: "object", properties: {} }) as Record<string, unknown>,
+    },
+  }));
+}
+
+/** Normalize the OpenAI SDK's tool_calls into our provider-agnostic ToolCall[]. */
+function fromOpenAIToolCalls(
+  raw: ChatCompletionMessageToolCall[] | undefined | null
+): ToolCall[] | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  const calls: ToolCall[] = [];
+  for (const c of raw) {
+    // Only function tool calls are supported; skip anything else defensively.
+    const fn = (c as { function?: { name?: string; arguments?: string } }).function;
+    if (!fn?.name) continue;
+    calls.push({
+      id: c.id || `call_${calls.length}`,
+      type: "function",
+      function: { name: fn.name, arguments: fn.arguments ?? "{}" },
+    });
+  }
+  return calls.length > 0 ? calls : undefined;
+}
+
+export function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] {
+  // A role:"tool" message is only valid if a PRECEDING assistant message in the same
+  // request echoes a tool_call with the same id. The agent stamps every tool result with
+  // an internal id (e.g. "batch_1_0") but stores assistant turns as plain text WITHOUT
+  // tool_calls, so those ids have no referent. Emitting role:"tool" for them produces an
+  // orphaned message the API drops - the model then never sees the tool output and
+  // hallucinates. So only route to role:"tool" when the id is actually echoed; otherwise
+  // deliver the result as a normal user message that every backend reliably sees.
+  const echoedToolCallIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "assistant" && m.toolCalls) {
+      for (const c of m.toolCalls) echoedToolCallIds.add(c.id);
+    }
+  }
+
   return messages.map((m): ChatCompletionMessageParam => {
     if (m.role === "tool") {
-      // This agent drives tools with a TEXT protocol ([TOOL:...]); assistant messages therefore never
-      // carry a matching `tool_calls` array. An OpenAI/LM Studio `role:"tool"` message MUST answer a
-      // preceding assistant tool_call with the same id - without it the message is an orphaned tool
-      // response that the API rejects or silently drops, so the model never sees the tool output and
-      // falls back to hallucinating (e.g. inventing today's date instead of reading the shell result).
-      // Deliver the result as a normal user message so every OpenAI-compatible backend reliably sees it.
       const text = typeof m.content === "string" ? m.content : "tool result";
+      if (m.toolCallId && echoedToolCallIds.has(m.toolCallId)) {
+        return { role: "tool", tool_call_id: m.toolCallId, content: text };
+      }
       return { role: "user", content: `[Tool result]\n${text}` };
     }
     if (m.role === "assistant") {
-      return { role: "assistant", content: typeof m.content === "string" ? m.content : "assistant response" };
+      const content = typeof m.content === "string" ? m.content : "assistant response";
+      // Echo native tool_calls back only when the history actually carries them AND their
+      // results are present as role:"tool" replies (guarded above). Today the agent doesn't
+      // persist assistant tool_calls, so this stays dormant and the text path is used.
+      const nativeCalls = m.toolCalls;
+      if (nativeCalls && nativeCalls.length > 0) {
+        return {
+          role: "assistant",
+          content: content || null,
+          tool_calls: nativeCalls.map((c) => ({
+            id: c.id,
+            type: "function",
+            function: { name: c.function.name, arguments: c.function.arguments },
+          })),
+        };
+      }
+      return { role: "assistant", content };
     }
     if (m.role === "system") {
       return { role: "system", content: typeof m.content === "string" ? m.content : "system prompt" };
@@ -122,6 +192,14 @@ export class OpenAIProvider implements LLMProvider {
   /** Set once a server has rejected `stream_options`, so the retry without it happens
    *  only on the first stream instead of on every single call. */
   private streamOptionsUnsupported = false;
+  /** Master switch for native tool-calling. Defaults on; set DUCKI_NATIVE_TOOLS=0/false
+   *  to force the legacy [TOOL:...] text protocol for every request. */
+  private readonly nativeToolsConfigured: boolean;
+  /** Flipped when a backend rejects the `tools` param (many local llama.cpp/older
+   *  LM Studio builds don't implement it). After that we stop sending `tools` for this
+   *  provider instance and the agent's text parser takes over - same self-healing
+   *  pattern as streamOptionsUnsupported. */
+  private nativeToolsUnsupported = false;
 
   constructor(options: ProviderOptions) {
     const rawApiKey = options.apiKey ?? "";
@@ -150,6 +228,24 @@ export class OpenAIProvider implements LLMProvider {
     });
     this.maxRetries = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRIES"], 2);
     this.baseRetryDelayMs = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRY_BASE_MS"], 1200);
+    const nativeFlag = (process.env["DUCKI_NATIVE_TOOLS"] ?? "").trim().toLowerCase();
+    this.nativeToolsConfigured = !["0", "false", "off", "no"].includes(nativeFlag);
+  }
+
+  /** Whether native tool-calling should be attempted right now (configured on AND not
+   *  yet proven unsupported by this backend). The agent reads this to decide whether to
+   *  pass tool definitions and to trust structured tool_calls over its text parser. */
+  supportsNativeTools(): boolean {
+    return this.nativeToolsConfigured && !this.nativeToolsUnsupported;
+  }
+
+  /** A server that doesn't implement function-calling rejects the `tools` param with a
+   *  400 that names it (or "function"/"tool"). Detect that so we can disable native
+   *  tools for this instance and fall back to the text protocol instead of failing. */
+  private rejectsToolsParam(error: unknown): boolean {
+    if (this.getStatusCode(error) !== 400) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    return /\btools?\b|function[_ -]?call|tool[_ -]?choice|unsupported|not supported/i.test(message);
   }
 
   private getStatusCode(error: unknown): number | undefined {
@@ -227,23 +323,42 @@ export class OpenAIProvider implements LLMProvider {
   async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
     console.log("[DEBUG OpenAIProvider.generate] Provider name:", this.name, "Type:", this.constructor.name);
     const merged = { ...this.defaultOptions, ...options };
+    const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
 
-    const completion = await this.withRateLimitRetry(() =>
-      this.client.chat.completions.create({
-        model: this.model,
-        messages: toOpenAIMessages(messages),
-        temperature: merged.temperature,
-        top_p: merged.topP,
-        max_tokens: merged.maxTokens,
-        stream: false,
-      })
-    );
+    const buildRequest = (withTools: boolean) => ({
+      model: this.model,
+      messages: toOpenAIMessages(messages),
+      temperature: merged.temperature,
+      top_p: merged.topP,
+      max_tokens: merged.maxTokens,
+      stream: false as const,
+      ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
+    });
+
+    let completion;
+    try {
+      completion = await this.withRateLimitRetry(() =>
+        this.client.chat.completions.create(buildRequest(useNativeTools))
+      );
+    } catch (error) {
+      // Backend doesn't implement the `tools` param: disable native tools for this
+      // instance and retry once WITHOUT them so the run continues on the text protocol.
+      if (useNativeTools && !this.nativeToolsUnsupported && this.rejectsToolsParam(error)) {
+        this.nativeToolsUnsupported = true;
+        completion = await this.withRateLimitRetry(() =>
+          this.client.chat.completions.create(buildRequest(false))
+        );
+      } else {
+        throw error;
+      }
+    }
 
     const choice = completion.choices[0];
     if (!choice) throw new Error("No completion choice returned");
 
     return {
       content: choice.message.content ?? "",
+      toolCalls: fromOpenAIToolCalls(choice.message.tool_calls),
       usage: {
         promptTokens: completion.usage?.prompt_tokens ?? 0,
         completionTokens: completion.usage?.completion_tokens ?? 0,
@@ -261,6 +376,7 @@ export class OpenAIProvider implements LLMProvider {
   ): Promise<LLMResponse> {
     const merged = { ...this.defaultOptions, ...options };
     const openAiMessages = toOpenAIMessages(messages);
+    const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
 
     const createStream = (includeUsage: boolean) =>
       this.client.chat.completions.create({
@@ -273,6 +389,7 @@ export class OpenAIProvider implements LLMProvider {
         // Without this the OpenAI streaming protocol never sends a usage chunk at all -
         // which is why every streamed response reported 0 tokens.
         ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+        ...(useNativeTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
       });
 
     let stream: Awaited<ReturnType<typeof createStream>>;
@@ -285,6 +402,11 @@ export class OpenAIProvider implements LLMProvider {
       if (!this.streamOptionsUnsupported && this.rejectsStreamOptions(error)) {
         this.streamOptionsUnsupported = true;
         stream = await this.withRateLimitRetry(() => createStream(false));
+      } else if (useNativeTools && !this.nativeToolsUnsupported && this.rejectsToolsParam(error)) {
+        // Backend can stream but not with `tools`: disable native tools and reopen the
+        // stream without them so the run falls back to the text protocol.
+        this.nativeToolsUnsupported = true;
+        stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported));
       } else {
         throw error;
       }
@@ -295,13 +417,27 @@ export class OpenAIProvider implements LLMProvider {
     let completionTokens = 0;
     let reportedUsage = false;
     let finalModel = this.model;
+    // Tool-call deltas arrive fragmented across chunks, keyed by `index`; accumulate the
+    // id/name/arguments pieces per slot and assemble them once the stream ends.
+    const toolCallAccum: Array<{ id: string; name: string; arguments: string }> = [];
 
     try {
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content ?? "";
+        const choice0 = chunk.choices[0];
+        const delta = choice0?.delta?.content ?? "";
         if (delta) {
           fullContent += delta;
           onChunk?.(delta);
+        }
+        const toolDeltas = choice0?.delta?.tool_calls;
+        if (toolDeltas) {
+          for (const td of toolDeltas) {
+            const idx = td.index ?? 0;
+            const slot = (toolCallAccum[idx] ??= { id: "", name: "", arguments: "" });
+            if (td.id) slot.id = td.id;
+            if (td.function?.name) slot.name = td.function.name;
+            if (td.function?.arguments) slot.arguments += td.function.arguments;
+          }
         }
         if (chunk.usage) {
           promptTokens = chunk.usage.prompt_tokens ?? 0;
@@ -319,10 +455,22 @@ export class OpenAIProvider implements LLMProvider {
       throw error;
     }
 
+    const toolCalls: ToolCall[] | undefined = toolCallAccum.length > 0
+      ? toolCallAccum
+          .filter((c) => c.name)
+          .map((c, i) => ({
+            id: c.id || `call_${i}`,
+            type: "function" as const,
+            function: { name: c.name, arguments: c.arguments || "{}" },
+          }))
+      : undefined;
+    const normalizedToolCalls = toolCalls && toolCalls.length > 0 ? toolCalls : undefined;
+
     if (!reportedUsage) {
       const estimate = estimateUsage(openAiMessages, fullContent);
       return {
         content: fullContent,
+        toolCalls: normalizedToolCalls,
         usage: { ...estimate, estimated: true },
         model: finalModel,
       };
@@ -330,6 +478,7 @@ export class OpenAIProvider implements LLMProvider {
 
     return {
       content: fullContent,
+      toolCalls: normalizedToolCalls,
       usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
       model: finalModel,
     };

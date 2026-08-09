@@ -320,6 +320,15 @@ export class ProviderRouter implements LLMProvider {
     return current.supportsStreaming();
   }
 
+  /** Delegate native tool-calling capability to the provider that will actually serve
+   *  the next request, so the agent only passes tool definitions when the live backend
+   *  supports them. */
+  supportsNativeTools(): boolean {
+    const current = this.getNextProvider();
+    if (!current) return false;
+    return current.supportsNativeTools?.() ?? false;
+  }
+
   /**
    * Get provider health status
    */

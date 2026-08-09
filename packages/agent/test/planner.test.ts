@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { Planner } from "../src/planner/planner";
+// Explicit .ts: a stale committed planner.js in src/ otherwise shadows the real source
+// in vite/vitest resolution (it prefers .js over .ts), running July-old planner logic.
+import { Planner } from "../src/planner/planner.ts";
 import type { LLMProvider } from "@ducki/providers";
 import type { Logger } from "@ducki/logger";
 
@@ -511,6 +513,23 @@ describe("Planner - Enhanced Features", () => {
       expect(plan.totalSteps).toBeDefined();
       expect(plan.executionStrategy).toBeDefined();
       expect(plan.validationResult).toBeDefined();
+    });
+  });
+
+  describe("Plan type decision (coding vs general)", () => {
+    // Force the deterministic fallback path (generate rejects) so these assert the
+    // classifyGoal heuristic + planType assignment without depending on the full
+    // parse/validate flow.
+    it("classifies a code task as 'coding' (fallback path)", async () => {
+      vi.mocked(mockProvider.generate).mockRejectedValue(new Error("no llm"));
+      const plan = await planner.createPlan("Implement a React component and fix the failing unit test");
+      expect(plan.planType).toBe("coding");
+    });
+
+    it("classifies a non-code task as 'general' (fallback path)", async () => {
+      vi.mocked(mockProvider.generate).mockRejectedValue(new Error("no llm"));
+      const plan = await planner.createPlan("Plane ein Team-Offsite und erstelle die Agenda");
+      expect(plan.planType).toBe("general");
     });
   });
 });

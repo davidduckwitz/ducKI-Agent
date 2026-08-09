@@ -36,13 +36,6 @@ export const SKILL_SCRIPT_MAPPINGS: ScriptMapping[] = [
     },
   },
   {
-    skillSlug: "shell-commands",
-    scripts: {
-      main: "./script.js",
-      execute: "./scripts/execute.sh",
-    },
-  },
-  {
     skillSlug: "git-operations",
     scripts: {
       main: "./script.js",

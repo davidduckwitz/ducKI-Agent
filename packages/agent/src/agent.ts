@@ -1,7 +1,7 @@
 import { jsonrepair } from "jsonrepair";
 import type { LLMProvider } from "@ducki/providers";
 import { isProviderConnectionError } from "@ducki/providers";
-import type { LLMMessage, ToolResult, LLMContent } from "@ducki/shared";
+import type { LLMMessage, ToolResult, LLMContent, ToolCall } from "@ducki/shared";
 import { tokenizeText } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
@@ -79,7 +79,21 @@ Rules:
 4. If multiple independent tool calls needed (no dependencies), emit multiple [TOOL:...] markers in same response
 5. For dependent calls (result needed as input), emit one at a time and wait for result
 6. Always close with )] - never leave it hanging
-7. When reporting a tool's result back to the user, copy exact values (numbers, times, dates, names) directly from the tool result - never recalculate, estimate, or recall them from your own knowledge`;
+7. When reporting a tool's result back to the user, copy exact values (numbers, times, dates, names) directly from the tool result - never recalculate, estimate, or recall them from your own knowledge
+
+## Writing files - USE THE BLOCK FORMAT (strongly preferred)
+When writing a file (code, HTML, JSON, any multi-line content), DO NOT embed the content inside JSON. Use the block form instead - the content is taken EXACTLY as written, with no escaping:
+[TOOL:filesystem action=write path=index.html]
+<!doctype html>
+<html>
+  <body>Hello</body>
+</html>
+[/TOOL]
+Rules for the block form:
+- The header line holds only simple values as key=value (action, path). No JSON, no ( or { on the header line.
+- Everything between the header line and [/TOOL] is the literal file content - do NOT escape newlines or quotes, do NOT wrap it in JSON.
+- Always end the block with a line containing exactly [/TOOL].
+- This avoids the #1 write failure: broken JSON escaping that corrupts the file. Prefer it for every write/append.`;
 
 const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
 Use the available tools to create and manage projects and tasks, then work them through to completion.
@@ -96,8 +110,17 @@ For queries requiring CURRENT/REAL data (not LLM training data), ALWAYS use tool
 - Current date/time: Use shell tool (e.g., "date" or "Get-Date" command)
 - Current file contents: Use file-read tool (do NOT use memory/conversation context)
 - Current system state: Use shell or system tools
-- Current web data: Use browser tool
+- Current web PAGE content (a specific site, a screenshot): Use the browser tool
+- Current facts from a public API (weather, exchange rates, etc.): Use the http tool to fetch a free, no-key API directly
 DO NOT answer these from conversation memory or LLM knowledge alone - execute tools to get actual current data.
+
+### Weather
+For any weather question, use the dedicated weather tool with just the city name - it geocodes and fetches current conditions + a short outlook in one call (free, no key). Do NOT ask the user for measurements or a station id.
+   [TOOL:weather({"location": "Fulda"})]
+Then report the "summary" field (or temperature/wind/precipitation from the "current" object). Only fall back to the http tool + a public API if the weather tool is unavailable.
+
+### Data-SOURCE tools vs data-CONSUMER tools (CRITICAL)
+A tool whose inputs are the very data the user is asking for is a CONSUMER (it processes/summarizes data you already have), NOT a source. Example: a "weather_summary" tool that requires temperature/precipitation/station_id as input cannot fetch the weather - it summarizes weather you already fetched. When a request needs live data, first FETCH it (http/browser/shell), then optionally pass it to a consumer tool. Never tell the user you cannot get the data because a consumer tool needs inputs - get the data yourself with the http/browser/shell tools.
 
 ## Responding to Tool Results - CRITICAL
 When you receive tool execution results (messages marked as "tool" role):
@@ -2367,6 +2390,120 @@ export class Agent {
     return statelessTools.has(toolName.toLowerCase());
   }
 
+  /**
+   * Adapt provider-native structured tool calls into the same shape extractAllToolCalls
+   * produces, so the whole downstream pipeline (dedup, execution graph, guardrails) is
+   * identical regardless of how the call was obtained. The native `arguments` field is a
+   * JSON string per the OpenAI spec, but we still route it through parseLooseObject so a
+   * lenient local backend that emits slightly-off JSON is repaired rather than dropped.
+   * The tool name is resolved through the same alias/skill mapping as the text path.
+   */
+  private nativeToolCallsToExtractResult(nativeCalls: ToolCall[]): {
+    calls: Array<{ toolName: string; input: Record<string, unknown> }>;
+    markerCount: number;
+    unparsed: string[];
+  } {
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    const unparsed: string[] = [];
+    for (const call of nativeCalls) {
+      const rawName = call.function?.name ?? "";
+      const rawArgs = call.function?.arguments ?? "";
+      const parsedArgs = this.parseLooseObject(rawArgs) ?? {};
+      if (!rawName) {
+        unparsed.push(`<native:${JSON.stringify(call)}>`);
+        continue;
+      }
+      // Native calls carry content in a structured, server-validated field - no tool-call
+      // syntax can have leaked into it, so mark it trusted for the scoped filesystem tool.
+      if (typeof parsedArgs["content"] === "string" || typeof parsedArgs["contents"] === "string") {
+        parsedArgs["__contentTrusted"] = true;
+      }
+      const resolved = this.resolveToolNameAndInput(rawName, parsedArgs);
+      calls.push(resolved);
+    }
+    return { calls, markerCount: nativeCalls.length, unparsed };
+  }
+
+  /**
+   * Parse the `key=value` pairs on a heredoc header line. Supports bare values
+   * (action=write), double- and single-quoted values (title="my file"). Values never
+   * span the newline because the header regex stops the run at the closing `]`.
+   */
+  private parseHeredocHeader(headerRest: string): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    const pairRe = /([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*("([^"]*)"|'([^']*)'|(\S+))/g;
+    let m: RegExpExecArray | null;
+    while ((m = pairRe.exec(headerRest)) !== null) {
+      const key = m[1];
+      if (!key) continue;
+      out[key] = m[3] ?? m[4] ?? m[5] ?? "";
+    }
+    return out;
+  }
+
+  /**
+   * Extract heredoc-style tool calls:
+   *
+   *   [TOOL:filesystem action=write path=index.html]
+   *   ...raw file content, no escaping needed...
+   *   [/TOOL]
+   *
+   * The header carries scalar args as `key=value`; everything between the header's
+   * newline and the closing `[/TOOL]` becomes the `content` field verbatim. The header
+   * char class forbids `(` `{` so a normal JSON call `[TOOL:name({...})]` is never
+   * mistaken for a heredoc. Returns the matched calls plus `remaining` (the input with
+   * every heredoc block removed) so the caller's other scanners don't double-process.
+   */
+  private extractHeredocCalls(response: string): {
+    calls: Array<{ toolName: string; input: Record<string, unknown> }>;
+    markerCount: number;
+    unparsed: string[];
+    remaining: string;
+  } {
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    const unparsed: string[] = [];
+    let markerCount = 0;
+    // Header: [TOOL:name <key=value pairs>] on its own line (no ( { in the header),
+    // then a newline, lazily up to the first [/TOOL] terminator.
+    const blockRe = /\[TOOL:([A-Za-z_][A-Za-z0-9_\-]*)([^\]\n(){}]*)\]\r?\n([\s\S]*?)\r?\n?\[\/TOOL\]/g;
+    const matchedBlocks: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = blockRe.exec(response)) !== null) {
+      const toolName = m[1];
+      const headerRest = m[2] ?? "";
+      const body = m[3] ?? "";
+      // A header with no key=value pairs and an empty body is almost certainly not a real
+      // heredoc write — skip it so we don't fabricate an empty content call.
+      const headerArgs = this.parseHeredocHeader(headerRest);
+      if (!toolName) {
+        unparsed.push(m[0]);
+        matchedBlocks.push(m[0]);
+        continue;
+      }
+      markerCount++;
+      matchedBlocks.push(m[0]);
+      // __contentTrusted: the body was taken verbatim (never through a JSON string), so the
+      // scoped filesystem tool can skip its leak-stripping heuristics on this content.
+      const input: Record<string, unknown> = { ...headerArgs, content: body, __contentTrusted: true };
+      const parsed = this.resolveToolNameAndInput(toolName, input);
+      if (parsed) {
+        calls.push(parsed);
+      } else {
+        unparsed.push(m[0]);
+      }
+    }
+    // Remove matched blocks from the text (indexOf/splice by exact substring keeps this
+    // safe even if two blocks are identical).
+    let remaining = response;
+    for (const block of matchedBlocks) {
+      const idx = remaining.indexOf(block);
+      if (idx >= 0) {
+        remaining = remaining.slice(0, idx) + remaining.slice(idx + block.length);
+      }
+    }
+    return { calls, markerCount, unparsed, remaining };
+  }
+
   private extractAllToolCalls(response: string): {
     calls: Array<{ toolName: string; input: Record<string, unknown> }>;
     markerCount: number;
@@ -2375,6 +2512,17 @@ export class Agent {
     const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
     const unparsed: string[] = [];
     let markerCount = 0;
+
+    // Heredoc write format FIRST — this is the safest way for weak local models to write
+    // a file: the body between the header and [/TOOL] is taken verbatim, so the model
+    // never has to JSON-escape newlines/quotes or land the exact `"})]` terminator (the
+    // #1 source of tool-call syntax leaking into written files). Matched blocks are cut
+    // from the text so the JSON [TOOL:...] scanner below never re-parses the header line.
+    const heredoc = this.extractHeredocCalls(response);
+    for (const c of heredoc.calls) calls.push(c);
+    markerCount += heredoc.markerCount;
+    for (const u of heredoc.unparsed) unparsed.push(u);
+    response = heredoc.remaining;
 
     // Extract [TOOL:...] format (legacy)
     let fromIndex = 0;
@@ -2887,6 +3035,7 @@ export class Agent {
       httpToolTimeoutMs: 60_000,
       browserToolTimeoutMs: 120_000,
       gitToolTimeoutMs: 120_000,
+      qualityPassTimeoutMs: Agent.QUALITY_PASS_TIMEOUT_MS,
       enableAutoMemory: this.enableAutoMemory,
       enableReflection: this.enableReflection,
       reflectionMaxRetries: this.enableReflection ? 1 : 0,
@@ -2978,6 +3127,7 @@ export class Agent {
         httpToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_HTTP_MS"), defaults.httpToolTimeoutMs, 1000, 3_600_000),
         browserToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_BROWSER_MS"), defaults.browserToolTimeoutMs, 1000, 3_600_000),
         gitToolTimeoutMs: this.parseNumberSetting(get("AGENT_TOOL_TIMEOUT_GIT_MS"), defaults.gitToolTimeoutMs, 1000, 3_600_000),
+        qualityPassTimeoutMs: this.parseNumberSetting(get("AGENT_QUALITY_PASS_TIMEOUT_MS"), defaults.qualityPassTimeoutMs, 5000, 600_000),
         enableAutoMemory: this.parseBooleanSetting(get("AGENT_AUTO_MEMORY"), defaults.enableAutoMemory),
         enableReflection: this.parseBooleanSetting(get("AGENT_ENABLE_REFLECTION"), defaults.enableReflection),
         reflectionMaxRetries: this.parseNumberSetting(get("AGENT_REFLECTION_MAX_RETRIES"), defaults.reflectionMaxRetries, 0, 3),
@@ -3496,19 +3646,25 @@ export class Agent {
     options: AgentRunOptions,
     emit: (type: AgentRunEventType, message: string, data?: Record<string, unknown>) => void,
     iterations: number,
-    repeatedToolCalls: Map<string, number>
+    repeatedToolCalls: Map<string, number>,
+    nativeToolCalls?: ToolCall[]
   ): Promise<{ resultMap: Map<string, ToolResult>; cleanedResponse: string; browserToolsCount: number }> {
     this.logger.info("[TOOL-CALLS] Starting extraction and execution", {
       responseLength: response.length,
       hasToolMarkers: /\[TOOL:/.test(response),
+      nativeCallCount: nativeToolCalls?.length ?? 0,
     });
 
     // Shared by every tool_call/tool_result/browser_preview event below so the UI can
     // fold all tool calls issued by this single LLM response into one collapsible group.
     const toolBatchId = randomUUID();
 
-    // Extract all tool calls from response
-    const extractResult = this.extractAllToolCalls(response);
+    // Prefer NATIVE (structured) tool calls when the provider returned them: the model
+    // never hand-serialized the call into prose, so there is nothing to leak or mis-parse.
+    // The text `[TOOL:...]` parser remains the fallback for backends without native tools.
+    const extractResult = nativeToolCalls && nativeToolCalls.length > 0
+      ? this.nativeToolCallsToExtractResult(nativeToolCalls)
+      : this.extractAllToolCalls(response);
     let toolCalls = extractResult.calls;
 
     // Deduplicate tool calls: if same action is called twice in a row, keep only first
@@ -3571,6 +3727,8 @@ export class Agent {
       this.logger.info("[TOOL-CALLS] No tool calls found, skipping execution");
       // Still clean the response to remove any markers (even if unparsed)
       const cleanedResponse = response
+        .replace(/\[TOOL:[A-Za-z_][A-Za-z0-9_\-]*[^\]\n(){}]*\]\r?\n[\s\S]*?\r?\n?\[\/TOOL\]/g, "") // Remove heredoc write blocks
+        .replace(/\[\/TOOL\]/g, "")                           // Remove any stray heredoc terminators
         .replace(/\[TOOL:[^\]]*\]/g, "")                     // Remove [TOOL:...] markers
         .replace(/<\|channel>.*?<channel\|>/gs, "")          // Remove <|channel>...<channel|> blocks
         .replace(/<\|channel>thought[^\n]*\n?/g, "")         // Remove <|channel>thought markers
@@ -3917,6 +4075,8 @@ export class Agent {
     });
 
     const cleanedResponse = response
+      .replace(/\[TOOL:[A-Za-z_][A-Za-z0-9_\-]*[^\]\n(){}]*\]\r?\n[\s\S]*?\r?\n?\[\/TOOL\]/g, "") // Remove heredoc write blocks
+      .replace(/\[\/TOOL\]/g, "")                           // Remove any stray heredoc terminators
       .replace(/\[TOOL:[^\]]*\]/g, "")                     // Remove [TOOL:...] markers
       .replace(/<\|channel>.*?<channel\|>/gs, "")          // Remove <|channel>...<channel|> blocks (multiline)
       .replace(/<\|channel>thought[^\n]*\n?/g, "")         // Remove <|channel>thought line markers
@@ -4851,6 +5011,11 @@ export class Agent {
       };
 
       let currentResponseTokens: { input?: number; output?: number; total?: number; estimated?: boolean } = {};
+      // Structured tool calls from the provider's NATIVE function-calling path (when the
+      // backend supports it). When populated, these are trusted over the text `[TOOL:...]`
+      // parser downstream - the model never had to hand-serialize the call into prose, so
+      // nothing can leak into a file's content.
+      let currentNativeToolCalls: ToolCall[] | undefined;
 
       const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
         // DEBUG: Log what's being sent to LLM
@@ -4892,7 +5057,16 @@ export class Agent {
         // mid-JSON, which produces an unterminated [TOOL:...] call the parser cannot
         // read. The adapter clamps this down to the model's real output limit, and any
         // admin-configured maxTokensOverride still takes precedence over it.
-        const mainGenOptions = { maxTokens: 8192 };
+        // Offer tool definitions to the provider only when it advertises native
+        // function-calling. Backends without it never see `tools` and keep using the
+        // text `[TOOL:...]` protocol described in the system prompt.
+        const nativeToolsEnabled = this.provider.supportsNativeTools?.() ?? false;
+        const mainGenOptions: { maxTokens: number; tools?: ReturnType<Executor["getToolDefinitions"]> } = { maxTokens: 8192 };
+        if (nativeToolsEnabled) {
+          mainGenOptions.tools = this.executor.getToolDefinitions();
+        }
+        // Reset per-turn so a native call from a previous iteration never re-executes.
+        currentNativeToolCalls = undefined;
         if (options.stream && this.provider.supportsStreaming()) {
           try {
             // The provider streams internally and resolves with the full response.
@@ -4906,6 +5080,7 @@ export class Agent {
               total: result.usage.totalTokens,
               estimated: result.usage.estimated === true,
             };
+            currentNativeToolCalls = result.toolCalls;
             return result.content;
           } catch (e) {
             // A dead endpoint cannot be fixed by asking it again without streaming: the
@@ -4923,6 +5098,7 @@ export class Agent {
               total: syncResult.usage.totalTokens,
               estimated: syncResult.usage.estimated === true,
             };
+            currentNativeToolCalls = syncResult.toolCalls;
             return syncResult.content;
           }
         }
@@ -4933,6 +5109,7 @@ export class Agent {
           total: result.usage.totalTokens,
           estimated: result.usage.estimated === true,
         };
+        currentNativeToolCalls = result.toolCalls;
         return result.content;
       };
 
@@ -5187,7 +5364,8 @@ export class Agent {
         options,
         emit,
         iterations,
-        repeatedToolCalls
+        repeatedToolCalls,
+        currentNativeToolCalls
       );
 
       this.logger.info("[RUNLOOP] Tool-call extraction and execution complete", {
@@ -5372,7 +5550,7 @@ export class Agent {
               this.sanitizeFinalResponse(finalResponse),
               `attempt=${reflectionAttempt}; toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
             ),
-            Agent.QUALITY_PASS_TIMEOUT_MS,
+            adjustedControls.qualityPassTimeoutMs,
             "reflection"
           );
         } catch (error) {
@@ -5444,7 +5622,7 @@ export class Agent {
             this.sanitizeFinalResponse(finalResponse),
             `type=meta-review; priorQuality=${reflectionQuality ?? "unknown"}; priorIssueCount=${reflectionIssues.length}`
           ),
-          Agent.QUALITY_PASS_TIMEOUT_MS,
+          adjustedControls.qualityPassTimeoutMs,
           "meta-reflection"
         );
       } catch (error) {
@@ -5491,7 +5669,7 @@ export class Agent {
         const constraints = adjustedControls.verifyDeriveConstraints
           ? await this.withTimeout(
               this.verifier.deriveConstraints(effectiveInput),
-              Agent.QUALITY_PASS_TIMEOUT_MS,
+              adjustedControls.qualityPassTimeoutMs,
               "verify-derive"
             )
           : [];
@@ -5504,7 +5682,7 @@ export class Agent {
                 this.sanitizeFinalResponse(finalResponse),
                 constraints
               ),
-              Agent.QUALITY_PASS_TIMEOUT_MS,
+              adjustedControls.qualityPassTimeoutMs,
               "verify"
             );
 
@@ -5538,7 +5716,7 @@ export class Agent {
             ];
             const fixResponse = await this.withTimeout(
               this.provider.generate(fixMessages, { temperature: 0.3, maxTokens: 2000 }),
-              Agent.QUALITY_PASS_TIMEOUT_MS,
+              adjustedControls.qualityPassTimeoutMs,
               "verify-fix"
             );
             const fixed = fixResponse.content?.trim();
@@ -5571,7 +5749,7 @@ export class Agent {
             this.sanitizeFinalResponse(finalResponse),
             `type=post-iteration; reason=max_iterations_reached; totalIterations=${iterations}; qualityIfNormal=${reflectionQuality ?? "unevaluated"}`
           ),
-          Agent.QUALITY_PASS_TIMEOUT_MS,
+          adjustedControls.qualityPassTimeoutMs,
           "post-iteration"
         );
       } catch (error) {

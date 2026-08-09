@@ -69,6 +69,15 @@ Return these fields in final summary:
 - [TOOL:http({"action":"delete","baseUrl":"http://localhost:3001","path":"/api/shared/file","query":{"path":"notes/old.md"},"allowedHosts":["localhost","127.0.0.1"]})]
 - [TOOL:filesystem({"action":"write","path":"notes/fallback.md","basePath":"./shared-workspace","safeMode":true,"createDirs":true,"content":"fallback write"})]
 
+Note: for the `filesystem` fallback with multi-line content, use the block-write form (verbatim body, no escaping):
+```
+[TOOL:filesystem action=write path=notes/fallback.md basePath=./shared-workspace]
+line one
+line two
+[/TOOL]
+```
+The primary `http` `/api/shared/write` path carries content in the JSON body, where normal escaping applies — the block form does not apply there.
+
 ## Skill Interop
 
 - Use this skill as the strict counterpart to `shared-workspace-ops` when API parity has priority.

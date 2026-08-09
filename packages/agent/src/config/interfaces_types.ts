@@ -115,6 +115,14 @@ export interface AgentRuntimeControls {
   httpToolTimeoutMs: number;
   browserToolTimeoutMs: number;
   gitToolTimeoutMs: number;
+  /**
+   * Per-pass timeout (ms) for the post-run quality passes: reflection, meta-reflection,
+   * verify constraint-derivation, and verify/fix. Each pass is bounded independently so a
+   * single stalled local-model call (e.g. LM Studio hanging) is abandoned and the turn still
+   * completes, instead of freezing until the global no-progress timeout.
+   * Settings key: AGENT_QUALITY_PASS_TIMEOUT_MS (default 45000).
+   */
+  qualityPassTimeoutMs: number;
 
   // Memory & Reflection
   enableAutoMemory: boolean;

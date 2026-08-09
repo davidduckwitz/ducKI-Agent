@@ -120,7 +120,7 @@ export const skillsTool: ToolExecutor = {
         action: {
           type: "string",
           description:
-            "Skill management action. NOTE: 'execute' only runs skills that embed a JavaScript script — it does NOT run shell commands. To run a shell command use the 'shell' tool; most skills (e.g. shell-commands) are documentation only.",
+            "Skill management action. NOTE: 'execute' only runs skills that embed a JavaScript script — it does NOT run shell commands. To run a shell command use the 'shell' tool; most skills (e.g. shell-commands-win, shell-commands-nix) are documentation only.",
           enum: ["list", "list_skills", "get_skills", "view", "create", "patch", "edit", "edit_skill", "rename", "delete", "write_file", "remove_file", "execute"],
         },
         name: { type: "string", description: "Skill name/slug" },
@@ -280,7 +280,7 @@ export const skillsTool: ToolExecutor = {
           const resolved = resolveScriptSource(dir, content, { explicitRelativePath: directScriptFile });
           if (!resolved.ok) {
             // Most skills are documentation/reference (SKILL.md guidance), not runnable
-            // JS. Models sometimes try to "execute" a doc skill like shell-commands
+            // JS. Models sometimes try to "execute" a doc skill like shell-commands-win
             // instead of using the real tool. Redirect them rather than dead-ending.
             return fail(
               `Skill '${slugify(name)}' is a documentation/reference skill with no executable script — do NOT try to execute it. ` +

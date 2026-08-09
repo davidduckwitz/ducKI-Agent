@@ -12,6 +12,10 @@ export interface LLMProvider {
     onChunk?: (chunk: string) => void
   ): Promise<LLMResponse>;
   supportsStreaming(): boolean;
+  /** True when this provider can accept `options.tools` and return structured
+   *  `LLMResponse.toolCalls` (native function-calling). Optional: absent/false means the
+   *  caller should rely on the text `[TOOL:...]` protocol. */
+  supportsNativeTools?(): boolean;
   isAvailable(): Promise<boolean>;
 }
 

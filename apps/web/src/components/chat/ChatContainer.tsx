@@ -132,7 +132,11 @@ export function ChatContainer() {
   const { chatListOpen, toggleChatList } = useUiStore();
   const navigate = useNavigate();
   const [compactMode, setCompactMode] = useState(false);
-  const [planMode, setPlanMode] = useState(false);
+  // Plan mode kind: "cowork" = general task plan (stays in chat, default), "code" = coding
+  // plan that hands off to the Coding Area, null = plan mode off. Default is "cowork" so the
+  // agent plans general tasks in chat instead of always producing a coding plan.
+  const [planKind, setPlanKind] = useState<"code" | "cowork" | null>("cowork");
+  const planMode = planKind !== null;
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});
   const [expandedToolGroups, setExpandedToolGroups] = useState<Record<string, boolean>>({});
@@ -1114,13 +1118,17 @@ ${summary}`;
       setExecutionProgress(0);
       setPlanExecuting(false);
 
-      // Auto-switch to Coding Area when plan is created in chat, handing the plan
-      // over via router state. The coding Plan panel derives its plan from the
-      // coding project's own conversation messages — which do NOT contain this
-      // chat-created plan — so without the handoff the panel shows "Noch kein Plan".
-      setTimeout(() => {
-        navigate("/coding", { state: { handoffPlan: planData } });
-      }, 300);
+      // Only a CODE plan hands off to the Coding Area. A cowork/general plan stays in the
+      // chat and is shown inline. The user's explicit button choice (planKind) is honored
+      // strictly - a cowork plan never jumps to coding, even if its content looks code-ish.
+      if (planKind === "code") {
+        // Hand the plan over via router state. The coding Plan panel derives its plan from
+        // the coding project's own conversation messages — which do NOT contain this
+        // chat-created plan — so without the handoff the panel shows "Noch kein Plan".
+        setTimeout(() => {
+          navigate("/coding", { state: { handoffPlan: planData } });
+        }, 300);
+      }
     }
   };
 
@@ -1632,8 +1640,8 @@ ${summary}`;
               onRemoveFile={(index) => setAttachedFiles((prev) => prev.filter((_, i) => i !== index))}
               analyzeImages={analyzeImages}
               onToggleAnalyzeImages={() => setAnalyzeImages((v) => !v)}
-              planMode={planMode}
-              onTogglePlanMode={() => setPlanMode((prev) => !prev)}
+              planKind={planKind}
+              onSelectPlanKind={(kind) => setPlanKind((prev) => (prev === kind ? null : kind))}
               conversationId={conversationId}
               onInsertSkill={handleInsertSkill}
               onToolExecuted={handleToolExecuted}

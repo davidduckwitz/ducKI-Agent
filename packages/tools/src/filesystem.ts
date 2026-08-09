@@ -226,7 +226,21 @@ export const filesystemTool: ToolExecutor = {
     const dryRun = (input["dryRun"] as boolean | undefined) ?? false;
     const createDirs = (input["createDirs"] as boolean | undefined) ?? true;
     const overwrite = (input["overwrite"] as boolean | undefined) ?? true;
-    let content = input["content"] as string | undefined;
+    // Accept common aliases for the write/append content field. Models frequently
+    // emit "text" (Anthropic text-editor style uses "file_text"), "contents", etc.
+    // instead of "content"; without this a perfectly valid write fails with
+    // "Content required". Only string values are considered.
+    let content = ([
+      input["content"],
+      input["contents"],
+      input["text"],
+      input["file_text"],
+      input["fileText"],
+      input["fileContent"],
+      input["file_contents"],
+      input["data"],
+      input["body"],
+    ].find((v) => typeof v === "string")) as string | undefined;
     const recursive = (input["recursive"] as boolean | undefined) ?? false;
 
     // De-escape literal \n, \t, \r escape sequences (from JSON string parsing)
