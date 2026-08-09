@@ -16,6 +16,8 @@ export interface CompletionToolOptions {
   completesRun?: boolean;
   /** Custom validation function for completion */
   validate?: (input: Record<string, unknown>) => { valid: boolean; reason?: string };
+  /** Optional JSON-schema parameters advertised to the model (defaults to summary/success/details). */
+  parameters?: Record<string, unknown>;
 }
 
 /**
@@ -30,10 +32,30 @@ export function createCompletionTool(options: CompletionToolOptions = {}): ToolE
   const completesRun = options.completesRun ?? true;
   const validate = options.validate;
 
+  const defaultParameters: Record<string, unknown> = {
+    type: "object",
+    properties: {
+      summary: {
+        type: "string",
+        description: "REQUIRED. A concise summary of the final result / what was accomplished. This becomes the final response.",
+      },
+      success: {
+        type: "boolean",
+        description: "Whether the task was completed successfully (default true).",
+      },
+      details: {
+        type: "object",
+        description: "Optional structured details about the solution.",
+      },
+    },
+    required: ["summary"],
+  };
+
   const definition: ToolDefinition = {
     name: toolName,
-    description: `Submit final solution and complete the task. This signals that the agent has finished work and is ready to provide the final response.`,
-  } as any; // schema defined externally in tool-registry
+    description: `Submit the final solution and complete the task. Call this once the work is done to provide the final response.`,
+    parameters: options.parameters ?? defaultParameters,
+  };
 
   return {
     name: toolName,
@@ -92,6 +114,16 @@ export function createCodingCompletionTool(options: {
   return createCompletionTool({
     name: "submit_code",
     completesRun: true,
+    parameters: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "REQUIRED. Concise summary of the code change / what was implemented." },
+        verified: { type: "boolean", description: `Set true only after verification${options.verifyCommand ? ` (run: ${options.verifyCommand})` : ""}.` },
+        success: { type: "boolean", description: "Whether the task completed successfully (default true)." },
+        details: { type: "object", description: "Optional structured details." },
+      },
+      required: options.requiresVerification ? ["summary", "verified"] : ["summary"],
+    },
     validate: (input) => {
       if (options.requiresVerification && !input.verified) {
         return {
@@ -118,6 +150,20 @@ export function createReviewCompletionTool(): ToolExecutor {
   return createCompletionTool({
     name: "submit_review",
     completesRun: true,
+    parameters: {
+      type: "object",
+      properties: {
+        summary: { type: "string", description: "REQUIRED. Concise summary of the review / analysis." },
+        findings: {
+          type: "array",
+          description: "REQUIRED. At least one finding.",
+          items: { type: "object" },
+        },
+        success: { type: "boolean", description: "Whether the review completed successfully (default true)." },
+        details: { type: "object", description: "Optional structured details." },
+      },
+      required: ["summary", "findings"],
+    },
     validate: (input) => {
       const summary = String(input.summary ?? "");
       const findings = input.findings;
