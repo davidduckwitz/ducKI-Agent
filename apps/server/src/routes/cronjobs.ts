@@ -5,6 +5,10 @@ import type { CronjobManager } from "../lib/cronjob-manager.js";
 
 export const cronjobsRouter: IRouter = Router();
 
+/** Supported cronjob target kinds. */
+const CRON_TARGET_TYPES = ["task", "prompt", "tool", "skill", "workflow", "coding"] as const;
+type CronTargetType = (typeof CRON_TARGET_TYPES)[number];
+
 function toEnabled(value: unknown): number {
   if (value === false || value === 0 || value === "0") return 0;
   return 1;
@@ -47,10 +51,12 @@ cronjobsRouter.post("/", async (req, res, next) => {
     const body = req.body as {
       name?: string;
       schedule?: string;
-      targetType?: "task" | "prompt" | "tool" | "skill";
+      targetType?: CronTargetType;
       targetRef?: string;
       payload?: unknown;
       enabled?: boolean;
+      runAt?: string;
+      runOnce?: boolean;
     };
 
     const name = body.name?.trim();
@@ -67,13 +73,20 @@ cronjobsRouter.post("/", async (req, res, next) => {
       return;
     }
 
-    if (!targetType || !["task", "prompt", "tool", "skill"].includes(targetType)) {
-      res.status(400).json(createApiError("targetType must be task, prompt, tool, or skill"));
+    if (!targetType || !CRON_TARGET_TYPES.includes(targetType)) {
+      res.status(400).json(createApiError(`targetType must be one of: ${CRON_TARGET_TYPES.join(", ")}`));
       return;
     }
 
-    if ((targetType === "task" || targetType === "tool" || targetType === "skill") && !body.targetRef?.trim()) {
-      res.status(400).json(createApiError("targetRef is required for task, tool, and skill cronjobs"));
+    // targetRef identifies the concrete thing to run. Coding accepts a goal via payload instead.
+    if (["task", "tool", "skill", "workflow"].includes(targetType) && !body.targetRef?.trim()) {
+      res.status(400).json(createApiError("targetRef is required for task, tool, skill, and workflow cronjobs"));
+      return;
+    }
+
+    const runAt = body.runAt?.trim();
+    if (runAt && Number.isNaN(Date.parse(runAt))) {
+      res.status(400).json(createApiError("runAt must be an ISO date-time"));
       return;
     }
 
@@ -84,6 +97,8 @@ cronjobsRouter.post("/", async (req, res, next) => {
       targetRef: body.targetRef?.trim() || null,
       payload: body.payload !== undefined ? JSON.stringify(body.payload) : null,
       enabled: toEnabled(body.enabled),
+      runAt: runAt || null,
+      runOnce: body.runOnce ? 1 : 0,
     });
 
     res.status(201).json(createApiResponse(created));
@@ -104,10 +119,12 @@ cronjobsRouter.patch("/:id", async (req, res, next) => {
     const body = req.body as {
       name?: string;
       schedule?: string;
-      targetType?: "task" | "prompt" | "tool" | "skill";
+      targetType?: CronTargetType;
       targetRef?: string | null;
       payload?: unknown;
       enabled?: boolean;
+      runAt?: string | null;
+      runOnce?: boolean;
     };
 
     if (body.schedule !== undefined && !isCronExpressionValid(String(body.schedule))) {
@@ -115,8 +132,13 @@ cronjobsRouter.patch("/:id", async (req, res, next) => {
       return;
     }
 
-    if (body.targetType !== undefined && !["task", "prompt", "tool", "skill"].includes(body.targetType)) {
-      res.status(400).json(createApiError("targetType must be task, prompt, tool, or skill"));
+    if (body.targetType !== undefined && !CRON_TARGET_TYPES.includes(body.targetType)) {
+      res.status(400).json(createApiError(`targetType must be one of: ${CRON_TARGET_TYPES.join(", ")}`));
+      return;
+    }
+
+    if (typeof body.runAt === "string" && body.runAt.trim() && Number.isNaN(Date.parse(body.runAt))) {
+      res.status(400).json(createApiError("runAt must be an ISO date-time"));
       return;
     }
 
@@ -127,6 +149,8 @@ cronjobsRouter.patch("/:id", async (req, res, next) => {
       targetRef: body.targetRef === null ? null : body.targetRef?.trim(),
       payload: body.payload !== undefined ? JSON.stringify(body.payload) : undefined,
       enabled: body.enabled === undefined ? undefined : toEnabled(body.enabled),
+      runAt: body.runAt === null ? null : body.runAt?.trim(),
+      runOnce: body.runOnce === undefined ? undefined : body.runOnce ? 1 : 0,
     });
 
     if (!updated) {

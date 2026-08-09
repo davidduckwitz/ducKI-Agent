@@ -200,6 +200,10 @@ export class DatabaseService {
     await this.client.execute(`ALTER TABLE cron_jobs ADD COLUMN conversation_id INTEGER REFERENCES conversations(id)`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
     });
+
+    // One-shot trigger fields (point-in-time jobs, e.g. calendar appointments).
+    await this.client.execute(`ALTER TABLE cron_jobs ADD COLUMN run_at TEXT`).catch(() => {});
+    await this.client.execute(`ALTER TABLE cron_jobs ADD COLUMN run_once INTEGER NOT NULL DEFAULT 0`).catch(() => {});
   }
 
   // ============================================================
@@ -849,7 +853,8 @@ export class DatabaseService {
     data: Omit<CronJobInsert, "id" | "createdAt" | "updatedAt" | "nextRunAt" | "lastRunAt" | "lastStatus" | "lastError" | "lastResult">
   ): Promise<CronJobSelect> {
     const now = new Date().toISOString();
-    const nextRunAt = computeNextRun(data.schedule, new Date()).toISOString();
+    // A one-shot job (runAt set) fires at that exact time; otherwise the recurring schedule drives it.
+    const nextRunAt = data.runAt ? data.runAt : computeNextRun(data.schedule, new Date()).toISOString();
     const result = await this.db
       .insert(schema.cronJobs)
       .values({
@@ -896,6 +901,11 @@ export class DatabaseService {
 
     if (data.schedule) {
       patch.nextRunAt = computeNextRun(data.schedule, new Date()).toISOString();
+    }
+
+    // A patched one-shot time wins over a schedule-derived nextRunAt.
+    if (data.runAt) {
+      patch.nextRunAt = data.runAt;
     }
 
     if (data.enabled === 0) {

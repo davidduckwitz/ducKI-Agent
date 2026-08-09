@@ -720,7 +720,13 @@ async function bootstrap(): Promise<void> {
 	const wikiServiceRef: { current?: LlmWikiService } = {};
 	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager);
 	const defaultAgent = await createAgent();
-	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"));
+	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"), {
+		runWorkflow: (workflowId: string) => workflowEngineRef.current.runWorkflow(workflowId),
+		runCoding: (goal: string, options?: { verifyCommand?: string; sandboxRoot?: string }) =>
+			createCodingAgentFactory({ sandboxRoot: options?.sandboxRoot }).run(goal, {
+				verifyCommand: options?.verifyCommand,
+			}),
+	});
 	cronjobManager.start();
 	await ensureLogCleanupCron(db);
 	await setupDefaultCronjobs(db, logger);

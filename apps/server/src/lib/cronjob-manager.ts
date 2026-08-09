@@ -22,6 +22,14 @@ interface SkillPayload {
   conversationName?: string;
 }
 
+/** Optional dispatchers for target types that run outside the chat agent (workflow, coding). */
+export interface CronjobDispatchers {
+  /** Run a workflow by id (returns a run summary). */
+  runWorkflow?: (workflowId: string) => Promise<unknown>;
+  /** Run the coding agent toward a goal (returns its result). */
+  runCoding?: (goal: string, options?: { verifyCommand?: string; sandboxRoot?: string }) => Promise<unknown>;
+}
+
 export class CronjobManager {
   private timer: NodeJS.Timeout | undefined;
   private readonly running = new Set<number>();
@@ -30,7 +38,8 @@ export class CronjobManager {
   constructor(
     private readonly db: DatabaseService,
     private readonly createAgent: () => Promise<Agent>,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly dispatchers: CronjobDispatchers = {}
   ) {
     this.intervalMs = Number.parseInt(process.env["CRONJOB_TICK_MS"] ?? "30000", 10);
   }
@@ -92,9 +101,14 @@ export class CronjobManager {
     if (this.running.has(job.id)) return;
     this.running.add(job.id);
 
+    // One-shot jobs (e.g. a calendar appointment trigger) fire exactly once, then disable
+    // themselves so a failed run also never repeats.
+    const isOneShot = job.runOnce === 1;
+
     try {
       const result = await this.dispatch(job);
-      const nextRunAt = job.enabled ? computeNextRun(job.schedule, new Date()).toISOString() : undefined;
+      if (isOneShot) await this.db.updateCronJob(job.id, { enabled: 0 });
+      const nextRunAt = !isOneShot && job.enabled ? computeNextRun(job.schedule, new Date()).toISOString() : undefined;
       await this.db.setCronJobRunResult(job.id, {
         status: "success",
         result: result?.slice(0, 4000),
@@ -103,6 +117,7 @@ export class CronjobManager {
       this.logger.info("Cronjob executed", { id: job.id, name: job.name, targetType: job.targetType });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (isOneShot) await this.db.updateCronJob(job.id, { enabled: 0 });
       await this.db.setCronJobRunResult(job.id, {
         status: "failed",
         error: message,
@@ -131,9 +146,40 @@ export class CronjobManager {
         return this.runToolJob(job);
       case "skill":
         return this.runSkillJob(job);
+      case "workflow":
+        return this.runWorkflowJob(job);
+      case "coding":
+        return this.runCodingJob(job);
       default:
         throw new Error(`Unsupported cronjob target type '${job.targetType}'`);
     }
+  }
+
+  private async runWorkflowJob(job: CronJobSelect): Promise<string> {
+    const workflowId = job.targetRef?.trim();
+    if (!workflowId) throw new Error("Workflow cronjob requires targetRef workflow id");
+    if (!this.dispatchers.runWorkflow) throw new Error("Workflow dispatcher is not configured");
+
+    const summary = await this.dispatchers.runWorkflow(workflowId);
+    return typeof summary === "string" ? summary : JSON.stringify(summary);
+  }
+
+  private async runCodingJob(job: CronJobSelect): Promise<string> {
+    interface CodingPayload {
+      goal?: string;
+      verifyCommand?: string;
+      sandboxRoot?: string;
+    }
+    const payload = this.parsePayload<CodingPayload>(job.payload);
+    const goal = payload.goal?.trim() || job.targetRef?.trim();
+    if (!goal) throw new Error("Coding cronjob requires payload.goal or targetRef");
+    if (!this.dispatchers.runCoding) throw new Error("Coding dispatcher is not configured");
+
+    const result = await this.dispatchers.runCoding(goal, {
+      verifyCommand: payload.verifyCommand,
+      sandboxRoot: payload.sandboxRoot,
+    });
+    return typeof result === "string" ? result : JSON.stringify(result);
   }
 
   private async runTaskJob(job: CronJobSelect): Promise<string> {

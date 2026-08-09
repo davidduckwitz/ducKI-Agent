@@ -1,41 +1,39 @@
 ﻿---
 name: plan
 description: "Planning mode: actionable plan only, no direct implementation in this turn."
-related_skills: [fast-answer, history-search, llm-wiki, test-driven-development, code-review, workflow-orchestrator]
-
-primary_skills: [history-search, llm-wiki]
-fallback_skills: [test-driven-development, code-review]
+related_skills: [memory, history-search, llm-wiki, test-driven-development, code-review, workflow-orchestrator]
+primary_skills: [memory, history-search, llm-wiki, workflow-orchestrator]
+fallback_skills: [workflow-orchestrator, test-driven-development, code-review]
 version: 1.0.0
 source: "Inspired by https://github.com/NousResearch/hermes-agent/blob/main/skills/software-development/plan/SKILL.md"
 ---
 
 # Plan Mode
 
-## Zweck
-Nutze diesen Skill, wenn der User einen belastbaren Umsetzungsplan erwartet und nicht sofort Implementierung.
+## Purpose
+Use this skill when the user expects a solid implementation plan and not immediate implementation.
 
-## Regeln
-- Keine produktiven Codeaenderungen in diesem Schritt.
-- Falls noetig nur read-only Repo-Inspektion.
-- Ergebnis ist ein konkreter, testbarer Schritt-fuer-Schritt-Plan.
+## Rules
+- No production code changes in this step.
+- If needed, only read-only repo inspection.
+- The result is a concrete, testable step-by-step plan.
 
-## Plan-Struktur
-1. Ziel und Scope.
-2. Aktueller Stand und Annahmen.
-3. Schrittfolge in kleinen Tasks.
-4. Betroffene Dateien und Schnittstellen.
-5. Test- und Verifikationsstrategie.
-6. Risiken und offene Fragen.
+## Plan structure
+1. Goal and scope.
+2. Current state and assumptions.
+3. Step sequence in small tasks.
+4. Affected files and interfaces.
+5. Test and verification strategy.
+6. Risks and open questions.
 
-## Qualitaetskriterien
-- Jeder Task ist klein und eindeutig.
-- Dateipfade und Kommandos sind konkret.
-- Akzeptanzkriterien sind messbar.
+## Quality criteria
+- Each task is small and unambiguous.
+- File paths and commands are concrete.
+- Acceptance criteria are measurable.
 
 ## Skill Interop
+- Incorporate historical solutions via `history-search` into assumptions/risks.
+- For knowledge/documentation parts, cite `llm-wiki` as a source in the plan.
+- Plan `test-driven-development` for implementation phases and `code-review` for acceptance as downstream steps.
 
-- Vor Plan-Erstellung mit `fast-answer` pruefen, ob die Anfrage ohne Plan geloest werden kann.
-- Historische Loesungen ueber `history-search` in Annahmen/Risiken einbeziehen.
-- Bei Wissens-/Doku-Anteilen `llm-wiki` als Quelle im Plan nennen.
-- Fuer Implementierungsphasen `test-driven-development` und fuer Abnahme `code-review` als nachgelagerte Schritte einplanen.
 

@@ -14,7 +14,7 @@ en.
 
 ## 🔄 Nodes im Detail
 
-### Node 1: Daily Trigger (06:00 CEST)n```jso
+### Node 1: Daily Trigger (06:00 CEST)n```json
 
 {
   "id": "node_1",
@@ -24,11 +24,13 @@ en.
   "timezone": "Europe/Berlin",
   "nextRun": "2026-08-01T06:00:00+02:00",
   "enabled": true
-}n```n**Funktion:** Startet täglich um 06:00 CEST den gesamten Workflown**Abhängigkeiten:** Keinen**Nächster Start:** 01. August 2026, 06:00 CEST
+}
+```
+**Funktion:** Startet täglich um 06:00 CEST den gesamten Workflown **Abhängigkeiten:** Keinen **Nächster Start:** 01. August 2026, 06:00 CEST
 
 ---
 
-### Node 2: BBC News - Krieg & Konflikten```jso
+### Node 2: BBC News - Krieg & Konflikten```json
 
 {
   "id": "node_2",
@@ -44,3 +46,5 @@ en.
   "timeout": 30,
   "headless": true,
   "dependsOn": ["node_1"]
+}
+```

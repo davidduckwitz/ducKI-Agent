@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>News</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%; }
+  body { font-family: system-ui, sans-serif; color: #111; background: transparent; padding: 0.6rem 0.7rem; box-sizing: border-box; }
+  @media (prefers-color-scheme: dark) { body { color: #f3f4f6; } }
+  h2 { margin: 0 0 0.5rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.6; }
+  ol { margin: 0; padding: 0 0 0 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; }
+  li { font-size: 0.84rem; line-height: 1.3; }
+  li a { color: inherit; text-decoration: none; }
+  li a:hover { text-decoration: underline; }
+  .empty { font-size: 0.82rem; opacity: 0.6; list-style: none; margin-left: -1.1rem; }
+  .meta { margin-top: 0.5rem; font-size: 0.68rem; opacity: 0.5; }
+</style>
+</head>
+<body>
+  <h2>📰 Schlagzeilen</h2>
+  <ol id="list"><li class="empty">Lädt …</li></ol>
+  <div class="meta" id="meta"></div>
+<script>
+  const INVOKE = "/api/plugins/news/invoke";
+  const list = document.getElementById("list");
+  const meta = document.getElementById("meta");
+
+  async function invoke(input) {
+    const res = await fetch(INVOKE, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "news", input }),
+    });
+    const json = await res.json().catch(() => ({}));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  function render(r) {
+    list.innerHTML = "";
+    const arts = r.articles || [];
+    if (arts.length === 0) {
+      list.innerHTML = '<li class="empty">Keine Meldungen.</li>';
+      return;
+    }
+    for (const a of arts) {
+      const li = document.createElement("li");
+      if (a.link) {
+        const link = document.createElement("a");
+        link.href = a.link; link.target = "_blank"; link.rel = "noopener noreferrer";
+        link.textContent = a.title;
+        li.appendChild(link);
+      } else {
+        li.textContent = a.title;
+      }
+      list.appendChild(li);
+    }
+    meta.textContent = r.source + (r.cached ? " · Cache" : " · aktualisiert") + " · " + (r.date || "");
+  }
+
+  async function load() {
+    // fetch nutzt den Tages-Cache: höchstens ein Netzabruf pro Tag/Quelle.
+    try { render(await invoke({ action: "fetch", count: 5 })); }
+    catch (e) { list.innerHTML = '<li class="empty">Fehler: ' + e.message + '</li>'; }
+  }
+  load();
+  // Alle 30 Min. neu rendern; dank Cache ohne erneuten Netzabruf.
+  setInterval(load, 1800000);
+</script>
+</body>
+</html>

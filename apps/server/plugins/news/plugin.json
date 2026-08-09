@@ -1,0 +1,25 @@
+{
+  "name": "news",
+  "version": "2.0.0",
+  "description": "Aktuelle Schlagzeilen aus kuratierten, keyless RSS-Feeds (Tagesschau, BBC, Spiegel). Speichert pro Tag und Quelle ein Markdown-Digest in einer plugin-eigenen SQLite-DB (getrennt von der Hauptdatenbank). Abruf höchstens einmal pro Tag (Cache) oder manuell erzwungen; der Agent kann Digests wie über eine API abrufen und weiterverarbeiten.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "📰",
+  "category": "knowledge",
+  "trust": "sandboxed",
+  "allowedHosts": ["www.tagesschau.de", "feeds.bbci.co.uk", "www.spiegel.de"],
+  "storage": { "sqlite": true },
+  "provides": {
+    "scriptTools": ["tools/news.tool.json"],
+    "skills": ["skills/news-usage"],
+    "frontendPage": "app/index.html",
+    "widgetPage": "widget/index.html",
+    "widgetPlacement": "both",
+    "settingsPage": "settings/index.html",
+    "settings": [
+      { "key": "default_source", "type": "select", "options": ["tagesschau", "tagesschau-ausland", "bbc", "bbc-world", "spiegel"], "default": "tagesschau", "description": "Standard-Nachrichtenquelle, wenn keine angegeben ist" },
+      { "key": "default_count", "type": "number", "default": 10, "description": "Standard-Anzahl der Meldungen (1-30)" }
+    ]
+  },
+  "enabled": true
+}

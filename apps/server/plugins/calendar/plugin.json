@@ -1,0 +1,24 @@
+{
+  "name": "calendar",
+  "version": "2.0.0",
+  "description": "Persistenter Kalender mit Terminen in einer plugin-eigenen SQLite-Datenbank (getrennt von der Hauptdatenbank). Eigene Frontend-Seite (FullCalendar), Widget mit den nächsten Terminen und ein Tool, mit dem der Agent Termine anlegen, lesen, ändern und löschen kann.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "📅",
+  "category": "knowledge",
+  "storage": { "sqlite": true },
+  "provides": {
+    "scriptTools": ["tools/calendar.tool.json"],
+    "skills": ["skills/calendar-usage"],
+    "frontendPage": "app/index.html",
+    "widgetPage": "widget/index.html",
+    "widgetPlacement": "both",
+    "settingsPage": "settings/index.html",
+    "settings": [
+      { "key": "default_view", "type": "select", "options": ["dayGridMonth", "timeGridWeek", "timeGridDay", "listWeek", "multiMonthYear"], "default": "dayGridMonth", "description": "Standard-Ansicht beim Öffnen des Kalenders" },
+      { "key": "default_category", "type": "select", "options": ["work", "private", "important"], "default": "work", "description": "Vorausgewählte Kategorie für neue Termine" },
+      { "key": "week_starts_monday", "type": "boolean", "default": true, "description": "Woche beginnt am Montag (statt Sonntag)" }
+    ]
+  },
+  "enabled": true
+}

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>News</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 1.1rem; line-height: 1.5; }
+  h1 { font-size: 1.15rem; margin: 0 0 0.9rem; display: flex; align-items: center; gap: 0.5rem; }
+  .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+  select, input, button { font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #8884; border-radius: 7px; background: transparent; color: inherit; }
+  input[type=number] { width: 5rem; }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  button.ghost { background: #8881; }
+  .layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 1.1rem; align-items: start; }
+  @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
+  .panel { border: 1px solid #8883; border-radius: 10px; padding: 0.7rem; }
+  .panel h2 { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.6; margin: 0 0 0.6rem; }
+  .digest { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.4rem 0.3rem; border-top: 1px solid #8882; cursor: pointer; }
+  .digest:first-of-type { border-top: 0; }
+  .digest:hover { background: #8881; border-radius: 6px; }
+  .digest.active { background: #2563eb22; border-radius: 6px; }
+  .digest .d { font-size: 0.82rem; }
+  .digest .s { font-size: 0.72rem; opacity: 0.6; }
+  .del { border: 0; background: #dc26261a; color: #dc2626; padding: 0.2rem 0.45rem; font-size: 0.72rem; border-radius: 5px; }
+  article { border-top: 1px solid #8882; padding: 0.6rem 0; }
+  article:first-of-type { border-top: 0; }
+  article .t { font-weight: 600; font-size: 0.95rem; }
+  article .t a { color: inherit; text-decoration: none; }
+  article .t a:hover { text-decoration: underline; }
+  article .m { font-size: 0.72rem; opacity: 0.55; margin: 0.15rem 0; }
+  article .sum { font-size: 0.86rem; opacity: 0.9; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.6rem; }
+  .head h2 { margin: 0; font-size: 1rem; }
+  .head .when { font-size: 0.72rem; opacity: 0.6; }
+  #status { margin: 0.6rem 0; font-size: 0.85rem; min-height: 1.2em; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+  .empty { opacity: 0.6; font-size: 0.9rem; padding: 0.5rem 0; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; background: #8881; padding: 0.7rem; border-radius: 8px; }
+</style>
+</head>
+<body>
+  <h1>📰 News</h1>
+
+  <div class="controls">
+    <select id="source">
+      <option value="all">Alle Quellen</option>
+      <option value="tagesschau">Tagesschau</option>
+      <option value="tagesschau-ausland">Tagesschau Ausland</option>
+      <option value="bbc">BBC</option>
+      <option value="bbc-world">BBC World</option>
+      <option value="spiegel">Spiegel</option>
+    </select>
+    <input id="count" type="number" min="1" max="30" value="10" title="Anzahl" />
+    <input id="query" type="text" placeholder="Filter (optional)" />
+    <button class="primary" id="fetchBtn">Abrufen</button>
+    <button class="ghost" id="forceBtn" title="Tages-Cache ignorieren">Neu laden</button>
+    <button class="ghost" id="mdBtn" title="Markdown anzeigen">Markdown</button>
+  </div>
+
+  <div id="status"></div>
+
+  <div class="layout">
+    <div class="panel">
+      <h2>Gespeicherte Digests</h2>
+      <div id="digests"><div class="empty">—</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="head">
+        <h2 id="viewTitle">Meldungen</h2>
+        <span class="when" id="viewWhen"></span>
+      </div>
+      <div id="view"><div class="empty">Noch nichts geladen. Klicke „Abrufen".</div></div>
+      <pre id="md" style="display:none"></pre>
+    </div>
+  </div>
+
+<script>
+  const INVOKE = "/api/plugins/news/invoke";
+  const $ = (id) => document.getElementById(id);
+  const status = (msg, ok) => { const s = $("status"); s.textContent = msg || ""; s.className = ok ? "ok" : "err"; };
+  let current = { source: null, date: null, markdown: "" };
+  let mdVisible = false;
+
+  async function invoke(input) {
+    const res = await fetch(INVOKE, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "news", input }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  function renderView(r) {
+    current = { source: r.source, date: r.date, markdown: r.markdown || "" };
+    $("viewTitle").textContent = "Meldungen · " + (r.source || "");
+    $("viewWhen").textContent = (r.date || "") + (r.cached ? " · Cache" : r.fetchedNow ? " · neu geladen" : "");
+    $("md").textContent = current.markdown;
+    $("md").style.display = mdVisible ? "block" : "none";
+    const view = $("view");
+    view.innerHTML = "";
+    const arts = r.articles || [];
+    if (arts.length === 0) { view.innerHTML = '<div class="empty">Keine Meldungen.</div>'; return; }
+    for (const a of arts) {
+      const el = document.createElement("article");
+      const t = document.createElement("div"); t.className = "t";
+      if (a.link) { const link = document.createElement("a"); link.href = a.link; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = a.title; t.appendChild(link); }
+      else { t.textContent = a.title; }
+      const m = document.createElement("div"); m.className = "m"; m.textContent = (a.source ? a.source + " · " : "") + (a.pubDate || "");
+      el.appendChild(t); el.appendChild(m);
+      if (a.summary) { const sm = document.createElement("div"); sm.className = "sum"; sm.textContent = a.summary; el.appendChild(sm); }
+      view.appendChild(el);
+    }
+  }
+
+  async function refreshDigests() {
+    try {
+      const r = await invoke({ action: "list" });
+      const box = $("digests");
+      box.innerHTML = "";
+      const rows = r.digests || [];
+      if (rows.length === 0) { box.innerHTML = '<div class="empty">Noch keine.</div>'; return; }
+      for (const d of rows) {
+        const row = document.createElement("div");
+        row.className = "digest" + (d.date === current.date && d.source === current.source ? " active" : "");
+        const info = document.createElement("div");
+        info.innerHTML = '<div class="d">' + d.date + '</div><div class="s">' + d.source + " · " + d.count + " Meldungen</div>";
+        info.onclick = () => openDigest(d);
+        const del = document.createElement("button");
+        del.className = "del"; del.textContent = "Löschen";
+        del.onclick = (e) => { e.stopPropagation(); removeDigest(d); };
+        row.appendChild(info); row.appendChild(del);
+        box.appendChild(row);
+      }
+    } catch (e) { status("Liste fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function openDigest(d) {
+    try { const r = await invoke({ action: "get", date: d.date, source: d.source, count: 30 }); renderView(r); refreshDigests(); status(""); }
+    catch (e) { status("Öffnen fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function removeDigest(d) {
+    try { await invoke({ action: "delete", id: d.id }); status("Gelöscht.", true); if (current.date === d.date && current.source === d.source) { $("view").innerHTML = '<div class="empty">Gelöscht.</div>'; current = { source: null, date: null, markdown: "" }; } refreshDigests(); }
+    catch (e) { status("Löschen fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function doFetch(force) {
+    const source = $("source").value;
+    let count = parseInt($("count").value, 10); if (!Number.isFinite(count) || count < 1) count = 10; if (count > 30) count = 30;
+    const query = $("query").value.trim() || undefined;
+    status(force ? "Lade neu …" : "Abrufen …", true);
+    try {
+      const r = await invoke({ action: "fetch", source, count, query, force: !!force });
+      renderView(r);
+      status(r.fetchedNow ? "Neu abgerufen." : "Aus Cache (heute bereits geladen).", true);
+      refreshDigests();
+    } catch (e) { status("Abruf fehlgeschlagen: " + e.message, false); }
+  }
+
+  $("fetchBtn").onclick = () => doFetch(false);
+  $("forceBtn").onclick = () => doFetch(true);
+  $("mdBtn").onclick = () => { mdVisible = !mdVisible; $("md").style.display = mdVisible ? "block" : "none"; };
+
+  (async () => {
+    await refreshDigests();
+    try { const r = await invoke({ action: "latest", count: 30 }); if (r.found) renderView(r); } catch (e) {}
+  })();
+</script>
+</body>
+</html>

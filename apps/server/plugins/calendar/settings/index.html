@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kalender — Einstellungen</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 1.25rem; line-height: 1.5; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
+  p.hint { margin: 0 0 1rem; opacity: 0.75; font-size: 0.85rem; }
+  label { display: block; margin: 0.9rem 0 0.3rem; font-weight: 600; font-size: 0.85rem; }
+  select { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; }
+  .toggle { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 0.9rem; }
+  .toggle label { margin: 0; }
+  .row { display: flex; gap: 0.5rem; margin-top: 1.25rem; }
+  button { padding: 0.5rem 0.9rem; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .primary { background: #7c3aed; color: #fff; }
+  #status { margin-top: 0.75rem; font-size: 0.85rem; min-height: 1.2em; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+</style>
+</head>
+<body>
+  <h1>📅 Kalender-Einstellungen</h1>
+  <p class="hint">Diese Vorgaben gelten für die Kalender-Seite. Termine selbst werden in der eigenen Plugin-Datenbank gespeichert.</p>
+
+  <label for="default_view">Standard-Ansicht</label>
+  <select id="default_view">
+    <option value="dayGridMonth">Monat</option>
+    <option value="timeGridWeek">Woche</option>
+    <option value="timeGridDay">Tag</option>
+    <option value="listWeek">Liste</option>
+    <option value="multiMonthYear">Jahr</option>
+  </select>
+
+  <label for="default_category">Standard-Kategorie für neue Termine</label>
+  <select id="default_category">
+    <option value="work">Arbeit</option>
+    <option value="private">Privat</option>
+    <option value="important">Wichtig</option>
+  </select>
+
+  <div class="toggle">
+    <label for="week_starts_monday">Woche beginnt am Montag</label>
+    <input id="week_starts_monday" type="checkbox" />
+  </div>
+
+  <div class="row">
+    <button class="primary" id="save">Speichern</button>
+  </div>
+  <div id="status"></div>
+
+<script>
+  const NAME = "calendar";
+  const BASE = "/api/plugins/" + NAME;
+  const $ = (id) => document.getElementById(id);
+  const status = (msg, ok) => { const s = $("status"); s.textContent = msg || ""; s.className = ok ? "ok" : "err"; };
+
+  async function load() {
+    try {
+      const res = await fetch(BASE + "/settings");
+      const json = await res.json();
+      const v = (json.data && json.data.values) || json.values || {};
+      if (v.default_view) $("default_view").value = v.default_view;
+      if (v.default_category) $("default_category").value = v.default_category;
+      $("week_starts_monday").checked = v.week_starts_monday === true || v.week_starts_monday === "true";
+    } catch (e) { status("Konnte Einstellungen nicht laden: " + e.message, false); }
+  }
+
+  async function save() {
+    const values = {
+      default_view: $("default_view").value,
+      default_category: $("default_category").value,
+      week_starts_monday: $("week_starts_monday").checked
+    };
+    try {
+      const res = await fetch(BASE + "/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+      status("Gespeichert.", true);
+    } catch (e) { status("Speichern fehlgeschlagen: " + e.message, false); }
+  }
+
+  $("save").onclick = save;
+  load();
+</script>
+</body>
+</html>

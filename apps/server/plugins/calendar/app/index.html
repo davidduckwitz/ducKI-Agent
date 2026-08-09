@@ -1,0 +1,5057 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark" data-color-scheme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Calendar Dashboard</title>
+
+  <!-- =========================================================
+       GOOGLE FONT
+  ========================================================== -->
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  >
+
+
+  <!-- =========================================================
+       FULLCALENDAR 7
+  ========================================================== -->
+
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@7.0.2/all/global.js"></script>
+
+  <!-- Monarch Theme -->
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@7.0.2/themes/monarch/global.js"></script>
+
+  <link
+    href="https://cdn.jsdelivr.net/npm/fullcalendar@7.0.2/skeleton.css"
+    rel="stylesheet"
+  >
+
+  <link
+    href="https://cdn.jsdelivr.net/npm/fullcalendar@7.0.2/themes/monarch/theme.css"
+    rel="stylesheet"
+  >
+
+  <link
+    href="https://cdn.jsdelivr.net/npm/fullcalendar@7.0.2/themes/monarch/palettes/purple.css"
+    rel="stylesheet"
+  >
+
+
+  <!-- =========================================================
+       CSS
+  ========================================================== -->
+
+  <style>
+
+    /* ========================================================
+       VARIABLES
+    ========================================================= */
+
+    :root {
+
+      --bg: #f4f5f9;
+
+      --surface: #ffffff;
+
+      --surface-2: #f7f7fa;
+
+      --surface-3: #eeeeF3;
+
+      --border: #e3e4ea;
+
+      --border-strong: #d5d6de;
+
+      --text: #18181b;
+
+      --text-secondary: #52525b;
+
+      --muted: #71717a;
+
+      --primary: #7c3aed;
+
+      --primary-hover: #6d28d9;
+
+      --primary-soft: rgba(124, 58, 237, .10);
+
+      --success: #22c55e;
+
+      --warning: #f59e0b;
+
+      --danger: #ef4444;
+
+      --info: #3b82f6;
+
+      --shadow:
+        0 10px 35px rgba(0, 0, 0, .07);
+
+      --shadow-large:
+        0 25px 80px rgba(0, 0, 0, .12);
+
+      --radius: 18px;
+
+    }
+
+
+    html[data-theme="dark"] {
+
+      --bg: #0b0b0f;
+
+      --surface: #141419;
+
+      --surface-2: #1b1b22;
+
+      --surface-3: #22222b;
+
+      --border: #292932;
+
+      --border-strong: #383842;
+
+      --text: #f4f4f5;
+
+      --text-secondary: #d4d4d8;
+
+      --muted: #a1a1aa;
+
+      --primary: #8b5cf6;
+
+      --primary-hover: #a78bfa;
+
+      --primary-soft: rgba(139, 92, 246, .14);
+
+      --shadow:
+        0 15px 50px rgba(0, 0, 0, .35);
+
+      --shadow-large:
+        0 30px 100px rgba(0, 0, 0, .55);
+
+    }
+
+
+    /* ========================================================
+       RESET
+    ========================================================= */
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+
+    html {
+      min-height: 100%;
+    }
+
+
+    body {
+
+      margin: 0;
+
+      min-height: 100vh;
+
+      font-family:
+        "Inter",
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+
+      background: var(--bg);
+
+      color: var(--text);
+
+      transition:
+        background-color .25s ease,
+        color .25s ease;
+
+    }
+
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+
+    button {
+      cursor: pointer;
+    }
+
+
+    /* ========================================================
+       APP
+    ========================================================= */
+
+    .app {
+
+      width: 100%;
+
+      max-width: 1700px;
+
+      margin: 0 auto;
+
+      padding:
+        20px
+        24px
+        40px;
+
+    }
+
+
+    /* ========================================================
+       TOPBAR
+    ========================================================= */
+
+    .topbar {
+
+      display: flex;
+
+      align-items: center;
+
+      justify-content: space-between;
+
+      gap: 20px;
+
+      margin-bottom: 20px;
+
+    }
+
+
+    .brand {
+
+      display: flex;
+
+      align-items: center;
+
+      gap: 13px;
+
+    }
+
+
+    .brand-icon {
+
+      width: 46px;
+
+      height: 46px;
+
+      display: flex;
+
+      align-items: center;
+
+      justify-content: center;
+
+      border-radius: 14px;
+
+      color: #fff;
+
+      font-size: 21px;
+
+      background:
+        linear-gradient(
+          135deg,
+          #7c3aed,
+          #a855f7
+        );
+
+      box-shadow:
+        0 8px 25px
+        rgba(124, 58, 237, .35);
+
+      flex-shrink: 0;
+
+    }
+
+
+    .brand-text h1 {
+
+      margin: 0;
+
+      font-size: 18px;
+
+      line-height: 1.2;
+
+      font-weight: 800;
+
+      letter-spacing: -.03em;
+
+    }
+
+
+    .brand-text p {
+
+      margin: 4px 0 0;
+
+      font-size: 11px;
+
+      color: var(--muted);
+
+    }
+
+
+    .top-actions {
+
+      display: flex;
+
+      align-items: center;
+
+      gap: 8px;
+
+    }
+
+
+    /* ========================================================
+       BUTTONS
+    ========================================================= */
+
+    .icon-button,
+    .secondary-button,
+    .primary-button,
+    .danger-button {
+
+      min-height: 40px;
+
+      border-radius: 10px;
+
+      padding:
+        0 13px;
+
+      border:
+        1px solid var(--border);
+
+      background:
+        var(--surface);
+
+      color:
+        var(--text);
+
+      transition:
+        background-color .18s ease,
+        border-color .18s ease,
+        color .18s ease,
+        transform .18s ease,
+        box-shadow .18s ease;
+
+    }
+
+
+    .icon-button {
+
+      width: 42px;
+
+      padding: 0;
+
+      display: inline-flex;
+
+      align-items: center;
+
+      justify-content: center;
+
+    }
+
+
+    .icon-button:hover,
+    .secondary-button:hover {
+
+      background:
+        var(--surface-2);
+
+      border-color:
+        var(--border-strong);
+
+    }
+
+
+    .primary-button {
+
+      background:
+        var(--primary);
+
+      color:
+        #fff;
+
+      border-color:
+        var(--primary);
+
+      font-weight: 600;
+
+    }
+
+
+    .primary-button:hover {
+
+      background:
+        var(--primary-hover);
+
+      border-color:
+        var(--primary-hover);
+
+      transform:
+        translateY(-1px);
+
+      box-shadow:
+        0 7px 20px
+        rgba(124, 58, 237, .25);
+
+    }
+
+
+    .danger-button {
+
+      color:
+        var(--danger);
+
+      border-color:
+        rgba(239, 68, 68, .25);
+
+      background:
+        rgba(239, 68, 68, .08);
+
+    }
+
+
+    .danger-button:hover {
+
+      background:
+        rgba(239, 68, 68, .14);
+
+    }
+
+
+    /* ========================================================
+       MAIN DASHBOARD
+       
+       WICHTIG:
+       Sidebar = Spalte 1
+       Kalender = Spalte 2
+    ========================================================= */
+
+    .dashboard {
+
+      display: grid !important;
+
+      grid-template-columns:
+        250px
+        minmax(0, 1fr) !important;
+
+      grid-template-rows:
+        auto !important;
+
+      gap: 20px;
+
+      width: 100%;
+
+      align-items: start;
+
+    }
+
+
+    /* ========================================================
+       SIDEBAR
+    ========================================================= */
+
+    .dashboard > .sidebar {
+
+      grid-column: 1 !important;
+
+      grid-row: 1 !important;
+
+      width: 250px;
+
+      min-width: 0;
+
+      padding: 18px;
+
+      background:
+        var(--surface);
+
+      border:
+        1px solid var(--border);
+
+      border-radius:
+        var(--radius);
+
+      box-shadow:
+        var(--shadow);
+
+      position:
+        sticky;
+
+      top: 20px;
+
+    }
+
+
+    .sidebar-section {
+
+      margin-bottom: 26px;
+
+    }
+
+
+    .sidebar-section:last-child {
+
+      margin-bottom: 0;
+
+    }
+
+
+    .sidebar-title {
+
+      margin:
+        0
+        0
+        9px;
+
+      font-size: 10px;
+
+      line-height: 1.2;
+
+      font-weight: 800;
+
+      letter-spacing: .10em;
+
+      text-transform: uppercase;
+
+      color:
+        var(--muted);
+
+    }
+
+
+    .sidebar-button {
+
+      width: 100%;
+
+      min-height: 36px;
+
+      display: flex;
+
+      align-items: center;
+
+      gap: 10px;
+
+      padding:
+        8px
+        10px;
+
+      margin:
+        2px
+        0;
+
+      border:
+        1px solid transparent;
+
+      border-radius: 9px;
+
+      background:
+        transparent;
+
+      color:
+        var(--text);
+
+      text-align:
+        left;
+
+      transition:
+        .18s ease;
+
+    }
+
+
+    .sidebar-button:hover {
+
+      background:
+        var(--surface-2);
+
+    }
+
+
+    .sidebar-button.active {
+
+      background:
+        var(--primary-soft);
+
+      color:
+        var(--primary);
+
+      font-weight:
+        600;
+
+    }
+
+
+    .sidebar-button:focus-visible {
+
+      outline:
+        2px solid
+        var(--primary);
+
+      outline-offset:
+        2px;
+
+    }
+
+
+    .dot {
+
+      width: 8px;
+
+      height: 8px;
+
+      flex:
+        0 0 8px;
+
+      border-radius:
+        50%;
+
+      background:
+        var(--primary);
+
+    }
+
+
+    .dot.green {
+      background: var(--success);
+    }
+
+
+    .dot.orange {
+      background: var(--warning);
+    }
+
+
+    .dot.red {
+      background: var(--danger);
+    }
+
+
+    .view-icon {
+
+      width: 15px;
+
+      text-align: center;
+
+      opacity: .8;
+
+    }
+
+
+    /* ========================================================
+       SETTINGS
+    ========================================================= */
+
+    .setting {
+
+      display: flex;
+
+      align-items: center;
+
+      justify-content: space-between;
+
+      gap: 10px;
+
+      min-height: 35px;
+
+      font-size: 12px;
+
+    }
+
+
+    .setting label:first-child {
+
+      cursor: pointer;
+
+      color:
+        var(--text-secondary);
+
+    }
+
+
+    .switch {
+
+      position: relative;
+
+      width: 38px;
+
+      height: 21px;
+
+      flex:
+        0 0 38px;
+
+    }
+
+
+    .switch input {
+
+      position: absolute;
+
+      opacity: 0;
+
+      pointer-events: none;
+
+    }
+
+
+    .slider {
+
+      position: absolute;
+
+      inset: 0;
+
+      border-radius:
+        999px;
+
+      background:
+        #52525b;
+
+      transition:
+        .2s ease;
+
+      cursor: pointer;
+
+    }
+
+
+    .slider::before {
+
+      content: "";
+
+      position: absolute;
+
+      width: 15px;
+
+      height: 15px;
+
+      left: 3px;
+
+      top: 3px;
+
+      border-radius:
+        50%;
+
+      background:
+        #fff;
+
+      transition:
+        .2s ease;
+
+      box-shadow:
+        0 1px 3px
+        rgba(0,0,0,.25);
+
+    }
+
+
+    .switch input:checked + .slider {
+
+      background:
+        var(--primary);
+
+    }
+
+
+    .switch input:checked + .slider::before {
+
+      transform:
+        translateX(17px);
+
+    }
+
+
+    /* ========================================================
+       CALENDAR CARD
+    ========================================================= */
+
+    .dashboard > .calendar-card {
+
+      grid-column: 2 !important;
+
+      grid-row: 1 !important;
+
+      width: 100%;
+
+      min-width: 0;
+
+      overflow: hidden;
+
+      background:
+        var(--surface);
+
+      border:
+        1px solid var(--border);
+
+      border-radius:
+        var(--radius);
+
+      box-shadow:
+        var(--shadow);
+
+    }
+
+
+    .calendar-header {
+
+      min-height: 72px;
+
+      display: flex;
+
+      align-items: center;
+
+      justify-content: space-between;
+
+      gap: 15px;
+
+      padding:
+        15px
+        20px;
+
+      border-bottom:
+        1px solid var(--border);
+
+    }
+
+
+    .calendar-header h2 {
+
+      margin:
+        0;
+
+      font-size:
+        15px;
+
+      font-weight:
+        700;
+
+    }
+
+
+    .calendar-header p {
+
+      margin:
+        4px
+        0
+        0;
+
+      color:
+        var(--muted);
+
+      font-size:
+        11px;
+
+    }
+
+
+    /* ========================================================
+       FULLCALENDAR
+    ========================================================= */
+
+    #calendar {
+
+      width: 100%;
+
+      min-width: 0;
+
+      min-height: 760px;
+
+      padding:
+        18px;
+
+    }
+
+
+    #calendar .fc {
+
+      width: 100%;
+
+      max-width: 100%;
+
+      color:
+        var(--text);
+
+      background:
+        var(--surface);
+
+      --fc-border-color:
+        var(--border);
+
+      --fc-page-bg-color:
+        var(--surface);
+
+      --fc-neutral-bg-color:
+        var(--surface-2);
+
+      --fc-neutral-text-color:
+        var(--muted);
+
+      --fc-list-event-hover-bg-color:
+        var(--surface-2);
+
+      --fc-today-bg-color:
+        rgba(124, 58, 237, .08);
+
+      --fc-now-indicator-color:
+        #ef4444;
+
+    }
+
+
+    #calendar .fc-view-harness,
+    #calendar .fc-view-harness-active {
+
+      width: 100%;
+
+      min-width: 0;
+
+    }
+
+
+    .fc-theme-standard td,
+    .fc-theme-standard th {
+
+      border-color:
+        var(--border) !important;
+
+    }
+
+
+    .fc .fc-scrollgrid {
+
+      border:
+        1px solid
+        var(--border) !important;
+
+      border-radius:
+        12px;
+
+      overflow:
+        hidden;
+
+    }
+
+
+    .fc .fc-toolbar {
+
+      display: flex;
+
+      align-items: center;
+
+      gap: 10px;
+
+      margin-bottom:
+        18px;
+
+      flex-wrap:
+        wrap;
+
+    }
+
+
+    .fc .fc-toolbar-title {
+
+      font-size:
+        21px;
+
+      font-weight:
+        800;
+
+      color:
+        var(--text);
+
+      letter-spacing:
+        -.03em;
+
+    }
+
+
+    .fc .fc-button {
+
+      border:
+        1px solid
+        var(--border);
+
+      background:
+        var(--surface-2);
+
+      color:
+        var(--text);
+
+      box-shadow:
+        none;
+
+      border-radius:
+        8px;
+
+      font-weight:
+        600;
+
+      transition:
+        .18s ease;
+
+    }
+
+
+    .fc .fc-button:hover {
+
+      background:
+        var(--primary);
+
+      border-color:
+        var(--primary);
+
+      color:
+        #fff;
+
+    }
+
+
+    .fc .fc-button-primary:not(:disabled).fc-button-active {
+
+      background:
+        var(--primary);
+
+      border-color:
+        var(--primary);
+
+      color:
+        #fff;
+
+    }
+
+
+    .fc .fc-button:focus {
+
+      box-shadow:
+        0 0 0 3px
+        var(--primary-soft);
+
+    }
+
+
+    .fc .fc-daygrid-day-number {
+
+      color:
+        var(--text);
+
+      font-size:
+        12px;
+
+    }
+
+
+    .fc .fc-col-header-cell-cushion {
+
+      color:
+        var(--text);
+
+      font-size:
+        11px;
+
+      font-weight:
+        700;
+
+    }
+
+
+    .fc .fc-day-today .fc-daygrid-day-number {
+
+      color:
+        var(--primary);
+
+      font-weight:
+        800;
+
+    }
+
+
+    .fc .fc-day-today {
+
+      background:
+        var(--fc-today-bg-color) !important;
+
+    }
+
+
+    .fc .fc-daygrid-more-link {
+
+      color:
+        var(--primary);
+
+      font-weight:
+        600;
+
+    }
+
+
+    .fc-event {
+
+      border:
+        0 !important;
+
+      border-radius:
+        6px !important;
+
+      padding:
+        2px
+        5px !important;
+
+      font-size:
+        11px !important;
+
+      font-weight:
+        600 !important;
+
+      cursor:
+        pointer;
+
+    }
+
+
+    .fc .fc-timegrid-slot {
+
+      height:
+        42px;
+
+    }
+
+
+    .fc .fc-timegrid-axis-cushion {
+
+      color:
+        var(--muted);
+
+    }
+
+
+    .fc .fc-timegrid-now-indicator-line {
+
+      border-width:
+        2px;
+
+    }
+
+
+    .fc .fc-list-day-cushion {
+
+      background:
+        var(--surface-2) !important;
+
+    }
+
+
+    .fc .fc-list-event-title a,
+    .fc .fc-list-event-time {
+
+      color:
+        var(--text) !important;
+
+    }
+
+
+    .fc .fc-list-event:hover td {
+
+      background:
+        var(--surface-2) !important;
+
+    }
+
+
+    .fc .fc-non-business {
+
+      background:
+        rgba(127, 127, 127, .035) !important;
+
+    }
+
+
+    /* ========================================================
+       EVENT DOT / ICON
+    ========================================================= */
+
+    .custom-event-content {
+
+      display:
+        flex;
+
+      align-items:
+        center;
+
+      gap:
+        4px;
+
+      overflow:
+        hidden;
+
+      white-space:
+        nowrap;
+
+    }
+
+
+    .custom-event-title {
+
+      overflow:
+        hidden;
+
+      text-overflow:
+        ellipsis;
+
+    }
+
+
+    .custom-event-location {
+
+      opacity:
+        .75;
+
+      flex:
+        0 0 auto;
+
+    }
+
+
+    /* ========================================================
+       MODAL
+    ========================================================= */
+
+    .modal-backdrop {
+
+      position:
+        fixed;
+
+      inset:
+        0;
+
+      z-index:
+        1000;
+
+      display:
+        none;
+
+      align-items:
+        center;
+
+      justify-content:
+        center;
+
+      padding:
+        20px;
+
+      background:
+        rgba(0,0,0,.65);
+
+      backdrop-filter:
+        blur(8px);
+
+    }
+
+
+    .modal-backdrop.open {
+
+      display:
+        flex;
+
+    }
+
+
+    .modal {
+
+      width:
+        min(520px, 100%);
+
+      max-height:
+        90vh;
+
+      overflow:
+        auto;
+
+      background:
+        var(--surface);
+
+      border:
+        1px solid
+        var(--border);
+
+      border-radius:
+        18px;
+
+      box-shadow:
+        var(--shadow-large);
+
+      animation:
+        modalIn
+        .18s
+        ease-out;
+
+    }
+
+
+    @keyframes modalIn {
+
+      from {
+
+        opacity:
+          0;
+
+        transform:
+          translateY(10px)
+          scale(.98);
+
+      }
+
+      to {
+
+        opacity:
+          1;
+
+        transform:
+          translateY(0)
+          scale(1);
+
+      }
+
+    }
+
+
+    .modal-header {
+
+      display:
+        flex;
+
+      align-items:
+        center;
+
+      justify-content:
+        space-between;
+
+      gap:
+        15px;
+
+      padding:
+        18px
+        20px;
+
+      border-bottom:
+        1px solid
+        var(--border);
+
+    }
+
+
+    .modal-header h3 {
+
+      margin:
+        0;
+
+      font-size:
+        17px;
+
+    }
+
+
+    .modal-body {
+
+      padding:
+        20px;
+
+    }
+
+
+    .form-group {
+
+      margin-bottom:
+        15px;
+
+    }
+
+
+    .form-group:last-child {
+
+      margin-bottom:
+        0;
+
+    }
+
+
+    .form-group > label {
+
+      display:
+        block;
+
+      margin-bottom:
+        7px;
+
+      color:
+        var(--muted);
+
+      font-size:
+        12px;
+
+      font-weight:
+        600;
+
+    }
+
+
+    .form-control {
+
+      display:
+        block;
+
+      width:
+        100%;
+
+      min-height:
+        42px;
+
+      padding:
+        9px
+        11px;
+
+      border:
+        1px solid
+        var(--border);
+
+      border-radius:
+        9px;
+
+      outline:
+        none;
+
+      background:
+        var(--surface-2);
+
+      color:
+        var(--text);
+
+      transition:
+        .18s ease;
+
+    }
+
+
+    .form-control:focus {
+
+      border-color:
+        var(--primary);
+
+      box-shadow:
+        0 0 0 3px
+        var(--primary-soft);
+
+    }
+
+
+    textarea.form-control {
+
+      min-height:
+        100px;
+
+      resize:
+        vertical;
+
+    }
+
+
+    .form-row {
+
+      display:
+        grid;
+
+      grid-template-columns:
+        1fr
+        1fr;
+
+      gap:
+        12px;
+
+    }
+
+
+    .modal-footer {
+
+      display:
+        flex;
+
+      align-items:
+        center;
+
+      justify-content:
+        space-between;
+
+      gap:
+        10px;
+
+      padding:
+        15px
+        20px;
+
+      border-top:
+        1px solid
+        var(--border);
+
+    }
+
+
+    .modal-footer-right {
+
+      display:
+        flex;
+
+      gap:
+        8px;
+
+    }
+
+
+    /* ========================================================
+       TOAST
+    ========================================================= */
+
+    .toast-container {
+
+      position:
+        fixed;
+
+      right:
+        20px;
+
+      bottom:
+        20px;
+
+      z-index:
+        2000;
+
+      display:
+        flex;
+
+      flex-direction:
+        column;
+
+      gap:
+        8px;
+
+      pointer-events:
+        none;
+
+    }
+
+
+    .toast {
+
+      min-width:
+        240px;
+
+      max-width:
+        360px;
+
+      padding:
+        12px
+        14px;
+
+      border:
+        1px solid
+        var(--border);
+
+      border-radius:
+        10px;
+
+      background:
+        var(--surface);
+
+      color:
+        var(--text);
+
+      box-shadow:
+        var(--shadow-large);
+
+      font-size:
+        12px;
+
+      animation:
+        toastIn
+        .2s
+        ease;
+
+    }
+
+
+    @keyframes toastIn {
+
+      from {
+
+        opacity:
+          0;
+
+        transform:
+          translateY(8px);
+
+      }
+
+      to {
+
+        opacity:
+          1;
+
+        transform:
+          translateY(0);
+
+      }
+
+    }
+
+
+    /* ========================================================
+       RESPONSIVE TABLET
+    ========================================================= */
+
+    @media (max-width: 1100px) {
+
+      .app {
+
+        padding:
+          15px;
+
+      }
+
+
+      .dashboard {
+
+        grid-template-columns:
+          220px
+          minmax(0, 1fr) !important;
+
+        gap:
+          15px;
+
+      }
+
+
+      .dashboard > .sidebar {
+
+        width:
+          220px;
+
+      }
+
+
+      #calendar {
+
+        padding:
+          12px;
+
+      }
+
+    }
+
+
+    /* ========================================================
+       RESPONSIVE MOBILE
+    ========================================================= */
+
+    @media (max-width: 760px) {
+
+      .app {
+
+        padding:
+          10px;
+
+      }
+
+
+      .topbar {
+
+        align-items:
+          flex-start;
+
+      }
+
+
+      .brand-text p {
+
+        display:
+          none;
+
+      }
+
+
+      .brand-icon {
+
+        width:
+          42px;
+
+        height:
+          42px;
+
+      }
+
+
+      .brand-text h1 {
+
+        font-size:
+          16px;
+
+      }
+
+
+      .top-actions {
+
+        gap:
+          5px;
+
+      }
+
+
+      .top-actions .primary-button {
+
+        padding:
+          0
+          11px;
+
+      }
+
+
+      .dashboard {
+
+        display:
+          flex !important;
+
+        flex-direction:
+          column;
+
+        gap:
+          12px;
+
+      }
+
+
+      .dashboard > .sidebar {
+
+        order:
+          1;
+
+        width:
+          100%;
+
+        position:
+          static;
+
+      }
+
+
+      .dashboard > .calendar-card {
+
+        order:
+          2;
+
+        width:
+          100%;
+
+      }
+
+
+      .calendar-header {
+
+        min-height:
+          64px;
+
+        padding:
+          12px
+          14px;
+
+      }
+
+
+      .calendar-header p {
+
+        display:
+          none;
+
+      }
+
+
+      #calendar {
+
+        padding:
+          8px;
+
+        min-height:
+          650px;
+
+      }
+
+
+      .fc .fc-toolbar {
+
+        display:
+          grid;
+
+        grid-template-columns:
+          1fr;
+
+      }
+
+
+      .fc .fc-toolbar-chunk {
+
+        display:
+          flex;
+
+        align-items:
+          center;
+
+        justify-content:
+          center;
+
+        flex-wrap:
+          wrap;
+
+        gap:
+          4px;
+
+      }
+
+
+      .fc .fc-toolbar-title {
+
+        font-size:
+          18px;
+
+      }
+
+
+      .fc .fc-button {
+
+        font-size:
+          11px;
+
+        padding:
+          5px
+          8px;
+
+      }
+
+
+      .form-row {
+
+        grid-template-columns:
+          1fr;
+
+      }
+
+
+      .modal {
+
+        border-radius:
+          14px;
+
+      }
+
+    }
+
+
+    /* ========================================================
+       VERY SMALL MOBILE
+    ========================================================= */
+
+    @media (max-width: 430px) {
+
+      .brand-icon {
+
+        width:
+          38px;
+
+        height:
+          38px;
+
+        border-radius:
+          11px;
+
+      }
+
+
+      .brand-text h1 {
+
+        font-size:
+          14px;
+
+      }
+
+
+      .top-actions .icon-button {
+
+        width:
+          38px;
+
+      }
+
+
+      .sidebar {
+
+        padding:
+          13px !important;
+
+      }
+
+
+      .fc .fc-toolbar-title {
+
+        font-size:
+          16px;
+
+      }
+
+    }
+
+
+  </style>
+
+</head>
+
+
+<body>
+
+
+<!-- =========================================================
+     APPLICATION
+========================================================== -->
+
+<div class="app">
+
+
+  <!-- =======================================================
+       TOPBAR
+  ======================================================== -->
+
+  <header class="topbar">
+
+    <div class="brand">
+
+      <div class="brand-icon">
+        📅
+      </div>
+
+      <div class="brand-text">
+
+        <h1>
+          Calendar Dashboard
+        </h1>
+
+        <p>
+          FullCalendar 7 · Modern Calendar Interface
+        </p>
+
+      </div>
+
+    </div>
+
+
+    <div class="top-actions">
+
+      <button
+        type="button"
+        class="icon-button"
+        id="themeToggle"
+        title="Dark / Light Mode"
+        aria-label="Dark / Light Mode"
+      >
+        ☀️
+      </button>
+
+
+      <input
+        type="file"
+        id="icsFileInput"
+        accept=".ics,text/calendar"
+        style="display:none"
+      />
+
+
+      <button
+        type="button"
+        class="secondary-button"
+        id="importIcs"
+        title="Termine aus einer .ics-Datei importieren"
+      >
+        ⬆ Import
+      </button>
+
+
+      <button
+        type="button"
+        class="secondary-button"
+        id="exportIcs"
+        title="Alle Termine als .ics-Datei exportieren"
+      >
+        ⬇ Export
+      </button>
+
+
+      <button
+        type="button"
+        class="primary-button"
+        id="addEventTop"
+      >
+        ＋ Termin
+      </button>
+
+    </div>
+
+  </header>
+
+
+  <!-- =======================================================
+       DASHBOARD
+  ======================================================== -->
+
+  <main class="dashboard">
+
+
+    <!-- =====================================================
+         SIDEBAR
+    ====================================================== -->
+
+    <aside class="sidebar">
+
+
+      <!-- KALENDER -->
+
+      <div class="sidebar-section">
+
+        <h3 class="sidebar-title">
+          Kalender
+        </h3>
+
+
+        <button
+          type="button"
+          class="sidebar-button active"
+          data-calendar-filter="all"
+        >
+
+          <span class="dot"></span>
+
+          <span>
+            Alle Termine
+          </span>
+
+        </button>
+
+
+        <button
+          type="button"
+          class="sidebar-button"
+          data-calendar-filter="work"
+        >
+
+          <span class="dot green"></span>
+
+          <span>
+            Arbeit
+          </span>
+
+        </button>
+
+
+        <button
+          type="button"
+          class="sidebar-button"
+          data-calendar-filter="private"
+        >
+
+          <span class="dot orange"></span>
+
+          <span>
+            Privat
+          </span>
+
+        </button>
+
+
+        <button
+          type="button"
+          class="sidebar-button"
+          data-calendar-filter="important"
+        >
+
+          <span class="dot red"></span>
+
+          <span>
+            Wichtig
+          </span>
+
+        </button>
+
+      </div>
+
+
+      <!-- ANSICHT -->
+
+      <div class="sidebar-section">
+
+        <h3 class="sidebar-title">
+          Ansicht
+        </h3>
+
+
+        <button
+          type="button"
+          class="sidebar-button active"
+          data-view="dayGridMonth"
+        >
+
+          <span class="view-icon">
+            ▦
+          </span>
+
+          Monat
+
+        </button>
+
+
+        <button
+          type="button"
+          class="sidebar-button"
+          data-view="timeGridWeek"
+        >
+
+          <span class="view-icon">
+            ▤
+          </span>
+
+          Woche
+
+        </button>
+
+
+        <button
+          type="button"
+          class="sidebar-button"
+          data-view="timeGridDay"
+        >
+
+          <span class="view-icon">
+            ▥
+          </span>
+
+          Tag
+
+        </button>
+
+
+        <button
+          type="button"
+          class="sidebar-button"
+          data-view="listWeek"
+        >
+
+          <span class="view-icon">
+            ☷
+          </span>
+
+          Liste
+
+        </button>
+
+
+        <button
+          type="button"
+          class="sidebar-button"
+          data-view="multiMonthYear"
+        >
+
+          <span class="view-icon">
+            ▦
+          </span>
+
+          Jahr
+
+        </button>
+
+      </div>
+
+
+      <!-- OPTIONEN -->
+
+      <div class="sidebar-section">
+
+        <h3 class="sidebar-title">
+          Optionen
+        </h3>
+
+
+        <!-- Wochenenden -->
+
+        <div class="setting">
+
+          <label for="weekends">
+            Wochenenden
+          </label>
+
+          <label class="switch">
+
+            <input
+              type="checkbox"
+              id="weekends"
+              checked
+            >
+
+            <span class="slider"></span>
+
+          </label>
+
+        </div>
+
+
+        <!-- Kalenderwochen -->
+
+        <div class="setting">
+
+          <label for="weekNumbers">
+            Kalenderwochen
+          </label>
+
+          <label class="switch">
+
+            <input
+              type="checkbox"
+              id="weekNumbers"
+              checked
+            >
+
+            <span class="slider"></span>
+
+          </label>
+
+        </div>
+
+
+        <!-- Arbeitszeiten -->
+
+        <div class="setting">
+
+          <label for="businessHours">
+            Arbeitszeiten
+          </label>
+
+          <label class="switch">
+
+            <input
+              type="checkbox"
+              id="businessHours"
+              checked
+            >
+
+            <span class="slider"></span>
+
+          </label>
+
+        </div>
+
+
+        <!-- Now Indicator -->
+
+        <div class="setting">
+
+          <label for="nowIndicator">
+            Jetzt-Indikator
+          </label>
+
+          <label class="switch">
+
+            <input
+              type="checkbox"
+              id="nowIndicator"
+              checked
+            >
+
+            <span class="slider"></span>
+
+          </label>
+
+        </div>
+
+      </div>
+
+
+    </aside>
+
+
+    <!-- =====================================================
+         CALENDAR
+    ====================================================== -->
+
+    <section class="calendar-card">
+
+
+      <div class="calendar-header">
+
+        <div>
+
+          <h2>
+            Meine Termine
+          </h2>
+
+          <p>
+            Klicke auf einen Tag, um einen Termin zu erstellen.
+          </p>
+
+        </div>
+
+
+        <button
+          type="button"
+          class="secondary-button"
+          id="todayButton"
+        >
+          Heute
+        </button>
+
+      </div>
+
+
+      <div id="calendar"></div>
+
+
+    </section>
+
+
+  </main>
+
+
+</div>
+
+
+<!-- =========================================================
+     EVENT MODAL
+========================================================== -->
+
+<div
+  class="modal-backdrop"
+  id="eventModal"
+  aria-hidden="true"
+>
+
+  <div
+    class="modal"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="modalTitle"
+  >
+
+
+    <!-- HEADER -->
+
+    <div class="modal-header">
+
+      <h3 id="modalTitle">
+        Termin erstellen
+      </h3>
+
+
+      <button
+        type="button"
+        class="icon-button"
+        id="closeModal"
+        aria-label="Schließen"
+      >
+        ✕
+      </button>
+
+    </div>
+
+
+    <!-- FORM -->
+
+    <form id="eventForm">
+
+
+      <div class="modal-body">
+
+
+        <input
+          type="hidden"
+          id="eventId"
+        >
+
+
+        <!-- TITEL -->
+
+        <div class="form-group">
+
+          <label for="eventTitle">
+            Titel
+          </label>
+
+          <input
+            type="text"
+            class="form-control"
+            id="eventTitle"
+            placeholder="z. B. Team Meeting"
+            required
+          >
+
+        </div>
+
+
+        <!-- KATEGORIE -->
+
+        <div class="form-group">
+
+          <label for="eventCategory">
+            Kategorie
+          </label>
+
+          <select
+            class="form-control"
+            id="eventCategory"
+          >
+
+            <option value="work">
+              Arbeit
+            </option>
+
+            <option value="private">
+              Privat
+            </option>
+
+            <option value="important">
+              Wichtig
+            </option>
+
+          </select>
+
+        </div>
+
+
+        <!-- START / ENDE -->
+
+        <div class="form-row">
+
+
+          <div class="form-group">
+
+            <label for="eventStart">
+              Start
+            </label>
+
+            <input
+              type="datetime-local"
+              class="form-control"
+              id="eventStart"
+              required
+            >
+
+          </div>
+
+
+          <div class="form-group">
+
+            <label for="eventEnd">
+              Ende
+            </label>
+
+            <input
+              type="datetime-local"
+              class="form-control"
+              id="eventEnd"
+              required
+            >
+
+          </div>
+
+
+        </div>
+
+
+        <!-- ORT -->
+
+        <div class="form-group">
+
+          <label for="eventLocation">
+            Ort
+          </label>
+
+          <input
+            type="text"
+            class="form-control"
+            id="eventLocation"
+            placeholder="Optional"
+          >
+
+        </div>
+
+
+        <!-- BESCHREIBUNG -->
+
+        <div class="form-group">
+
+          <label for="eventDescription">
+            Beschreibung
+          </label>
+
+          <textarea
+            class="form-control"
+            id="eventDescription"
+            placeholder="Optional"
+          ></textarea>
+
+        </div>
+
+
+        <!-- AUTOMATISCHE AKTION -->
+
+        <div class="form-group">
+
+          <label for="eventActionType">
+            Automatische Aktion zur Startzeit
+          </label>
+
+          <select
+            class="form-control"
+            id="eventActionType"
+          >
+
+            <option value="none">
+              Keine
+            </option>
+
+            <option value="task">
+              Task ausführen
+            </option>
+
+            <option value="prompt">
+              Prompt an den Agenten
+            </option>
+
+            <option value="workflow">
+              Workflow starten
+            </option>
+
+            <option value="coding">
+              Coding-Agent
+            </option>
+
+          </select>
+
+          <div
+            style="margin-top:6px;font-size:11px;color:var(--muted)"
+          >
+            Wird zur Startzeit automatisch über einen einmaligen
+            Cronjob ausgeführt. Prompt bzw. Anweisung trägst du
+            unten im Feld „Anweisung / Referenz" ein.
+          </div>
+
+        </div>
+
+
+        <div
+          class="form-group"
+          id="actionRefGroup"
+          style="display:none"
+        >
+
+          <label for="eventActionRef" id="actionRefLabel">
+            Anweisung / Referenz
+          </label>
+
+          <textarea
+            class="form-control"
+            id="eventActionRef"
+            placeholder=""
+            style="min-height:2.6rem"
+          ></textarea>
+
+          <div
+            id="actionHint"
+            style="margin-top:6px;font-size:11px;color:var(--muted)"
+          ></div>
+
+        </div>
+
+
+        <div
+          class="form-group"
+          id="actionPayloadGroup"
+          style="display:none"
+        >
+
+          <label for="eventActionPayload">
+            Erweitert – Payload (JSON, optional)
+          </label>
+
+          <textarea
+            class="form-control"
+            id="eventActionPayload"
+            placeholder='z. B. {"verifyCommand": "npm test"}'
+            style="min-height:64px"
+          ></textarea>
+
+        </div>
+
+
+      </div>
+
+
+      <!-- FOOTER -->
+
+      <div class="modal-footer">
+
+
+        <button
+          type="button"
+          class="danger-button"
+          id="deleteEvent"
+          style="display:none"
+        >
+          Löschen
+        </button>
+
+
+        <div class="modal-footer-right">
+
+          <button
+            type="button"
+            class="secondary-button"
+            id="cancelModal"
+          >
+            Abbrechen
+          </button>
+
+
+          <button
+            type="submit"
+            class="primary-button"
+          >
+            Speichern
+          </button>
+
+        </div>
+
+
+      </div>
+
+
+    </form>
+
+
+  </div>
+
+</div>
+
+
+<!-- =========================================================
+     TOAST
+========================================================== -->
+
+<div
+  class="toast-container"
+  id="toastContainer"
+></div>
+
+
+<!-- =========================================================
+     JAVASCRIPT
+========================================================== -->
+
+<script>
+
+document.addEventListener(
+  "DOMContentLoaded",
+  async function () {
+
+
+    /* ======================================================
+       ELEMENTS
+    ====================================================== */
+
+    const calendarEl =
+      document.getElementById("calendar");
+
+
+    const modal =
+      document.getElementById("eventModal");
+
+
+    const modalTitle =
+      document.getElementById("modalTitle");
+
+
+    const form =
+      document.getElementById("eventForm");
+
+
+    const eventId =
+      document.getElementById("eventId");
+
+
+    const eventTitle =
+      document.getElementById("eventTitle");
+
+
+    const eventCategory =
+      document.getElementById("eventCategory");
+
+
+    const eventStart =
+      document.getElementById("eventStart");
+
+
+    const eventEnd =
+      document.getElementById("eventEnd");
+
+
+    const eventLocation =
+      document.getElementById("eventLocation");
+
+
+    const eventDescription =
+      document.getElementById("eventDescription");
+
+
+    const eventActionType =
+      document.getElementById("eventActionType");
+
+
+    const eventActionRef =
+      document.getElementById("eventActionRef");
+
+
+    const eventActionPayload =
+      document.getElementById("eventActionPayload");
+
+
+    const actionRefGroup =
+      document.getElementById("actionRefGroup");
+
+
+    const actionPayloadGroup =
+      document.getElementById("actionPayloadGroup");
+
+
+    const actionRefLabel =
+      document.getElementById("actionRefLabel");
+
+
+    const actionHint =
+      document.getElementById("actionHint");
+
+
+    const deleteButton =
+      document.getElementById("deleteEvent");
+
+
+    const toastContainer =
+      document.getElementById("toastContainer");
+
+
+    /* ======================================================
+       COLORS
+    ====================================================== */
+
+    const categoryColors = {
+
+      work: "#22c55e",
+
+      private: "#f59e0b",
+
+      important: "#ef4444"
+
+    };
+
+
+    /* ======================================================
+       PLUGIN API (persistente SQLite-DB des Plugins)
+
+       Alle Termine werden über das `calendar`-Tool des Plugins
+       gespeichert - dieselbe DB, die auch der Agent nutzt.
+    ====================================================== */
+
+    const INVOKE_URL =
+      "/api/plugins/calendar/invoke";
+
+
+    async function invoke(input) {
+
+      const res = await fetch(
+        INVOKE_URL,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            tool: "calendar",
+            input: input
+          })
+        }
+      );
+
+      const json =
+        await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          (json && (json.error || json.message)) ||
+          ("HTTP " + res.status)
+        );
+      }
+
+      const payload =
+        (json.data && json.data.result) ||
+        json.result ||
+        {};
+
+      if (payload.error) {
+        throw new Error(payload.error);
+      }
+
+      return payload;
+    }
+
+
+    /* ------------------------------------------------------
+       Aktueller Kategorie-Filter (Sidebar)
+    ------------------------------------------------------ */
+
+    let currentFilter = "all";
+
+
+    /* ------------------------------------------------------
+       Plugin-Einstellungen (Standard-Ansicht/-Kategorie …)
+    ------------------------------------------------------ */
+
+    let pluginSettings = {};
+
+    try {
+
+      const settingsRes =
+        await fetch(
+          "/api/plugins/calendar/settings"
+        );
+
+      const settingsJson =
+        await settingsRes.json();
+
+      pluginSettings =
+        (settingsJson.data && settingsJson.data.values) ||
+        settingsJson.values ||
+        {};
+
+    } catch (error) {
+
+      /* Einstellungen optional - Standardwerte greifen. */
+
+    }
+
+
+    const defaultCategory =
+      pluginSettings.default_category || "work";
+
+
+    const defaultView =
+      pluginSettings.default_view || "dayGridMonth";
+
+
+    const weekStartsMonday =
+      pluginSettings.week_starts_monday !== false &&
+      pluginSettings.week_starts_monday !== "false";
+
+
+    /* ------------------------------------------------------
+       DB-Zeile -> FullCalendar-Event
+    ------------------------------------------------------ */
+
+    function rowToEvent(row) {
+
+      const color =
+        categoryColors[row.category] ||
+        "#7c3aed";
+
+      return {
+        id: String(row.id),
+        title: row.title,
+        start: row.start,
+        end: row.end || undefined,
+        allDay:
+          row.all_day === 1 ||
+          row.all_day === true,
+        backgroundColor: color,
+        borderColor: color,
+        extendedProps: {
+          category: row.category,
+          location: row.location || "",
+          description: row.description || "",
+          actionType: row.action_type || "none",
+          actionRef: row.action_ref || "",
+          actionPayload: row.action_payload || "",
+          cronjobId: row.cronjob_id != null ? row.cronjob_id : null
+        }
+      };
+    }
+
+
+    /* ------------------------------------------------------
+       Automatische Aktion (Task/Prompt/Workflow/Coding)
+
+       Ein Termin kann zur Startzeit über einen einmaligen
+       Cronjob eine Aktion in der internen API auslösen.
+    ------------------------------------------------------ */
+
+    const CRON_URL = "/api/cronjobs";
+
+
+    const ACTION_META = {
+      none: {
+        ref: false,
+        payload: false
+      },
+      task: {
+        ref: true,
+        payload: false,
+        label: "Task-ID",
+        hint: "Trage hier die numerische ID einer bestehenden Task ein — genau diese Task wird zur Startzeit ausgeführt.",
+        ph: "z. B. 12"
+      },
+      prompt: {
+        ref: true,
+        payload: true,
+        label: "Anweisung / Prompt",
+        hint: "Schreibe hier direkt den Text, den der Agent zur Startzeit ausführen soll — wie eine Chat-Nachricht. (Optional statt Freitext im Payload {\"prompt\": \"…\"}.)",
+        ph: "z. B. Fasse die neuen E-Mails zusammen und lege offene To-dos als Tasks an."
+      },
+      workflow: {
+        ref: true,
+        payload: false,
+        label: "Workflow-ID",
+        hint: "ID eines gespeicherten Workflows, der zur Startzeit gestartet wird.",
+        ph: "z. B. build-nightly"
+      },
+      coding: {
+        ref: true,
+        payload: true,
+        label: "Coding-Ziel / Anweisung",
+        hint: "Beschreibe hier die Aufgabe für den Coding-Agenten (was umgesetzt werden soll). Optionaler Verify-Befehl im Payload, z. B. {\"verifyCommand\": \"npm test\"}.",
+        ph: "z. B. Behebe den Login-Bug in src/auth und ergänze einen Test."
+      }
+    };
+
+
+    function updateActionVisibility() {
+
+      const meta =
+        ACTION_META[eventActionType.value] ||
+        ACTION_META.none;
+
+      actionRefGroup.style.display =
+        meta.ref ? "" : "none";
+
+      actionPayloadGroup.style.display =
+        meta.payload ? "" : "none";
+
+      if (meta.ref) {
+        actionRefLabel.textContent = meta.label;
+        eventActionRef.placeholder = meta.ph || "";
+        actionHint.textContent = meta.hint || "";
+      }
+    }
+
+
+    eventActionType.addEventListener(
+      "change",
+      updateActionVisibility
+    );
+
+
+    /* Cron-Ausdruck aus einem Datum (min std tag monat *). */
+
+    function makeCron(d) {
+      if (isNaN(d)) return "0 0 1 1 *";
+      return (
+        d.getMinutes() + " " +
+        d.getHours() + " " +
+        d.getDate() + " " +
+        (d.getMonth() + 1) + " *"
+      );
+    }
+
+
+    /* Cronjob zu einem (gerade gespeicherten) Termin abgleichen.
+       `row` ist die DB-Zeile (snake_case) aus add/update. */
+
+    async function syncCronjob(row) {
+
+      const existingId =
+        row.cronjob_id != null ? row.cronjob_id : null;
+
+      const type = row.action_type || "none";
+
+      // Keine Aktion: evtl. vorhandenen Job entfernen.
+      if (type === "none") {
+        if (existingId) {
+          await fetch(CRON_URL + "/" + existingId, { method: "DELETE" }).catch(function () {});
+          await invoke({ action: "update", id: row.id, cronjobId: null });
+        }
+        return;
+      }
+
+      let payload;
+      if (row.action_payload) {
+        try { payload = JSON.parse(row.action_payload); }
+        catch (e) { payload = { text: row.action_payload }; }
+      }
+
+      const body = {
+        name: "📅 " + row.title,
+        schedule: makeCron(new Date(row.start)),
+        targetType: type,
+        targetRef: row.action_ref || undefined,
+        payload: payload,
+        runAt: row.start,
+        runOnce: true,
+        enabled: true
+      };
+
+      try {
+
+        if (existingId) {
+
+          const res = await fetch(CRON_URL + "/" + existingId, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          if (!res.ok) {
+            const j = await res.json().catch(function () { return {}; });
+            throw new Error((j && j.error) || ("HTTP " + res.status));
+          }
+
+        } else {
+
+          const res = await fetch(CRON_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          const j = await res.json().catch(function () { return {}; });
+          if (!res.ok) throw new Error((j && j.error) || ("HTTP " + res.status));
+          const cronId = j.data && j.data.id;
+          if (cronId) {
+            await invoke({ action: "update", id: row.id, cronjobId: cronId });
+          }
+        }
+
+      } catch (error) {
+        showToast("Aktion/Cronjob fehlgeschlagen: " + error.message);
+      }
+    }
+
+
+    /* Cronjob eines Termins löschen (bei Termin-Löschung). */
+
+    async function deleteCronjobFor(row) {
+      const id = row && row.cronjob_id;
+      if (id) {
+        await fetch(CRON_URL + "/" + id, { method: "DELETE" }).catch(function () {});
+      }
+    }
+
+
+    /* Cron-Zeit nach Drag/Resize auf den neuen Start setzen. */
+
+    async function rescheduleCronjob(cronjobId, startIso) {
+      if (!cronjobId) return;
+      await fetch(CRON_URL + "/" + cronjobId, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runAt: startIso,
+          schedule: makeCron(new Date(startIso)),
+          enabled: true
+        })
+      }).catch(function () {});
+    }
+
+
+    /* ------------------------------------------------------
+       Event-Quelle für FullCalendar (lädt aus der DB)
+    ------------------------------------------------------ */
+
+    async function fetchEvents(info, successCallback, failureCallback) {
+
+      try {
+
+        const res =
+          await invoke({ action: "list" });
+
+        const rows =
+          res.events || [];
+
+        const mapped =
+          rows
+            .filter(function (row) {
+              return (
+                currentFilter === "all" ||
+                row.category === currentFilter
+              );
+            })
+            .map(rowToEvent);
+
+        successCallback(mapped);
+
+      } catch (error) {
+
+        showToast(
+          "Laden fehlgeschlagen: " + error.message
+        );
+
+        failureCallback(error);
+
+      }
+    }
+
+
+    /* ======================================================
+       TOAST
+    ====================================================== */
+
+    function showToast(message) {
+
+      const toast =
+        document.createElement("div");
+
+      toast.className =
+        "toast";
+
+      toast.textContent =
+        message;
+
+      toastContainer.appendChild(
+        toast
+      );
+
+
+      setTimeout(
+        function () {
+
+          toast.style.opacity =
+            "0";
+
+          toast.style.transform =
+            "translateY(8px)";
+
+          setTimeout(
+            function () {
+
+              toast.remove();
+
+            },
+            200
+          );
+
+        },
+        2500
+      );
+
+    }
+
+
+    /* ======================================================
+       CALENDAR
+    ====================================================== */
+
+    const calendar =
+      new FullCalendar.Calendar(
+        calendarEl,
+        {
+
+
+          /* ------------------------------------------------
+             LANGUAGE
+          ------------------------------------------------ */
+
+          locale:
+            "de",
+
+          firstDay:
+            weekStartsMonday ? 1 : 0,
+
+
+          /* ------------------------------------------------
+             INITIAL VIEW
+          ------------------------------------------------ */
+
+          initialView:
+            defaultView,
+
+
+          /* ------------------------------------------------
+             DIMENSIONS
+          ------------------------------------------------ */
+
+          height:
+            "auto",
+
+          expandRows:
+            true,
+
+
+          /* ------------------------------------------------
+             GENERAL
+          ------------------------------------------------ */
+
+          weekends:
+            true,
+
+          weekNumbers:
+            true,
+
+          weekNumberCalculation:
+            "ISO",
+
+          nowIndicator:
+            true,
+
+          selectable:
+            true,
+
+          selectMirror:
+            true,
+
+          editable:
+            true,
+
+          eventResizableFromStart:
+            true,
+
+          dayMaxEvents:
+            true,
+
+          navLinks:
+            true,
+
+          eventOverlap:
+            true,
+
+
+          /* ------------------------------------------------
+             BUSINESS HOURS
+          ------------------------------------------------ */
+
+          businessHours: {
+
+            daysOfWeek:
+              [1, 2, 3, 4, 5],
+
+            startTime:
+              "08:00",
+
+            endTime:
+              "18:00"
+
+          },
+
+
+          /* ------------------------------------------------
+             TIME GRID
+          ------------------------------------------------ */
+
+          slotMinTime:
+            "06:00:00",
+
+          slotMaxTime:
+            "22:00:00",
+
+          scrollTime:
+            "08:00:00",
+
+          slotDuration:
+            "00:30:00",
+
+          snapDuration:
+            "00:15:00",
+
+          allDaySlot:
+            true,
+
+
+          /* ------------------------------------------------
+             NAVIGATION
+          ------------------------------------------------ */
+
+          headerToolbar: {
+
+            start:
+              "prevYear,prev,next,nextYear today",
+
+            center:
+              "title",
+
+            end:
+              "dayGridMonth,timeGridWeek,timeGridDay,listWeek,multiMonthYear"
+
+          },
+
+
+          /* ------------------------------------------------
+             BUTTON LABELS
+          ------------------------------------------------ */
+
+          buttonText: {
+
+            today:
+              "Heute",
+
+            month:
+              "Monat",
+
+            week:
+              "Woche",
+
+            day:
+              "Tag",
+
+            list:
+              "Liste",
+
+            year:
+              "Jahr"
+
+          },
+
+
+          /* ------------------------------------------------
+             DATE FORMATTING
+          ------------------------------------------------ */
+
+          titleFormat: {
+
+            year:
+              "numeric",
+
+            month:
+              "long"
+
+          },
+
+
+          dayHeaderFormat: {
+
+            weekday:
+              "short",
+
+            day:
+              "numeric",
+
+            month:
+              "short"
+
+          },
+
+
+          eventTimeFormat: {
+
+            hour:
+              "2-digit",
+
+            minute:
+              "2-digit",
+
+            hour12:
+              false
+
+          },
+
+
+          /* ------------------------------------------------
+             EVENTS
+          ------------------------------------------------ */
+
+          events:
+            fetchEvents,
+
+
+          /* ------------------------------------------------
+             SELECT
+          ------------------------------------------------ */
+
+          select:
+            function (info) {
+
+              openCreateModal(
+                info.start,
+                info.end,
+                info.allDay
+              );
+
+            },
+
+
+          /* ------------------------------------------------
+             EVENT CLICK
+          ------------------------------------------------ */
+
+          eventClick:
+            function (info) {
+
+              openEditModal(
+                info.event
+              );
+
+            },
+
+
+          /* ------------------------------------------------
+             DRAG
+          ------------------------------------------------ */
+
+          eventDrop:
+            function (info) {
+
+              updateStoredEvent(
+                info.event
+              );
+
+              showToast(
+                "Termin verschoben."
+              );
+
+            },
+
+
+          /* ------------------------------------------------
+             RESIZE
+          ------------------------------------------------ */
+
+          eventResize:
+            function (info) {
+
+              updateStoredEvent(
+                info.event
+              );
+
+              showToast(
+                "Termin aktualisiert."
+              );
+
+            },
+
+
+          /* ------------------------------------------------
+             EVENT CONTENT
+          ------------------------------------------------ */
+
+          eventContent:
+            function (arg) {
+
+              const wrapper =
+                document.createElement(
+                  "div"
+                );
+
+              wrapper.className =
+                "custom-event-content";
+
+
+              const title =
+                document.createElement(
+                  "span"
+                );
+
+              title.className =
+                "custom-event-title";
+
+              title.textContent =
+                arg.event.title;
+
+
+              wrapper.appendChild(
+                title
+              );
+
+
+              const location =
+                arg.event.extendedProps.location;
+
+
+              if (location) {
+
+                const locationElement =
+                  document.createElement(
+                    "span"
+                  );
+
+                locationElement.className =
+                  "custom-event-location";
+
+                locationElement.textContent =
+                  " · 📍";
+
+
+                wrapper.appendChild(
+                  locationElement
+                );
+
+              }
+
+
+              return {
+
+                domNodes:
+                  [wrapper]
+
+              };
+
+            }
+
+        }
+      );
+
+
+    calendar.render();
+
+
+    /* Sidebar-Ansicht auf die Standard-Ansicht abgleichen. */
+
+    document
+      .querySelectorAll("[data-view]")
+      .forEach(function (btn) {
+        btn.classList.toggle(
+          "active",
+          btn.dataset.view === defaultView
+        );
+      });
+
+
+    /* ======================================================
+       MODAL
+    ====================================================== */
+
+    function openModal() {
+
+      modal.classList.add(
+        "open"
+      );
+
+      modal.setAttribute(
+        "aria-hidden",
+        "false"
+      );
+
+
+      setTimeout(
+        function () {
+
+          eventTitle.focus();
+
+        },
+        50
+      );
+
+    }
+
+
+    function closeModal() {
+
+      modal.classList.remove(
+        "open"
+      );
+
+      modal.setAttribute(
+        "aria-hidden",
+        "true"
+      );
+
+    }
+
+
+    /* ======================================================
+       FORMAT DATETIME
+    ====================================================== */
+
+    function formatDateTimeLocal(
+      date
+    ) {
+
+      const year =
+        date.getFullYear();
+
+
+      const month =
+        String(
+          date.getMonth() + 1
+        ).padStart(
+          2,
+          "0"
+        );
+
+
+      const day =
+        String(
+          date.getDate()
+        ).padStart(
+          2,
+          "0"
+        );
+
+
+      const hours =
+        String(
+          date.getHours()
+        ).padStart(
+          2,
+          "0"
+        );
+
+
+      const minutes =
+        String(
+          date.getMinutes()
+        ).padStart(
+          2,
+          "0"
+        );
+
+
+      return (
+        year +
+        "-" +
+        month +
+        "-" +
+        day +
+        "T" +
+        hours +
+        ":" +
+        minutes
+      );
+
+    }
+
+
+    /* ======================================================
+       CREATE MODAL
+    ====================================================== */
+
+    function openCreateModal(
+      start,
+      end,
+      allDay = false
+    ) {
+
+      form.reset();
+
+      eventId.value =
+        "";
+
+      modalTitle.textContent =
+        "Termin erstellen";
+
+      deleteButton.style.display =
+        "none";
+
+
+      if (allDay) {
+
+        const startDate =
+          new Date(start);
+
+        startDate.setHours(
+          9,
+          0,
+          0,
+          0
+        );
+
+
+        const endDate =
+          new Date(start);
+
+        endDate.setHours(
+          10,
+          0,
+          0,
+          0
+        );
+
+
+        start =
+          startDate;
+
+        end =
+          endDate;
+
+      }
+
+
+      eventStart.value =
+        formatDateTimeLocal(
+          new Date(start)
+        );
+
+
+      eventEnd.value =
+        formatDateTimeLocal(
+          new Date(end)
+        );
+
+
+      eventCategory.value =
+        defaultCategory;
+
+
+      eventActionType.value = "none";
+      eventActionRef.value = "";
+      eventActionPayload.value = "";
+      updateActionVisibility();
+
+
+      openModal();
+
+    }
+
+
+    /* ======================================================
+       EDIT MODAL
+    ====================================================== */
+
+    function openEditModal(
+      event
+    ) {
+
+      eventId.value =
+        event.id;
+
+
+      eventTitle.value =
+        event.title;
+
+
+      eventCategory.value =
+        event.extendedProps.category ||
+        "work";
+
+
+      eventStart.value =
+        formatDateTimeLocal(
+          event.start
+        );
+
+
+      const eventEndDate =
+        event.end ||
+        new Date(
+          event.start.getTime() +
+          60 * 60 * 1000
+        );
+
+
+      eventEnd.value =
+        formatDateTimeLocal(
+          eventEndDate
+        );
+
+
+      eventLocation.value =
+        event.extendedProps.location ||
+        "";
+
+
+      eventDescription.value =
+        event.extendedProps.description ||
+        "";
+
+
+      eventActionType.value =
+        event.extendedProps.actionType || "none";
+
+      eventActionRef.value =
+        event.extendedProps.actionRef || "";
+
+      eventActionPayload.value =
+        event.extendedProps.actionPayload || "";
+
+      updateActionVisibility();
+
+
+      modalTitle.textContent =
+        "Termin bearbeiten";
+
+
+      deleteButton.style.display =
+        "block";
+
+
+      openModal();
+
+    }
+
+
+    /* ======================================================
+       FORM SUBMIT
+    ====================================================== */
+
+    form.addEventListener(
+      "submit",
+      async function (event) {
+
+        event.preventDefault();
+
+
+        const id =
+          eventId.value;
+
+
+        const title =
+          eventTitle.value.trim();
+
+
+        const category =
+          eventCategory.value;
+
+
+        const start =
+          eventStart.value;
+
+
+        const end =
+          eventEnd.value;
+
+
+        const location =
+          eventLocation.value.trim();
+
+
+        const description =
+          eventDescription.value.trim();
+
+
+        if (!title) {
+
+          showToast(
+            "Bitte einen Titel eingeben."
+          );
+
+          return;
+
+        }
+
+
+        if (
+          !start ||
+          !end
+        ) {
+
+          showToast(
+            "Bitte Start und Ende angeben."
+          );
+
+          return;
+
+        }
+
+
+        if (
+          new Date(end) <=
+          new Date(start)
+        ) {
+
+          showToast(
+            "Das Ende muss nach dem Start liegen."
+          );
+
+          return;
+
+        }
+
+
+        const payload = {
+          title: title,
+          category: category,
+          start: start,
+          end: end,
+          location: location,
+          description: description,
+          actionType: eventActionType.value,
+          actionRef: eventActionRef.value.trim(),
+          actionPayload: eventActionPayload.value.trim()
+        };
+
+
+        try {
+
+          let saved;
+
+          if (id) {
+
+            payload.action = "update";
+            payload.id = Number(id);
+
+            saved = await invoke(payload);
+
+            showToast(
+              "Termin aktualisiert."
+            );
+
+          } else {
+
+            payload.action = "add";
+
+            saved = await invoke(payload);
+
+            showToast(
+              "Termin erstellt."
+            );
+
+          }
+
+
+          // Verknüpften Cronjob anlegen/ändern/entfernen.
+          if (saved && saved.event) {
+            await syncCronjob(saved.event);
+          }
+
+
+          calendar.refetchEvents();
+
+          closeModal();
+
+        } catch (error) {
+
+          showToast(
+            "Speichern fehlgeschlagen: " + error.message
+          );
+
+        }
+
+      }
+    );
+
+
+    /* ======================================================
+       UPDATE STORED EVENT
+
+       Nach Drag/Resize: die neuen Zeiten in der DB speichern.
+    ====================================================== */
+
+    async function updateStoredEvent(
+      event
+    ) {
+
+      try {
+
+        await invoke({
+          action: "update",
+          id: Number(event.id),
+          start: event.start
+            ? event.start.toISOString()
+            : undefined,
+          end: event.end
+            ? event.end.toISOString()
+            : null,
+          allDay: event.allDay
+        });
+
+
+        // Falls ein Aktions-Cronjob hängt: Zeit mitziehen.
+        const cronId =
+          event.extendedProps &&
+          event.extendedProps.cronjobId;
+
+        if (cronId && event.start) {
+          await rescheduleCronjob(
+            cronId,
+            event.start.toISOString()
+          );
+        }
+
+      } catch (error) {
+
+        showToast(
+          "Speichern fehlgeschlagen: " + error.message
+        );
+
+        calendar.refetchEvents();
+
+      }
+
+    }
+
+
+    /* ======================================================
+       DELETE EVENT
+    ====================================================== */
+
+    deleteButton.addEventListener(
+      "click",
+      async function () {
+
+        const id =
+          eventId.value;
+
+
+        if (!id) {
+
+          return;
+
+        }
+
+
+        try {
+
+          const removed = await invoke({
+            action: "delete",
+            id: Number(id)
+          });
+
+
+          // Verknüpften Cronjob mit entfernen.
+          if (removed && removed.event) {
+            await deleteCronjobFor(removed.event);
+          }
+
+
+          calendar.refetchEvents();
+
+          closeModal();
+
+          showToast(
+            "Termin gelöscht."
+          );
+
+        } catch (error) {
+
+          showToast(
+            "Löschen fehlgeschlagen: " + error.message
+          );
+
+        }
+
+      }
+    );
+
+
+    /* ======================================================
+       CLOSE MODAL
+    ====================================================== */
+
+    document
+      .getElementById("closeModal")
+      .addEventListener(
+        "click",
+        closeModal
+      );
+
+
+    document
+      .getElementById("cancelModal")
+      .addEventListener(
+        "click",
+        closeModal
+      );
+
+
+    modal.addEventListener(
+      "click",
+      function (event) {
+
+        if (
+          event.target === modal
+        ) {
+
+          closeModal();
+
+        }
+
+      }
+    );
+
+
+    document.addEventListener(
+      "keydown",
+      function (event) {
+
+        if (
+          event.key === "Escape" &&
+          modal.classList.contains(
+            "open"
+          )
+        ) {
+
+          closeModal();
+
+        }
+
+      }
+    );
+
+
+    /* ======================================================
+       ADD EVENT BUTTON
+    ====================================================== */
+
+    document
+      .getElementById("addEventTop")
+      .addEventListener(
+        "click",
+        function () {
+
+          const now =
+            new Date();
+
+
+          /*
+           * Auf nächste halbe Stunde runden
+           */
+
+          const minutes =
+            now.getMinutes();
+
+
+          const roundedMinutes =
+            minutes < 30
+              ? 30
+              : 0;
+
+
+          if (
+            minutes >= 30
+          ) {
+
+            now.setHours(
+              now.getHours() + 1
+            );
+
+          }
+
+
+          now.setMinutes(
+            roundedMinutes,
+            0,
+            0
+          );
+
+
+          const end =
+            new Date(now);
+
+
+          end.setHours(
+            end.getHours() + 1
+          );
+
+
+          openCreateModal(
+            now,
+            end,
+            false
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       ICS IMPORT / EXPORT (iCalendar, RFC 5545)
+
+       Export baut aus den DB-Terminen eine .ics-Datei.
+       Import liest eine .ics-Datei und legt die Termine über
+       das calendar-Tool in derselben DB an.
+    ====================================================== */
+
+    function pad(n) {
+      return String(n).padStart(2, "0");
+    }
+
+
+    /* Text für ICS maskieren (RFC 5545 3.3.11). */
+
+    function icsEscape(value) {
+      return String(value || "")
+        .replace(/\\/g, "\\\\")
+        .replace(/;/g, "\\;")
+        .replace(/,/g, "\\,")
+        .replace(/\r?\n/g, "\\n");
+    }
+
+
+    function icsUnescape(value) {
+      return String(value || "")
+        .replace(/\\n/gi, "\n")
+        .replace(/\\,/g, ",")
+        .replace(/\\;/g, ";")
+        .replace(/\\\\/g, "\\");
+    }
+
+
+    /* Lange Zeilen nach 73 Zeichen falten (Fortsetzung mit Space). */
+
+    function icsFold(line) {
+      if (line.length <= 73) return line;
+      let out = "";
+      let rest = line;
+      while (rest.length > 73) {
+        out += rest.slice(0, 73) + "\r\n ";
+        rest = rest.slice(73);
+      }
+      return out + rest;
+    }
+
+
+    /* ISO-Zeit -> ICS. allDay => YYYYMMDD, sonst YYYYMMDDTHHMMSS (lokal). */
+
+    function toIcsDate(iso, allDay) {
+      const d = new Date(iso);
+      if (isNaN(d)) return null;
+      const date =
+        d.getFullYear().toString() +
+        pad(d.getMonth() + 1) +
+        pad(d.getDate());
+      if (allDay) return { value: date, dateOnly: true };
+      return {
+        value:
+          date + "T" +
+          pad(d.getHours()) +
+          pad(d.getMinutes()) +
+          pad(d.getSeconds()),
+        dateOnly: false
+      };
+    }
+
+
+    /* ICS-Datumswert -> lokaler ISO-String + allDay-Flag. */
+
+    function fromIcsDate(value, isDateParam) {
+      const raw = String(value || "").trim();
+
+      // Reines Datum: 20260810 (oder VALUE=DATE)
+      if (isDateParam || /^\d{8}$/.test(raw)) {
+        const y = raw.slice(0, 4);
+        const m = raw.slice(4, 6);
+        const day = raw.slice(6, 8);
+        return { iso: y + "-" + m + "-" + day, allDay: true };
+      }
+
+      const match = raw.match(
+        /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/
+      );
+      if (!match) return null;
+
+      const parts = match.slice(1, 7).map(Number);
+
+      // Mit "Z": UTC -> lokale Zeit umrechnen.
+      const d = match[7]
+        ? new Date(Date.UTC(
+            parts[0], parts[1] - 1, parts[2],
+            parts[3], parts[4], parts[5]
+          ))
+        : new Date(
+            parts[0], parts[1] - 1, parts[2],
+            parts[3], parts[4], parts[5]
+          );
+
+      const iso =
+        d.getFullYear() + "-" +
+        pad(d.getMonth() + 1) + "-" +
+        pad(d.getDate()) + "T" +
+        pad(d.getHours()) + ":" +
+        pad(d.getMinutes()) + ":" +
+        pad(d.getSeconds());
+
+      return { iso: iso, allDay: false };
+    }
+
+
+    function buildIcs(rows) {
+      const d = new Date();
+      const now =
+        d.getUTCFullYear().toString() +
+        pad(d.getUTCMonth() + 1) +
+        pad(d.getUTCDate()) + "T" +
+        pad(d.getUTCHours()) +
+        pad(d.getUTCMinutes()) +
+        pad(d.getUTCSeconds());
+      const lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//DucKI//Calendar Plugin//DE",
+        "CALSCALE:GREGORIAN"
+      ];
+
+      for (const row of rows) {
+        const allDay =
+          row.all_day === 1 || row.all_day === true;
+
+        const start = toIcsDate(row.start, allDay);
+        if (!start) continue;
+
+        const end = row.end
+          ? toIcsDate(row.end, allDay)
+          : null;
+
+        lines.push("BEGIN:VEVENT");
+        lines.push("UID:" + row.id + "@ducki-calendar");
+        lines.push("DTSTAMP:" + now + "Z");
+
+        if (start.dateOnly) {
+          lines.push("DTSTART;VALUE=DATE:" + start.value);
+          if (end && end.dateOnly) {
+            lines.push("DTEND;VALUE=DATE:" + end.value);
+          }
+        } else {
+          lines.push("DTSTART:" + start.value);
+          if (end) lines.push("DTEND:" + end.value);
+        }
+
+        lines.push("SUMMARY:" + icsEscape(row.title));
+        if (row.category) {
+          lines.push("CATEGORIES:" + icsEscape(row.category));
+        }
+        if (row.location) {
+          lines.push("LOCATION:" + icsEscape(row.location));
+        }
+        if (row.description) {
+          lines.push("DESCRIPTION:" + icsEscape(row.description));
+        }
+        lines.push("END:VEVENT");
+      }
+
+      lines.push("END:VCALENDAR");
+      return lines.map(icsFold).join("\r\n");
+    }
+
+
+    /* Zeilen entfalten (Fortsetzungszeilen beginnen mit Space/Tab). */
+
+    function unfoldIcs(text) {
+      const rawLines = text.split(/\r?\n/);
+      const out = [];
+      for (const line of rawLines) {
+        if (/^[ \t]/.test(line) && out.length) {
+          out[out.length - 1] += line.slice(1);
+        } else {
+          out.push(line);
+        }
+      }
+      return out;
+    }
+
+
+    function parseIcs(text) {
+      const lines = unfoldIcs(text);
+      const events = [];
+      let cur = null;
+      const cats = ["work", "private", "important"];
+
+      for (const line of lines) {
+        if (line === "BEGIN:VEVENT") {
+          cur = {};
+          continue;
+        }
+        if (line === "END:VEVENT") {
+          if (cur && cur.title && cur.start) events.push(cur);
+          cur = null;
+          continue;
+        }
+        if (!cur) continue;
+
+        const idx = line.indexOf(":");
+        if (idx === -1) continue;
+
+        const rawName = line.slice(0, idx);
+        const value = line.slice(idx + 1);
+        const nameParts = rawName.split(";");
+        const name = nameParts[0].toUpperCase();
+        const isDateParam = /VALUE=DATE(?![-])/i.test(rawName);
+
+        if (name === "SUMMARY") {
+          cur.title = icsUnescape(value);
+        } else if (name === "LOCATION") {
+          cur.location = icsUnescape(value);
+        } else if (name === "DESCRIPTION") {
+          cur.description = icsUnescape(value);
+        } else if (name === "CATEGORIES") {
+          const first = icsUnescape(value)
+            .split(",")[0]
+            .trim()
+            .toLowerCase();
+          if (cats.includes(first)) cur.category = first;
+        } else if (name === "DTSTART") {
+          const parsed = fromIcsDate(value, isDateParam);
+          if (parsed) {
+            cur.start = parsed.iso;
+            cur.allDay = parsed.allDay;
+          }
+        } else if (name === "DTEND") {
+          const parsed = fromIcsDate(value, isDateParam);
+          if (parsed) cur.end = parsed.iso;
+        }
+      }
+
+      return events;
+    }
+
+
+    /* -------- EXPORT -------- */
+
+    async function exportIcs() {
+      try {
+        const res = await invoke({ action: "list" });
+        const rows = res.events || [];
+
+        if (rows.length === 0) {
+          showToast("Keine Termine zum Exportieren.");
+          return;
+        }
+
+        const ics = buildIcs(rows);
+        const blob = new Blob(
+          [ics],
+          { type: "text/calendar;charset=utf-8" }
+        );
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download =
+          "kalender-" +
+          new Date().toISOString().slice(0, 10) +
+          ".ics";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        showToast(rows.length + " Termine exportiert.");
+      } catch (error) {
+        showToast("Export fehlgeschlagen: " + error.message);
+      }
+    }
+
+
+    /* -------- IMPORT -------- */
+
+    async function importIcsText(text) {
+      const parsed = parseIcs(text);
+
+      if (parsed.length === 0) {
+        showToast("Keine Termine in der Datei gefunden.");
+        return;
+      }
+
+      let ok = 0;
+      let failed = 0;
+
+      for (const ev of parsed) {
+        try {
+          await invoke({
+            action: "add",
+            title: ev.title,
+            start: ev.start,
+            end: ev.end,
+            allDay: ev.allDay === true,
+            category: ev.category || "work",
+            location: ev.location,
+            description: ev.description
+          });
+          ok++;
+        } catch (error) {
+          failed++;
+        }
+      }
+
+      calendar.refetchEvents();
+      showToast(
+        ok + " Termine importiert" +
+        (failed ? " (" + failed + " fehlgeschlagen)" : "") +
+        "."
+      );
+    }
+
+
+    const icsFileInput =
+      document.getElementById("icsFileInput");
+
+
+    document
+      .getElementById("exportIcs")
+      .addEventListener("click", exportIcs);
+
+
+    document
+      .getElementById("importIcs")
+      .addEventListener("click", function () {
+        icsFileInput.value = "";
+        icsFileInput.click();
+      });
+
+
+    icsFileInput.addEventListener("change", function () {
+      const file = this.files && this.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function () {
+        importIcsText(String(reader.result || ""));
+      };
+      reader.onerror = function () {
+        showToast("Datei konnte nicht gelesen werden.");
+      };
+      reader.readAsText(file);
+    });
+
+
+    /* ======================================================
+       TODAY
+    ====================================================== */
+
+    document
+      .getElementById("todayButton")
+      .addEventListener(
+        "click",
+        function () {
+
+          calendar.today();
+
+        }
+      );
+
+
+    /* ======================================================
+       VIEW BUTTONS
+    ====================================================== */
+
+    document
+      .querySelectorAll(
+        "[data-view]"
+      )
+      .forEach(
+        function (button) {
+
+          button.addEventListener(
+            "click",
+            function () {
+
+              const view =
+                this.dataset.view;
+
+
+              calendar.changeView(
+                view
+              );
+
+
+              document
+                .querySelectorAll(
+                  "[data-view]"
+                )
+                .forEach(
+                  function (btn) {
+
+                    btn.classList.remove(
+                      "active"
+                    );
+
+                  }
+                );
+
+
+              this.classList.add(
+                "active"
+              );
+
+            }
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       CATEGORY FILTER
+    ====================================================== */
+
+    document
+      .querySelectorAll(
+        "[data-calendar-filter]"
+      )
+      .forEach(
+        function (button) {
+
+          button.addEventListener(
+            "click",
+            function () {
+
+              const filter =
+                this.dataset.calendarFilter;
+
+
+              document
+                .querySelectorAll(
+                  "[data-calendar-filter]"
+                )
+                .forEach(
+                  function (btn) {
+
+                    btn.classList.remove(
+                      "active"
+                    );
+
+                  }
+                );
+
+
+              this.classList.add(
+                "active"
+              );
+
+
+              currentFilter = filter;
+
+
+              calendar.refetchEvents();
+
+            }
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       WEEKENDS
+    ====================================================== */
+
+    document
+      .getElementById("weekends")
+      .addEventListener(
+        "change",
+        function () {
+
+          calendar.setOption(
+            "weekends",
+            this.checked
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       WEEK NUMBERS
+    ====================================================== */
+
+    document
+      .getElementById("weekNumbers")
+      .addEventListener(
+        "change",
+        function () {
+
+          calendar.setOption(
+            "weekNumbers",
+            this.checked
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       BUSINESS HOURS
+    ====================================================== */
+
+    document
+      .getElementById("businessHours")
+      .addEventListener(
+        "change",
+        function () {
+
+          calendar.setOption(
+
+            "businessHours",
+
+            this.checked
+
+              ? {
+
+                  daysOfWeek:
+                    [1, 2, 3, 4, 5],
+
+                  startTime:
+                    "08:00",
+
+                  endTime:
+                    "18:00"
+
+                }
+
+              : false
+
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       NOW INDICATOR
+    ====================================================== */
+
+    document
+      .getElementById("nowIndicator")
+      .addEventListener(
+        "change",
+        function () {
+
+          calendar.setOption(
+            "nowIndicator",
+            this.checked
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       THEME
+    ====================================================== */
+
+    const themeToggle =
+      document.getElementById(
+        "themeToggle"
+      );
+
+
+    let currentTheme =
+      localStorage.getItem(
+        "calendar-dashboard-theme"
+      );
+
+
+    if (
+      !currentTheme
+    ) {
+
+      currentTheme =
+        window.matchMedia(
+          "(prefers-color-scheme: dark)"
+        ).matches
+          ? "dark"
+          : "light";
+
+    }
+
+
+    function applyTheme(
+      theme
+    ) {
+
+      document.documentElement
+        .setAttribute(
+          "data-theme",
+          theme
+        );
+
+
+      /* FullCalendar (monarch-Theme) liest data-color-scheme,
+         damit greift dessen eigene dunkle Palette. */
+
+      document.documentElement
+        .setAttribute(
+          "data-color-scheme",
+          theme
+        );
+
+
+      themeToggle.textContent =
+        theme === "dark"
+          ? "☀️"
+          : "🌙";
+
+
+      themeToggle.setAttribute(
+        "aria-label",
+        theme === "dark"
+          ? "Light Mode aktivieren"
+          : "Dark Mode aktivieren"
+      );
+
+
+      themeToggle.setAttribute(
+        "title",
+        theme === "dark"
+          ? "Light Mode"
+          : "Dark Mode"
+      );
+
+
+      localStorage.setItem(
+        "calendar-dashboard-theme",
+        theme
+      );
+
+    }
+
+
+    applyTheme(
+      currentTheme
+    );
+
+
+    themeToggle.addEventListener(
+      "click",
+      function () {
+
+        currentTheme =
+          currentTheme === "dark"
+            ? "light"
+            : "dark";
+
+
+        applyTheme(
+          currentTheme
+        );
+
+      }
+    );
+
+
+    /* ======================================================
+       INITIAL SETTINGS FROM LOCAL STORAGE
+    ====================================================== */
+
+    const savedWeekends =
+      localStorage.getItem(
+        "calendar-weekends"
+      );
+
+
+    const savedWeekNumbers =
+      localStorage.getItem(
+        "calendar-weeknumbers"
+      );
+
+
+    const savedBusinessHours =
+      localStorage.getItem(
+        "calendar-business-hours"
+      );
+
+
+    const savedNowIndicator =
+      localStorage.getItem(
+        "calendar-now-indicator"
+      );
+
+
+    if (
+      savedWeekends !== null
+    ) {
+
+      const value =
+        savedWeekends === "true";
+
+
+      document.getElementById(
+        "weekends"
+      ).checked =
+        value;
+
+
+      calendar.setOption(
+        "weekends",
+        value
+      );
+
+    }
+
+
+    if (
+      savedWeekNumbers !== null
+    ) {
+
+      const value =
+        savedWeekNumbers === "true";
+
+
+      document.getElementById(
+        "weekNumbers"
+      ).checked =
+        value;
+
+
+      calendar.setOption(
+        "weekNumbers",
+        value
+      );
+
+    }
+
+
+    if (
+      savedBusinessHours !== null
+    ) {
+
+      const value =
+        savedBusinessHours === "true";
+
+
+      document.getElementById(
+        "businessHours"
+      ).checked =
+        value;
+
+
+      calendar.setOption(
+
+        "businessHours",
+
+        value
+          ? {
+              daysOfWeek:
+                [1,2,3,4,5],
+              startTime:
+                "08:00",
+              endTime:
+                "18:00"
+            }
+          : false
+
+      );
+
+    }
+
+
+    if (
+      savedNowIndicator !== null
+    ) {
+
+      const value =
+        savedNowIndicator === "true";
+
+
+      document.getElementById(
+        "nowIndicator"
+      ).checked =
+        value;
+
+
+      calendar.setOption(
+        "nowIndicator",
+        value
+      );
+
+    }
+
+
+    /* ======================================================
+       SAVE SETTINGS
+    ====================================================== */
+
+    document
+      .getElementById("weekends")
+      .addEventListener(
+        "change",
+        function () {
+
+          localStorage.setItem(
+            "calendar-weekends",
+            this.checked
+          );
+
+        }
+      );
+
+
+    document
+      .getElementById("weekNumbers")
+      .addEventListener(
+        "change",
+        function () {
+
+          localStorage.setItem(
+            "calendar-weeknumbers",
+            this.checked
+          );
+
+        }
+      );
+
+
+    document
+      .getElementById("businessHours")
+      .addEventListener(
+        "change",
+        function () {
+
+          localStorage.setItem(
+            "calendar-business-hours",
+            this.checked
+          );
+
+        }
+      );
+
+
+    document
+      .getElementById("nowIndicator")
+      .addEventListener(
+        "change",
+        function () {
+
+          localStorage.setItem(
+            "calendar-now-indicator",
+            this.checked
+          );
+
+        }
+      );
+
+
+    /* ======================================================
+       WINDOW RESIZE
+       
+       Hilft FullCalendar nach Layoutänderungen.
+    ====================================================== */
+
+    let resizeTimer;
+
+
+    window.addEventListener(
+      "resize",
+      function () {
+
+        clearTimeout(
+          resizeTimer
+        );
+
+
+        resizeTimer =
+          setTimeout(
+            function () {
+
+              calendar.updateSize();
+
+            },
+            100
+          );
+
+      }
+    );
+
+
+  }
+);
+
+</script>
+
+
+</body>
+</html>

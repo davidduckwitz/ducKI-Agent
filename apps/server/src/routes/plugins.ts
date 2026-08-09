@@ -2,17 +2,34 @@ import { Router, type IRouter } from "express";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { createApiResponse, createApiError } from "@ducki/shared";
-import { loadPlugins, setPluginEnabled, pluginsRoot, parsePluginManifest } from "@ducki/agent";
+import type { ToolExecutor } from "@ducki/shared";
+import { loadPlugins, setPluginEnabled, pluginsRoot, parsePluginManifest, type LoadedPluginInfo } from "@ducki/agent";
 import { getPluginSettings, setPluginSetting } from "@ducki/database";
 
 /** Minimal shape of the PluginManager we read off app.locals (avoids a hard type import). */
 interface PluginManagerLike {
   requestReload(): { applied: boolean; deferred: boolean };
+  getPlugins(): LoadedPluginInfo[];
+  getTools(): ToolExecutor[];
+}
+
+function pluginManager(req: import("express").Request): PluginManagerLike | undefined {
+  return req.app.locals["pluginManager"] as PluginManagerLike | undefined;
+}
+
+/**
+ * Read the CURRENT plugin set. Prefers the cached PluginManager (loaded once, refreshed only on
+ * enable/disable/install) so ordinary page/settings/invoke requests don't re-scan every manifest,
+ * open plugin DBs and decrypt settings on each call. Falls back to a fresh load only if the
+ * manager isn't wired up yet (e.g. very early in startup).
+ */
+async function currentPlugins(req: import("express").Request): Promise<LoadedPluginInfo[]> {
+  const mgr = pluginManager(req);
+  return mgr ? mgr.getPlugins() : (await loadPlugins()).plugins;
 }
 
 function reloadPlugins(req: import("express").Request): { applied: boolean; deferred: boolean } {
-  const mgr = req.app.locals["pluginManager"] as PluginManagerLike | undefined;
-  return mgr?.requestReload() ?? { applied: false, deferred: false };
+  return pluginManager(req)?.requestReload() ?? { applied: false, deferred: false };
 }
 
 /**
@@ -24,10 +41,9 @@ export const pluginsRouter: IRouter = Router();
 const SAFE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /** GET /api/plugins - list all plugins with their resolved tools/skills/status. */
-pluginsRouter.get("/", async (_req, res, next) => {
+pluginsRouter.get("/", async (req, res, next) => {
   try {
-    const loaded = await loadPlugins();
-    res.json(createApiResponse(loaded.plugins));
+    res.json(createApiResponse(await currentPlugins(req)));
   } catch (error) {
     next(error);
   }
@@ -41,7 +57,7 @@ pluginsRouter.get("/:name", async (req, res, next) => {
       res.status(400).json(createApiError("Invalid plugin name"));
       return;
     }
-    const info = (await loadPlugins()).plugins.find((p) => p.name === name);
+    const info = (await currentPlugins(req)).find((p) => p.name === name);
     if (!info) {
       res.status(404).json(createApiError("Plugin not found"));
       return;
@@ -63,7 +79,7 @@ function setEnabledRoute(enabled: boolean) {
         res.status(400).json(createApiError("Invalid plugin name"));
         return;
       }
-      const exists = (await loadPlugins()).plugins.some((p) => p.name === name);
+      const exists = (await currentPlugins(req)).some((p) => p.name === name);
       if (!exists) {
         res.status(404).json(createApiError("Plugin not found"));
         return;
@@ -91,7 +107,7 @@ pluginsRouter.get("/:name/settings", async (req, res, next) => {
       res.status(400).json(createApiError("Invalid plugin name"));
       return;
     }
-    const info = (await loadPlugins()).plugins.find((p) => p.name === name);
+    const info = (await currentPlugins(req)).find((p) => p.name === name);
     if (!info) {
       res.status(404).json(createApiError("Plugin not found"));
       return;
@@ -115,7 +131,7 @@ pluginsRouter.put("/:name/settings", async (req, res, next) => {
       res.status(400).json(createApiError("Invalid plugin name"));
       return;
     }
-    const info = (await loadPlugins()).plugins.find((p) => p.name === name);
+    const info = (await currentPlugins(req)).find((p) => p.name === name);
     if (!info) {
       res.status(404).json(createApiError("Plugin not found"));
       return;
@@ -148,8 +164,9 @@ pluginsRouter.post("/:name/invoke", async (req, res, next) => {
   try {
     const name = String(req.params.name ?? "");
     if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
-    const loaded = await loadPlugins();
-    const info = loaded.plugins.find((p) => p.name === name);
+    const mgr = pluginManager(req);
+    const plugins = mgr ? mgr.getPlugins() : (await loadPlugins()).plugins;
+    const info = plugins.find((p) => p.name === name);
     if (!info) { res.status(404).json(createApiError("Plugin not found")); return; }
     if (!info.enabled) { res.status(409).json(createApiError("Plugin is disabled")); return; }
 
@@ -159,7 +176,8 @@ pluginsRouter.post("/:name/invoke", async (req, res, next) => {
       res.status(400).json(createApiError(`Tool '${toolName}' does not belong to plugin '${name}'`));
       return;
     }
-    const tool = loaded.tools.find((t) => t.name === toolName);
+    const tools = mgr ? mgr.getTools() : (await loadPlugins()).tools;
+    const tool = tools.find((t) => t.name === toolName);
     if (!tool) { res.status(404).json(createApiError("Tool not available")); return; }
 
     const exec = await tool.execute(body.input ?? {});
@@ -201,7 +219,7 @@ async function servePluginPage(
 ): Promise<void> {
   const name = String(req.params.name ?? "");
   if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
-  const info = (await loadPlugins()).plugins.find((p) => p.name === name);
+  const info = (await currentPlugins(req)).find((p) => p.name === name);
   const pageRel = page === "settings" ? info?.settingsPage : page === "frontend" ? info?.frontendPage : info?.widgetPage;
   if (!pageRel) { res.status(404).json(createApiError(`Plugin has no ${page} page`)); return; }
 
@@ -220,6 +238,9 @@ async function servePluginPage(
   res.setHeader("Content-Type", UI_CONTENT_TYPES[ext] ?? "application/octet-stream");
   res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
   res.setHeader("X-Content-Type-Options", "nosniff");
+  // Plugin pages are edited in place and served straight from disk; never let the browser/iframe
+  // hold a stale copy (that would hide fresh UI like new buttons after a plugin update).
+  res.setHeader("Cache-Control", "no-store, must-revalidate");
   res.send(readFileSync(target));
 }
 

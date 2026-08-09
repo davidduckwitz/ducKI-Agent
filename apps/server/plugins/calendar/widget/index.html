@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nächste Termine</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: system-ui, sans-serif; color: #111; background: transparent;
+    padding: 0.6rem 0.7rem; box-sizing: border-box;
+  }
+  @media (prefers-color-scheme: dark) { body { color: #f3f4f6; } }
+  h2 { margin: 0 0 0.5rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.6; }
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+  li { display: flex; align-items: flex-start; gap: 0.55rem; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 0.35rem; flex: 0 0 8px; }
+  .work { background: #22c55e; } .private { background: #f59e0b; } .important { background: #ef4444; }
+  .body { min-width: 0; flex: 1; }
+  .title { font-size: 0.85rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .when { font-size: 0.72rem; opacity: 0.65; }
+  .empty { font-size: 0.82rem; opacity: 0.6; }
+</style>
+</head>
+<body>
+  <h2>📅 Nächste Termine</h2>
+  <ul id="list"><li class="empty">Lädt …</li></ul>
+<script>
+  const INVOKE = "/api/plugins/calendar/invoke";
+  const list = document.getElementById("list");
+  const dtf = new Intl.DateTimeFormat("de-DE", { weekday: "short", day: "2-digit", month: "short" });
+  const tf = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" });
+
+  async function invoke(input) {
+    const res = await fetch(INVOKE, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "calendar", input }),
+    });
+    const json = await res.json().catch(() => ({}));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  function when(ev) {
+    const d = new Date(ev.start);
+    if (isNaN(d)) return ev.start || "";
+    if (ev.all_day) return dtf.format(d) + " · ganztägig";
+    return dtf.format(d) + " · " + tf.format(d);
+  }
+
+  function render(events) {
+    list.innerHTML = "";
+    if (!events || events.length === 0) {
+      list.innerHTML = '<li class="empty">Keine anstehenden Termine.</li>';
+      return;
+    }
+    for (const ev of events) {
+      const li = document.createElement("li");
+      const dot = document.createElement("span");
+      dot.className = "dot " + (["work", "private", "important"].includes(ev.category) ? ev.category : "work");
+      const body = document.createElement("div");
+      body.className = "body";
+      const t = document.createElement("div");
+      t.className = "title"; t.textContent = ev.title;
+      const w = document.createElement("div");
+      w.className = "when"; w.textContent = when(ev);
+      body.appendChild(t); body.appendChild(w);
+      li.appendChild(dot); li.appendChild(body);
+      list.appendChild(li);
+    }
+  }
+
+  async function load() {
+    try { const r = await invoke({ action: "upcoming", limit: 5 }); render(r.events); }
+    catch (e) { list.innerHTML = '<li class="empty">Fehler: ' + e.message + '</li>'; }
+  }
+  load();
+  setInterval(load, 60000);
+</script>
+</body>
+</html>

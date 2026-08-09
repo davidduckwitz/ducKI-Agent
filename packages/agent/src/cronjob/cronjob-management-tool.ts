@@ -2,7 +2,7 @@ import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import { isCronExpressionValid } from "@ducki/database";
 
-type CronTargetType = "task" | "prompt" | "tool" | "skill";
+type CronTargetType = "task" | "prompt" | "tool" | "skill" | "workflow" | "coding";
 
 function ok(data: unknown): ToolResult {
   return { success: true, data };
@@ -14,7 +14,10 @@ function fail(error: string): ToolResult {
 
 function asTargetType(value: unknown): CronTargetType | undefined {
   const normalized = String(value ?? "").trim().toLowerCase();
-  if (normalized === "task" || normalized === "prompt" || normalized === "tool" || normalized === "skill") {
+  if (
+    normalized === "task" || normalized === "prompt" || normalized === "tool" ||
+    normalized === "skill" || normalized === "workflow" || normalized === "coding"
+  ) {
     return normalized;
   }
   return undefined;
@@ -40,8 +43,8 @@ export function createCronjobManagementTool(db: DatabaseService): ToolExecutor {
           id: { type: "number", description: "Cronjob id" },
           name: { type: "string" },
           schedule: { type: "string", description: "Cron expression: minute hour day month weekday" },
-          targetType: { type: "string", enum: ["task", "prompt", "tool", "skill"] },
-          targetRef: { type: "string", description: "Task ID, tool name, or skill slug" },
+          targetType: { type: "string", enum: ["task", "prompt", "tool", "skill", "workflow", "coding"] },
+          targetRef: { type: "string", description: "Task ID, tool name, skill slug, or workflow id" },
           payload: { type: "object", description: "Target payload, for example prompt text or tool input" },
           enabled: { type: "boolean" },
         },

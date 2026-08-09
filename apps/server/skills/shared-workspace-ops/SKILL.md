@@ -1,0 +1,120 @@
+﻿---
+name: shared-workspace-ops
+description: "Use shared-workspace directly or via /api/shared endpoints for read/write/create/move/delete operations."
+related_skills: [browser-control, shared-workspace-api-first, workflow-orchestrator, llm-wiki, discord]
+
+primary_skills: [shared-workspace-api-first]
+fallback_skills: [workflow-orchestrator]
+version: 1.0.0
+---
+
+# Shared Workspace Operations
+
+## Purpose
+Use this skill when the user asks to create, read, edit, move, upload, download, or delete files that should live in the shared workspace.
+
+## Decision Rule (First Step)
+Before loading any heavy workflow, decide which path is best:
+1. Use filesystem tool when direct local file editing in shared-workspace is enough.
+2. Use http tool with /api/shared API when behavior must mirror backend/UI API contracts.
+3. If uncertain, start with API discovery using GET /api/shared/files.
+
+## Allowed Storage Scope
+- Preferred root: ./shared-workspace
+- Never write outside the shared workspace for shared artifacts.
+- Reject any path traversal pattern (for example .. segments).
+
+## API Endpoints
+Use base URL from runtime settings and call these endpoints:
+- GET /api/shared/files
+- GET /api/shared/read?path=<relativePath>
+- GET /api/shared/download?path=<relativePath>
+- POST /api/shared/write with body { path, content }
+- POST /api/shared/upload with body { fileName, contentBase64, folder? }
+- POST /api/shared/move with body { fromPath, toPath }
+- DELETE /api/shared/file?path=<relativePath>
+
+## Tool Strategy
+
+### Local Filesystem Preferred
+Use filesystem actions for fast local operations in shared-workspace:
+- read
+- write
+- append
+- list
+- move
+- delete
+
+Recommended control flags:
+- basePath: "./shared-workspace"
+- safeMode: true
+- createDirs: true
+- dryRun: false (set true for preview)
+- overwrite: explicit for write operations
+
+### API Preferred
+Use http actions when:
+- You need parity with frontend behavior.
+- You must validate server-side path rules and responses.
+- You need binary transfer semantics (upload/download).
+
+Recommended control fields:
+- baseUrl + path instead of full url
+- query for path parameters
+- allowedHosts for host allowlist (example: ["localhost", "127.0.0.1"])
+
+## Safety Rules
+- Always use relative paths inside shared-workspace.
+- For writes, ensure parent folders exist.
+- For replace edits, read first and verify expected content before writing.
+- For destructive actions (delete/move), confirm exact target path in output.
+
+## Mandatory Write Discipline
+1. Never use absolute paths.
+2. For filesystem operations always set:
+- `basePath: "./shared-workspace"`
+- `safeMode: true`
+- `createDirs: true` (for write/append)
+3. Before every `write`/`append`/`move`/`copy`, run the same operation with `dryRun: true` first.
+4. After every write-like operation, verify immediately with:
+- `exists` or `stat` on the target path
+- optional `read` for text-content validation
+5. If a scope/path error occurs, stop and correct the path relative to `./shared-workspace` before retry.
+
+## Minimal Write Pattern
+1. Resolve relative target path under shared-workspace.
+2. Dry-run validation.
+3. Execute operation.
+4. Verify result (`exists`/`stat`/`read`).
+
+## Output Contract
+When done, return:
+1. Chosen mode: filesystem or API
+2. Exact path(s) changed
+3. Operation result summary
+4. Next recommended action (if any)
+
+## Example Tool Calls
+- [TOOL:filesystem({"action":"write","path":"notes/todo.md","basePath":"./shared-workspace","safeMode":true,"createDirs":true,"overwrite":true,"content":"# Todo"})]
+- [TOOL:filesystem({"action":"delete","path":"notes/old.md","basePath":"./shared-workspace","safeMode":true,"dryRun":true})]
+
+**Multi-line content via `filesystem`:** use the block-write form so newlines/quotes need no escaping (content is taken verbatim):
+```
+[TOOL:filesystem action=write path=notes/todo.md basePath=./shared-workspace]
+# Todo
+- [ ] first item
+- [ ] second item
+[/TOOL]
+```
+(This applies to the `filesystem` tool only. The `http` `/api/shared/write` path below carries content in the JSON body, where normal escaping still applies.)
+- [TOOL:http({"action":"get","baseUrl":"http://localhost:3001","path":"/api/shared/files","allowedHosts":["localhost","127.0.0.1"]})]
+- [TOOL:http({"action":"get","baseUrl":"http://localhost:3001","path":"/api/shared/read","query":{"path":"docs/readme.md"},"allowedHosts":["localhost","127.0.0.1"]})]
+- [TOOL:http({"action":"post","baseUrl":"http://localhost:3001","path":"/api/shared/write","body":{"path":"docs/readme.md","content":"Hello"},"allowedHosts":["localhost","127.0.0.1"]})]
+
+## Skill Interop
+
+- Primary persistence skill for other skills: `browser-control`, `workflow-orchestrator`, `llm-wiki`, `discord`, `mcp-integration`.
+- When API behavior must be followed exactly, escalate to `shared-workspace-api-first`.
+- When an implementation plan is needed first, combine with `plan`.
+
+

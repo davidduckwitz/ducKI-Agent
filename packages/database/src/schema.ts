@@ -156,10 +156,14 @@ export const cronJobs = sqliteTable("cron_jobs", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   schedule: text("schedule").notNull(),
-  targetType: text("target_type").notNull(), // task, prompt, tool, skill
+  targetType: text("target_type").notNull(), // task, prompt, tool, skill, workflow, coding
   targetRef: text("target_ref"),
   payload: text("payload"), // JSON
   enabled: integer("enabled").notNull().default(1),
+  // One-shot execution: when set, the job fires once at runAt (ISO) and is disabled afterwards.
+  // Used by point-in-time triggers such as calendar appointments.
+  runAt: text("run_at"),
+  runOnce: integer("run_once").notNull().default(0),
   conversationId: integer("conversation_id").references(() => conversations.id),
   lastRunAt: text("last_run_at"),
   nextRunAt: text("next_run_at"),
