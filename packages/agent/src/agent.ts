@@ -3814,11 +3814,19 @@ export class Agent {
 
     // Emit initial tool-call detection event
     const callSummaries = toolCalls.map((c) => summarizeToolCall(c.toolName, c.input));
+    // Per-call ids MUST match the ones the tool_result events will carry so the UI can
+    // correlate start->completion. buildExecutionPlan below assigns `batch_${iterations}_${idx}`
+    // (idx = position in this deduped toolCalls list), so mint the same ids here. Without this
+    // the store synthesised a timestamp-based id that never matched the batch id, and the
+    // completion event logged "Tool call not found" (seen in the coding agent, whose calls
+    // weren't already resolved by the toolName fallback).
+    const callIds = toolCalls.map((_, idx) => `batch_${iterations}_${idx}`);
     emit("tool_call", callSummaries.join(" · "), {
       toolBatchId,
       batchSize: toolCalls.length,
       count: toolCalls.length,
       tools: toolCalls.map((c) => c.toolName),
+      callIds,
       // summary carries what the reader actually needs (which file, which command); the
       // input keys stay available underneath for debugging.
       summaries: callSummaries,
@@ -3826,6 +3834,7 @@ export class Agent {
         toolName: c.toolName,
         summary: callSummaries[index],
         inputKeys: Object.keys(c.input),
+        callId: callIds[index],
       })),
     });
 

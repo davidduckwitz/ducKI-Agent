@@ -626,13 +626,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     // Tool call tracking
     socket.on("tool:call_started", (data: { timestamp: string; conversationId?: number; data?: Record<string, unknown> }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
-      const toolData = data.data as { count?: number; tools?: string[]; summaries?: string[] } | undefined;
+      const toolData = data.data as { count?: number; tools?: string[]; summaries?: string[]; callIds?: string[] } | undefined;
       const tools = toolData?.tools ?? [];
       const summaries = toolData?.summaries ?? [];
+      const callIds = toolData?.callIds ?? [];
 
       // Create tool calls for each tool (tools and summaries arrays have same length)
       for (let i = 0; i < tools.length; i++) {
-        const callId = `${tools[i]}_${data.timestamp}_${i}`;
+        // Use the id the agent will also stamp on the matching tool_result event so the
+        // completion can be correlated exactly. Fall back to a synthesized id for older
+        // event payloads that don't carry callIds.
+        const callId = callIds[i] ?? `${tools[i]}_${data.timestamp}_${i}`;
         const toolCall: ToolCallRecord = {
           id: callId,
           toolName: tools[i] ?? "unknown",
