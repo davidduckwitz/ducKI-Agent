@@ -1,3 +1,8 @@
+---
+name: skill-manage
+description: Create, update, and manage Markdown-based skills so the agent can extend its own capabilities. Use when adding, editing, or documenting skills.
+---
+
 # Skill: Skill Management
 
 ## Summary

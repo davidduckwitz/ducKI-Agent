@@ -1,3 +1,8 @@
+---
+name: http-operations
+description: Make safe and effective HTTP requests and API calls - fetch data and integrate external services with best practices for security, performance, and error handling. Use for HTTP or API tasks.
+---
+
 # Skill: HTTP Operations
 
 ## Summary

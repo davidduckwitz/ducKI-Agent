@@ -1,3 +1,8 @@
+---
+name: filesystem-operations
+description: Work safely and efficiently with the filesystem via the filesystem tool - list, read, stat, and write paths confined to shared-workspace. Use for any file or directory operation.
+---
+
 # Skill: Filesystem Operations
 
 ## Summary

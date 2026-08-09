@@ -1,3 +1,8 @@
+---
+name: git-operations
+description: Safe and effective Git workflows - status, commits, branches, and pushes with best practices for clean version control. Use for any Git or version-control task.
+---
+
 # Skill: Git Operations
 
 ## Summary

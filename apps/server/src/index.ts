@@ -584,6 +584,19 @@ async function bootstrap(): Promise<void> {
 	const httpServer = createServer({ maxHeaderSize: 64 * 1024 }, app);
 
 	app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+
+	// Chrome "Private Network Access": a public/secure page (e.g. the deployed landing
+	// UI served over https) reaching this backend on a local/private address
+	// (127.0.0.1, 192.168.x, …) triggers a preflight that the browser blocks unless the
+	// server explicitly opts in with this header. Without it, "Verbindung testen" and
+	// the socket handshake fail even though CORS is otherwise open.
+	app.use((req, res, next) => {
+		if (req.headers["access-control-request-private-network"]) {
+			res.setHeader("Access-Control-Allow-Private-Network", "true");
+		}
+		next();
+	});
+
 	app.use(
 		cors({
 			origin: process.env["CORS_ORIGIN"] ?? "*",

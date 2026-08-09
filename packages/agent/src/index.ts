@@ -123,6 +123,7 @@ export {
 export { AgentBenchmark, type BenchmarkResult } from "./performance/benchmarks.js";
 export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
+export { createScopedFilesystemTool } from "./coding/scoped-filesystem-tool.js";
 // Context compression & memory optimization
 export { TokenCounter } from "./context/token-counter.js";
 export type { ModelTokenConfig } from "./context/token-counter.js";
@@ -137,6 +138,15 @@ export { SkillSelectionService, skillSelectionService } from "./skill-selector/s
 export { SkillSelector, skillSelector } from "./skill-selector/selector.js";
 export type { SkillMetrics } from "./skill-selector/selector.js";
 export { SkillRegistry, skillRegistry, AVAILABLE_SKILLS, populateSkillBundles } from "./skill-selector/skill-registry.js";
+export {
+  parseFrontmatter,
+  normalizeFrontmatter,
+  normalizeSkillContent,
+  readSkillFrontmatter,
+} from "./skill-selector/frontmatter.js";
+export type { NormalizedSkillFrontmatter, ParsedFrontmatter } from "./skill-selector/frontmatter.js";
+export { validateSkillContent, validateSkillDirectory } from "./skill-selector/validate.js";
+export type { SkillValidationResult, SkillValidationIssue } from "./skill-selector/validate.js";
 
 // Bitcoin Puzzle Solver
 export { BitcoinPuzzleService } from "./crypto/bitcoin-puzzle-service.js";

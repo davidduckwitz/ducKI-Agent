@@ -4,6 +4,32 @@
 
 ---
 
+## Skill Catalog Sync (agentskills.io bundles)
+
+The catalog is the distribution source for the Node agent's skill importer.
+After deploying `/landing`, regenerate the catalog on the server:
+
+1. Ensure the `phar` PHP extension is enabled with **`phar.readonly=0`** (required
+   to build the per-skill `.tar.gz` bundles). Without it, sync still succeeds but
+   multi-file skills won't get a bundle (single-file skills fall back to inline
+   `content`).
+2. Run the sync: open `…/api/v1.php?action=sync` once. This regenerates
+   `api/data/skills.json` and `api/data/bundles/<id>.tar.gz` for every skill.
+3. Verify: `…/api/v1.php?action=audit` and spot-check
+   `…/api/v1.php?action=download&id=<some-skill>` returns a `.tar.gz`.
+4. `api/data/bundles/` is generated (gitignored) — it does not need to be committed,
+   but the server it's deployed to must be able to write to `api/data/`.
+
+New `skills.json` fields per skill: `tags`, `version`, `license`, `compatibility`,
+`dependencies`, `spec_compliant`, `has_scripts`, `origin`, `source_url`, `checksum`.
+
+**Catalog-only (community) skills:** `landing/catalog-skills/<id>/SKILL.md` are indexed
+into the catalog (`origin: "community"`) and installable, but are NOT part of the agent's
+runtime `skills/` dir — they become active only after a user installs them. Deploy this
+directory alongside `api/`. Example included: `catalog-skills/brainstorming`.
+
+---
+
 ## Pre-Deployment Verification
 
 ### ✅ Core Files

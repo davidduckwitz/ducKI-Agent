@@ -1,5 +1,5 @@
 ---
-name: Plan Import
+name: plan-import
 slug: plan-import
 description: Parse and import markdown-formatted plans into the system
 icon: 📋

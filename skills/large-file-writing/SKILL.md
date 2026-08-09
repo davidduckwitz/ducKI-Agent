@@ -1,5 +1,5 @@
 ---
-name: "Large File Writing"
+name: large-file-writing
 description: "Chunk strategy for writing files larger than token limits - split content across multiple API calls"
 ---
 

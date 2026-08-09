@@ -1,5 +1,5 @@
 ---
-name: "Tool Orchestration"
+name: tool-orchestration
 description: "Master guide for coordinating tool calls in proper sequence and parallel execution"
 primary_skills: []
 related_skills: ["workflow-orchestrator"]

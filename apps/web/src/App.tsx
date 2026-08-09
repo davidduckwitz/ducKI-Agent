@@ -141,6 +141,8 @@ function AppContent() {
           <Route path="logs" element={<LazyRoute><LogViewer /></LazyRoute>} />
           <Route path="crypto" element={<LazyRoute><CryptoPaymentPage /></LazyRoute>} />
           <Route path="settings" element={<LazyRoute><Settings /></LazyRoute>} />
+          {/* Unknown paths (incl. a direct /index.html hit under a sub-path deploy) -> dashboard */}
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Route>
       </Routes>
       <ToastDisplay />
@@ -149,9 +151,13 @@ function AppContent() {
   );
 }
 
+// Honour Vite's base (e.g. "/web/") so routing works under a sub-path deploy.
+// React Router wants a basename without a trailing slash; "/" means root.
+const routerBasename = import.meta.env.BASE_URL.replace(/\/$/, "") || "/";
+
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={routerBasename}>
       <AppContent />
     </BrowserRouter>
   );

@@ -1,3 +1,8 @@
+---
+name: mcp-integration
+description: Use MCP servers safely and reliably - configure servers, discover tools, execute calls, and handle streaming output with reconnect awareness. Use for MCP integration tasks.
+---
+
 # MCP Integration Skill
 
 ## Goal

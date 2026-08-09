@@ -1,3 +1,8 @@
+---
+name: shell-commands
+description: Run shell commands efficiently and safely - scripts, system tasks, and processes with best practices for security and reliability. Use for shell or command-execution tasks.
+---
+
 # Skill: Shell Commands
 
 ## Summary

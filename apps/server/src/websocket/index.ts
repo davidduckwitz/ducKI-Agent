@@ -1,14 +1,32 @@
 import { randomUUID } from "crypto";
+import { resolve } from "node:path";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Agent, AgentRunEvent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "../lib/agent-registry.js";
-import { BitcoinPuzzleService } from "@ducki/agent";
+import { BitcoinPuzzleService, createScopedFilesystemTool } from "@ducki/agent";
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
-import { browserTool } from "@ducki/tools";
+import { browserTool, CODING_WORKSPACE_ROOT } from "@ducki/tools";
+import { wrapTools } from "../lib/tool-wrapper.js";
+
+/**
+ * Coding-area chats prepend a "[CODING_CONTEXT]\nproject=<slug>\n…" block to every
+ * prompt. Extract the project slug so we can scope the agent's filesystem tool to
+ * that project's sandbox — otherwise the general filesystem tool (rooted at the
+ * shared workspace) writes relative paths to the wrong place. Returns undefined for
+ * normal chats (no marker), which run completely unchanged.
+ */
+function extractCodingProjectSlug(message: string): string | undefined {
+  if (typeof message !== "string" || !message.includes("[CODING_CONTEXT]")) return undefined;
+  const match = message.match(/^\s*project=([^\r\n]+)/m);
+  const slug = match?.[1]?.trim();
+  if (!slug || slug.toLowerCase() === "none") return undefined;
+  // Single path segment only — never let the slug escape the coding root.
+  return /^[A-Za-z0-9_.-]+$/.test(slug) ? slug : undefined;
+}
 
 /** Actions the browser control panel (UI-initiated, not agent-initiated) may invoke directly. */
 const ALLOWED_UI_BROWSER_ACTIONS = new Set([
@@ -416,6 +434,22 @@ export function setupWebSocket(
 
         const runAttempt = async (prompt: string) => {
           const runAgent = await createAgent();
+
+          // Coding-area chat: scope the filesystem tool to the project sandbox so
+          // relative paths land in shared-workspace/coding/<project>/ instead of the
+          // shared-workspace root. registerTool overrides the general "filesystem"
+          // tool by name; wrapTools keeps the same event/staging behaviour as the
+          // other tools. Normal chats skip this entirely.
+          const codingSlug = extractCodingProjectSlug(prompt);
+          if (codingSlug) {
+            const sandboxRoot = resolve(CODING_WORKSPACE_ROOT, codingSlug);
+            const [scopedFs] = wrapTools([createScopedFilesystemTool(sandboxRoot)]);
+            if (scopedFs) {
+              runAgent.executor.registerTool(scopedFs);
+              logger.info("Scoped coding filesystem tool for chat run", { codingSlug, sandboxRoot });
+            }
+          }
+
           registerActiveAgent(socket.id, runAgent);
           runAgents.push(runAgent);
           await runAgent.loadConversation(resolvedConversationId);

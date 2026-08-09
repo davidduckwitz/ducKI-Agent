@@ -54,7 +54,14 @@ export function writeBackendConfig(config: BackendConfig): void {
 }
 
 function normalizeRemote(url: string): string {
-  return url.trim().replace(/\/+$/, "");
+  let u = url.trim().replace(/\/+$/, "");
+  // A URL without a scheme ("127.0.0.1:3001") is parsed by the browser as
+  // "scheme:path", which breaks fetch and socket.io. Default to http:// so a
+  // host:port entry Just Works. (Enter an explicit https:// for TLS backends.)
+  if (u && !/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) {
+    u = `http://${u}`;
+  }
+  return u;
 }
 
 /**

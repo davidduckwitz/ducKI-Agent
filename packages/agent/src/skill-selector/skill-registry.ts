@@ -1,128 +1,11 @@
 import type { SkillManifest } from "../config/interfaces_types.js";
+import { parseFrontmatter, normalizeFrontmatter } from "./frontmatter.js";
 import { DEFAULT_SKILL_BUNDLES, SkillBundleManager } from "./skill-bundle.js";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-/**
- * Parse YAML-style frontmatter from SKILL.md
- * Supports: name, description, category, tags, scripts, dependencies, priority
- */
-function parseFrontmatter(content: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-
-  if (!content.startsWith("---")) return result;
-
-  const endIdx = content.indexOf("\n---", 3);
-  if (endIdx < 0) return result;
-
-  const block = content.slice(3, endIdx).trim();
-  const lines = block.split(/\r?\n/);
-
-  let currentKey: string | null = null;
-  let currentArray: string[] = [];
-  let inScripts = false;
-  let inDependencies = false;
-  let scripts: Record<string, string> = {};
-
-  for (const line of lines) {
-    // Handle indented array items or object properties
-    if (line.startsWith("  ") || line.startsWith("\t")) {
-      const trimmed = line.trim();
-
-      if (inScripts) {
-        // Parse scripts object: key: value
-        const colonIdx = trimmed.indexOf(":");
-        if (colonIdx > 0) {
-          const key = trimmed.slice(0, colonIdx).trim();
-          const value = trimmed.slice(colonIdx + 1).trim().replace(/^['"]|['"]$/g, "");
-          scripts[key] = value;
-        }
-        continue;
-      }
-
-      if (inDependencies && trimmed.startsWith("-")) {
-        // Array item
-        const item = trimmed.slice(1).trim().replace(/^['"]|['"]$/g, "");
-        currentArray.push(item);
-        continue;
-      }
-    }
-
-    // Reset indentation-based parsing
-    if (!line.startsWith("  ") && !line.startsWith("\t")) {
-      if (currentKey === "tags" && currentArray.length > 0) {
-        result.tags = currentArray;
-        currentArray = [];
-      }
-      if (currentKey === "dependencies" && currentArray.length > 0) {
-        result.dependencies = currentArray;
-        currentArray = [];
-      }
-      if (currentKey === "primary_skills" && currentArray.length > 0) {
-        result.primary_skills = currentArray;
-        currentArray = [];
-      }
-      if (currentKey === "related_skills" && currentArray.length > 0) {
-        result.related_skills = currentArray;
-        currentArray = [];
-      }
-      if (currentKey === "fallback_skills" && currentArray.length > 0) {
-        result.fallback_skills = currentArray;
-        currentArray = [];
-      }
-      if (currentKey === "scripts") {
-        result.scripts = scripts;
-        inScripts = false;
-        scripts = {};
-      }
-      currentKey = null;
-      inDependencies = false;
-    }
-
-    const colonIdx = line.indexOf(":");
-    if (colonIdx < 0) continue;
-
-    const key = line.slice(0, colonIdx).trim();
-    const value = line.slice(colonIdx + 1).trim();
-
-    // Simple key: value pairs
-    if (value && !value.startsWith("[") && !value.startsWith("{")) {
-      result[key] = value.replace(/^['"]|['"]$/g, "");
-      currentKey = null;
-      inDependencies = false;
-      inScripts = false;
-    }
-
-    // Handle arrays: key: [item1, item2] or key:\n  - item1
-    if (value === "" || value === "[" || value.startsWith("[") || value === "-") {
-      currentKey = key;
-      currentArray = [];
-      inDependencies = (key === "dependencies" || key === "primary_skills" || key === "related_skills" || key === "fallback_skills");
-      inScripts = (key === "scripts");
-
-      // Handle inline arrays like "tags: [tag1, tag2]"
-      if (value.startsWith("[") && value.includes("]")) {
-        const arrayStr = value.slice(1, value.indexOf("]"));
-        result[key] = arrayStr.split(",").map(s => s.trim().replace(/^['"]|['"]$/g, ""));
-        currentKey = null;
-        inDependencies = false;
-        inScripts = false;
-      }
-    }
-  }
-
-  // Handle remaining array
-  if (currentKey === "tags" && currentArray.length > 0) result.tags = currentArray;
-  if (currentKey === "dependencies" && currentArray.length > 0) result.dependencies = currentArray;
-  if (currentKey === "primary_skills" && currentArray.length > 0) result.primary_skills = currentArray;
-  if (currentKey === "related_skills" && currentArray.length > 0) result.related_skills = currentArray;
-  if (currentKey === "fallback_skills" && currentArray.length > 0) result.fallback_skills = currentArray;
-  if (currentKey === "scripts") result.scripts = scripts;
-
-  return result;
-}
 
 /**
  * Dynamically load skills from the skills directory
@@ -140,12 +23,12 @@ function loadSkillsFromDirectory(): SkillManifest[] {
       const skillPath = join(skillsDir, skillDir);
       const skillMdPath = join(skillPath, "SKILL.md");
 
-      // Try to read SKILL.md for metadata
-      let frontmatter: Record<string, unknown> = {};
+      // Try to read SKILL.md for metadata (shared, BOM/CRLF-safe parser)
+      let fm = normalizeFrontmatter({});
       if (existsSync(skillMdPath)) {
         try {
           const content = readFileSync(skillMdPath, "utf8");
-          frontmatter = parseFrontmatter(content);
+          fm = normalizeFrontmatter(parseFrontmatter(content).data);
         } catch (e) {
           // Ignore frontmatter parse errors, use defaults
         }
@@ -157,20 +40,31 @@ function loadSkillsFromDirectory(): SkillManifest[] {
         .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
         .join(" ");
 
+      const priority =
+        fm.priority && ["critical", "high", "medium", "low"].includes(fm.priority)
+          ? (fm.priority as "critical" | "high" | "medium" | "low")
+          : undefined;
+
       skills.push({
         slug,
-        name: (frontmatter.name as string) || defaultName,
-        description: (frontmatter.description as string) || undefined,
+        name: fm.name || defaultName,
+        description: fm.description,
         path: skillPath,
-        primarySkills: (frontmatter.primary_skills as string[]) || [],
-        relatedSkills: (frontmatter.related_skills as string[]) || [],
-        fallbackSkills: (frontmatter.fallback_skills as string[]) || [],
+        primarySkills: fm.primarySkills ?? [],
+        relatedSkills: fm.relatedSkills ?? [],
+        fallbackSkills: fm.fallbackSkills ?? [],
         // Hermes Pattern #1: Load additional metadata
-        category: (frontmatter.category as string) || undefined,
-        tags: (frontmatter.tags as string[]) || undefined,
-        scripts: (frontmatter.scripts as Record<string, string>) || undefined,
-        dependencies: (frontmatter.dependencies as string[]) || undefined,
-        priority: (frontmatter.priority as "critical" | "high" | "medium" | "low") || undefined,
+        category: fm.category,
+        tags: fm.tags,
+        scripts: fm.scripts,
+        dependencies: fm.dependencies,
+        priority,
+        // agentskills.io spec fields
+        license: fm.license,
+        compatibility: fm.compatibility,
+        allowedTools: fm.allowedTools,
+        version: fm.version,
+        metadata: Object.keys(fm.metadata).length ? fm.metadata : undefined,
       });
     }
   } catch (error) {

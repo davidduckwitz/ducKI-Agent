@@ -1,5 +1,5 @@
 ---
-name: "JSON Tool Format"
+name: json-tool-format
 description: "Precise JSON formatting for tool calls - avoid errors with correct syntax"
 primary_skills: ["tool-orchestration"]
 related_skills: []

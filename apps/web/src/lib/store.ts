@@ -283,7 +283,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const socket = io(socketUrl, {
       path: "/socket.io",
-      transports: ["websocket"],
+      // websocket first, but fall back to HTTP long-polling. Polling matters when the
+      // page is served from a public https origin and the backend is on a local address
+      // (127.0.0.1/LAN): Chrome's Private Network Access preflight rides the HTTP path,
+      // which the server allows, whereas a bare ws:// upgrade can be blocked.
+      transports: ["websocket", "polling"],
       // Bounded, jittered backoff instead of the default tight retry loop - a server
       // that is down should cost a handful of attempts per minute, not a stream.
       reconnection: true,

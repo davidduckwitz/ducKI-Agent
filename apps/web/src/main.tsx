@@ -5,7 +5,12 @@ import App from "./App";
 import { I18nProvider } from "./lib/i18n";
 import { ThemeProvider } from "./components/theme/ThemeProvider";
 import { Toaster } from "./components/ui/sonner";
+import { installApiFetchRewrite } from "./lib/apiFetchRewrite";
 import "./index.css";
+
+// Route every "/api/..." request through the configured backend base (local or
+// remote) before anything renders. No-op in local browser mode.
+installApiFetchRewrite();
 
 const queryClient = new QueryClient({
   defaultOptions: {

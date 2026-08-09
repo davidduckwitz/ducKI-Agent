@@ -1,0 +1,6 @@
+
+# Generated skill bundles (created by v1.php?action=sync)
+api/data/bundles/
+
+# Compiled web UI (built via pnpm build:landing-web)
+web/

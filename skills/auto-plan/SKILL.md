@@ -1,5 +1,5 @@
 ---
-name: "Auto Plan"
+name: auto-plan
 description: "Automatically create detailed plans when tasks or workflows are created"
 primary_skills: ["plan", "tool-orchestration"]
 related_skills: ["task-splitter"]

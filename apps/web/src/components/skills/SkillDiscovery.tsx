@@ -11,6 +11,12 @@ interface DiscoveredSkill {
   status?: string;
   lines?: number;
   updated?: string;
+  // agentskills.io catalog fields
+  spec_compliant?: boolean;
+  has_scripts?: boolean;
+  tags?: string[];
+  version?: string | null;
+  source_url?: string | null;
 }
 
 interface SkillDiscoveryProps {
@@ -57,20 +63,22 @@ export function SkillDiscovery({ installedSkills }: SkillDiscoveryProps) {
   const installSkillMutation = useMutation({
     mutationFn: async (skill: DiscoveredSkill) => {
       setInstallError(null);
-      const res = await fetch("/api/skills", {
+      // Import the full skill bundle (SKILL.md + scripts/assets) from the catalog,
+      // not just an empty template. The server downloads, validates, and installs.
+      const res = await fetch("/api/skills/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: skill.id,
-          description: skill.description,
+          source: `catalog:${skill.id}`,
           slug: skill.id,
         }),
       });
+      const json = await res.json().catch(() => null);
       if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`Failed to install: ${errText || res.statusText}`);
+        const msg = json?.error || json?.message || res.statusText;
+        throw new Error(`Failed to install: ${msg}`);
       }
-      return res.json();
+      return json;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["skills"] });
@@ -79,6 +87,18 @@ export function SkillDiscovery({ installedSkills }: SkillDiscoveryProps) {
       setInstallError(error instanceof Error ? error.message : "Installation failed");
     },
   });
+
+  const confirmAndInstall = (skill: DiscoveredSkill) => {
+    const warnScripts = skill.has_scripts
+      ? "\n\n⚠️ This skill bundles executable scripts. Only install skills you trust."
+      : "";
+    const warnSpec = skill.spec_compliant === false
+      ? "\n\n⚠️ This skill is not marked spec-compliant and may fail validation on install."
+      : "";
+    if (window.confirm(`Install "${skill.name}" from the catalog?${warnScripts}${warnSpec}`)) {
+      installSkillMutation.mutate(skill);
+    }
+  };
 
   // Filter skills
   const filtered = discoveredSkills.filter((skill: DiscoveredSkill) => {
@@ -243,6 +263,25 @@ export function SkillDiscovery({ installedSkills }: SkillDiscoveryProps) {
                   {skill.description}
                 </p>
 
+                {/* Spec / scripts badges */}
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {skill.spec_compliant === false && (
+                    <span className="px-2 py-0.5 text-xs rounded bg-yellow-900/30 text-yellow-300">
+                      not spec-compliant
+                    </span>
+                  )}
+                  {skill.has_scripts && (
+                    <span className="px-2 py-0.5 text-xs rounded bg-orange-900/30 text-orange-300" title="Bundles executable scripts">
+                      ⚙ scripts
+                    </span>
+                  )}
+                  {skill.version && (
+                    <span className="px-2 py-0.5 text-xs rounded bg-gray-800 text-gray-300">
+                      v{skill.version}
+                    </span>
+                  )}
+                </div>
+
                 {/* Status Badge */}
                 {installed && (
                   <div className="mb-2 px-2 py-1 text-xs rounded bg-green-900/30 text-green-300 inline-block">
@@ -264,7 +303,7 @@ export function SkillDiscovery({ installedSkills }: SkillDiscoveryProps) {
                 <div className="flex gap-2">
                   {!installed ? (
                     <button
-                      onClick={() => installSkillMutation.mutate(skill)}
+                      onClick={() => confirmAndInstall(skill)}
                       disabled={isInstalling}
                       className="flex-1 px-3 py-2 rounded text-xs font-medium bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white transition flex items-center justify-center gap-1"
                     >

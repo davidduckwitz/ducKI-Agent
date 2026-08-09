@@ -212,6 +212,28 @@ switch ($action) {
         ]);
         break;
 
+    case 'download':
+        // Serve a skill's tar.gz bundle for the Node importer.
+        if (!$id) {
+            error_response('Skill ID required', 'MISSING_ID', 400);
+        }
+        // Strict id sanitization to prevent path traversal.
+        if (!preg_match('/^[a-z0-9][a-z0-9-]*$/', $id)) {
+            error_response('Invalid skill ID', 'INVALID_ID', 400);
+        }
+        $bundle_file = $data_dir . '/bundles/' . $id . '.tar.gz';
+        $real = realpath($bundle_file);
+        $bundles_root = realpath($data_dir . '/bundles');
+        if ($real === false || $bundles_root === false || strpos($real, $bundles_root) !== 0) {
+            error_response('Bundle not found: ' . $id . '. Run action=sync first.', 'NOT_FOUND', 404);
+        }
+        header('Content-Type: application/gzip');
+        header('Content-Disposition: attachment; filename="' . $id . '.tar.gz"');
+        header('Content-Length: ' . filesize($real));
+        readfile($real);
+        exit();
+        break;
+
     case 'sync':
         require_once(__DIR__ . '/controllers/SyncController.php');
         $sync = new SyncController(__DIR__);

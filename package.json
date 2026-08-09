@@ -11,6 +11,7 @@
     "build:server": "pnpm --filter @ducki/server run build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "skills:validate": "node scripts/validate-skills.mjs",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
     "typecheck": "pnpm -r run typecheck",

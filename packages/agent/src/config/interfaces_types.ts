@@ -89,6 +89,12 @@ export interface SkillManifest {
   scripts?: Record<string, string>;
   dependencies?: string[];
   priority?: "critical" | "high" | "medium" | "low";
+  // agentskills.io spec fields
+  license?: string;
+  compatibility?: string;
+  allowedTools?: string[];
+  version?: string;
+  metadata?: Record<string, string>;
 }
 
 export interface SkillSummary extends SkillManifest {

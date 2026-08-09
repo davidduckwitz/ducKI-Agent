@@ -73,6 +73,12 @@ describe("backendUrl", () => {
     expect(getSocketUrl()).toBe("http://192.168.1.50:3001");
   });
 
+  it("prepends http:// when the remote url has no scheme", () => {
+    store({ type: "remote", url: "127.0.0.1:3001" });
+    expect(getApiBaseUrl()).toBe("http://127.0.0.1:3001/api");
+    expect(getSocketUrl()).toBe("http://127.0.0.1:3001");
+  });
+
   it("probes health through the API base so the dev proxy forwards it", () => {
     expect(getHealthUrl()).toBe("/api/health");
     store({ type: "remote", url: "https://agent.example.com" });

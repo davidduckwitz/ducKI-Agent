@@ -1,3 +1,8 @@
+---
+name: btc-puzzle-solver
+description: Solves Bitcoin puzzle addresses by generating BIP39 wordlists, cracking the mnemonic seed to satisfy the address checksum, and validating the private key via ECDSA. Use for BTC puzzle or seed-recovery tasks.
+---
+
 # BTC Puzzle Solver
 ## Input
 - btc_address: "1KfZGvwZxsvSmemoCmEV75uqcNzYBHjkHZ"

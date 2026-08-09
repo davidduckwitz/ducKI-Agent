@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:landing-web": "vite build --base=/web/ --outDir ../../landing/web --emptyOutDir",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },

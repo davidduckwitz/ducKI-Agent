@@ -1957,6 +1957,25 @@ export class Agent {
       // jsonrepair couldn't salvage it — fall through to the hand-rolled fixes.
     }
 
+    // Recover `func({...}, "key": val)` where args after the object are loose pairs
+    // (jsonrepair turns that into an array, which we reject). Merge them into the
+    // object, then parse (jsonrepair handles any remaining minor breakage).
+    const mergedPairs = this.mergeTrailingPairsIntoObject(candidate);
+    if (mergedPairs) {
+      for (const attempt of [mergedPairs, () => jsonrepair(mergedPairs)]) {
+        try {
+          const text = typeof attempt === "function" ? attempt() : attempt;
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            this.logger.debug("[PARSER] Merged loose trailing pairs into tool call object");
+            return parsed as Record<string, unknown>;
+          }
+        } catch {
+          // Try the next form / fall through.
+        }
+      }
+    }
+
     // Local models routinely truncate the JSON one character early - almost always the
     // final `}` right before the [TOOL:...] call's own closing `)]`, e.g.
     // {"command": "..."} emitted as {"command": "...". Close off exactly the brackets that
@@ -2086,6 +2105,41 @@ export class Agent {
       .map((opener) => (opener === "{" ? "}" : "]"))
       .join("");
     return text + closers;
+  }
+
+  /**
+   * Recover a tool call where the model passed the arguments as an object PLUS extra
+   * loose key/value pairs — `func({...}, "offset": 100)` instead of putting `offset`
+   * inside the object. The first object closes early and `, "offset": 100` trails it,
+   * so JSON.parse fails and jsonrepair turns it into an array. Merge the trailing
+   * pairs into the object (`{...}, "offset":100` → `{..., "offset":100}`). Returns
+   * undefined when there's nothing to merge (object closes cleanly), leaving valid
+   * input untouched.
+   */
+  private mergeTrailingPairsIntoObject(text: string): string | undefined {
+    const t = text.trim();
+    if (!t.startsWith("{")) return undefined;
+    let depth = 0;
+    let inString = false;
+    for (let i = 0; i < t.length; i++) {
+      const char = t[i];
+      const prevChar = i > 0 ? t[i - 1] : "";
+      if (char === '"' && prevChar !== "\\") {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (char === "{") depth++;
+      else if (char === "}") {
+        depth--;
+        if (depth === 0) {
+          const rest = t.slice(i + 1).trim();
+          // Something follows the closed object, separated by a comma → merge it in.
+          return rest.startsWith(",") ? `${t.slice(0, i)}${t.slice(i + 1)}}` : undefined;
+        }
+      }
+    }
+    return undefined;
   }
 
   /** Serializes a tool result to JSON bounded to maxSize, without ever slicing the
