@@ -128,6 +128,13 @@ export interface BrowserSession {
 
 export interface ToolCallRecord {
   id: string;
+  /**
+   * Correlation id stamped by the agent (e.g. "batch_1_0"). NOT globally unique:
+   * the agent resets its batch counter each turn, so the same value recurs across
+   * turns. Use `id` for React keys / removal; use `callId` only to correlate the
+   * matching tool_result event.
+   */
+  callId?: string;
   toolName: string;
   action?: string;
   timestamp: string;
@@ -638,7 +645,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         // event payloads that don't carry callIds.
         const callId = callIds[i] ?? `${tools[i]}_${data.timestamp}_${i}`;
         const toolCall: ToolCallRecord = {
-          id: callId,
+          id: crypto.randomUUID(),
+          callId,
           toolName: tools[i] ?? "unknown",
           timestamp: data.timestamp,
           status: "executing",
@@ -660,8 +668,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       let toolCall = undefined;
 
       if (callId) {
-        // Prefer matching by exact callId for precision
-        toolCall = toolCalls.find((tc) => tc.id === callId);
+        // Prefer matching by exact callId for precision. The same callId can recur
+        // across turns, so also require the record to still be executing.
+        toolCall =
+          toolCalls.find((tc) => tc.callId === callId && tc.status === "executing") ??
+          toolCalls.find((tc) => tc.callId === callId);
       }
 
       if (!toolCall) {
