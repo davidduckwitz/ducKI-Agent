@@ -114,6 +114,8 @@ export const AGENT_EVENT_TYPES = {
 
   // Legacy event types (backward compat)
   PLAN: "plan",
+  /** Session checklist lifecycle: phase=created|progress|done with the item list/statuses. */
+  CHECKLIST: "checklist",
   ITERATION: "iteration",
   TOOL_CALL: "tool_call",
   TOOL_RESULT: "tool_result",

@@ -10,6 +10,7 @@ import {
   Wrench,
   Sparkles,
   Target,
+  ListChecks,
   Database,
   BookOpen,
   HardDrive,
@@ -205,6 +206,16 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_ENABLE_VERIFY",
         "AGENT_VERIFY_MAX_FIX_ATTEMPTS",
         "AGENT_VERIFY_DERIVE_CONSTRAINTS",
+      ],
+    },
+    {
+      name: "Session-Checkliste",
+      icon: ListChecks,
+      keys: [
+        "AGENT_CHECKLIST_ENABLED",
+        "AGENT_CHECKLIST_MIN_COMPLEXITY",
+        "AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS",
+        "AGENT_CHECKLIST_SKIPPED_POLICY",
       ],
     },
     {

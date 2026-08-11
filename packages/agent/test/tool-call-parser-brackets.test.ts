@@ -55,6 +55,46 @@ describe("Tool Call Parser – Bracket Payload Handling (PR1-A1)", () => {
     });
   });
 
+  describe("space-separated key=value bracket calls (Variant E)", () => {
+    it("parses the exact failing filesystem write from the report (quotes, newlines, parens, URLs)", () => {
+      const agent = createAgentForParserTests();
+      const response =
+        '[TOOL:filesystem action=write path=./weather_news_report.md basePath=./shared-workspace ' +
+        'content="# Wetter- und Nachrichtenbericht\\n\\n## Wetter in Fulda\\n- **Temperatur:** 22,6 °C\\n\\n' +
+        '1. **Schlichtung bei Lufthansa** (tagesschau)\\n   <https://www.tagesschau.de/x.html>"]';
+
+      const result = (agent as any).extractAllToolCalls(response);
+
+      expect(result.calls).toHaveLength(1);
+      expect(result.unparsed).toHaveLength(0);
+      const call = result.calls[0];
+      expect(call.toolName).toBe("filesystem");
+      expect(call.input.action).toBe("write");
+      expect(call.input.path).toBe("./weather_news_report.md");
+      expect(call.input.basePath).toBe("./shared-workspace");
+      // Escaped \n became a real newline; parens and <url> survived intact.
+      expect(call.input.content).toContain("# Wetter- und Nachrichtenbericht\n");
+      expect(call.input.content).toContain("(tagesschau)");
+      expect(call.input.content).toContain("<https://www.tagesschau.de/x.html>");
+    });
+
+    it("parses bare and single-quoted values", () => {
+      const agent = createAgentForParserTests();
+      const result = (agent as any).extractAllToolCalls("[TOOL:filesystem action=read path='./my file.md']");
+      expect(result.calls).toHaveLength(1);
+      expect(result.calls[0].input.action).toBe("read");
+      expect(result.calls[0].input.path).toBe("./my file.md");
+      expect(result.unparsed).toHaveLength(0);
+    });
+
+    it("still prefers JSON payloads (Variant E does not shadow them)", () => {
+      const agent = createAgentForParserTests();
+      const result = (agent as any).extractAllToolCalls('[TOOL:shell({"command":"echo hi=there"})]');
+      expect(result.calls).toHaveLength(1);
+      expect(result.calls[0].input.command).toBe("echo hi=there");
+    });
+  });
+
   describe("scanBracketPayload helper", () => {
     it("correctly finds closing bracket at any nesting depth", () => {
       const agent = createAgentForParserTests();

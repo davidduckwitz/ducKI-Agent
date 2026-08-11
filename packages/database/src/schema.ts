@@ -357,6 +357,35 @@ export const bitcoinPuzzles = sqliteTable("bitcoin_puzzles", {
 export type BitcoinPuzzleInsert = typeof bitcoinPuzzles.$inferInsert;
 export type BitcoinPuzzleSelect = typeof bitcoinPuzzles.$inferSelect;
 
+// ============================================================
+// Session Checklist
+// ============================================================
+// Per-conversation, per-run checklist derived from a Plan. Externalizes the
+// agent's open-goal state so it survives context compression and lets the
+// run-loop focus on / verify one step at a time instead of relying on the LLM
+// to implicitly remember what is still outstanding. One row = one step.
+export const sessionChecklist = sqliteTable("session_checklist", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  conversationId: integer("conversation_id").references(() => conversations.id).notNull(),
+  runId: text("run_id"), // a fresh run/re-plan starts a new set under a new runId
+  stepIndex: integer("step_index").notNull(), // ordering (= Planner step index)
+  title: text("title").notNull(),
+  description: text("description"),
+  // The verifiable acceptance criteria for this step. Named acceptance_criteria
+  // (not "constraint") because CONSTRAINT is a reserved SQL keyword.
+  acceptanceCriteria: text("acceptance_criteria"),
+  constraintKind: text("constraint_kind"), // requirement|logic-assertion|style|shell-check|unit-test
+  status: text("status").notNull().default("pending"), // pending|in_progress|done|failed|unverified|skipped
+  confidence: text("confidence"), // verified|soft (set when status=done)
+  verifyState: text("verify_state"), // JSON: compact excerpt of the last VerifyResult
+  attempts: integer("attempts").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export type SessionChecklistInsert = typeof sessionChecklist.$inferInsert;
+export type SessionChecklistSelect = typeof sessionChecklist.$inferSelect;
+
 export type ConversationInsert = typeof conversations.$inferInsert;
 export type ConversationSelect = typeof conversations.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;

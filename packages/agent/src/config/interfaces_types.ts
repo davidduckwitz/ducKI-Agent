@@ -267,6 +267,32 @@ export interface AgentRuntimeControls {
    */
   verifyDeriveConstraints: boolean;
 
+  // Session Checklist
+  /**
+   * Enable the per-run session checklist: derive a checklist from the auto-plan,
+   * inject the current open step each iteration, and verify each step before the
+   * run ends. Default false.
+   * Settings key: AGENT_CHECKLIST_ENABLED
+   */
+  checklistEnabled: boolean;
+  /**
+   * Minimum plan complexity that activates the checklist ("low"|"medium"|"high").
+   * Trivial requests never get a checklist. Default "medium".
+   * Settings key: AGENT_CHECKLIST_MIN_COMPLEXITY
+   */
+  checklistMinComplexity: "low" | "medium" | "high";
+  /**
+   * Max verify/repair attempts per checklist item before it is skipped. Default 2.
+   * Settings key: AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS
+   */
+  checklistMaxItemAttempts: number;
+  /**
+   * How an "unverified" item (all checks skipped) is treated: "soft" accepts and
+   * moves on (flagged unbestätigt); "strict" retries like a failure. Default "soft".
+   * Settings key: AGENT_CHECKLIST_SKIPPED_POLICY
+   */
+  checklistSkippedPolicy: "soft" | "strict";
+
   // Vision ("Observer" — Phase 4)
   /**
    * Enable the analyze_ui_layout vision tool. Needs a vision-capable model in

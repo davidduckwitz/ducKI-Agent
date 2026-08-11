@@ -13,6 +13,9 @@ export default defineConfig({
     },
   },
   server: {
+    host: true,
+    // Allow access via the Tailscale MagicDNS hostname (*.ts.net) in addition to localhost.
+    allowedHosts: [".ts.net"],
     port: process.env["VITE_PORT"] ? parseInt(process.env["VITE_PORT"]) : 5173,
     strictPort: false,
     proxy: {

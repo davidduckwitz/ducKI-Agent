@@ -40,6 +40,14 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     enableVerify: (process.env["AGENT_ENABLE_VERIFY"] ?? "false").toLowerCase() === "true",
     verifyMaxFixAttempts: parseInt(process.env["AGENT_VERIFY_MAX_FIX_ATTEMPTS"] ?? "1"),
     verifyDeriveConstraints: (process.env["AGENT_VERIFY_DERIVE_CONSTRAINTS"] ?? "true").toLowerCase() !== "false",
+
+    checklistEnabled: (process.env["AGENT_CHECKLIST_ENABLED"] ?? "false").toLowerCase() === "true",
+    checklistMinComplexity: (["low", "medium", "high"].includes((process.env["AGENT_CHECKLIST_MIN_COMPLEXITY"] ?? "").toLowerCase())
+      ? (process.env["AGENT_CHECKLIST_MIN_COMPLEXITY"] ?? "medium").toLowerCase()
+      : "medium") as "low" | "medium" | "high",
+    checklistMaxItemAttempts: parseInt(process.env["AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS"] ?? "3"),
+    checklistSkippedPolicy: ((process.env["AGENT_CHECKLIST_SKIPPED_POLICY"] ?? "soft").toLowerCase() === "strict" ? "strict" : "soft") as "soft" | "strict",
+
     enableVision: (process.env["AGENT_ENABLE_VISION"] ?? "true").toLowerCase() !== "false",
 
     reasonerUseToolMinConfidence: parseFloat(process.env["AGENT_REASONER_MIN_CONFIDENCE"] ?? "0.7"),

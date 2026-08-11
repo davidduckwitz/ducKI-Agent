@@ -13,6 +13,8 @@ const CLIENT_ID_KEY = "ducki.clientId";
 export interface ServerHelloSnapshot {
   agents?: { runningCount?: number; agents?: unknown[] };
   gateway?: unknown;
+  /** Conversations with an in-flight run, so a reconnecting client can restore loading state. */
+  runningConversationIds?: number[];
 }
 
 /** Counts consecutive socket connect failures so the console logging can be throttled. */
@@ -311,6 +313,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         clientId: getClientId(),
         appVersion: import.meta.env["VITE_APP_VERSION"] ?? "dev",
       });
+      // Re-join the active conversation room so an in-flight run keeps streaming to us after
+      // a reconnect. Without this, the server would emit the rest of the run to a socket we
+      // no longer own and the UI would only reveal the persisted answer on a manual reload.
+      const activeConversationId = get().conversationId;
+      if (typeof activeConversationId === "number") {
+        socket.emit("chat:join", { conversationId: activeConversationId });
+      }
     });
 
     socket.on("server:hello", (data: { protocolVersion?: number; snapshot?: ServerHelloSnapshot }) => {
@@ -319,11 +328,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       // The handshake snapshot replaces the burst of requests the client used to fire
       // on startup just to learn the agent and gateway state.
       const snapshot = data?.snapshot;
-      set({
-        connected: true,
-        globalRunningAgents: snapshot?.agents?.runningCount ?? 0,
-        agentMetrics: snapshot?.agents,
-        gatewayStatus: snapshot?.gateway,
+      set((s) => {
+        // Restore which conversations are still running server-side, and re-arm the loading
+        // indicator if the currently open chat is one of them (e.g. after a reconnect or a
+        // reload while a run is in flight). The room re-join already resumed the event stream.
+        const running = new Set(snapshot?.runningConversationIds ?? []);
+        const activeStillRunning =
+          typeof s.conversationId === "number" && running.has(s.conversationId);
+        return {
+          connected: true,
+          globalRunningAgents: snapshot?.agents?.runningCount ?? 0,
+          agentMetrics: snapshot?.agents,
+          gatewayStatus: snapshot?.gateway,
+          runningConversationIds: running,
+          isLoading: activeStillRunning ? true : s.isLoading,
+        };
       });
     });
 
@@ -375,6 +394,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
 
     socket.on("chat:conversation", (data: { conversationId: number }) => {
+      socket.emit("chat:join", { conversationId: data.conversationId });
       set((s) => {
         if (!s.awaitingNewConversation) return {};
         return { conversationId: data.conversationId, awaitingNewConversation: false };
@@ -763,6 +783,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
       }
 
+      // Join the room before the run starts so every streamed event reaches us, and keeps
+      // reaching us across reconnects mid-run.
+      socket.emit("chat:join", { conversationId: resolvedConversationId });
+
       socket.emit("chat:message", {
         message: content,
         conversationId: resolvedConversationId,
@@ -813,14 +837,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   clearChat: () => set({ messages: [] }),
-  setConversationId: (id) =>
+  setConversationId: (id) => {
+    const { socket, conversationId: previousId } = get();
+    // Switch room membership so a run started elsewhere (another tab, or before a reload)
+    // streams live into the newly opened conversation.
+    if (socket && id !== previousId) {
+      if (typeof previousId === "number") socket.emit("chat:leave", { conversationId: previousId });
+      if (typeof id === "number") socket.emit("chat:join", { conversationId: id });
+    }
     set((s) => ({
       conversationId: id,
       messages: s.conversationId !== id ? [] : s.messages, // Only clear messages when switching to a DIFFERENT conversation
       awaitingNewConversation: false,
       isLoading: typeof id === "number" ? s.runningConversationIds.has(id) : false,
       streamingContent: "",
-    })),
+    }));
+  },
   setMessages: (messages) =>
     set((s) => ({
       messages: typeof messages === "function" ? messages(s.messages) : messages,

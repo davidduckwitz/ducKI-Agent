@@ -149,6 +149,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS crypto_portfolio_settings (id INTEGER PRIMARY KEY AUTOINCREMENT, currency TEXT DEFAULT 'USD', refresh_interval_seconds INTEGER DEFAULT 300, auto_sync_enabled INTEGER DEFAULT 1, notifications_enabled INTEGER DEFAULT 0, export_format TEXT DEFAULT 'json', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS crypto_portfolio_history (id INTEGER PRIMARY KEY AUTOINCREMENT, total_value_usd REAL NOT NULL, btc_balance TEXT, btc_value_usd REAL, eth_balance TEXT, eth_value_usd REAL, xrp_balance TEXT, xrp_value_usd REAL, timestamp INTEGER NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS crypto_price_history (id INTEGER PRIMARY KEY AUTOINCREMENT, currency TEXT NOT NULL, price REAL NOT NULL, price_usd REAL NOT NULL, change_24h REAL, market_cap REAL, volume_24h REAL, timestamp INTEGER NOT NULL, created_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS session_checklist (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), run_id TEXT, step_index INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance_criteria TEXT, constraint_kind TEXT, status TEXT NOT NULL DEFAULT 'pending', confidence TEXT, verify_state TEXT, attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -440,6 +441,88 @@ export class DatabaseService {
       .where(eq(schema.tasks.createdBy, createdBy))
       .orderBy(desc(schema.tasks.createdAt))
       .all();
+  }
+
+  // ============================================================
+  // Session Checklist
+  // ============================================================
+  /** Create a checklist (one row per step) for a conversation run. Steps are inserted
+   *  in the given order; stepIndex is assigned from the array position unless provided. */
+  async createChecklist(
+    conversationId: number,
+    runId: string | undefined,
+    items: Array<Pick<schema.SessionChecklistInsert, "title"> &
+      Partial<Pick<schema.SessionChecklistInsert, "description" | "acceptanceCriteria" | "constraintKind" | "stepIndex" | "status">>>
+  ): Promise<schema.SessionChecklistSelect[]> {
+    if (items.length === 0) return [];
+    const now = new Date().toISOString();
+    const rows: schema.SessionChecklistInsert[] = items.map((item, idx) => ({
+      conversationId,
+      runId: runId ?? null,
+      stepIndex: item.stepIndex ?? idx,
+      title: item.title,
+      description: item.description ?? null,
+      acceptanceCriteria: item.acceptanceCriteria ?? null,
+      constraintKind: item.constraintKind ?? null,
+      status: item.status ?? "pending",
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    return this.db.insert(schema.sessionChecklist).values(rows).returning().all();
+  }
+
+  /** All checklist items for a conversation, ordered by step. When runId is given,
+   *  only that run's items are returned (a re-plan creates a fresh runId). */
+  async getChecklist(conversationId: number, runId?: string): Promise<schema.SessionChecklistSelect[]> {
+    const conditions = [eq(schema.sessionChecklist.conversationId, conversationId)];
+    if (runId !== undefined) {
+      conditions.push(eq(schema.sessionChecklist.runId, runId));
+    }
+    return this.db
+      .select()
+      .from(schema.sessionChecklist)
+      .where(and(...conditions))
+      .orderBy(schema.sessionChecklist.stepIndex, schema.sessionChecklist.id)
+      .all();
+  }
+
+  /** Open (not yet resolved) items for a run, ordered by step. "Open" = pending or in_progress. */
+  async getOpenChecklistItems(conversationId: number, runId?: string): Promise<schema.SessionChecklistSelect[]> {
+    const conditions = [
+      eq(schema.sessionChecklist.conversationId, conversationId),
+      or(eq(schema.sessionChecklist.status, "pending"), eq(schema.sessionChecklist.status, "in_progress"))!,
+    ];
+    if (runId !== undefined) {
+      conditions.push(eq(schema.sessionChecklist.runId, runId));
+    }
+    return this.db
+      .select()
+      .from(schema.sessionChecklist)
+      .where(and(...conditions))
+      .orderBy(schema.sessionChecklist.stepIndex, schema.sessionChecklist.id)
+      .all();
+  }
+
+  async updateChecklistItem(
+    id: number,
+    data: Partial<Omit<schema.SessionChecklistInsert, "id" | "conversationId" | "createdAt">>
+  ): Promise<schema.SessionChecklistSelect | undefined> {
+    return this.db
+      .update(schema.sessionChecklist)
+      .set({ ...data, updatedAt: new Date().toISOString() })
+      .where(eq(schema.sessionChecklist.id, id))
+      .returning()
+      .get();
+  }
+
+  /** Remove all checklist rows for a conversation (or a single run of it). */
+  async deleteChecklist(conversationId: number, runId?: string): Promise<void> {
+    const conditions = [eq(schema.sessionChecklist.conversationId, conversationId)];
+    if (runId !== undefined) {
+      conditions.push(eq(schema.sessionChecklist.runId, runId));
+    }
+    await this.db.delete(schema.sessionChecklist).where(and(...conditions)).run();
   }
 
   // ============================================================

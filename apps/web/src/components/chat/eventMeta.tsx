@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, BrainCircuit, Check, GitBranch, Sparkles, Wrench, Monitor, Zap, RefreshCw, MessageSquare } from "lucide-react";
+import { Activity, AlertTriangle, BrainCircuit, Check, GitBranch, Sparkles, Wrench, Monitor, Zap, RefreshCw, MessageSquare, ListChecks } from "lucide-react";
 import type { AgentEventType } from "./chatTypes";
 
 export function eventIcon(eventType?: AgentEventType, eventData?: Record<string, unknown>) {
@@ -8,6 +8,7 @@ export function eventIcon(eventType?: AgentEventType, eventData?: Record<string,
     if (success === true) return <Check className="w-4 h-4 text-emerald-300" />;
   }
   if (eventType === "plan") return <GitBranch className="w-4 h-4 text-indigo-300" />;
+  if (eventType === "checklist") return <ListChecks className="w-4 h-4 text-teal-300" />;
   if (eventType === "tool_call" || eventType === "tool_result") return <Wrench className="w-4 h-4 text-amber-300" />;
   if (eventType === "skill_selection") return <Zap className="w-4 h-4 text-cyan-300 animate-pulse" />;
   if (eventType === "tool_retry") return <RefreshCw className="w-4 h-4 text-orange-300" />;
@@ -36,12 +37,14 @@ export function eventTone(eventType?: AgentEventType, eventData?: Record<string,
   if (eventType === "tool_call") return "border-amber-500/30 bg-amber-500/[0.07] text-amber-100";
   if (eventType === "tool_result") return "border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-100";
   if (eventType === "plan") return "border-indigo-500/30 bg-indigo-500/10 text-indigo-100";
+  if (eventType === "checklist") return "border-teal-500/30 bg-teal-500/10 text-teal-100";
   if (eventType === "internal_instruction") return "border-border bg-muted-foreground/[0.05] text-muted-foreground";
   return "border-border bg-muted-foreground/[0.07] text-foreground/80";
 }
 
 export function eventLabel(t: (key: string) => string, eventType?: AgentEventType) {
   if (eventType === "plan") return t("chat.eventPlan");
+  if (eventType === "checklist") return "Checkliste";
   if (eventType === "tool_call") return t("chat.eventToolCall");
   if (eventType === "tool_result") return t("chat.eventToolResult");
   if (eventType === "skill_selection") return "Skills Selected";

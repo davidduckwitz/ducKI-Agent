@@ -1,5 +1,6 @@
 export type AgentEventType =
   | "plan"
+  | "checklist"
   | "iteration"
   | "tool_call"
   | "tool_result"

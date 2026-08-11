@@ -78,10 +78,13 @@ function runningPuzzleCount(): number {
 }
 
 /** Snapshot every freshly handshaken client receives, so it does not have to poll for it. */
-function buildHelloSnapshot(gatewayStatus: unknown) {
+function buildHelloSnapshot(gatewayStatus: unknown, runningConversationIds: number[] = []) {
   return {
     agents: { ...agentRegistry.snapshot(), bitcoinPuzzles: runningPuzzleCount() },
     gateway: gatewayStatus,
+    // Conversations with an in-flight run right now. Lets a client that reconnects mid-run
+    // (or reloads) restore its loading state instead of looking idle until the next event.
+    runningConversationIds,
   };
 }
 
@@ -168,6 +171,47 @@ export function setupWebSocket(
     logger.debug("Socket opened", { id: socket.id });
 
     /**
+     * Chat events are streamed to a per-conversation room instead of the single socket
+     * that sent the message. A reconnect (transport upgrade, network hiccup, sleep,
+     * remote/Tailscale) produces a *new* server-side socket; emitting to the old socket
+     * reference would drop every remaining event of an in-flight run, which is why the UI
+     * previously needed a manual reload to reveal the persisted answer. Room membership is
+     * re-established by the client via `chat:join` on (re)connect, so the run keeps
+     * reaching whatever socket currently represents this client (and any other tab viewing
+     * the same conversation). Falls back to the originating socket when no conversation id
+     * is known yet (e.g. an early failure before resolution).
+     */
+    const conversationRoom = (id: number): string => `conversation:${id}`;
+    const emitToConversation = (
+      id: number | undefined,
+      event: string,
+      payload: unknown
+    ): void => {
+      if (typeof id === "number") {
+        io.to(conversationRoom(id)).emit(event, payload);
+      } else {
+        socket.emit(event, payload);
+      }
+    };
+
+    // Re-join the conversation room after a reconnect (or when switching the active chat),
+    // so live streaming survives the socket being replaced mid-run.
+    socket.on("chat:join", (data?: { conversationId?: number }) => {
+      if (typeof data?.conversationId === "number") {
+        socket.join(conversationRoom(data.conversationId));
+        logger.debug("Socket joined conversation room", {
+          id: socket.id,
+          conversationId: data.conversationId,
+        });
+      }
+    });
+    socket.on("chat:leave", (data?: { conversationId?: number }) => {
+      if (typeof data?.conversationId === "number") {
+        socket.leave(conversationRoom(data.conversationId));
+      }
+    });
+
+    /**
      * Handshake. The client is only considered usable once it has announced itself and
      * received `server:hello`; until then it must not start issuing requests. The reply
      * carries the first snapshot, which replaces the burst of polls the client used to
@@ -185,7 +229,7 @@ export function setupWebSocket(
       socket.emit("server:hello", {
         protocolVersion: SERVER_PROTOCOL_VERSION,
         serverTime: new Date().toISOString(),
-        snapshot: buildHelloSnapshot(getGatewayStatus()),
+        snapshot: buildHelloSnapshot(getGatewayStatus(), Array.from(runningConversations.keys())),
       });
     });
 
@@ -273,6 +317,10 @@ export function setupWebSocket(
         }
         conversationId = resolvedConversationId;
 
+        // Join the room now so every streamed event below reaches this client even if the
+        // underlying socket is replaced by a reconnect mid-run.
+        socket.join(conversationRoom(resolvedConversationId));
+
         // Wait for any running conversation to complete (prevent concurrent execution)
         const existingRun = runningConversations.get(resolvedConversationId);
         if (existingRun) {
@@ -293,7 +341,7 @@ export function setupWebSocket(
           label: "WebSocket Chat",
         });
 
-        socket.emit("chat:start", { timestamp: new Date().toISOString(), conversationId: resolvedConversationId });
+        emitToConversation(resolvedConversationId, "chat:start", { timestamp: new Date().toISOString(), conversationId: resolvedConversationId });
 
         let attemptProducedOutput = false;
 
@@ -304,7 +352,7 @@ export function setupWebSocket(
           localMessageId: data.localMessageId,
           onChunk: (chunk: string) => {
             attemptProducedOutput = true;
-            socket.emit("chat:chunk", { content: chunk, conversationId: resolvedConversationId });
+            emitToConversation(resolvedConversationId, "chat:chunk", { content: chunk, conversationId: resolvedConversationId });
           },
           onEvent: async (event: AgentRunEvent) => {
               attemptProducedOutput = true;
@@ -350,7 +398,7 @@ export function setupWebSocket(
                 }
               }
 
-              socket.emit("chat:event", { ...eventToEmit, conversationId: resolvedConversationId });
+              emitToConversation(resolvedConversationId, "chat:event", { ...eventToEmit, conversationId: resolvedConversationId });
 
               // Emit browser_preview as tool events for ToolEventsDisplay
               if (event.type === "browser_preview") {
@@ -360,7 +408,7 @@ export function setupWebSocket(
                 });
 
                 // Emit tool-start first (if not already started)
-                socket.emit("chat:tool-event", {
+                emitToConversation(resolvedConversationId, "chat:tool-event", {
                   type: "tool-start",
                   toolName: "Browser",
                   timestamp: event.timestamp,
@@ -368,7 +416,7 @@ export function setupWebSocket(
                 });
 
                 // Then emit tool-complete with screenshot data
-                socket.emit("chat:tool-event", {
+                emitToConversation(resolvedConversationId, "chat:tool-event", {
                   type: "tool-complete",
                   toolName: "Browser",
                   timestamp: event.timestamp,
@@ -385,7 +433,7 @@ export function setupWebSocket(
 
               // Emit tool call events separately for UI tracking
               if (event.type === "tool_call") {
-                socket.emit("tool:call_started", {
+                emitToConversation(resolvedConversationId, "tool:call_started", {
                   timestamp: event.timestamp,
                   conversationId: resolvedConversationId,
                   data: event.data,
@@ -399,7 +447,7 @@ export function setupWebSocket(
                   callId: (event.data as any)?.callId,
                   success: (event.data as any)?.success,
                 });
-                socket.emit("tool:call_completed", {
+                emitToConversation(resolvedConversationId, "tool:call_completed", {
                   timestamp: event.timestamp,
                   conversationId: resolvedConversationId,
                   data: {
@@ -419,7 +467,7 @@ export function setupWebSocket(
                 const llmTokens = iterationData.llmTokens as { input?: number; output?: number; total?: number } | undefined;
 
                 if (llmTokens) {
-                  socket.emit("agent:iteration-metrics", {
+                  emitToConversation(resolvedConversationId, "agent:iteration-metrics", {
                     timestamp: event.timestamp,
                     conversationId: resolvedConversationId,
                     iterationNumber: iterationData.iterationNumber,
@@ -508,14 +556,14 @@ export function setupWebSocket(
           result = await runAttempt(retryPrompt);
         }
 
-        socket.emit("chat:complete", {
+        emitToConversation(resolvedConversationId, "chat:complete", {
           ...result,
           conversationId: resolvedConversationId,
           // Stable per-turn id so the client can deterministically collapse duplicate completes.
           messageId: data.localMessageId || randomUUID(),
         });
       } catch (error) {
-        socket.emit("chat:error", {
+        emitToConversation(conversationId, "chat:error", {
           error: error instanceof Error ? error.message : String(error),
           conversationId,
         });
@@ -536,7 +584,7 @@ export function setupWebSocket(
 
     socket.on("chat:stop", (data?: { conversationId?: number }) => {
       stopSocketAgents(socket.id);
-      socket.emit("chat:stopped", { timestamp: new Date().toISOString(), conversationId: data?.conversationId });
+      emitToConversation(data?.conversationId, "chat:stopped", { timestamp: new Date().toISOString(), conversationId: data?.conversationId });
     });
 
     // Task updates

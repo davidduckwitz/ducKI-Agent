@@ -393,6 +393,24 @@ export function ChatContainer() {
     });
   }, [qc]);
 
+  // Reconnect safety net: if a run finished while the socket was disconnected, its
+  // chat:complete was emitted to the conversation room with nobody listening, so the store
+  // never received it. On (re)connect, refetch the active conversation's persisted messages
+  // so the completed answer appears without a manual page reload. The initial connect is
+  // harmless (query is refetched or still disabled when no conversation is open).
+  useEffect(() => {
+    if (!socket) return;
+    const handleReconnect = () => {
+      if (typeof conversationId === "number") {
+        void qc.invalidateQueries({ queryKey: ["chat", "messages", conversationId] });
+      }
+    };
+    socket.on("connect", handleReconnect);
+    return () => {
+      socket.off("connect", handleReconnect);
+    };
+  }, [socket, conversationId, qc]);
+
     const appliedQueryConversationId = useRef(false);
     useEffect(() => {
       // Only ever apply the ?conversationId= param once on initial load - otherwise this
@@ -492,6 +510,7 @@ export function ChatContainer() {
               const type = parsed.eventType;
               if (
                 type === "plan" ||
+                type === "checklist" ||
                 type === "iteration" ||
                 type === "tool_call" ||
                 type === "tool_result" ||
@@ -620,6 +639,7 @@ export function ChatContainer() {
                 const type = parsed.eventType;
                 if (
                   type === "plan" ||
+                  type === "checklist" ||
                   type === "iteration" ||
                   type === "tool_call" ||
                   type === "tool_result" ||

@@ -18,6 +18,7 @@ import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
 import { Reflection } from "./reflection/reflection.js";
 import { Verifier } from "./verification/verifier.js";
+import { ChecklistManager, type ChecklistItem } from "./checklist/checklist-manager.js";
 import { CostTracker } from "./cost/cost-tracker.js";
 import { History } from "./history/history.js";
 import { createWorkflowTools } from "./workflow/workflow-tools.js";
@@ -233,6 +234,7 @@ export class Agent {
   private reasoner: Reasoner;
   private reflection: Reflection;
   private verifier: Verifier;
+  private checklistManager: ChecklistManager;
   private costTracker?: CostTracker;
   private visionEnabled = true;
   private history: History;
@@ -419,6 +421,9 @@ export class Agent {
     // is wired in yet, so shell-check/unit-test constraints report as "skipped"
     // rather than running arbitrary commands outside the tool sandbox.
     this.verifier = new Verifier(provider, this.logger);
+    // Session checklist: externalizes open-goal state so the run-loop can focus on and
+    // verify one plan step at a time. DatabaseService structurally satisfies ChecklistStore.
+    this.checklistManager = new ChecklistManager(this.db, this.logger);
     this.history = new History();
     this.thinkBlockParser = new ThinkBlockParser();
     this.toolGraph = new ToolExecutionGraph();
@@ -1366,6 +1371,32 @@ export class Agent {
       }
     }
 
+    if (normalized === "gateway") {
+      // Field-name aliasing: models routinely call this tool with natural field names
+      // instead of its exact schema — most notably "content" (Discord's OWN API field),
+      // plus "text"/"body" for the message and "channel"/"to"/"target" for the destination.
+      // Without this, a perfectly-intended send fails as "missing message/target". Map the
+      // common variants onto the canonical fields BEFORE action inference below.
+      const g = normalizedInput;
+      const firstFilled = (...keys: string[]): unknown =>
+        keys.map((k) => g[k]).find((v) => v !== undefined && v !== null && String(v).trim() !== "");
+      if (g["message"] === undefined || String(g["message"] ?? "").trim() === "") {
+        const m = firstFilled("content", "text", "body", "msg", "messageContent");
+        if (m !== undefined) g["message"] = m;
+      }
+      if (
+        (g["channelId"] === undefined || String(g["channelId"] ?? "").trim() === "") &&
+        (g["externalConversationId"] === undefined || String(g["externalConversationId"] ?? "").trim() === "")
+      ) {
+        const c = firstFilled("channel", "channelName", "channel_id", "to", "target", "recipient", "chatId", "chat_id");
+        if (c !== undefined) g["channelId"] = c;
+      }
+      if (g["portal"] === undefined || String(g["portal"] ?? "").trim() === "") {
+        const p = firstFilled("platform", "service", "provider");
+        if (p !== undefined) g["portal"] = p;
+      }
+    }
+
     if (normalized === "gateway" && normalizedInput["action"] === undefined) {
       if (normalizedInput["message"] !== undefined) {
         normalizedInput["action"] = "send";
@@ -2268,14 +2299,23 @@ export class Agent {
     // ask more narrowly" and no way to reach the content that was already written to disk,
     // which is precisely how a staged result used to end the run early.
     const stagingId = (value as { data?: { __toolStagingId?: unknown } } | null)?.data?.__toolStagingId;
+    // Always include a real content PREVIEW (the head of the per-field-truncated data), not
+    // just the "too large" note. Otherwise the model has zero actual content inline and a
+    // small model that doesn't issue the follow-up tool_staging read will hallucinate the
+    // result. The preview grounds it immediately; the note still points to the full content.
+    const previewChars = 1800;
+    const preview = boundedJson.length > previewChars
+      ? `${boundedJson.slice(0, previewChars)} …[preview truncated — read the staged result for the rest]`
+      : boundedJson;
     const summary = {
       success: (value as { success?: boolean } | null)?.success ?? false,
       error: (value as { error?: string } | null)?.error,
       truncated: true,
       __toolStagingId: typeof stagingId === "string" ? stagingId : undefined,
+      preview,
       note: stagingId
-        ? `Result too large to include (${original.length} bytes). The FULL result is staged - read it with [TOOL:tool_staging({"action":"read","id":"${String(stagingId)}"})] before answering. Do not treat this as finished.`
-        : `Result too large to include (${original.length} bytes) even after truncating individual fields - ask more narrowly if you need specific details.`,
+        ? `Only a PREVIEW of the result is shown above; ${original.length} bytes total. Read the full result with [TOOL:tool_staging({"action":"read","id":"${String(stagingId)}"})] before answering. Do not treat this as finished, and do not invent content beyond the preview.`
+        : `Only a PREVIEW is shown (${original.length} bytes total). Ask more narrowly for specific details; do not invent content beyond the preview.`,
     };
     return { json: JSON.stringify(summary), truncated: true, originalSize: original.length };
   }
@@ -2792,6 +2832,21 @@ export class Agent {
       }
     }
 
+    // Variant E: space-separated key=value args on one line, e.g.
+    //   filesystem action=write path=./report.md content="# Title\n- item (source) <url>"
+    // Weaker models routinely emit this instead of JSON or the [/TOOL] heredoc. Every JSON/
+    // brace variant above fails on it, so the whole call — usually a file write — was dropped
+    // as unparsed and the file was never written (the checklist's "save report" step then
+    // failed). Runs late so it never shadows a genuine JSON payload. Quote-aware so values may
+    // contain '(', ')', '<', '>' and escaped newlines.
+    const kvNameMatch = body.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s+([\s\S]+)$/);
+    if (kvNameMatch?.[1] && kvNameMatch[2] && /^[A-Za-z_][A-Za-z0-9_\-]*\s*=/.test(kvNameMatch[2].trimStart())) {
+      const args = this.parseSpaceSeparatedKeyValues(kvNameMatch[2]);
+      if (Object.keys(args).length > 0) {
+        return this.resolveToolNameAndInput(kvNameMatch[1], args);
+      }
+    }
+
     // Last resort: if we can extract just the tool name with no arguments
     // For stateless tools (shell, filesystem, etc), call with empty args
     // For stateful tools (browser, etc), better to fail than execute with incomplete state
@@ -2811,6 +2866,41 @@ export class Agent {
     return undefined;
   }
 
+
+  /**
+   * Parse space-separated `key=value` pairs from a one-line bracket tool call, where values
+   * may be bare (`action=write`), double- or single-quoted, and quoted values may contain
+   * spaces, parentheses, angle brackets and escaped characters. Quoted values are unescaped
+   * (`\n`→newline, `\t`, `\r`, `\"`, `\\`) so a model that wrote `content="a\nb"` produces a
+   * file with a real line break. Bare values are taken verbatim.
+   */
+  private parseSpaceSeparatedKeyValues(rest: string): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    // Value alternatives: "double" | 'single' | bareword. The quoted forms allow escaped
+    // characters (\\.) so an internal \" does not end the value early.
+    const pairRe = /([A-Za-z_][A-Za-z0-9_\-]*)\s*=\s*("((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|(\S+))/g;
+    let m: RegExpExecArray | null;
+    while ((m = pairRe.exec(rest)) !== null) {
+      const key = m[1];
+      if (!key) continue;
+      if (m[3] !== undefined) out[key] = this.unescapeInlineValue(m[3]);
+      else if (m[4] !== undefined) out[key] = this.unescapeInlineValue(m[4]);
+      else out[key] = m[5] ?? "";
+    }
+    return out;
+  }
+
+  /** Unescape the common backslash sequences a model uses inside a quoted tool-call value. */
+  private unescapeInlineValue(value: string): string {
+    return value.replace(/\\(["'\\nrt])/g, (_match, ch: string) => {
+      switch (ch) {
+        case "n": return "\n";
+        case "r": return "\r";
+        case "t": return "\t";
+        default: return ch; // \" \' \\
+      }
+    });
+  }
 
   private buildToolCallSignature(toolName: string, input: Record<string, unknown>): string {
     const stable = JSON.stringify(input, Object.keys(input).sort());
@@ -2870,6 +2960,25 @@ export class Agent {
 
     if (normalizedTool === "history" && /unknown history action/.test(normalizedError)) {
       return "History hint: Allowed actions are search, list_conversations, get_messages, get_conversation.";
+    }
+
+    // Gateway (Discord/Telegram/Webhook outbound) — steer the agent to self-serve: discover
+    // the available config + its default channel, then retry send. These are the config-level
+    // failures that field-name aliasing cannot fix; a clear recovery path lets the agent
+    // operate the gateway autonomously instead of stalling.
+    if (normalizedTool === "gateway") {
+      if (/no matching enabled gateway config/.test(normalizedError)) {
+        return "Gateway hint: First call gateway with action:'list_configs' to see the enabled portals and their ids. Then call action:'send' — pass configId (or portal, e.g. 'discord') for the one you want, plus message. Do NOT invent a configId.";
+      }
+      if (/no target id provided/.test(normalizedError)) {
+        return "Gateway hint: This config has no default channel. Call action:'list_configs' to read each config's defaultTarget; if one is present, retry send with that config. Otherwise set channelId to the exact Discord channel id (a numeric snowflake) you want to post to.";
+      }
+      if (/requires field 'message'/.test(normalizedError)) {
+        return "Gateway hint: action:'send' needs the message text in the 'message' field (aliases content/text/body also work). Put the full report text there.";
+      }
+      if (/unknown gateway action|action is required/.test(normalizedError)) {
+        return "Gateway hint: Allowed actions are 'list_configs' (discover portals/channels) and 'send' (deliver a message). Use list_configs first if unsure which portal/channel exists.";
+      }
     }
 
     if (/unknown tool/.test(normalizedError)) {
@@ -3127,6 +3236,13 @@ export class Agent {
       enableVerify: false,
       verifyMaxFixAttempts: 1,
       verifyDeriveConstraints: true,
+      checklistEnabled: false,
+      checklistMinComplexity: "medium",
+      // 3 gives the model two genuine repair chances (each failure now injects a concrete
+      // repair instruction, so retries are productive rather than blind) before a step is
+      // skipped — a better default especially for smaller models that need more tries.
+      checklistMaxItemAttempts: 3,
+      checklistSkippedPolicy: "soft",
       enableVision: true,
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
@@ -3219,6 +3335,13 @@ export class Agent {
         enableVerify: this.parseBooleanSetting(get("AGENT_ENABLE_VERIFY"), defaults.enableVerify),
         verifyMaxFixAttempts: this.parseNumberSetting(get("AGENT_VERIFY_MAX_FIX_ATTEMPTS"), defaults.verifyMaxFixAttempts, 0, 3),
         verifyDeriveConstraints: this.parseBooleanSetting(get("AGENT_VERIFY_DERIVE_CONSTRAINTS"), defaults.verifyDeriveConstraints),
+        checklistEnabled: this.parseBooleanSetting(get("AGENT_CHECKLIST_ENABLED"), defaults.checklistEnabled),
+        checklistMinComplexity: ((): "low" | "medium" | "high" => {
+          const raw = (get("AGENT_CHECKLIST_MIN_COMPLEXITY") ?? "").toLowerCase();
+          return raw === "low" || raw === "high" ? raw : defaults.checklistMinComplexity;
+        })(),
+        checklistMaxItemAttempts: this.parseNumberSetting(get("AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS"), defaults.checklistMaxItemAttempts, 1, 5),
+        checklistSkippedPolicy: (get("AGENT_CHECKLIST_SKIPPED_POLICY") ?? "").toLowerCase() === "strict" ? "strict" : defaults.checklistSkippedPolicy,
         enableVision: this.parseBooleanSetting(get("AGENT_ENABLE_VISION"), defaults.enableVision),
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
@@ -4094,6 +4217,18 @@ export class Agent {
           // If parsing fails, use the raw JSON
         }
 
+        // On failure, append an actionable recovery hint so the model self-corrects on the
+        // next iteration instead of blindly repeating the same failing call (or giving up).
+        // Previously deriveToolRecoveryHint existed but was never wired into this path, so its
+        // guidance never reached the model — the gateway/Discord config failures in particular
+        // left the agent stuck with only a raw error string.
+        if (!executed.result.success && executed.result.error && toolCall) {
+          const hint = this.deriveToolRecoveryHint(toolCall.toolName, toolCall.input, executed.result.error);
+          if (hint) {
+            resultContent = `${resultContent}\n\n[Recovery hint] ${hint}`;
+          }
+        }
+
         const toolResultMessage: LLMMessage = {
           role: "tool",
           content: resultContent,
@@ -4201,6 +4336,85 @@ export class Agent {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error("Hook execution error", { hookName, error: message });
       return { proceed: false, reason: `Hook error: ${message}` };
+    }
+  }
+
+  /** True when `complexity` is at least `min` on the low<medium<high scale. */
+  private meetsMinComplexity(complexity: "low" | "medium" | "high", min: "low" | "medium" | "high"): boolean {
+    const rank = { low: 1, medium: 2, high: 3 };
+    return rank[complexity] >= rank[min];
+  }
+
+  /** Compile evidence (assistant text + tool results) for verifying one checklist step.
+   *  A mid-task step's proof lives in the tool results, not only the final prose — and it
+   *  must include evidence from EARLIER iterations, whose tool results have already scrolled
+   *  out of the live message window. The run-loop accumulates that per-iteration into
+   *  `evidenceLog`; we prefer it and fall back to the recent message tail when it is empty. */
+  private compileChecklistEvidence(finalResponse: string, evidenceLog: string[] = []): string {
+    if (evidenceLog.length > 0) {
+      // Keep the most recent evidence (which is the most likely to contain the proof for the
+      // steps still open) within the token budget by trimming from the front.
+      return `${evidenceLog.join("\n")}\n\n[latest] ${finalResponse}`.slice(-12000);
+    }
+    const tail = this.conversation
+      .getMessages()
+      .filter((m) => m.role === "assistant" || m.role === "tool")
+      .slice(-6)
+      .map((m) => {
+        const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        return `[${m.role}] ${content}`;
+      })
+      .join("\n");
+    return `${tail}\n\n[latest] ${finalResponse}`.slice(-6000);
+  }
+
+  /**
+   * Render the per-iteration checklist focus hint: the FULL numbered list with status glyphs,
+   * the current step highlighted, its acceptance criterion, any prior failure, and a short
+   * imperative. Deliberately English + terse so small/local models follow it reliably and stay
+   * oriented (seeing the whole list stops them jumping ahead or redoing finished steps). Pure
+   * over its inputs so it is unit-testable without running the loop.
+   */
+  private renderChecklistFocusHint(
+    open: ChecklistItem,
+    all: ChecklistItem[],
+    priorFailure: string | undefined
+  ): string {
+    const doneCount = all.filter((i) => i.status === "done" || i.status === "unverified").length;
+    const glyph = (s: string): string =>
+      s === "done" || s === "unverified" ? "[x]"
+        : s === "skipped" ? "[-]"
+        : s === "failed" ? "[!]"
+        : "[ ]";
+    const list = [...all]
+      .sort((a, b) => a.stepIndex - b.stepIndex)
+      .map((i) => {
+        const marker = i.id === open.id ? "  <-- DO THIS NOW" : "";
+        return `${glyph(i.status)} ${i.stepIndex + 1}. ${i.title}${marker}`;
+      })
+      .join("\n");
+    return (
+      `\n\n## Task checklist (${doneCount}/${all.length} done)\n` +
+      `${list}\n\n` +
+      `CURRENT STEP: ${open.stepIndex + 1}. ${open.title}\n` +
+      `Done when: ${open.acceptanceCriteria ?? open.title}\n` +
+      (priorFailure ? `Your previous attempt failed: ${priorFailure} — fix exactly this.\n` : "") +
+      `Instructions: Actually perform this step now with the right tool (write the file, ` +
+      `send the message, fetch the data — do not just describe it). Do ONLY this one step, ` +
+      `then continue. Never skip ahead or redo a step already marked [x].`
+    );
+  }
+
+  /** First failure string from an item's stored verifyState JSON, if any. */
+  private extractChecklistFailure(item: ChecklistItem): string | undefined {
+    if (!item.verifyState) return undefined;
+    try {
+      const parsed = JSON.parse(item.verifyState) as { failures?: unknown };
+      const failures = Array.isArray(parsed.failures) ? parsed.failures : [];
+      const first = failures[0];
+      return typeof first === "string" ? first : undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -4783,6 +4997,66 @@ export class Agent {
         });
       }
     }
+
+    // === SESSION CHECKLIST: derive from the auto-plan (opt-in, medium/high only) ===
+    // Externalizes the plan's steps into a persisted checklist so the loop can focus on
+    // and verify one step at a time (see docs/session-checklist-plan.md). Default OFF.
+    const checklistCfg = {
+      enabled: controls.checklistEnabled,
+      minComplexity: controls.checklistMinComplexity,
+      maxItemAttempts: controls.checklistMaxItemAttempts,
+      skippedPolicy: controls.checklistSkippedPolicy,
+    };
+    const checklistRunId = `run-${Date.now()}`;
+    let checklistActive = false;
+    // Rolling per-run evidence log for checklist verification. Tool results and assistant
+    // text are captured HERE, while fresh, each iteration — otherwise an early step's proof
+    // has already rolled out of the message window by the time it is verified at loop end,
+    // which caused correctly-completed steps to be falsely reported as failed/skipped.
+    const checklistEvidenceLog: string[] = [];
+    // Monotonic counters (survive the log's 40-entry cap) gating the mid-run advance so the
+    // Verifier is only invoked when NEW evidence has arrived since the last check — never
+    // re-verifying identical evidence iteration after iteration.
+    let checklistEvidencePushes = 0;
+    let checklistLastAdvanceAt = -1;
+    if (
+      checklistCfg.enabled &&
+      planContext &&
+      this.conversation.id !== undefined &&
+      this.meetsMinComplexity(planContext.estimatedComplexity, checklistCfg.minComplexity)
+    ) {
+      const items = await this.checklistManager.deriveFromPlan(planContext, this.conversation.id, checklistRunId);
+      if (items.length > 0) {
+        checklistActive = true;
+
+        // Guarantee the iteration budget can actually reach every step. Task-type heuristics
+        // above may have LOWERED maxIterations (e.g. a "lightweight"/chatbot cap), and each
+        // checklist step realistically costs a few iterations (act with a tool → model
+        // summarizes → verify/advance), sometimes plus an empty-response recovery. Without
+        // this, multi-step runs died at maxIterations with later steps still "open" (the run
+        // in the report stopped after step 2 with steps 3-5 never attempted). Bounded by the
+        // user's global maxIterations so we never exceed their configured ceiling.
+        const perStepBudget = 4;
+        const neededForChecklist = items.length * perStepBudget + 4;
+        const bumped = Math.min(controls.maxIterations, Math.max(adjustedControls.maxIterations, neededForChecklist));
+        if (bumped > adjustedControls.maxIterations) {
+          this.logger.info("[CHECKLIST] Raised iteration budget to cover all steps", {
+            from: adjustedControls.maxIterations,
+            to: bumped,
+            steps: items.length,
+          });
+          adjustedControls.maxIterations = bumped;
+        }
+
+        emit("checklist", `Checkliste erstellt (${items.length} Schritte).`, {
+          phase: "created",
+          runId: checklistRunId,
+          total: items.length,
+          doneCount: 0,
+          items: items.map((i) => ({ index: i.stepIndex, title: i.title, status: i.status })),
+        });
+      }
+    }
     const installedSkillsContext = installedSkillManifests.length > 0
       ? `\n\n## Installed Skills\n${installedSkillManifests
           .map((skill) => `- ${skill.slug}: ${skill.description ?? "No description"}`)
@@ -4943,6 +5217,27 @@ export class Agent {
       this.logger.debug("Agent iteration", { iteration: iterations });
       emit("iteration", `Iteration ${iterations}`);
 
+      // Checklist focus: inject the FULL checklist (compact, numbered, with status) plus a
+      // short imperative instruction for the current step. Deliberately English and terse:
+      // small/local models follow short English imperatives far more reliably than prose, and
+      // seeing the whole list (not just the current line) keeps them oriented — without it they
+      // jump ahead or redo finished steps. Reassigned each iteration; buildMessages closes over it.
+      let checklistHint = "";
+      if (checklistActive && this.conversation.id !== undefined) {
+        try {
+          const open = await this.checklistManager.nextOpen(this.conversation.id, checklistRunId);
+          if (open) {
+            const all = await this.db.getChecklist(this.conversation.id, checklistRunId);
+            checklistHint = this.renderChecklistFocusHint(open, all, this.extractChecklistFailure(open));
+            await this.checklistManager.markInProgress(open.id);
+          }
+        } catch (error) {
+          this.logger.warn("Failed to build checklist hint", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       const dynamicMemorySignals = [
         effectiveInput,
         ...activeSkillSlugs,
@@ -5090,7 +5385,7 @@ export class Agent {
           : "";
         const systemMessage: LLMMessage = {
           role: "system",
-          content: `${clippedPrompt}${clippedDynamicMemory}`,
+          content: `${clippedPrompt}${clippedDynamicMemory}${checklistHint}`,
         };
 
         const contextMessages = buildConversationWindow(
@@ -5366,10 +5661,15 @@ export class Agent {
           iteration: iterations,
         });
 
-        // Add an explicit prompt forcing the model to respond based on tool results
+        // Add an explicit prompt forcing the model to respond based on tool results. When a
+        // checklist is active there are still steps to do, so steer to CONTINUE the plan (act
+        // on the current step) rather than to wrap up — otherwise the model treats the last
+        // tool result as the final answer and later steps never get done.
         const recoveryPrompt: LLMMessage = {
           role: "user",
-          content: "You executed the tools. Please provide a concise response based on their results. What information did they return? How does it answer the original question?",
+          content: checklistActive
+            ? "You executed the tools. Briefly note what they returned, then CONTINUE with the current checklist step shown above: if that step requires an action (write a file, send a message, fetch data), call the appropriate tool now. Do not stop until every checklist step is done."
+            : "You executed the tools. Please provide a concise response based on their results. What information did they return? How does it answer the original question?",
           metadata: { internal: true, kind: "empty_response_recovery" },
         };
         await this.conversation.addMessage(recoveryPrompt);
@@ -5476,6 +5776,70 @@ export class Agent {
         emptyResponseAfterTools = false; // Reset recovery flag for this execution batch
       }
 
+      // Capture this iteration's fresh evidence for later checklist verification. Doing it
+      // here — not at loop end — means early steps keep their proof even after their tool
+      // results have scrolled out of the LLM context window.
+      if (checklistActive && (toolResultsMap.size > 0 || cleanedResponse.trim().length > 0)) {
+        const toolEvidence = Array.from(toolResultsMap.values())
+          .map((r) => {
+            try {
+              return typeof r?.data === "string" ? r.data : JSON.stringify(r?.data ?? r);
+            } catch {
+              return String(r);
+            }
+          })
+          .join("\n");
+        const entry = [
+          cleanedResponse.trim() ? `[assistant] ${cleanedResponse.trim()}` : "",
+          toolEvidence ? `[tools] ${toolEvidence}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        if (entry) {
+          checklistEvidenceLog.push(`--- iteration ${iterations} ---\n${entry}`);
+          checklistEvidencePushes++;
+          // Bound memory/token growth: keep the most recent slice of the run's evidence.
+          if (checklistEvidenceLog.length > 40) checklistEvidenceLog.shift();
+        }
+      }
+
+      // Mid-run pointer advance: while the model is still working, opportunistically check
+      // off the current open step(s) whose work is already finished, so the focus hint tracks
+      // real progress instead of staying stuck on step 1 until the very end (which confused
+      // the model and caused double work). Non-destructive — advances only on a clear `done`,
+      // never consumes an attempt or marks failure. Bounded to a few advances per iteration to
+      // cap verifier cost; the end-of-loop verification handles anything still open.
+      if (
+        checklistActive &&
+        this.conversation.id !== undefined &&
+        cleanedResponse.trim().length > 0 &&
+        checklistEvidencePushes > checklistLastAdvanceAt // only when fresh evidence arrived since the last check
+      ) {
+        checklistLastAdvanceAt = checklistEvidencePushes;
+        try {
+          const evidence = this.compileChecklistEvidence(cleanedResponse, checklistEvidenceLog);
+          for (let advances = 0; advances < 3; advances++) {
+            const open = await this.checklistManager.nextOpen(this.conversation.id, checklistRunId);
+            if (!open) break;
+            const advanced = await this.checklistManager.tryAdvanceDuringRun(open, effectiveInput, evidence, this.verifier);
+            if (!advanced) break;
+            const snapshot = await this.db.getChecklist(this.conversation.id, checklistRunId);
+            emit("checklist", `Schritt erledigt: ${open.title}`, {
+              phase: "progress",
+              runId: checklistRunId,
+              item: { index: open.stepIndex, title: open.title, status: "done" },
+              total: snapshot.length,
+              doneCount: snapshot.filter((i) => i.status === "done").length,
+              items: snapshot.map((i) => ({ index: i.stepIndex, title: i.title, status: i.status })),
+            });
+          }
+        } catch (error) {
+          this.logger.warn("Mid-run checklist advance failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
       // If tools were executed and the cleaned response is empty, we MUST ask for analysis
       // Empty text after tool calls means the agent only said [TOOL:...] without any message.
       // Even near iteration limit, we need the agent to actually respond about what tools found.
@@ -5526,7 +5890,11 @@ export class Agent {
           // sections. Ask for the plain answer in the user's language instead.
           analyzePrompt = {
             role: "user",
-            content: `Answer my original question directly, using the results from the ${toolNames} tool(s) that just executed. Reply in the same language I used. Give only the answer I asked for — do not describe the tool, the command run, or exit codes, and do not add headings like 'Analysis' or 'Summary'. Keep it as short as the question needs (for a simple question, one sentence).`,
+            content: checklistActive
+              // Mid-checklist: a direct "answer the original question" prompt makes the model
+              // finalize after one step and abandon the rest. Steer it to keep executing the plan.
+              ? `The ${toolNames} tool(s) just returned results. Briefly use them for the current checklist step, then CONTINUE to the next open step — if it needs an action (write/send/fetch), call the tool now. Only give a final answer once every checklist step is done.`
+              : `Answer my original question directly, using the results from the ${toolNames} tool(s) that just executed. Reply in the same language I used. Give only the answer I asked for — do not describe the tool, the command run, or exit codes, and do not add headings like 'Analysis' or 'Summary'. Keep it as short as the question needs (for a simple question, one sentence).`,
             metadata: { internal: true, kind: "tool_analysis", toolNames },
           };
         }
@@ -5556,8 +5924,77 @@ export class Agent {
         options.onChunk(cleanedResponse);
       }
 
-      // If no tool calls were found, we're done
+      // If no tool calls were found, we're normally done — UNLESS an active checklist
+      // still has open steps. Then we verify the current step against the evidence and
+      // either advance (verified), accept (unverified+soft), or retry/skip (failed) so
+      // the run doesn't stop with goals still outstanding.
       if (toolResultsMap.size === 0) {
+        if (checklistActive && this.conversation.id !== undefined) {
+          const open = await this.checklistManager.nextOpen(this.conversation.id, checklistRunId);
+          if (open) {
+            const evidence = this.compileChecklistEvidence(finalResponse, checklistEvidenceLog);
+            const res = await this.checklistManager.verifyAndMark(open, effectiveInput, evidence, this.verifier);
+            const attemptsNow = (open.attempts ?? 0) + 1;
+            const remaining = await this.checklistManager.nextOpen(this.conversation.id, checklistRunId);
+            const snapshot = await this.db.getChecklist(this.conversation.id, checklistRunId);
+            emit("checklist", `Schritt geprüft: ${open.title}`, {
+              phase: "progress",
+              runId: checklistRunId,
+              item: { index: open.stepIndex, title: open.title, status: res.status },
+              failures: res.failures.slice(0, 3),
+              total: snapshot.length,
+              doneCount: snapshot.filter((i) => i.status === "done").length,
+              items: snapshot.map((i) => ({ index: i.stepIndex, title: i.title, status: i.status })),
+            });
+
+            const accepted = res.status === "done" || (res.status === "unverified" && checklistCfg.skippedPolicy === "soft");
+            if (accepted) {
+              // Step resolved (done, or unverified accepted under soft policy) — loop
+              // continues to the next open step or exits below when none remain.
+              if (remaining) continue;
+            } else {
+              // failed, or unverified under strict policy: retry until the attempt budget
+              // is exhausted, then skip so the run can make progress on later steps.
+              if (attemptsNow >= checklistCfg.maxItemAttempts) {
+                await this.checklistManager.skip(open.id);
+                const skipSnapshot = await this.db.getChecklist(this.conversation.id, checklistRunId);
+                emit("checklist", `Schritt übersprungen (Limit erreicht): ${open.title}`, {
+                  phase: "progress",
+                  runId: checklistRunId,
+                  item: { index: open.stepIndex, title: open.title, status: "skipped" },
+                  total: skipSnapshot.length,
+                  doneCount: skipSnapshot.filter((i) => i.status === "done").length,
+                  items: skipSnapshot.map((i) => ({ index: i.stepIndex, title: i.title, status: i.status })),
+                });
+              } else {
+                // Re-open for another attempt AND inject a concrete repair instruction so the
+                // model knows exactly WHAT to fix — the checklist hint alone often left it
+                // guessing, so a failed step was retried blindly and then skipped. English on
+                // purpose: every model understands it reliably regardless of the chat language.
+                await this.checklistManager.markInProgress(open.id);
+                const failureLines = res.failures.slice(0, 3).map((f) => `- ${f}`).join("\n");
+                const repairPrompt: LLMMessage = {
+                  role: "user",
+                  content:
+                    `The step "${open.title}" is NOT complete yet. Its acceptance criterion was checked against the work so far and it did not pass.\n\n` +
+                    `Acceptance criterion:\n${open.acceptanceCriteria ?? open.title}\n\n` +
+                    (failureLines
+                      ? `What is still missing / wrong:\n${failureLines}\n\n`
+                      : `The required result could not be found in the work done so far.\n\n`) +
+                    `Do exactly this now: take the concrete action(s) needed to satisfy this step (call the appropriate tool if the step requires producing, writing, sending, or fetching something — do not just describe it). Focus on this single step only, then stop.`,
+                  metadata: { internal: true, kind: "checklist_repair" },
+                };
+                await this.conversation.addMessage(repairPrompt);
+                this.history.add(repairPrompt, "checklist_repair_prompt");
+                emit("internal_instruction", `Schritt wird repariert: ${open.title}`, {
+                  kind: "checklist_repair",
+                  failures: res.failures.slice(0, 3),
+                });
+              }
+              continue;
+            }
+          }
+        }
         this.logger.info("[RUNLOOP] No tool calls found, exiting loop", { iteration: iterations });
         toolsJustExecuted = false; // Reset flag since no tools were executed
         break; // No tool calls, we're done
@@ -5622,6 +6059,37 @@ export class Agent {
         length: finalResponse.length,
         preview: finalResponse.substring(0, 100),
       });
+    }
+
+    // === SESSION CHECKLIST: final report ===
+    // Emit the terminal checklist state and, when steps ended unresolved or unverified,
+    // append an honest status line instead of letting the run read as fully "done".
+    if (checklistActive && this.conversation.id !== undefined) {
+      try {
+        const finalItems = await this.db.getChecklist(this.conversation.id, checklistRunId);
+        const doneCount = finalItems.filter((i) => i.status === "done").length;
+        const unresolved = finalItems.filter((i) => i.status !== "done");
+        emit("checklist", `Checkliste abgeschlossen (${doneCount}/${finalItems.length}).`, {
+          phase: "done",
+          runId: checklistRunId,
+          total: finalItems.length,
+          doneCount,
+          items: finalItems.map((i) => ({ index: i.stepIndex, title: i.title, status: i.status })),
+        });
+        if (unresolved.length > 0 && finalResponse.trim().length > 0) {
+          const lines = unresolved.map((i) => {
+            const label =
+              i.status === "unverified" ? "unbestätigt" : i.status === "skipped" ? "übersprungen" : i.status;
+            return `- ${i.stepIndex + 1}. ${i.title} (${label})`;
+          });
+          finalResponse +=
+            `\n\n---\n**Checkliste: ${doneCount}/${finalItems.length} erledigt.** Offen/unbestätigt:\n${lines.join("\n")}`;
+        }
+      } catch (error) {
+        this.logger.warn("Failed to emit checklist final report", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Reflection & Self-Improvement Loop

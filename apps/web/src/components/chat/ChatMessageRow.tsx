@@ -5,6 +5,7 @@ import { eventDataWithoutInternalText, eventIcon, eventLabel, eventTone, extract
 import type { RenderedChatMessage } from "./chatTypes";
 import { api } from "../../lib/api";
 import { BrowserPreview } from "./BrowserPreview";
+import { ChecklistView, type ChecklistItemView } from "./ChecklistView";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ReasoningDisplay } from "./ReasoningDisplay";
 import { ThinkBlockDisplay } from "./ThinkBlockDisplay";
@@ -119,6 +120,38 @@ export function EventRow({
             />
           ))}
         </div>
+      );
+    }
+  }
+
+  // Session checklist: render the step list from the event's `items` snapshot. Every
+  // checklist event (created/progress/done) carries the full current snapshot, so this
+  // renders correctly both live and when a conversation is replayed from persisted events.
+  if (msg.eventType === "checklist") {
+    const items = msg.eventData?.["items"] as ChecklistItemView[] | undefined;
+    if (Array.isArray(items) && items.length > 0) {
+      const phase = msg.eventData?.["phase"];
+      const isDone = phase === "done";
+      return (
+        <details
+          open={!isDone}
+          onToggle={(e) => onToggle((e.currentTarget as HTMLDetailsElement).open)}
+          className={`${ANIMATE_IN} rounded-lg border px-2.5 py-1.5 text-xs ${eventTone("checklist")}`}
+        >
+          <summary className="list-none cursor-pointer select-none flex items-baseline justify-between gap-2">
+            <span className="flex items-baseline gap-1.5 min-w-0">
+              <span className="self-center shrink-0">{eventIcon("checklist")}</span>
+              <span className="font-medium whitespace-nowrap opacity-90">{eventLabel(t, "checklist")}</span>
+              <span className="truncate opacity-80">{msg.content}</span>
+            </span>
+            <span className="text-[10px] opacity-60 whitespace-nowrap shrink-0">
+              {new Date(msg.timestamp).toLocaleTimeString()}
+            </span>
+          </summary>
+          <div className="mt-2">
+            <ChecklistView items={items} />
+          </div>
+        </details>
       );
     }
   }

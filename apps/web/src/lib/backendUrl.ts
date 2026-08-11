@@ -94,7 +94,11 @@ export function getSocketUrl(config: BackendConfig = readBackendConfig()): strin
     return `http://localhost:${config.port ?? DEFAULT_PORT}`;
   }
   if (import.meta.env.DEV) {
-    return (import.meta.env["VITE_SOCKET_URL"] as string | undefined) ?? `http://localhost:${DEFAULT_PORT}`;
+    // Fall back to the current page origin (undefined) rather than localhost:3001, so
+    // the socket rides the Vite proxy's /socket.io (ws:true) route. This keeps it working
+    // when the dev server is reached from another device (e.g. over Tailscale), where
+    // "localhost" would resolve to that device instead of the server.
+    return import.meta.env["VITE_SOCKET_URL"] as string | undefined;
   }
   return undefined;
 }
