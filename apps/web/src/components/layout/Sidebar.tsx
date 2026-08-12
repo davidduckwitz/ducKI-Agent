@@ -1,9 +1,11 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { ChevronDown, Code2, FilePlus2, FolderPlus, LayoutGrid, MessageSquarePlus, Plus } from "lucide-react";
+import { ChevronDown, Code2, FilePlus2, FolderPlus, LayoutGrid, MessageSquarePlus, Plus, X } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
-import { useUiStore } from "../../lib/uiStore";
+import { useUiStore, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "../../lib/uiStore";
+import { useIsMobile } from "../../lib/useMediaQuery";
 import { useCodingSession } from "../../lib/codingSessionStore";
+import { SplitHandle } from "../ui/split-handle";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { CodingSidebarPanel } from "../coding/CodingSidebarPanel";
 import { SidebarHeader } from "./SidebarHeader";
@@ -65,7 +67,9 @@ export function Sidebar({
   const location = useLocation();
   const isCodingRoute = location.pathname.startsWith("/coding");
   const { setConversationId } = useAppStore();
-  const { sidebarCollapsed, toggleSidebar } = useUiStore();
+  const { sidebarCollapsed, toggleSidebar, sidebarWidth, setSidebarWidth, mobileNavOpen, setMobileNavOpen } =
+    useUiStore();
+  const isMobile = useIsMobile();
   const runCodingCommand = useCodingSession((s) => s.runCommand);
   const busy = runningCount > 0 || runningTools.size > 0;
 
@@ -75,6 +79,85 @@ export function Sidebar({
     setConversationId(undefined);
     navigate("/chat");
   };
+
+  // On mobile the sidebar is a drawer over the content: no rail mode, no resize handle,
+  // and it closes as soon as the user picks something.
+  if (isMobile) {
+    return (
+      <>
+        {mobileNavOpen && (
+          <button
+            type="button"
+            aria-label={t("layout.sidebar.closeNav")}
+            onClick={() => setMobileNavOpen(false)}
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+          />
+        )}
+        <aside
+          className={`fixed inset-y-0 left-0 z-50 flex w-[min(20rem,85vw)] flex-col border-r border-border bg-card shadow-2xl transition-transform duration-200 ease-out md:hidden ${
+            mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+          aria-hidden={!mobileNavOpen}
+          onClick={(event) => {
+            // Any nav link / action inside dismisses the drawer, so the content is visible again.
+            if ((event.target as HTMLElement).closest("a,button")) setMobileNavOpen(false);
+          }}
+        >
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+            <span className="text-sm font-semibold">{t("layout.sidebar.navigation")}</span>
+            <button
+              type="button"
+              onClick={() => setMobileNavOpen(false)}
+              aria-label={t("layout.sidebar.closeNav")}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <SidebarHeader
+            connected={connected}
+            agentStatus={agentStatus}
+            busy={busy}
+            collapsed={false}
+            onToggleCollapsed={toggleSidebar}
+            hideCollapseToggle
+          />
+
+          <div className="space-y-2 p-2">
+            {codingEnabled && (
+              <ModeSwitcher
+                active={isCodingRoute ? "coding" : "standard"}
+                onSelect={(mode) => navigate(mode === "coding" ? "/coding" : "/dashboard")}
+              />
+            )}
+            <button
+              type="button"
+              onClick={startNewChat}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground"
+            >
+              <Plus className="h-4 w-4" />
+              {t("layout.sidebar.newChat")}
+            </button>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-1 pb-2">
+            {isCodingRoute && codingEnabled && <CodingSidebarPanel />}
+            <PluginWidgets placement="sidebar" />
+            <RecentChatsSection />
+            <MoreNavSection groups={navGroups} />
+          </div>
+
+          <LiveAgentsFooter
+            runningCount={runningCount}
+            runningTools={runningTools}
+            gatewayActive={gatewayActive}
+            bitcoinPuzzles={bitcoinPuzzles}
+          />
+        </aside>
+      </>
+    );
+  }
 
   if (sidebarCollapsed) {
     const railItems = navGroups.flatMap((group) => group.items);
@@ -121,7 +204,11 @@ export function Sidebar({
   }
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-border bg-card">
+    <>
+    <aside
+      className="flex shrink-0 flex-col border-r border-border bg-card"
+      style={{ width: `${sidebarWidth}px`, minWidth: `${SIDEBAR_MIN_WIDTH}px`, maxWidth: `${SIDEBAR_MAX_WIDTH}px` }}
+    >
       <SidebarHeader
         connected={connected}
         agentStatus={agentStatus}
@@ -206,5 +293,15 @@ export function Sidebar({
         bitcoinPuzzles={bitcoinPuzzles}
       />
     </aside>
+
+    {/* Dragging right widens the sidebar; double click restores the default. */}
+    <SplitHandle
+      value={sidebarWidth}
+      onChange={setSidebarWidth}
+      direction="right"
+      resetValue={SIDEBAR_DEFAULT_WIDTH}
+      ariaLabel={t("layout.sidebar.resize")}
+    />
+    </>
   );
 }

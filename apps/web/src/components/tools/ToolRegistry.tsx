@@ -73,7 +73,7 @@ export function ToolRegistry() {
   const optionalTools = tools.filter((tool) => !tool.core);
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-6 space-y-6">
       <div>
         <h1 className="text-2xl font-bold">{t("nav.tools")}</h1>
         <p className="text-sm text-gray-400 mt-1">{t("toolsPage.titleHint")}</p>
@@ -84,7 +84,7 @@ export function ToolRegistry() {
         <div className="grid gap-3 sm:grid-cols-2">
           {coreTools.map((tool) => (
             <div key={tool.name} className="card">
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex items-start gap-3 min-w-0">
                   <div className="p-2 bg-purple-400/10 rounded-lg">
                     <Wrench className="w-5 h-5 text-purple-400" />
@@ -111,7 +111,7 @@ export function ToolRegistry() {
             const enabled = tool.enabled;
             return (
               <div key={tool.name} className="card">
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="p-2 bg-purple-400/10 rounded-lg">
                       <Wrench className="w-5 h-5 text-purple-400" />

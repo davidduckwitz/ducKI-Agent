@@ -106,12 +106,13 @@ export function LogViewer() {
           ? "error"
           : direction;
 
+    // min-w-0 instead of shrink-0: on a phone these tags are wider than the row.
     return (
-      <span className="flex flex-wrap gap-1 shrink-0">
+      <span className="flex min-w-0 flex-wrap gap-1">
         {labels.map((label) => (
           <span
             key={label}
-            className={`px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wide ${tagColor[colorKey] ?? tagColor.gateway}`}
+            className={`max-w-full truncate px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wide ${tagColor[colorKey] ?? tagColor.gateway}`}
           >
             {label}
           </span>
@@ -121,7 +122,7 @@ export function LogViewer() {
   };
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-3 sm:p-6 space-y-4">
       <div className="flex items-center gap-4 flex-wrap">
         <h1 className="text-2xl font-bold">{t("logsPage.title")}</h1>
         <select

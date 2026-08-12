@@ -66,7 +66,7 @@ export function IterationMetrics({
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-1 duration-300 rounded-lg border border-amber-800/40 bg-amber-900/20 p-2 text-xs">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         {/* Real-time metrics */}
         <div className="flex items-center gap-4 flex-1">
           <div className="flex items-center gap-1">

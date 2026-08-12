@@ -14,12 +14,18 @@ export function SplitHandle({
   direction = "left",
   className,
   ariaLabel,
+  resetValue = 380,
+  step = 16,
 }: {
   value: number;
   onChange: (next: number) => void;
   direction?: "left" | "right";
   className?: string;
   ariaLabel?: string;
+  /** Width restored on double click. */
+  resetValue?: number;
+  /** Pixels per arrow-key press, for keyboard resizing. */
+  step?: number;
 }) {
   const startRef = useRef({ x: 0, value: 0 });
 
@@ -51,17 +57,33 @@ export function SplitHandle({
     document.body.style.userSelect = "";
   }, []);
 
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      // Same sign convention as the drag: for "left", moving left grows the panel.
+      const grow = direction === "left" ? -1 : 1;
+      if (event.key === "ArrowLeft") onChange(value - grow * step);
+      else if (event.key === "ArrowRight") onChange(value + grow * step);
+      else if (event.key === "Home" || event.key === "End") onChange(resetValue);
+      else return;
+      event.preventDefault();
+    },
+    [direction, onChange, resetValue, step, value]
+  );
+
   return (
     <div
       role="separator"
+      tabIndex={0}
       aria-orientation="vertical"
       aria-label={ariaLabel}
+      aria-valuenow={Math.round(value)}
       className={cn("split-handle group", className)}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
-      onDoubleClick={() => onChange(380)}
+      onKeyDown={handleKeyDown}
+      onDoubleClick={() => onChange(resetValue)}
     >
       <span className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border group-hover:bg-transparent" />
     </div>

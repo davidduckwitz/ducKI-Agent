@@ -227,15 +227,15 @@ export function TaskManager() {
   };
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-6 space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{t("tasks.title")}</h1>
           <p className="text-sm text-gray-400">{t("tasks.subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
-            className="input"
+            className="input min-w-0 max-w-[12rem]"
             value={selectedProjectId}
             onChange={(e) => {
               const value = e.target.value;
@@ -343,7 +343,7 @@ export function TaskManager() {
                     <div className="mt-0.5 shrink-0">{statusIcon(task.status)}</div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className={`font-medium ${task.status === "completed" ? "line-through text-gray-500" : ""}`}>
+                        <p className={`min-w-0 break-words font-medium ${task.status === "completed" ? "line-through text-gray-500" : ""}`}>
                           {task.title}
                         </p>
                         {task.parentTaskId && (

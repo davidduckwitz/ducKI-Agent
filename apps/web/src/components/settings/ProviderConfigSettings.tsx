@@ -397,7 +397,7 @@ export function ProviderConfigSettings() {
   return (
     <div className="space-y-4">
       {/* Header with Actions */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-bold">LLM Provider Configuration</h2>
         <div className="flex gap-2">
           <button

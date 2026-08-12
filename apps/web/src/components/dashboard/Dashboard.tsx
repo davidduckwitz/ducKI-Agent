@@ -65,7 +65,7 @@ export function Dashboard() {
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3 sm:p-6 space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Dashboard</h1>
@@ -229,9 +229,9 @@ export function Dashboard() {
         <div className="space-y-2">
           {(tasks.data as Array<{ id: number; title: string; status: string; priority: string }> | undefined)?.slice(0, 5).map((task) => (
             <div key={task.id} className="card">
-              <div className="flex items-center justify-between">
-                <span className="text-sm">{task.title}</span>
-                <div className="flex gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="min-w-0 break-words text-sm">{task.title}</span>
+                <div className="flex shrink-0 gap-2">
                   <span className={`text-xs px-2 py-0.5 rounded-full ${
                     task.status === "completed" ? "bg-green-500/20 text-green-400" :
                     task.status === "running" ? "bg-blue-500/20 text-blue-400" :

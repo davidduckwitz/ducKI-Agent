@@ -247,8 +247,8 @@ export function WorkflowGraphEditor() {
   const running = runWorkflow.isPending || resumeWorkflow.isPending;
 
   return (
-    <div className="p-6 h-full flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="p-3 sm:p-6 h-full flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{t("workflowPage.title")}</h1>
           <p className="text-sm text-gray-400">{t("workflowPage.subtitle")}</p>

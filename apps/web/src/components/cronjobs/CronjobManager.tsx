@@ -225,8 +225,8 @@ export function CronjobManager() {
   };
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-6 space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <CalendarClock className="w-6 h-6 text-cyan-400" />
@@ -385,10 +385,10 @@ export function CronjobManager() {
             {sortedJobs.length === 0 && <p className="text-sm text-gray-400">{t("cronjobs.noJobs")}</p>}
             {sortedJobs.map((job) => (
               <article key={job.id} className="rounded-lg border border-gray-800 bg-gray-950/70 p-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <p className="font-medium text-sm">{job.name}</p>
-                    <p className="text-xs text-gray-400">#{job.id} | {job.schedule}</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="break-words font-medium text-sm">{job.name}</p>
+                    <p className="break-all text-xs text-gray-400">#{job.id} | {job.schedule}</p>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded border ${job.enabled ? "border-green-500/50 text-green-300" : "border-gray-600 text-gray-400"}`}>
                     {job.enabled ? t("common.enabled") : t("common.disabled")}
@@ -404,8 +404,8 @@ export function CronjobManager() {
 
                 {job.lastError && <p className="text-xs text-red-300">{t("cronjobs.error")}: {job.lastError}</p>}
                 {job.lastResult && (
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-xs text-gray-400 break-words">{t("cronjobs.result")}: {job.lastResult}</p>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <p className="min-w-0 text-xs text-gray-400 break-words">{t("cronjobs.result")}: {job.lastResult}</p>
                     {job.conversationId && (
                       <button
                         onClick={() => navigate(`/chat?conversationId=${job.conversationId}`)}
@@ -419,7 +419,7 @@ export function CronjobManager() {
                   </div>
                 )}
 
-                <div className="flex items-center gap-2 pt-1">
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     onClick={() => setForm(buildFormFromJob(job))}
                     className="btn-secondary text-xs"

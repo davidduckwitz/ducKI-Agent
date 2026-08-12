@@ -21,6 +21,7 @@ import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useCodingSession } from "../../lib/codingSessionStore";
 import { useUiStore, CODING_AGENT_MIN_WIDTH, CODING_AGENT_MAX_WIDTH } from "../../lib/uiStore";
+import { useIsMobile } from "../../lib/useMediaQuery";
 import { useTheme } from "../theme/ThemeProvider";
 import { extractChangedFiles } from "../../lib/extractChangedFiles";
 import { PanelEmpty } from "../ui/panel";
@@ -115,6 +116,7 @@ export function CodingWorkspace() {
     setCodingSplitPreview,
     setCodingAgentTab,
   } = useUiStore();
+  const isNarrow = useIsMobile();
 
   // A plan created in the chat page hands itself over via router state on the
   // auto-switch to /coding. The coding Plan panel otherwise derives its plan from
@@ -812,11 +814,17 @@ export function CodingWorkspace() {
               ariaLabel={t("codingPage.agentPanel")}
             />
             <div
-              className="flex min-h-0 shrink-0 flex-col border-l border-border bg-card/40"
+              className="flex min-h-0 w-full min-w-0 shrink flex-col border-l border-border bg-card/40 md:shrink-0"
               style={{
-                width: `${codingAgentWidth}px`,
-                minWidth: `${CODING_AGENT_MIN_WIDTH}px`,
-                maxWidth: `${CODING_AGENT_MAX_WIDTH}px`,
+                // On a phone the drag handle is hidden and the pixel width would overflow the
+                // viewport, so the panel only takes its stored width from `md` upwards.
+                ...(isNarrow
+                  ? {}
+                  : {
+                      width: `${codingAgentWidth}px`,
+                      minWidth: `${CODING_AGENT_MIN_WIDTH}px`,
+                      maxWidth: `${CODING_AGENT_MAX_WIDTH}px`,
+                    }),
               }}
             >
               <CodingAgentPanel

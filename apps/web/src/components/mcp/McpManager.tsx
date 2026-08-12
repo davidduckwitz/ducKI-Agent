@@ -259,8 +259,8 @@ export function McpManager() {
   };
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-3 sm:p-6 space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <PlugZap className="w-6 h-6 text-cyan-400" />
@@ -268,7 +268,7 @@ export function McpManager() {
           </h1>
           <p className="text-sm text-gray-400">{t("mcpPage.subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button className="btn-secondary inline-flex items-center gap-2" onClick={() => reloadServers.mutate()}>
             <RefreshCw className="w-4 h-4" />
             {t("mcpPage.reload")}

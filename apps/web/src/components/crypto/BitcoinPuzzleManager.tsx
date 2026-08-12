@@ -313,7 +313,7 @@ export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleM
   };
 
   return (
-    <div className="p-4 space-y-6 bg-gray-950/40">
+    <div className="p-3 sm:p-4 space-y-6 bg-gray-950/40">
       {/* Header Section */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">

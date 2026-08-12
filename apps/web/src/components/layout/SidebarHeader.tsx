@@ -53,12 +53,15 @@ export function SidebarHeader({
   busy,
   collapsed,
   onToggleCollapsed,
+  hideCollapseToggle = false,
 }: {
   connected: boolean;
   agentStatus: string;
   busy: boolean;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /** The mobile drawer has its own close button - rail mode makes no sense there. */
+  hideCollapseToggle?: boolean;
 }) {
   const { t, language, setLanguage, languages } = useI18n();
 
@@ -92,14 +95,16 @@ export function SidebarHeader({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <ThemeModeSwitcher />
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            title={t("layout.sidebar.collapse")}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:border-foreground/40 hover:text-foreground"
-          >
-            <PanelLeftClose className="h-3.5 w-3.5" />
-          </button>
+          {!hideCollapseToggle && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              title={t("layout.sidebar.collapse")}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:border-foreground/40 hover:text-foreground"
+            >
+              <PanelLeftClose className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 

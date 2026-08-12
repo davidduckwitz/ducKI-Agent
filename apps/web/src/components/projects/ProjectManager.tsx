@@ -79,7 +79,7 @@ export function ProjectManager() {
   });
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-3 sm:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Projekte</h1>
         <button onClick={() => setShowCreate(true)} className="btn-primary flex items-center gap-2">

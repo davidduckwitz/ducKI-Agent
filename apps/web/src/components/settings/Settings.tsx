@@ -1422,8 +1422,8 @@ export function Settings() {
   };
 
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="p-3 sm:p-6 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">{t("settingsPage.title")}</h1>
         <div className="flex items-center gap-2">
           <button onClick={() => setSetupModalOpen(true)} className="btn-secondary flex items-center gap-2">

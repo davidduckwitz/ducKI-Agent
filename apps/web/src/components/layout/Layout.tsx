@@ -1,4 +1,4 @@
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { useEffect, useRef, type ComponentType } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -28,7 +28,9 @@ import { useSettingsChangeListener } from "../../lib/useServerQuery";
 import { SetupWizardModal } from "../setup/SetupWizardModal";
 import { PetLayer } from "../pet/PetLayer";
 import { Sidebar } from "./Sidebar";
+import { MobileTopBar } from "./MobileTopBar";
 import { UpdateStatusBar } from "./UpdateStatusBar";
+import { useUiStore } from "../../lib/uiStore";
 import type { NavGroup } from "./MoreNavSection";
 
 /** Stable emoji-as-icon components keyed by emoji, so plugin nav items match the NavItem shape. */
@@ -59,9 +61,14 @@ export function Layout() {
     agentMetrics,
   } = useAppStore();
   const firstRunCheckDone = useRef(false);
+  const location = useLocation();
+  const setMobileNavOpen = useUiStore((s) => s.setMobileNavOpen);
 
   // Invalidate the shared settings cache when the server announces a change.
   useSettingsChangeListener();
+
+  // A route change means the drawer did its job - leaving it open would hide the page.
+  useEffect(() => setMobileNavOpen(false), [location.pathname, setMobileNavOpen]);
 
   // Agent metrics arrive via socket push (agent:metrics). This used to be a 1.5s poll
   // of /agents/live on every single page - 40 requests a minute on its own.
@@ -150,8 +157,11 @@ export function Layout() {
     else navGroups.push({ title, items: [item] });
   }
 
+  const busy = runningCount > 0 || runningTools.size > 0;
+
   return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+    // 100dvh instead of 100vh: mobile browser chrome otherwise pushes the composer off-screen.
+    <div className="flex h-[100dvh] overflow-hidden bg-background text-foreground">
       <Sidebar
         navGroups={navGroups}
         codingEnabled={codingEnabled}
@@ -165,7 +175,8 @@ export function Layout() {
 
       {/* min-w-0 keeps wide children (editor, tables) from stretching the shell. */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <MobileTopBar navGroups={navGroups} connected={connected} busy={busy} />
+        <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           <Outlet />
         </main>
         <UpdateStatusBar />
