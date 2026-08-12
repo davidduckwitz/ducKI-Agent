@@ -12,7 +12,13 @@ export type AgentEventType =
   | "mode_selected"
   | "browser_preview"
   | "thinking"
-  | "internal_instruction";
+  | "internal_instruction"
+  /**
+   * A block of user-facing agent text, published as its own timeline row so it keeps its
+   * position between the tool calls around it. Never rendered as an event box - the UI turns it
+   * back into an assistant bubble.
+   */
+  | "assistant_text";
 
 /**
  * A chat message as rendered in the UI.

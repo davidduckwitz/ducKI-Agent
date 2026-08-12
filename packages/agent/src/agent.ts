@@ -261,6 +261,14 @@ export class Agent {
   private autoSkillSelections = 0;
   private currentScreenshotMessage: LLMMessage | undefined;
 
+  /**
+   * Serializes the fire-and-forget event inserts in `emit()`. libsql is genuinely async, so
+   * firing several inserts without awaiting let them land in an order that did not match the
+   * order the events were emitted in - and the row id IS the timeline order the chat UI pages
+   * through. Chaining them keeps insertion order == emit order without making emit() block.
+   */
+  private eventPersistQueue: Promise<unknown> = Promise.resolve();
+
   // Phase 1: Hook system and granular events
   private hookRegistry: HookRegistry;
   private eventEmitterV2: EventEmitterV2;
@@ -4431,6 +4439,11 @@ export class Agent {
     // Initialize adjustedControls early so emit() can reference it
     let adjustedControls: AgentRuntimeControls | undefined;
 
+    // Id and text of the most recent display row, returned with the result so the client can
+    // tell that the final response is a repeat of a row it already has.
+    let lastDisplayMessageId: string | undefined;
+    let lastDisplayText: string | undefined;
+
     const emit = (
       type: AgentRunEventType | string,
       message: string,
@@ -4500,18 +4513,84 @@ export class Agent {
         if (options.localMessageId) {
           eventMetadata.localMessageId = options.localMessageId;
         }
-        void this.db
-          .addMessage({
-            conversationId: this.conversation.id,
-            role: "event",
-            content: message,
-            toolResult: JSON.stringify(eventMetadata),
-            metadata: options.localMessageId ? JSON.stringify({ localMessageId: options.localMessageId }) : undefined,
-          })
-          .catch(() => {
-            // Ignore event persistence errors to avoid interrupting the run loop.
-          });
+        const conversationId = this.conversation.id;
+        // Queued rather than fired in parallel so the row ids stay in emit order, and stamped
+        // with the event's own timestamp so the persisted copy is recognisably the same event
+        // as the one already streamed to the client.
+        this.eventPersistQueue = this.eventPersistQueue.then(() =>
+          this.db
+            .addMessage({
+              conversationId,
+              role: "event",
+              content: message,
+              toolResult: JSON.stringify(eventMetadata),
+              metadata: options.localMessageId ? JSON.stringify({ localMessageId: options.localMessageId }) : undefined,
+              createdAt: timestamp,
+            })
+            .catch(() => {
+              // Ignore event persistence errors to avoid interrupting the run loop.
+            })
+        );
       }
+    };
+
+    /**
+     * Publishes a block of user-facing agent text as its own timeline row.
+     *
+     * The run's raw model output is stored for the LLM's benefit and still carries tool
+     * markers; the text the user should read was previously only streamed, never stored. That
+     * left the client reconciling a live-only answer against rows never meant for display, and
+     * every heuristic it used for that (turn ids, content+time windows) was a source of the
+     * answer being duplicated or dropped. Writing the cleaned text as a real row - at the point
+     * in the run where it was produced - gives it a position in the transcript and a stable id.
+     *
+     * Stored with role "event" deliberately: ConversationManager.load() only feeds
+     * user/assistant/system/tool rows back into the LLM context, so a display row can never
+     * duplicate the assistant turn it mirrors. It is mapped back to an assistant bubble by the
+     * UI. `emit()` is bypassed on purpose - that would persist a second, competing row.
+     */
+    const emitDisplayText = (text: string): string | undefined => {
+      const trimmed = text.trim();
+      if (trimmed.length === 0) return undefined;
+
+      const displayMessageId = randomUUID();
+      const timestamp = new Date().toISOString();
+
+      void options.onEvent?.({
+        type: "assistant_text" as AgentRunEventType,
+        message: text,
+        data: { displayMessageId, iteration: iterations },
+        timestamp,
+      });
+
+      const conversationId = this.conversation.id;
+      if (conversationId !== undefined) {
+        const metadata: Record<string, unknown> = { displayMessageId };
+        if (options.localMessageId) metadata.localMessageId = options.localMessageId;
+
+        // Same queue as the event rows, so the row id (which is the transcript's running
+        // order) matches the order things actually happened in.
+        this.eventPersistQueue = this.eventPersistQueue.then(() =>
+          this.db
+            .addMessage({
+              conversationId,
+              role: "event",
+              content: text,
+              toolResult: JSON.stringify({
+                eventType: "assistant_text",
+                data: { displayMessageId, iteration: iterations },
+                timestamp,
+              }),
+              metadata: JSON.stringify(metadata),
+              createdAt: timestamp,
+            })
+            .catch(() => {
+              // Never let a persistence failure interrupt the run.
+            })
+        );
+      }
+
+      return displayMessageId;
     };
 
     const rememberSuccessfulTool = async (
@@ -5730,14 +5809,20 @@ export class Agent {
       // This ensures proper message ordering for the LLM:
       // User -> Assistant -> Tool Results -> (next iteration or exit)
       // Without this, the LLM sees tool results without an assistant message that called them
-      const assistantMetadata: Record<string, unknown> = {};
+      // This row exists so the LLM sees the turn that issued the tool calls; it is the raw
+      // model output, markers and all. The user-facing version is written separately by
+      // emitDisplayText below, so mark this one as context-only and let the UI skip it. The UI
+      // used to render it, which is why an assistant turn containing "[TOOL:...]" showed up as
+      // a tool box with the prose lost. Rows written before this flag existed carry no marker
+      // and keep their old rendering.
+      const assistantMetadata: Record<string, unknown> = { llmOnly: true };
       if (options.localMessageId) {
         assistantMetadata.localMessageId = options.localMessageId;
       }
       const assistantMessage: LLMMessage = {
         role: "assistant",
         content: response,
-        metadata: Object.keys(assistantMetadata).length > 0 ? assistantMetadata : undefined,
+        metadata: assistantMetadata,
       };
       await this.conversation.addMessage(assistantMessage);
       this.history.add(assistantMessage);
@@ -5922,6 +6007,17 @@ export class Agent {
           iteration: iterations,
         });
         options.onChunk(cleanedResponse);
+      }
+
+      // ...and record it as a row of its own, so this iteration's text keeps its place in the
+      // transcript between the tool calls around it instead of being merged into one block of
+      // text at the end. Runs without streaming still get the row.
+      if (cleanedResponse.length > 0) {
+        const displayId = emitDisplayText(cleanedResponse);
+        if (displayId) {
+          lastDisplayMessageId = displayId;
+          lastDisplayText = cleanedResponse;
+        }
       }
 
       // If no tool calls were found, we're normally done — UNLESS an active checklist
@@ -6419,11 +6515,25 @@ export class Agent {
     // Phase 1: Flush any pending events before returning
     this.eventEmitterV2.flushPending();
 
+    const responseText = this.buildNonEmptyResponse(
+      this.sanitizeFinalResponse(finalResponse),
+      toolsUsed,
+      iterations
+    );
+
+    // Only claim the response is already on screen when it genuinely is the last display row.
+    // sanitizeFinalResponse/buildNonEmptyResponse may rewrite or substitute the text, and a
+    // client told to suppress a message it never received would lose the answer entirely.
+    const sameAsLastDisplayRow =
+      lastDisplayText !== undefined &&
+      lastDisplayText.replace(/\s+/g, " ").trim() === responseText.replace(/\s+/g, " ").trim();
+
     return {
-      response: this.buildNonEmptyResponse(this.sanitizeFinalResponse(finalResponse), toolsUsed, iterations),
+      response: responseText,
       iterations,
       toolsUsed,
       conversationId: this.conversation.id,
+      ...(sameAsLastDisplayRow ? { displayMessageId: lastDisplayMessageId } : {}),
     };
   }
 

@@ -358,6 +358,15 @@ export function setupWebSocket(
               attemptProducedOutput = true;
               const eventToEmit = { ...event };
 
+              // Timeline events go out FIRST, before any awaiting work below. Screenshot
+              // storage used to run before this emit, which held the browser_preview event
+              // back for the duration of a disk write while every later event (tool_result,
+              // reasoning) took the synchronous path and overtook it - the screenshot then
+              // appeared in the transcript after steps that happened after it. The client
+              // renders the inline base64 when no stored URL is present, so emitting early
+              // costs nothing; the stored URL still reaches the tool-event stream below.
+              emitToConversation(resolvedConversationId, "chat:event", { ...eventToEmit, conversationId: resolvedConversationId });
+
               // Auto-handle large screenshots: store to disk if > 150KB
               if (event.type === "browser_preview" && event.data) {
                 // Try multiple possible keys for screenshot data
@@ -397,8 +406,6 @@ export function setupWebSocket(
                   }
                 }
               }
-
-              emitToConversation(resolvedConversationId, "chat:event", { ...eventToEmit, conversationId: resolvedConversationId });
 
               // Emit browser_preview as tool events for ToolEventsDisplay
               if (event.type === "browser_preview") {
@@ -561,11 +568,17 @@ export function setupWebSocket(
           conversationId: resolvedConversationId,
           // Stable per-turn id so the client can deterministically collapse duplicate completes.
           messageId: data.localMessageId || randomUUID(),
+          // The client used to stamp its own receive time here. Every other entry in the
+          // transcript is stamped by the server, and the client sorts them all together, so a
+          // client clock running behind the server's sorted the final answer above the tool
+          // calls it came from - very visible over a remote/VPN connection between machines.
+          timestamp: new Date().toISOString(),
         });
       } catch (error) {
         emitToConversation(conversationId, "chat:error", {
           error: error instanceof Error ? error.message : String(error),
           conversationId,
+          timestamp: new Date().toISOString(),
         });
       } finally {
         if (registryRunId) {

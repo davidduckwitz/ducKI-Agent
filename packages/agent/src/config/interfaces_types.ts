@@ -34,6 +34,12 @@ export interface AgentRunResult {
   iterations: number;
   toolsUsed: string[];
   conversationId?: number;
+  /**
+   * Id of the display row that already carries this response. The run streams each
+   * iteration's user-facing text as its own timeline row, so the final result is usually a
+   * repeat of the last one - the client uses this id to recognise that and not show it twice.
+   */
+  displayMessageId?: string;
 }
 
 export interface AgentRunContextCaps {

@@ -414,6 +414,37 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     socket.on("chat:event", (event: ChatEvent) => {
       if (!belongsToActiveConversation(event.conversationId)) return;
+
+      // A block of agent text closes off whatever was streaming and becomes a real message at
+      // this point in the transcript. Resetting streamingContent is what stops every iteration's
+      // text piling up into one block at the bottom: the live box only ever previews the block
+      // currently being written, and each finished block takes its place among the tool calls.
+      if (event.type === "assistant_text") {
+        const displayMessageId = event.data?.["displayMessageId"] as string | undefined;
+        set((s) => {
+          if (displayMessageId && s.messages.some((m) => m.metadata?.["displayMessageId"] === displayMessageId)) {
+            return { streamingContent: "" };
+          }
+          return {
+            streamingContent: "",
+            messages: [
+              ...s.messages,
+              {
+                id: displayMessageId ?? crypto.randomUUID(),
+                role: "assistant" as const,
+                content: event.message,
+                timestamp: event.timestamp,
+                metadata: {
+                  ...(displayMessageId ? { displayMessageId } : {}),
+                  ...(s.pendingLocalMessageId ? { localMessageId: s.pendingLocalMessageId } : {}),
+                },
+              },
+            ],
+          };
+        });
+        return;
+      }
+
       const msg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "event",
@@ -442,24 +473,36 @@ export const useAppStore = create<AppState>((set, get) => ({
             updatedToolCalls = [...s.toolCalls, newToolCall];
           }
         } else if (event.type === "tool_result" && event.data) {
-          // Update tool call with result
+          // Resolve exactly ONE record. The agent stamps the same callId on the tool_call and
+          // its tool_result, so prefer that; matching on toolName alone completed *every*
+          // running call of that tool at once, which is wrong as soon as a turn fires the same
+          // tool more than once (a batch of reads, say) - the first result closed all of them.
           const toolName = event.data.toolName as string | undefined;
-          if (toolName) {
-            updatedToolCalls = s.toolCalls.map((call) => {
-              if (call.toolName === toolName && call.status === "executing") {
-                return {
-                  ...call,
-                  status: (event.data?.success === false ? "failed" : "completed") as "completed" | "failed",
-                  result: {
-                    success: (event.data?.success as boolean) ?? true,
-                    output: event.message,
-                    data: event.data?.data,
-                    error: event.data?.error as string | undefined,
-                  },
-                };
-              }
-              return call;
-            });
+          const callId = event.data.callId as string | undefined;
+          const target =
+            (callId
+              ? s.toolCalls.find((call) => call.callId === callId && call.status === "executing") ??
+                s.toolCalls.find((call) => call.callId === callId)
+              : undefined) ??
+            (toolName
+              ? s.toolCalls.find((call) => call.toolName === toolName && call.status === "executing")
+              : undefined);
+
+          if (target) {
+            updatedToolCalls = s.toolCalls.map((call) =>
+              call.id === target.id
+                ? {
+                    ...call,
+                    status: (event.data?.success === false ? "failed" : "completed") as "completed" | "failed",
+                    result: {
+                      success: (event.data?.success as boolean) ?? true,
+                      output: event.message,
+                      data: event.data?.data,
+                      error: event.data?.error as string | undefined,
+                    },
+                  }
+                : call
+            );
           }
         }
 
@@ -475,7 +518,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((s) => ({ streamingContent: s.streamingContent + data.content }));
     });
 
-    socket.on("chat:complete", (data: { response: string; conversationId?: number; messageId?: string }) => {
+    socket.on("chat:complete", (data: { response: string; conversationId?: number; messageId?: string; timestamp?: string; displayMessageId?: string }) => {
       console.log("[store] chat:complete received", {
         responseLength: data.response?.length,
         responsePreview: data.response?.substring(0, 100),
@@ -486,7 +529,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         console.log("[store] chat:complete ignored - not active conversation");
         return;
       }
-      const msgTimestamp = new Date().toISOString();
+      // Prefer the server's stamp: the transcript is sorted by timestamp and everything else
+      // in it comes from the server clock, so mixing in a local clock reorders the answer
+      // relative to the events that produced it. Local time is only a fallback for an older
+      // server that does not send one.
+      const msgTimestamp = data.timestamp ?? new Date().toISOString();
       set((s) => ({
         ...(() => {
           const localTurnId = s.pendingLocalMessageId;
@@ -501,8 +548,16 @@ export const useAppStore = create<AppState>((set, get) => ({
             },
           };
 
+          // The final response is normally a repeat of the last block of agent text, which is
+          // already on screen as its own row. The server names that row, so this is an exact
+          // id match rather than a guess at whether two texts are "the same message".
+          const alreadyShownAsDisplayRow =
+            !!data.displayMessageId &&
+            s.messages.some((existing) => existing.metadata?.["displayMessageId"] === data.displayMessageId);
+
           // Skip if exact same message ID already exists (true duplicate)
-          const alreadyPresentById = s.messages.some((existing) => existing.id === msg.id);
+          const alreadyPresentById =
+            alreadyShownAsDisplayRow || s.messages.some((existing) => existing.id === msg.id);
           if (alreadyPresentById) {
             console.debug("[store.chat:complete] Message already exists by ID, skipping duplicate", {
               messageId: msg.id,
@@ -556,13 +611,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
     });
 
-    socket.on("chat:stopped", (data: { conversationId?: number }) => {
+    socket.on("chat:stopped", (data: { conversationId?: number; timestamp?: string }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
       const msg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "event",
         content: t("chat.executionStopped"),
-        timestamp: new Date().toISOString(),
+        timestamp: data.timestamp ?? new Date().toISOString(),
         eventType: "reasoning",
       };
       set((s) => ({
@@ -582,13 +637,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
     });
 
-    socket.on("chat:error", (data: { error: string; conversationId?: number }) => {
+    socket.on("chat:error", (data: { error: string; conversationId?: number; timestamp?: string }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
       const msg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         content: formatChatErrorMessage(data.error),
-        timestamp: new Date().toISOString(),
+        timestamp: data.timestamp ?? new Date().toISOString(),
       };
       set((s) => ({
         ...(() => {

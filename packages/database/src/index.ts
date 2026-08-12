@@ -276,8 +276,15 @@ export class DatabaseService {
   // ============================================================
   // Messages
   // ============================================================
-  async addMessage(data: Omit<MessageInsert, "createdAt">): Promise<MessageSelect> {
-    const result = await this.db.insert(schema.messages).values({ ...data, createdAt: new Date().toISOString() }).returning().get();
+  /**
+   * `createdAt` defaults to the insert time, but callers that already stamped a timestamp
+   * on the thing being stored should pass it in: the agent emits an event to the socket and
+   * persists it separately, and if the two carry different timestamps the client cannot
+   * recognise the persisted copy as the same event (it dedups on type+content+time) and
+   * renders it twice.
+   */
+  async addMessage(data: Omit<MessageInsert, "createdAt"> & { createdAt?: string }): Promise<MessageSelect> {
+    const result = await this.db.insert(schema.messages).values({ ...data, createdAt: data.createdAt ?? new Date().toISOString() }).returning().get();
     if (!result) throw new Error("Failed to add message");
     return result;
   }

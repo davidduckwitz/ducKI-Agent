@@ -20,6 +20,13 @@ import { ToolEventsDisplay } from "./ToolEventsDisplay";
 import { ToolEventSummary } from "./ToolEventSummary";
 import { IterationMetrics } from "./IterationMetrics";
 import type { AgentEventType, RenderedChatMessage } from "./chatTypes";
+import {
+  buildEventDedupKey,
+  buildPersistedIndex,
+  compareMessages,
+  isSupersededByPersisted,
+  normalizeMessageForDedup,
+} from "./messageOrder";
 
 interface ToolSummaryItem {
   id: string;
@@ -62,37 +69,6 @@ function parseMessageMetadata(raw?: string | null): Record<string, unknown> | un
 // Step titles are free text (LLM/user authored) - escape before dropping them into a RegExp.
 function escapeForRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function compareMessages(a: RenderedChatMessage, b: RenderedChatMessage): number {
-  const aTime = Date.parse(a.timestamp);
-  const bTime = Date.parse(b.timestamp);
-  if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) {
-    return aTime - bTime;
-  }
-
-  if (a.id !== b.id) {
-    return a.id.localeCompare(b.id);
-  }
-
-  return 0;
-}
-
-function normalizeMessageForDedup(content: string): string {
-  return content.replace(/\s+/g, " ").trim();
-}
-
-function buildEventDedupKey(
-  eventType: AgentEventType | undefined,
-  content: string,
-  timestamp: string
-): string {
-  const normalizedType = eventType ?? "unknown";
-  const normalizedContent = normalizeMessageForDedup(content);
-  const ts = Date.parse(timestamp);
-  // Bucket by second to avoid millisecond drift between live/persisted paths.
-  const secondBucket = Number.isFinite(ts) ? Math.floor(ts / 1000) : timestamp;
-  return `${normalizedType}|${normalizedContent}|${secondBucket}`;
 }
 
 export function ChatContainer() {
@@ -248,22 +224,37 @@ export function ChatContainer() {
     }
   }, [streamingContent]);
 
-  // Auto-clear persistent streaming content once the actual message appears in messages array
-  // This prevents duplication: streaming box shows during response, then disappears when message renders
+  // Auto-clear the streaming box once the run is over, so it hands off to the real assistant
+  // message instead of lingering.
+  //
+  // This used to wait for `messages[last].role === "assistant"`, which is a condition that
+  // mostly never becomes true: the agent persists its assistant message BEFORE running the
+  // turn's tools, so that row's timestamp sits early in the run while every tool_result and
+  // reasoning event that follows is stamped later. Once the persisted history is merged in and
+  // sorted, the last row is an event, not the assistant message - the box was never cleared and
+  // the next turn re-displayed the previous answer (the render condition below also fires on
+  // plain `isLoading`). Keying off "the run ended" instead holds regardless of what sorts last.
   useEffect(() => {
     if (persistentStreamingContent.trim().length === 0) return;
-    if (messages.length === 0) return;
+    if (isLoading) return;
 
-    // Check if the last message in the array is an assistant message that matches the streaming content
-    const lastMessage = messages[messages.length - 1];
-    if (lastMessage && lastMessage.role === "assistant") {
-      // Clear the persistent streaming content after a brief delay to avoid jarring disappearance
-      const timer = setTimeout(() => {
-        setPersistentStreamingContent("");
-      }, 300);
-      return () => clearTimeout(timer);
+    // Brief delay so the box does not blink out before the real message paints.
+    const timer = setTimeout(() => {
+      setPersistentStreamingContent("");
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [isLoading, persistentStreamingContent]);
+
+  // Belt and braces: a new turn must never inherit the previous turn's streamed text, even if
+  // the clear above was somehow skipped (an error path, a reconnect, a run that ended without
+  // ever going idle). Fires only on the idle -> running edge, so it cannot wipe mid-stream.
+  const wasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (isLoading && !wasLoadingRef.current) {
+      setPersistentStreamingContent("");
     }
-  }, [messages, persistentStreamingContent]);
+    wasLoadingRef.current = isLoading;
+  }, [isLoading]);
 
   // Clear persistent content when conversation changes (user starts new chat)
   useEffect(() => {
@@ -522,7 +513,8 @@ export function ChatContainer() {
                 type === "mode_selected" ||
                 type === "browser_preview" ||
                 type === "thinking" ||
-                type === "internal_instruction"
+                type === "internal_instruction" ||
+                type === "assistant_text"
               ) {
                 eventType = type;
               }
@@ -530,6 +522,24 @@ export function ChatContainer() {
             } catch {
               // Ignore malformed event metadata and render fallback event entry.
             }
+          }
+
+          // A block of the agent's own text. Stored as an "event" row only so it stays out of
+          // the LLM context on reload - to the reader it is simply the agent talking, at the
+          // point in the run where it said it.
+          if (eventType === "assistant_text") {
+            return {
+              id: `db-${msg.id}`,
+              role: "assistant" as const,
+              content: msg.content,
+              timestamp: msg.createdAt,
+              metadata: {
+                ...metadata,
+                ...(eventData?.["displayMessageId"]
+                  ? { displayMessageId: eventData["displayMessageId"] }
+                  : {}),
+              },
+            };
           }
 
           return {
@@ -595,7 +605,12 @@ export function ChatContainer() {
         // Synthetic follow-up prompts (metadata.internal) are only there to steer the LLM;
         // their user-facing status note was already shown live as an internal_instruction
         // event, so the raw prompt itself must not also render as a fake user turn.
-        .filter((m) => !(m.role === "user" && m.metadata?.internal === true));
+        .filter((m) => !(m.role === "user" && m.metadata?.internal === true))
+        // Raw model turns (markers and all) exist purely so the LLM sees what issued the tool
+        // calls. Their readable counterpart is the assistant_text row written alongside them.
+        // Only rows explicitly flagged are dropped, so conversations recorded before display
+        // rows existed keep rendering exactly as they did.
+        .filter((m) => m.metadata?.llmOnly !== true);
 
       // Merge against the latest local (non-persisted) messages via the functional
       // updater so this effect does not depend on `messages` — depending on it while
@@ -605,82 +620,13 @@ export function ChatContainer() {
         // During streaming: shows live updates while agent runs
         // After agent completes: shows messages until DB catches up
         // The query will eventually fetch them from DB and deduplicate here
-        console.log("[ChatContainer merge] Before merge", {
-          prevLength: prev.length,
-          prevRoles: prev.map(m => `${m.role}:${m.content?.substring(0,20)}`).join(' | '),
-          persistedLength: persisted?.length,
-        });
         const localMessages = prev.filter((m) => !m.id.startsWith("db-"));
 
-        // FIX #1: Deduplicate using both DB IDs AND local UUIDs in metadata
-        // Build a set of persisted IDs (regular db-N identifiers)
-        const persistedIds = new Set(renderedPersisted.map((m) => m.id));
-
-        // ALSO build a set of localMessageIds from persisted metadata
-        // This links UUID→DB-ID when a message moves from local to persisted
-        const persistedLocalIds = new Set<string>();
-        const persistedAssistantTurnIds = new Set<string>();
-        const persistedEventKeys = new Set<string>();
-        persisted.forEach((msg) => {
-          const meta = parseMessageMetadata(msg.metadata);
-          const localId = (meta?.localMessageId as string | undefined);
-          if (localId) {
-            persistedLocalIds.add(localId);
-            if (msg.role === "assistant") {
-              persistedAssistantTurnIds.add(localId);
-            }
-          }
-
-          if (msg.role === "event") {
-            let eventType: AgentEventType | undefined;
-            if (msg.toolResult) {
-              try {
-                const parsed = JSON.parse(msg.toolResult) as { eventType?: string };
-                const type = parsed.eventType;
-                if (
-                  type === "plan" ||
-                  type === "checklist" ||
-                  type === "iteration" ||
-                  type === "tool_call" ||
-                  type === "tool_result" ||
-                  type === "reasoning" ||
-                  type === "decision" ||
-                  type === "guardrail" ||
-                  type === "skill_selection" ||
-                  type === "tool_retry" ||
-                  type === "mode_selected" ||
-                  type === "browser_preview" ||
-                  type === "thinking" ||
-                  type === "internal_instruction"
-                ) {
-                  eventType = type;
-                }
-              } catch {
-                // Keep eventType undefined for malformed payloads.
-              }
-            }
-
-            persistedEventKeys.add(buildEventDedupKey(eventType, msg.content, msg.createdAt));
-          }
-        });
-
-        // Remove local messages that are already in DB - check both:
-        // 1. By their current rendered ID (fallback for older messages)
-        // 2. By their localMessageId in metadata (new UUIDs)
-        let uniqueLocalMessages = localMessages.filter((m) => {
-          if (m.role === "event") {
-            const key = buildEventDedupKey(m.eventType, m.content, m.timestamp);
-            return !persistedEventKeys.has(key);
-          }
-
-          const localMessageId = (m.metadata?.localMessageId as string | undefined) ?? m.id;
-          const serverMessageId = m.metadata?.serverMessageId as string | undefined;
-          const turnKey = localMessageId || serverMessageId;
-          if (persistedIds.has(m.id)) return false; // Old style ID match
-          if (persistedLocalIds.has(localMessageId)) return false; // Turn-key UUID match
-          if (m.role === "assistant" && turnKey && persistedAssistantTurnIds.has(turnKey)) return false;
-          return true;
-        });
+        // Index the RENDERED history, not the raw rows - mapPersistedMessage can change a row's
+        // role, and dedup has to go by what the timeline actually shows. Then drop the local
+        // copies of anything already represented there.
+        const persistedIndex = buildPersistedIndex(renderedPersisted);
+        let uniqueLocalMessages = localMessages.filter((m) => !isSupersededByPersisted(m, persistedIndex));
 
         // Fallback dedupe for first-message race: optimistic local user/assistant entries
         // can still survive if the persisted counterpart has no localMessageId link.
@@ -707,14 +653,7 @@ export function ChatContainer() {
           return !persistedTimes.some((persistedTime) => Math.abs(persistedTime - localTime) <= 15_000);
         });
 
-        const result = [...renderedPersisted, ...uniqueLocalMessages].sort(compareMessages);
-        console.log("[ChatContainer merge] After merge", {
-          renderedPersistedLength: renderedPersisted.length,
-          uniqueLocalLength: uniqueLocalMessages.length,
-          finalLength: result.length,
-          finalRoles: result.map(m => `${m.role}:${m.content?.substring(0,20)}`).join(' | '),
-        });
-        return result;
+        return [...renderedPersisted, ...uniqueLocalMessages].sort(compareMessages);
       });
     }, [
       conversationId,
