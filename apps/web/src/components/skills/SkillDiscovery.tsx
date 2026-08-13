@@ -23,7 +23,7 @@ interface SkillDiscoveryProps {
   installedSkills: string[];
 }
 
-const LANDING_PAGE_API = "https://ducki-ai-agent.davidduckwitz.de/api/v1.php";
+const LANDING_PAGE_API = "https://ducki.cloud/api/v1";
 
 export function SkillDiscovery({ installedSkills }: SkillDiscoveryProps) {
   const qc = useQueryClient();
@@ -330,9 +330,9 @@ export function SkillDiscovery({ installedSkills }: SkillDiscoveryProps) {
                     onClick={() =>
                       window.open(
                         `${LANDING_PAGE_API.replace(
-                          "/api/v1.php",
+                          /\/api\/v1.*$/,
                           ""
-                        )}/detail.html?type=skill&id=${skill.id}`,
+                        )}/skills/${skill.id}`,
                         "_blank"
                       )
                     }

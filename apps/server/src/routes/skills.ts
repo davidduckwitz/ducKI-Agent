@@ -423,7 +423,7 @@ skillsRouter.post("/validate", (req, res) => {
 function catalogApiUrl(): string {
   return (
     process.env["CATALOG_API_URL"]?.trim() ||
-    "https://ducki-ai-agent.davidduckwitz.de/api/v1.php"
+    "https://ducki.cloud/api/v1"
   );
 }
 

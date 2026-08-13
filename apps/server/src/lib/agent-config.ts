@@ -4,8 +4,8 @@
  * The agent can reference this URL to understand its own capabilities
  */
 export const LANDING_PAGE_CONFIG = {
-  url: 'https://ducki-ai-agent.davidduckwitz.de/',
-  api: 'https://ducki-ai-agent.davidduckwitz.de/landing/api/v1.php',
+  url: 'https://ducki.cloud/',
+  api: 'https://ducki.cloud/api/v1',
   endpoints: {
     tools: '?action=tools',
     skills: '?action=skills',

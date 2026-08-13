@@ -90,7 +90,7 @@ export function SkillsPrivacySettings() {
             </div>
             <p className="text-xs text-gray-600 dark:text-gray-400">
               {syncEnabled
-                ? "✓ Your skills are visible on https://ducki-ai-agent.davidduckwitz.de/"
+                ? "✓ Your skills are visible on https://ducki.cloud/"
                 : "✗ Your skills remain private and won't appear on the public landing page"}
             </p>
           </div>

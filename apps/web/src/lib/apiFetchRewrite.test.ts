@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveApiUrl } from "./apiFetchRewrite";
 
-const ORIGIN = "https://ducki-ai-agent.davidduckwitz.de";
+const ORIGIN = "https://ducki.cloud";
 
 describe("resolveApiUrl", () => {
   it("is a no-op in local mode (apiBase '/api')", () => {

@@ -5,7 +5,7 @@ import { api, type PluginInfo } from "../../lib/api";
 import { toastManager as toast } from "../../lib/toast";
 
 /** Public plugin catalog API (filterable via ?search= / ?category=). */
-const CATALOG_API = "https://ducki-ai-agent.davidduckwitz.de/api/v1.php";
+const CATALOG_API = "https://ducki.cloud/api/v1";
 
 interface CatalogEntry {
   id?: string;
