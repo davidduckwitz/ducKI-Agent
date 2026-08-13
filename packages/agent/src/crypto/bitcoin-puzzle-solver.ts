@@ -39,13 +39,23 @@ export interface AttemptRecord {
   address: string;
 }
 
+/** Obergrenze für den Puffer noch nicht persistierter Versuche (Schutz gegen Speicherleck). */
+const MAX_PENDING_ATTEMPTS = 50_000;
+
 class BitcoinPuzzleSolver {
   private state: SolverState;
   private isRunning = false;
   private isPaused = false;
+  /** true, solange die Batch-Loop tatsächlich läuft. Ein restaurierter Solver hat keine Loop. */
+  private loopAlive = false;
+  private loopPromise: Promise<SolverState> | null = null;
+  /** Startzeitpunkt/Zählerstand des AKTUELLEN Laufs - Basis für eine ehrliche /Sek-Rate. */
+  private runStartedAt = Date.now();
+  private runStartCount = 0;
   private wordList: string[];
   private triedCombinations: Set<string> = new Set(); // Intern nur Set für Duplikat-Check
   private recentAttempts: AttemptRecord[] = []; // Letzte 50 verarbeiteten Phrasen mit Adressen
+  private pendingAttempts: AttemptRecord[] = []; // Noch nicht in die CSV geschriebene Versuche
   private eventListeners: EventListener[] = [];
   private onProgressCallback?: (state: SolverState) => void; // Callback für Speicherung
   private phraseExistsCallback?: (phrase: string) => boolean; // Callback um externe Phrase-Datenbank zu prüfen
@@ -107,6 +117,14 @@ class BitcoinPuzzleSolver {
     if (savedState.lastCheckAt !== undefined) {
       this.state.lastCheckAt = savedState.lastCheckAt;
     }
+    // Ein pausiert gespeichertes Puzzle muss auch pausiert wieder auftauchen - sonst
+    // sieht die UI "idle" und der Resume-Pfad hält es für einen frischen Solver.
+    if (savedState.status !== undefined) {
+      this.state.status = savedState.status === "running" ? "paused" : savedState.status;
+    }
+    if (savedState.foundAddress !== undefined && savedState.foundAddress) {
+      this.state.foundAddress = savedState.foundAddress;
+    }
     if (savedState.foundMnemonic !== undefined && savedState.foundMnemonic) {
       this.state.foundMnemonic = savedState.foundMnemonic;
       this.state.status = "completed";
@@ -114,15 +132,32 @@ class BitcoinPuzzleSolver {
     if (savedState.errorMessage !== undefined) {
       this.state.errorMessage = savedState.errorMessage;
     }
+    this.runStartCount = this.state.generatedCount;
   }
 
   /**
    * Starte den Solver-Prozess mit verschiedenen Kombinationsstrategien
    */
   async start(onProgress?: (state: SolverState) => void): Promise<SolverState> {
-    this.onProgressCallback = onProgress; // Speichere Callback für spätere Nutzung (z.B. beim Pause)
+    if (onProgress) {
+      this.onProgressCallback = onProgress; // Speichere Callback für spätere Nutzung (z.B. beim Pause)
+    }
+
+    // Zweiter start() auf denselben Solver würde eine zweite Batch-Loop auf denselben
+    // State setzen (doppelte Zähler, doppelte CSV-Writes). Stattdessen nur entpausieren.
+    if (this.loopAlive && this.loopPromise) {
+      console.log(`[BitcoinPuzzleSolver] start() ignored - loop already alive. Unpausing instead.`);
+      this.isPaused = false;
+      this.state.status = "running";
+      return this.loopPromise;
+    }
+
     this.isRunning = true;
+    this.isPaused = false;
+    this.loopAlive = true;
     this.state.status = "running";
+    this.runStartedAt = Date.now();
+    this.runStartCount = this.state.generatedCount;
 
     this.emit({
       type: "started",
@@ -141,6 +176,11 @@ class BitcoinPuzzleSolver {
       // Starte den Lösungsprozess - mit Event-Loop-Freigabe
       const runSolverIteration = (): Promise<SolverState> => {
         return new Promise((resolve) => {
+          const finish = (state: SolverState) => {
+            this.loopAlive = false;
+            this.loopPromise = null;
+            resolve(state);
+          };
           const processNextBatch = () => {
             if (!this.isRunning) {
               this.state.status = "idle";
@@ -149,14 +189,14 @@ class BitcoinPuzzleSolver {
                 timestamp: Date.now(),
                 data: { reason: "manual_stop", attempts: this.state.generatedCount },
               });
-              resolve(this.state);
+              finish(this.state);
               return;
             }
 
-            // Wenn pausiert: warte aktiv ohne setTimeout (verhindert dass Loop "steckenbleibt")
-            // Nutze busy-wait aber mit setImmediate für andere Tasks
+            // Pausiert: NICHT mit setImmediate weiterspinnen - das ist ein Busy-Wait, der
+            // einen CPU-Kern voll auslastet, solange das Puzzle "pausiert" ist.
             if (this.isPaused) {
-              setImmediate(processNextBatch);
+              setTimeout(processNextBatch, 250);
               return;
             }
 
@@ -169,34 +209,34 @@ class BitcoinPuzzleSolver {
               if (this.state.generatedCount % 5000 === 0 && this.state.generatedCount > 0) {
                 this.state.currentCombinationMode = "ordered";
                 mnemonic = this.generateOrderedMnemonic();
+                // Die geordnete Phrase ist deterministisch. Wäre sie ein Duplikat und wir
+                // würden nur `continue`, käme sie in der nächsten Iteration erneut heraus
+                // (generatedCount unverändert => gleiche Bedingung) - Endlosschleife.
+                if (this.triedCombinations.has(mnemonic)) {
+                  this.state.currentCombinationMode = "random";
+                  mnemonic = bip39.generateMnemonic(128, undefined, this.wordList);
+                }
               } else {
                 this.state.currentCombinationMode = "random";
                 mnemonic = bip39.generateMnemonic(128, undefined, this.wordList);
               }
 
-              // Überprüfe auf Duplikate (interne Datenbank - schnell)
+              // Überprüfe auf Duplikate (interne Datenbank - schnell).
+              // Das Set ist beim Restore aus der kompletten CSV vorbefüllt, deckt also
+              // auch frühere Läufe ab.
               if (this.triedCombinations.has(mnemonic)) {
-                if (this.state.generatedCount % 10000 === 0) {
-                  console.log(`[BitcoinPuzzleSolver] Duplicate detected (internal): ${mnemonic.substring(0, 20)}... at iteration ${this.state.generatedCount}`);
-                }
                 continue;
               }
 
-              // Überprüfe externe Datenbank (CSV Search API - nur aktuelle Puzzle CSV)
-              // Mit nur einer Puzzle CSV ist das günstig genug um häufiger zu prüfen
-              let isExternalDuplicate = false;
-              if (this.phraseExistsCallback && this.state.generatedCount % 100 === 0) {
-                isExternalDuplicate = this.phraseExistsCallback(mnemonic);
-                if (isExternalDuplicate && this.state.generatedCount % 10000 === 0) {
-                  console.log(`[BitcoinPuzzleSolver] External duplicate detected at iteration ${this.state.generatedCount}`);
-                }
-                if (isExternalDuplicate) {
-                  continue;
-                }
+              // Zusätzliche externe Prüfung (z.B. manuell markierte Phrasen).
+              // Muss O(1) sein - der Callback darf hier keine Datei lesen.
+              if (this.phraseExistsCallback && this.phraseExistsCallback(mnemonic)) {
+                this.triedCombinations.add(mnemonic);
+                continue;
               }
 
               this.triedCombinations.add(mnemonic);
-              this.state.triedCombinationsCount = this.triedCombinations.size;
+              this.state.triedCombinationsCount++;
 
               if (this.state.generatedCount % 10000 === 0) {
                 console.log(`[BitcoinPuzzleSolver] Progress: ${this.state.generatedCount} generated, ${this.state.triedCombinationsCount} tried`);
@@ -205,10 +245,18 @@ class BitcoinPuzzleSolver {
               // Generiere Bitcoin-Adresse
               const address = this.generateAddressFromMnemonic(mnemonic);
 
-              // Speichere in recentAttempts (letzte 50)
-              this.recentAttempts.push({ mnemonic, address });
+              // recentAttempts = reines Anzeige-Fenster (letzte 50).
+              // pendingAttempts = Persistenz-Puffer: er wird beim Speichern geleert, damit
+              // KEIN Versuch verloren geht. (Vorher wurde alle 100 Versuche nur das
+              // 50er-Fenster geschrieben - die Hälfte landete nie in der CSV.)
+              const attempt = { mnemonic, address };
+              this.recentAttempts.push(attempt);
               if (this.recentAttempts.length > 50) {
                 this.recentAttempts.shift();
+              }
+              this.pendingAttempts.push(attempt);
+              if (this.pendingAttempts.length > MAX_PENDING_ATTEMPTS) {
+                this.pendingAttempts.shift();
               }
 
               this.state.generatedCount++;
@@ -245,14 +293,14 @@ class BitcoinPuzzleSolver {
                   },
                 });
 
-                onProgress?.(this.state);
-                resolve(this.state);
+                this.onProgressCallback?.(this.state);
+                finish(this.state);
                 return;
               }
 
               // Fortschritts-Callback (alle 100 Versuche für regelmäßige CSV-Updates)
               if (this.state.generatedCount % 100 === 0) {
-                onProgress?.(this.state);
+                this.onProgressCallback?.(this.state);
 
                 this.emit({
                   type: "progress",
@@ -279,6 +327,8 @@ class BitcoinPuzzleSolver {
       this.state.status = "error";
       this.state.errorMessage = error instanceof Error ? error.message : String(error);
       this.isRunning = false;
+      this.loopAlive = false;
+      this.loopPromise = null;
 
       this.emit({
         type: "error",
@@ -326,18 +376,49 @@ class BitcoinPuzzleSolver {
   }
 
   /**
-   * Fortsetzen - WICHTIG: triggereProzessierung um sicherzustellen dass die Solve-Loop wirklich weitermacht
+   * Fortsetzen.
+   *
+   * Hebt nur das Pause-Flag auf. Ob dahinter überhaupt eine Loop wartet, weiß der Aufrufer
+   * über {@link isLoopAlive} - ein aus dem State-File restaurierter Solver hat keine, der
+   * muss mit start() angeworfen werden.
    */
   resume(): void {
-    console.log(`[BitcoinPuzzleSolver] Resuming solver. isRunning=${this.isRunning}, isPaused=${this.isPaused}, generatedCount=${this.state.generatedCount}`);
+    console.log(`[BitcoinPuzzleSolver] Resuming solver. loopAlive=${this.loopAlive}, isPaused=${this.isPaused}, generatedCount=${this.state.generatedCount}`);
     this.isPaused = false;
+    this.isRunning = true;
     this.state.status = "running";
-    console.log(`[BitcoinPuzzleSolver] Resumed. isPaused=${this.isPaused}, status=${this.state.status}`);
+    // Rate-Messung neu aufsetzen, sonst verwässert die Pausenzeit die /Sek-Anzeige.
+    this.runStartedAt = Date.now();
+    this.runStartCount = this.state.generatedCount;
+  }
 
-    // KRITISCH: Wecke die Solve-Loop auf damit sie nicht in setTimeout wartet
-    // Ohne das wird die Loop nie wieder aufgerufen wenn isPaused true war
-    // Wir können das nicht direkt tun, also sind wir abhängig davon dass der Timer die Loop aufruft
-    // Dies ist ein Design-Problem das grundlegend umgebaut werden muss
+  /**
+   * Läuft die Batch-Loop gerade tatsächlich (inkl. pausiert-wartend)?
+   */
+  isLoopAlive(): boolean {
+    return this.loopAlive;
+  }
+
+  /**
+   * Adressen pro Sekunde im AKTUELLEN Lauf.
+   * (Über state.startedAt gerechnet ergäbe das bei einem Puzzle, das vor Wochen erstellt
+   * wurde, praktisch immer 0.)
+   */
+  getRatePerSecond(): number {
+    if (!this.loopAlive || this.isPaused) return 0;
+    const elapsedMs = Date.now() - this.runStartedAt;
+    if (elapsedMs <= 0) return 0;
+    const delta = this.state.generatedCount - this.runStartCount;
+    if (delta <= 0) return 0;
+    return Math.round((delta / elapsedMs) * 1000);
+  }
+
+  /**
+   * Sekunden seit Start des aktuellen Laufs (0 wenn nichts läuft).
+   */
+  getRunElapsedSeconds(): number {
+    if (!this.loopAlive) return 0;
+    return Math.round((Date.now() - this.runStartedAt) / 1000);
   }
 
   /**
@@ -346,7 +427,9 @@ class BitcoinPuzzleSolver {
   stop(): void {
     this.isRunning = false;
     this.isPaused = false;
-    this.state.status = "idle";
+    if (this.state.status !== "completed" && this.state.status !== "error") {
+      this.state.status = "idle";
+    }
   }
 
   /**
@@ -385,14 +468,30 @@ class BitcoinPuzzleSolver {
   }
 
   /**
-   * Setze alle bereits versuchten Kombinationen (beim Restore)
+   * Hole alle seit dem letzten Aufruf neu erzeugten Versuche und leere den Puffer.
+   * Der Aufrufer ist damit verantwortlich, sie zu persistieren.
+   */
+  drainPendingAttempts(): AttemptRecord[] {
+    const drained = this.pendingAttempts;
+    this.pendingAttempts = [];
+    return drained;
+  }
+
+  /**
+   * Setze alle bereits versuchten Kombinationen (beim Restore).
+   *
+   * Additiv und niemals zählerreduzierend: früher wurde hier mit den letzten 50
+   * CSV-Zeilen überschrieben, wodurch ein Puzzle mit 118.000 Versuchen nach jedem
+   * Neustart/Resume wieder "50 versucht" anzeigte.
    */
   setTriedCombinations(attempts: AttemptRecord[]): void {
-    this.triedCombinations.clear();
     for (const attempt of attempts) {
       this.triedCombinations.add(attempt.mnemonic);
     }
-    this.state.triedCombinationsCount = this.triedCombinations.size;
+    this.state.triedCombinationsCount = Math.max(
+      this.state.triedCombinationsCount,
+      this.triedCombinations.size
+    );
   }
 
   /**

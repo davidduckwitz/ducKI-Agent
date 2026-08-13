@@ -106,7 +106,9 @@ function generatePartialMnemonicCombinations(
  */
 function parseCSVLine(line: string): [string, string] | null {
   const match = line.match(/^"([^"]*(?:""[^"]*)*)","([^"]*(?:""[^"]*)*)"$/);
-  if (match && match[1] && match[2]) {
+  // Auf undefined prüfen, nicht auf truthy: eine leere Adresse ("") ist ein gültiger Wert
+  // für manuell markierte Phrasen und darf die Zeile nicht unlesbar machen.
+  if (match && match[1] !== undefined && match[2] !== undefined) {
     // Unescape escaped quotes ("")
     const mnemonic = match[1].replace(/""/g, '"');
     const address = match[2].replace(/""/g, '"');
@@ -125,6 +127,12 @@ export class BitcoinPuzzleService {
   private wordList: string[] = [];
   private db: DatabaseService | null = null;
   private attemptsCsvDir: string;
+  /**
+   * Pro Puzzle die bereits in der CSV stehenden Mnemonics.
+   * Ersetzt das frühere Neu-Einlesen+Parsen der kompletten CSV bei JEDEM Speichern und
+   * bei jeder Duplikatprüfung - das war bei 20k+ Zeilen der eigentliche Bremsklotz.
+   */
+  private persistedMnemonics = new Map<string, Set<string>>();
 
   private constructor() {
     this.loadWordList();
@@ -184,87 +192,87 @@ export class BitcoinPuzzleService {
         return;
       }
 
-      const { readdirSync } = await import("node:fs");
       const stateFiles = readdirSync(this.attemptsCsvDir).filter((f: string) => f.endsWith("-state.json"));
 
       console.log(`[BitcoinPuzzleService] Found ${stateFiles.length} saved puzzle states`);
 
       for (const file of stateFiles) {
-        try {
-          const stateFile = resolve(this.attemptsCsvDir, file);
-          const stateJson = readFileSync(stateFile, "utf-8");
-          const saved = JSON.parse(stateJson);
-
-          // Ignoriere bereits laufende Puzzles
-          if (this.activePuzzles.has(saved.id)) continue;
-
-          // Erstelle neuen Solver mit gespeichertem Stand
-          const solver = new BitcoinPuzzleSolver(this.wordList, {
-            targetAddress: saved.targetAddress,
-            startMnemonic: undefined,
-            batchSize: 100,
-          });
-
-          // Setze Callback um externe Phrase-Datenbank zu prüfen
-          solver.setPhraseExistsCallback((phrase) => {
-            const result = this.phraseExistsAnyPuzzle(phrase);
-            return result.exists;
-          });
-
-          // Restore den Stand
-          solver.restoreState({
-            triedCombinationsCount: saved.triedCombinationsCount,
-            generatedCount: saved.generatedCount,
-            currentCombinationMode: saved.currentCombinationMode,
-            startedAt: new Date(saved.startedAt).getTime(),
-            lastCheckAt: new Date(saved.lastCheckAt).getTime(),
-            foundMnemonic: saved.foundMnemonic || undefined,
-            foundAddress: saved.foundAddress || undefined,
-            errorMessage: saved.errorMessage || undefined,
-          });
-
-          // Lade letzte 50 Versuche von CSV für UI-Display
-          const recentAttempts = this.getRecentAttemptsFromCsv(saved.id);
-          if (recentAttempts.length > 0) {
-            solver.setRecentAttempts(recentAttempts);
-            // Setze auch die letzten 50 Attempts als "bereits versucht" im Memory
-            // Dadurch wird der Solver nicht wieder die gleichen Phrasen generieren
-            solver.setTriedCombinations(recentAttempts);
-          }
-
-          // Setze Callback um externe Phrase-Datenbank zu prüfen
-          // WICHTIG: Nur das aktuelle Puzzle prüfen (nicht alle), um Performance zu halten
-          // Dies verhindert dass der Solver Phrasen regeneriert die bereits versucht wurden
-          const puzzleId = saved.id;
-          solver.setPhraseExistsCallback((phrase) => {
-            return this.phraseExistsInPuzzle(puzzleId, phrase);
-          });
-
-          console.log(`[BitcoinPuzzleService] Puzzle ${saved.id} restored. CSV Search API active for duplicate detection.`);
-
-          // Speichere als inactive Puzzle (wird nur restauriert wenn User auf start klickt)
-          const metadata: PuzzleMetadata = {
-            id: saved.id,
-            name: saved.name,
-            targetAddress: saved.targetAddress,
-            infoUrl: saved.infoUrl,
-            createdAt: new Date(saved.createdAt).getTime(),
-          };
-
-          this.activePuzzles.set(saved.id, {
-            metadata,
-            solver,
-            promise: null,
-          });
-
-          console.log(`[BitcoinPuzzleService] Restored puzzle from state file: ${saved.id}`);
-        } catch (err) {
-          console.error(`[BitcoinPuzzleService] Error reading state file ${file}:`, err);
-        }
+        this.restorePuzzleFromDisk(file.replace("-state.json", ""));
       }
       console.log(`[BitcoinPuzzleService] Initialization complete. Total puzzles loaded: ${this.activePuzzles.size}`);
     } catch (error) {
       console.error("[BitcoinPuzzleService] Error initializing from saved states:", error);
+    }
+  }
+
+  /**
+   * Restauriere ein einzelnes Puzzle aus seinem State-File in die aktive Map.
+   *
+   * Der Solver wird dabei NICHT gestartet - er hängt nur mit dem gespeicherten Stand
+   * bereit, bis der Nutzer auf "Weiter" klickt (siehe {@link resumePuzzle}).
+   */
+  private restorePuzzleFromDisk(puzzleId: string): ActivePuzzle | null {
+    // Bereits geladen? Dann nicht überschreiben - der aktive Solver ist die Wahrheit.
+    const existing = this.activePuzzles.get(puzzleId);
+    if (existing) return existing;
+
+    const stateFile = resolve(this.attemptsCsvDir, `${puzzleId}-state.json`);
+    if (!existsSync(stateFile)) return null;
+
+    try {
+      const saved = JSON.parse(readFileSync(stateFile, "utf-8"));
+
+      const solver = new BitcoinPuzzleSolver(this.wordList, {
+        targetAddress: saved.targetAddress,
+        startMnemonic: undefined,
+        batchSize: 100,
+      });
+
+      // Restore den Stand (inkl. status - ein pausiertes Puzzle bleibt pausiert)
+      solver.restoreState({
+        triedCombinationsCount: saved.triedCombinationsCount,
+        generatedCount: saved.generatedCount,
+        currentCombinationMode: saved.currentCombinationMode,
+        status: saved.status,
+        startedAt: new Date(saved.startedAt).getTime(),
+        lastCheckAt: new Date(saved.lastCheckAt).getTime(),
+        foundMnemonic: saved.foundMnemonic || undefined,
+        foundAddress: saved.foundAddress || undefined,
+        errorMessage: saved.errorMessage || undefined,
+      });
+
+      // Duplikat-Set aus der KOMPLETTEN CSV vorbefüllen, nicht nur aus den letzten 50 -
+      // sonst würde der Solver alles vor dem letzten Fenster erneut durchprobieren.
+      const allAttempts = this.getAllAttemptsFromCsv(puzzleId);
+      if (allAttempts.length > 0) {
+        solver.setTriedCombinations(allAttempts);
+        solver.setRecentAttempts(allAttempts.slice(-50));
+        // Gleich als Persistenz-Index übernehmen, statt die Datei später nochmal zu lesen.
+        this.persistedMnemonics.set(puzzleId, new Set(allAttempts.map((a) => a.mnemonic)));
+      }
+
+      // O(1)-Duplikatprüfung gegen den persistierten Bestand dieses Puzzles.
+      solver.setPhraseExistsCallback((phrase) => this.phraseExistsInPuzzle(puzzleId, phrase));
+
+      const metadata: PuzzleMetadata = {
+        id: saved.id ?? puzzleId,
+        name: saved.name,
+        targetAddress: saved.targetAddress,
+        infoUrl: saved.infoUrl,
+        createdAt: new Date(saved.createdAt).getTime(),
+      };
+
+      const puzzle: ActivePuzzle = { metadata, solver, promise: null };
+      this.activePuzzles.set(metadata.id, puzzle);
+
+      console.log(
+        `[BitcoinPuzzleService] Restored puzzle from state file: ${metadata.id} ` +
+          `(status=${solver.getState().status}, generated=${saved.generatedCount}, tried=${solver.getState().triedCombinationsCount})`
+      );
+      return puzzle;
+    } catch (err) {
+      console.error(`[BitcoinPuzzleService] Error restoring puzzle ${puzzleId}:`, err);
+      return null;
     }
   }
 
@@ -401,7 +409,9 @@ export class BitcoinPuzzleService {
    * Hole Puzzle-Details
    */
   getPuzzle(puzzleId: string): { metadata: PuzzleMetadata; state: SolverState } | null {
-    const puzzle = this.activePuzzles.get(puzzleId);
+    // Fallback auf die Platte: die Liste zeigt auch Puzzles aus State-Files an, ein
+    // Detail-Aufruf darauf darf nicht mit 404 ("wurde gelöscht") antworten.
+    const puzzle = this.activePuzzles.get(puzzleId) ?? this.restorePuzzleFromDisk(puzzleId);
     if (!puzzle) return null;
 
     return {
@@ -434,44 +444,28 @@ export class BitcoinPuzzleService {
    * Fortsetzen
    */
   resumePuzzle(puzzleId: string): SolverState | null {
-    const puzzle = this.activePuzzles.get(puzzleId);
+    const puzzle = this.activePuzzles.get(puzzleId) ?? this.restorePuzzleFromDisk(puzzleId);
     if (!puzzle) return null;
 
     const currentState = puzzle.solver.getState();
     console.log(
-      `[BitcoinPuzzleService] Resuming puzzle ${puzzleId}. Current state: generatedCount=${currentState.generatedCount}, status=${currentState.status}`
+      `[BitcoinPuzzleService] Resuming puzzle ${puzzleId}. Current state: generatedCount=${currentState.generatedCount}, status=${currentState.status}, loopAlive=${puzzle.solver.isLoopAlive()}`
     );
 
-    // WICHTIG: Bei Pause-Resume funktioniert die Promise-basierte Loop nicht richtig
-    // Lösung: Starte den Solver komplett neu mit gespeichertem State
-    if (currentState.status === "paused") {
-      // Stoppe den alten Solver
-      puzzle.solver.stop();
+    if (currentState.status === "completed" || currentState.foundMnemonic) {
+      console.log(`[BitcoinPuzzleService] Puzzle ${puzzleId} is already solved - nothing to resume`);
+      return currentState;
+    }
 
-      // Erstelle neuen Solver mit gleicher Config
-      const newSolver = new BitcoinPuzzleSolver(this.wordList, {
-        targetAddress: puzzle.metadata.targetAddress,
-        startMnemonic: undefined,
-        batchSize: 100,
-      });
+    // Pause-Flag lösen. Läuft die Batch-Loop noch (Pause im selben Serverlauf), reicht das.
+    puzzle.solver.resume();
 
-      // Restore den gespeicherten State in den neuen Solver
-      newSolver.restoreState(currentState);
-
-      // Lade letzte 50 Versuche
-      const recentAttempts = this.getRecentAttemptsFromCsv(puzzleId);
-      if (recentAttempts.length > 0) {
-        newSolver.setRecentAttempts(recentAttempts);
-        newSolver.setTriedCombinations(recentAttempts);
-      }
-
-      // Setze CSV Search Callback
-      newSolver.setPhraseExistsCallback((phrase) => {
-        return this.phraseExistsInPuzzle(puzzleId, phrase);
-      });
-
-      // Starte neuen Solver
-      const promise = newSolver.start((state) => {
+    // Nach einem Serverneustart existiert nur der restaurierte State, aber keine Loop.
+    // Genau hier lag der Fehler: resume() setzte bloß status="running", ohne dass je
+    // etwas gerechnet wurde - Zähler und das 50er-Fenster blieben eingefroren.
+    if (!puzzle.solver.isLoopAlive()) {
+      console.log(`[BitcoinPuzzleService] No live solver loop for ${puzzleId} - starting it`);
+      const promise = puzzle.solver.start((state) => {
         this.savePuzzleProgress(puzzleId, state).catch((err) => {
           console.error(`[BitcoinPuzzleService] Error saving progress: ${err}`);
         });
@@ -479,17 +473,9 @@ export class BitcoinPuzzleService {
       promise.catch((err) => {
         console.error(`[BitcoinPuzzleService] Solver error: ${err}`);
       });
-
-      // Update the active puzzle with new solver
-      puzzle.solver = newSolver;
       puzzle.promise = promise;
-
-      console.log(`[BitcoinPuzzleService] Puzzle ${puzzleId} restarted after pause`);
-      return newSolver.getState();
     }
 
-    // Falls nicht pausiert, nutze nur die resume() Methode
-    puzzle.solver.resume();
     return puzzle.solver.getState();
   }
 
@@ -500,8 +486,14 @@ export class BitcoinPuzzleService {
     const puzzle = this.activePuzzles.get(puzzleId);
     if (!puzzle) return null;
     puzzle.solver.stop();
+    puzzle.promise = null;
     const state = puzzle.solver.getState();
-    this.activePuzzles.delete(puzzleId);
+    // NICHT aus der Map entfernen: das State-File bleibt ja liegen, das Puzzle taucht
+    // also weiter in der Liste auf. Vorher lief es danach in einen 404 ("wurde gelöscht"),
+    // obwohl es nur gestoppt war. Zum Entfernen gibt es deletePuzzle().
+    this.savePuzzleProgress(puzzleId, state).catch((err) => {
+      console.error(`[BitcoinPuzzleService] Error saving on stop: ${err}`);
+    });
     return state;
   }
 
@@ -536,6 +528,8 @@ export class BitcoinPuzzleService {
         deletedAny = true;
         console.log(`[BitcoinPuzzleService] Deleted CSV file: ${csvFile}`);
       }
+
+      this.persistedMnemonics.delete(puzzleId);
 
       if (deletedAny) {
         console.log(`[BitcoinPuzzleService] Puzzle deleted: ${puzzleId}`);
@@ -635,15 +629,9 @@ export class BitcoinPuzzleService {
         );
         this.saveAttemptsToCSV(puzzleId, attempts);
 
-        // Update Solver wenn aktiv
-        const puzzle = this.activePuzzles.get(puzzleId);
-        if (puzzle) {
-          const recentAttempts = this.getRecentAttemptsFromCsv(puzzleId);
-          if (recentAttempts.length > 0) {
-            puzzle.solver.setRecentAttempts(recentAttempts);
-            puzzle.solver.setTriedCombinations(recentAttempts);
-          }
-        }
+        // Nur das Duplikat-Set des Solvers ergänzen - das Anzeigefenster "letzte 50"
+        // gehört den echten Versuchen und darf hier nicht überschrieben werden.
+        this.activePuzzles.get(puzzleId)?.solver.setTriedCombinations(attempts);
 
         return { success: true, generatedCount: attempts.length };
       } else {
@@ -656,11 +644,7 @@ export class BitcoinPuzzleService {
 
         const puzzle = this.activePuzzles.get(puzzleId);
         if (puzzle) {
-          const recentAttempts = this.getRecentAttemptsFromCsv(puzzleId);
-          if (recentAttempts.length > 0) {
-            puzzle.solver.setRecentAttempts(recentAttempts);
-            puzzle.solver.setTriedCombinations(recentAttempts);
-          }
+          puzzle.solver.setTriedCombinations([{ mnemonic: phraseStr, address }]);
 
           // Prüfe ob diese Phrase die Zieladresse generiert
           if (address === puzzle.metadata.targetAddress) {
@@ -726,14 +710,15 @@ export class BitcoinPuzzleService {
     currentCombinationMode?: string;
     recentAttempts?: AttemptRecord[];
   } | null {
-    const puzzle = this.activePuzzles.get(puzzleId);
+    const puzzle = this.activePuzzles.get(puzzleId) ?? this.restorePuzzleFromDisk(puzzleId);
     if (!puzzle) return null;
 
     const state = puzzle.solver.getState();
-    const isRunning = state.status === "running";
-    const elapsedMs = Date.now() - state.startedAt;
-    const elapsedSeconds = Math.round(elapsedMs / 1000);
-    const addressesPerSecond = Math.round((state.generatedCount / elapsedMs) * 1000);
+    // "läuft" heißt: es rechnet wirklich jemand. Ein status-Feld allein reicht nicht,
+    // ein restaurierter Solver kann "running" gespeichert haben ohne aktive Loop.
+    const isRunning = state.status === "running" && puzzle.solver.isLoopAlive();
+    const elapsedSeconds = puzzle.solver.getRunElapsedSeconds();
+    const addressesPerSecond = puzzle.solver.getRatePerSecond();
 
     return {
       metadata: puzzle.metadata,
@@ -775,8 +760,6 @@ export class BitcoinPuzzleService {
         return;
       }
 
-      console.log(`[BitcoinPuzzleService] Saving puzzle progress: ${puzzleId} (status: ${state.status}, attempts: ${state.triedCombinationsCount})`);
-
       // Speichere State als JSON für schnelle Recovery
       const stateFile = resolve(this.attemptsCsvDir, `${puzzleId}-state.json`);
       const stateData = {
@@ -797,16 +780,13 @@ export class BitcoinPuzzleService {
         createdAt: new Date(puzzle.metadata.createdAt).toISOString(),
       };
       writeFileSync(stateFile, JSON.stringify(stateData, null, 2), "utf-8");
-      console.log(`[BitcoinPuzzleService] Saved state to: ${stateFile}`);
 
-      // Speichere Versuche in CSV (nur die letzten 50 aus dem Solver)
-      // Die CSV wird über Zeit kumulativ mit allen Attempts aufgebaut durch Append-Logik
-      const attempts = puzzle.solver.getRecentAttempts();
-      console.log(`[BitcoinPuzzleService] Saving ${attempts.length} recent attempts to CSV (cumulative append)`);
+      // Alle seit dem letzten Speichern erzeugten Versuche wegschreiben.
+      // Vorher wurde hier das 50er-Anzeigefenster geschrieben, obwohl der Callback erst
+      // alle 100 Versuche feuert - jeder zweite Versuch ging dadurch verloren.
+      const attempts = puzzle.solver.drainPendingAttempts();
       if (attempts.length > 0) {
         this.saveAttemptsToCSV(puzzleId, attempts);
-      } else {
-        console.log(`[BitcoinPuzzleService] No recent attempts to save for puzzle ${puzzleId}`);
       }
     } catch (error) {
       console.error(`[BitcoinPuzzleService] Error saving puzzle progress: ${error}`);
@@ -820,72 +800,41 @@ export class BitcoinPuzzleService {
     try {
       const filePath = this.getAttemptsFilePath(puzzleId);
 
-      // Validiere dass alle Attempts echte Daten haben
-      const validAttempts = attempts.filter(a => {
-        if (!a.mnemonic || !a.address) {
-          console.warn(`[BitcoinPuzzleService] Skipping invalid attempt: mnemonic="${a.mnemonic}", address="${a.address}"`);
+      // Die Mnemonic ist der Schlüssel und muss da sein. Eine leere Adresse ist dagegen
+      // zulässig: manuell markierte Phrasen ("bereits probiert") haben keine.
+      const validAttempts = attempts.filter((a) => {
+        if (!a.mnemonic) {
+          console.warn(`[BitcoinPuzzleService] Skipping attempt without mnemonic`);
           return false;
         }
         return true;
       });
 
       if (validAttempts.length === 0) {
-        console.log(`[BitcoinPuzzleService] No valid attempts to save for puzzle ${puzzleId}`);
         return;
       }
 
-      console.log(`[BitcoinPuzzleService] Saving CSV to: ${filePath} (${validAttempts.length} valid attempts)`);
-
-      // Überprüfe ob Datei bereits existiert
+      // Bestand einmal indizieren, danach nur noch anhängen. Kein erneutes Einlesen der
+      // kompletten CSV pro Speichervorgang mehr.
+      const persisted = this.getPersistedMnemonics(puzzleId);
       const fileExists = existsSync(filePath);
 
+      const newLines: string[] = [];
+      for (const attempt of validAttempts) {
+        if (persisted.has(attempt.mnemonic)) continue;
+        persisted.add(attempt.mnemonic);
+        const escapedMnemonic = attempt.mnemonic.replace(/"/g, '""');
+        const escapedAddress = attempt.address.replace(/"/g, '""');
+        newLines.push(`"${escapedMnemonic}","${escapedAddress}"`);
+      }
+
+      if (newLines.length === 0) return;
+
       if (!fileExists) {
-        // Neue Datei: schreibe Header + alle Attempts
-        console.log(`[BitcoinPuzzleService] Creating new CSV file with ${validAttempts.length} attempts`);
-        const lines = ["mnemonic,address"];
-        for (const attempt of validAttempts) {
-          // Escape Quotes in Werten
-          const escapedMnemonic = attempt.mnemonic.replace(/"/g, '""');
-          const escapedAddress = attempt.address.replace(/"/g, '""');
-          lines.push(`"${escapedMnemonic}","${escapedAddress}"`);
-        }
-        writeFileSync(filePath, lines.join("\n"), "utf-8");
-        console.log(`[BitcoinPuzzleService] CSV created: ${filePath}`);
+        writeFileSync(filePath, ["mnemonic,address", ...newLines].join("\n"), "utf-8");
+        console.log(`[BitcoinPuzzleService] CSV created: ${filePath} (${newLines.length} attempts)`);
       } else {
-        // Datei existiert: lade existierende Einträge und append nur neue
-        console.log(`[BitcoinPuzzleService] Appending attempts to existing CSV`);
-        const csvContent = readFileSync(filePath, "utf-8");
-        const existingLines = csvContent.split("\n").filter((l) => l.trim() && !l.startsWith("mnemonic"));
-
-        // Parse CSV korrekt (mit Quotes)
-        const existingMnemonics = new Set<string>();
-        for (const line of existingLines) {
-          // Parse CSV-Zeile korrekt
-          const match = line.match(/^"([^"]*(?:""[^"]*)*)","([^"]*(?:""[^"]*)*)"$/);
-          if (match && match[1]) {
-            // Unescape escaped quotes
-            const mnemonic = match[1].replace(/""/g, '"');
-            existingMnemonics.add(mnemonic);
-          }
-        }
-
-        // Filtere nur neue Attempts
-        const newLines: string[] = [];
-        for (const attempt of validAttempts) {
-          if (!existingMnemonics.has(attempt.mnemonic)) {
-            const escapedMnemonic = attempt.mnemonic.replace(/"/g, '""');
-            const escapedAddress = attempt.address.replace(/"/g, '""');
-            newLines.push(`"${escapedMnemonic}","${escapedAddress}"`);
-          }
-        }
-
-        // Append neue Einträge
-        if (newLines.length > 0) {
-          appendFileSync(filePath, "\n" + newLines.join("\n"), "utf-8");
-          console.log(`[BitcoinPuzzleService] CSV appended: ${newLines.length} new attempts to ${filePath}`);
-        } else {
-          console.log(`[BitcoinPuzzleService] No new attempts to append (all ${validAttempts.length} already in CSV)`);
-        }
+        appendFileSync(filePath, "\n" + newLines.join("\n"), "utf-8");
       }
     } catch (error) {
       console.error(`[BitcoinPuzzleService] Error saving attempts to CSV: ${error}`);
@@ -897,6 +846,19 @@ export class BitcoinPuzzleService {
    */
   getAttemptsFilePath(puzzleId: string): string {
     return resolve(this.attemptsCsvDir, `${puzzleId}-attempts.csv`);
+  }
+
+  /**
+   * Index der bereits persistierten Mnemonics eines Puzzles (lazy, einmal pro Prozess).
+   */
+  private getPersistedMnemonics(puzzleId: string): Set<string> {
+    let set = this.persistedMnemonics.get(puzzleId);
+    if (!set) {
+      set = new Set(this.getAllAttemptsFromCsv(puzzleId).map((a) => a.mnemonic));
+      this.persistedMnemonics.set(puzzleId, set);
+      console.log(`[BitcoinPuzzleService] Indexed ${set.size} persisted attempts for ${puzzleId}`);
+    }
+    return set;
   }
 
   /**
@@ -1181,22 +1143,9 @@ export class BitcoinPuzzleService {
    */
   phraseExistsInPuzzle(puzzleId: string, phrase: string): boolean {
     try {
-      const csvPath = this.getAttemptsFilePath(puzzleId);
-      if (!existsSync(csvPath)) {
-        return false;
-      }
-
-      const csvContent = readFileSync(csvPath, "utf-8");
-      const lines = csvContent.split("\n").filter((l) => l.trim());
-
-      for (const line of lines.slice(1)) {
-        const parsed = parseCSVLine(line);
-        if (parsed && parsed[0] === phrase) {
-          return true;
-        }
-      }
-
-      return false;
+      // Über den Index statt über einen Full-Scan der Datei: dieser Aufruf sitzt in der
+      // heißen Solver-Schleife.
+      return this.getPersistedMnemonics(puzzleId).has(phrase);
     } catch (err) {
       console.error(`[BitcoinPuzzleService] Error checking phrase existence:`, err);
       return false;
@@ -1271,46 +1220,6 @@ export class BitcoinPuzzleService {
     }
   }
 
-  /**
-   * Lade letzte 50 Versuche von der CSV-Datei
-   */
-  private getRecentAttemptsFromCsv(puzzleId: string): AttemptRecord[] {
-    try {
-      const csvPath = this.getAttemptsFilePath(puzzleId);
-      if (!existsSync(csvPath)) {
-        return [];
-      }
-
-      const csvContent = readFileSync(csvPath, "utf-8");
-      const lines = csvContent.split("\n").filter((l) => l.trim());
-
-      if (lines.length <= 1) {
-        // Nur Header, keine Daten
-        return [];
-      }
-
-      // Lese letzte 50 Zeilen (skip Header)
-      const dataLines = lines.slice(1); // Skip header
-      const lastLines = dataLines.slice(-50);
-
-      return lastLines
-        .map((line) => {
-          // Parse CSV-Zeile korrekt mit Quotes
-          const match = line.match(/^"([^"]*(?:""[^"]*)*)","([^"]*(?:""[^"]*)*)"$/);
-          if (match && match[1] && match[2]) {
-            // Unescape escaped quotes ("")
-            const mnemonic = match[1].replace(/""/g, '"');
-            const address = match[2].replace(/""/g, '"');
-            return { mnemonic, address };
-          }
-          return null;
-        })
-        .filter((r) => r !== null) as AttemptRecord[];
-    } catch (err) {
-      console.error(`[BitcoinPuzzleService] Error reading recent attempts from CSV:`, err);
-      return [];
-    }
-  }
 }
 
 export { type SolverState, type SolverConfig };

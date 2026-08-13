@@ -45,6 +45,17 @@ interface BitcoinPuzzleManagerProps {
   initialSelectedPuzzleId?: string | null;
 }
 
+/** Sekunden lesbar machen - der Rohwert lief bei alten Puzzles in die Hunderttausende. */
+function formatDuration(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return "0s";
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = Math.floor(totalSeconds % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleManagerProps = {}) {
   const { t } = useI18n();
   const [puzzles, setPuzzles] = useState<PuzzleItem[]>([]);
@@ -79,8 +90,9 @@ export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleM
   const [editingPuzzleId, setEditingPuzzleId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", infoUrl: "", manualPhrase: "", manualAddress: "" });
 
-  // Load Puzzles
-  const loadPuzzles = async () => {
+  // Load Puzzles. Gibt das frisch geladene Detail zurück, damit Aufrufer damit arbeiten
+  // können statt mit dem State, der zum Zeitpunkt des Aufrufs noch der alte ist.
+  const loadPuzzles = async (): Promise<PuzzleDetail | null> => {
     try {
       const data = await api.bitcoinPuzzle.list();
       // Ensure all puzzles have triedCombinationsCount
@@ -97,6 +109,7 @@ export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleM
           try {
             const fullDetail = await api.bitcoinPuzzle.get(selectedPuzzleId);
             setSelectedPuzzleDetail(fullDetail);
+            return fullDetail;
           } catch (err) {
             // Puzzle was deleted, clear selection
             setSelectedPuzzleId(null);
@@ -111,6 +124,7 @@ export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleM
     } catch (error) {
       console.error("Failed to load puzzles:", error);
     }
+    return null;
   };
 
   // Edit Puzzle Handler
@@ -177,20 +191,22 @@ export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleM
   useEffect(() => {
     loadPuzzles();
     const interval = setInterval(() => {
-      loadPuzzles().then(() => {
-        // Wenn Puzzle läuft, emittiere Logs
-        if (selectedPuzzleDetail?.isRunning) {
+      // Das frisch geladene Detail benutzen - selectedPuzzleDetail aus der Closure ist
+      // hier immer der Stand vom Anlegen des Intervalls, dadurch stand im Live-Log
+      // dauerhaft dieselbe Zahl.
+      loadPuzzles().then((detail) => {
+        if (detail?.isRunning) {
           const newEvent = {
             timestamp: new Date().toLocaleTimeString("de-DE"),
-            type: selectedPuzzleDetail.currentCombinationMode === "ordered" ? "ordered" : "random",
-            message: `${selectedPuzzleDetail.generatedAddresses.toLocaleString()} Kombinationen | ${(selectedPuzzleDetail.triedCombinationsCount ?? 0).toLocaleString()} versucht | ${selectedPuzzleDetail.addressesPerSecond}/sec`,
+            type: detail.currentCombinationMode === "ordered" ? "ordered" : "random",
+            message: `${detail.generatedAddresses.toLocaleString()} Kombinationen | ${(detail.triedCombinationsCount ?? 0).toLocaleString()} versucht | ${detail.addressesPerSecond.toLocaleString()}/sec`,
           };
           setLiveEvents((prev) => [newEvent, ...prev.slice(0, 9)]);
         }
       });
     }, 2000);
     return () => clearInterval(interval);
-  }, [selectedPuzzleId, selectedPuzzleDetail?.isRunning]);
+  }, [selectedPuzzleId]);
 
   // Wähle Puzzle aus wenn URL Query-Parameter vorhanden ist
   useEffect(() => {
@@ -749,7 +765,7 @@ export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleM
                 </div>
                 <div className="bg-gray-800/50 p-2 rounded">
                   <div className="text-gray-400">Laufzeit</div>
-                  <div className="font-mono font-semibold">{selectedPuzzleDetail.elapsedSeconds}s</div>
+                  <div className="font-mono font-semibold">{formatDuration(selectedPuzzleDetail.elapsedSeconds)}</div>
                 </div>
                 <div className="bg-gray-800/50 p-2 rounded">
                   <div className="text-gray-400">Status</div>
@@ -781,42 +797,41 @@ export function BitcoinPuzzleManager({ initialSelectedPuzzleId }: BitcoinPuzzleM
                   </div>
                 )}
 
-                {/* Recent Attempts */}
-                {selectedPuzzleDetail?.recentAttempts && selectedPuzzleDetail.recentAttempts.length > 0 && (
-                  <div id={`puzzle-${selectedPuzzleId}-all-attempts`} className="bg-gray-800/30 border border-gray-700 rounded p-2">
-                    <div className="flex items-center justify-between mb-2">
-                      <button
-                        onClick={() => setShowRecentAttempts(!showRecentAttempts)}
-                        className="flex items-center gap-2 text-xs font-semibold text-gray-300 hover:text-gray-200"
-                      >
-                        <span>{showRecentAttempts ? "▼" : "▶"}</span>
-                        Letzte 50 Versuche ({selectedPuzzleDetail.recentAttempts.length})
-                      </button>
-                      <a
-                        href="#"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setShowRecentAttempts(true);
-                        }}
-                        className="text-xs text-blue-400 hover:text-blue-300"
-                        title="Liste der Versuche anzeigen"
-                      >
-                        [Öffnen →]
-                      </a>
-                    </div>
-                    {showRecentAttempts && (
-                      <div className="mt-2 max-h-80 overflow-y-auto space-y-1">
-                        {selectedPuzzleDetail.recentAttempts.map((attempt, idx) => (
-                          <div key={idx} className="text-xs bg-gray-900/50 rounded hover:bg-gray-900/80 p-1.5">
+                {/* Recent Attempts - immer sichtbar, damit man auch "noch keine" erkennt */}
+                <div id={`puzzle-${selectedPuzzleId}-all-attempts`} className="bg-gray-800/30 border border-gray-700 rounded p-2">
+                  <div className="flex items-center justify-between mb-2">
+                    <button
+                      onClick={() => setShowRecentAttempts(!showRecentAttempts)}
+                      className="flex items-center gap-2 text-xs font-semibold text-gray-300 hover:text-gray-200"
+                    >
+                      <span>{showRecentAttempts ? "▼" : "▶"}</span>
+                      Letzte 50 Versuche ({selectedPuzzleDetail.recentAttempts?.length ?? 0})
+                    </button>
+                    <span className="text-xs text-gray-500">
+                      {selectedPuzzleDetail.isRunning ? "live" : "angehalten"}
+                    </span>
+                  </div>
+                  {showRecentAttempts && (
+                    <div className="mt-2 max-h-80 overflow-y-auto space-y-1">
+                      {(selectedPuzzleDetail.recentAttempts ?? []).length === 0 ? (
+                        <div className="text-xs text-gray-500 py-2 text-center">
+                          Noch keine Versuche – Solver mit „Weiter" starten
+                        </div>
+                      ) : (
+                        // Neueste zuerst: der Solver hängt hinten an
+                        [...(selectedPuzzleDetail.recentAttempts ?? [])].reverse().map((attempt, idx) => (
+                          <div key={`${attempt.mnemonic}-${idx}`} className="text-xs bg-gray-900/50 rounded hover:bg-gray-900/80 p-1.5">
                             <div className="text-gray-500 mb-0.5">#{idx + 1}</div>
                             <div className="font-mono text-gray-300 break-all text-xs">{attempt.mnemonic}</div>
-                            <div className="font-mono text-gray-500 break-all text-xs mt-0.5">📍 {attempt.address}</div>
+                            <div className="font-mono text-gray-500 break-all text-xs mt-0.5">
+                              📍 {attempt.address || "(manuell markiert)"}
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 {/* Controls */}
                 <div className="flex gap-2 pt-2">

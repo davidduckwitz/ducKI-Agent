@@ -622,6 +622,8 @@ export const api = {
         createdAt: string;
         status: string;
         generatedAddresses: number;
+        triedCombinationsCount: number;
+        currentCombinationMode: string;
         elapsedSeconds: number;
         addressesPerSecond: number;
         isRunning: boolean;
@@ -629,6 +631,7 @@ export const api = {
         foundMnemonic: string | null;
         error: string | null;
         lastUpdate: string;
+        recentAttempts: Array<{ mnemonic: string; address: string }>;
       }>(`/bitcoin-puzzle/${puzzleId}`),
     pause: (puzzleId: string) =>
       request<{ success: boolean; status: string }>(`/bitcoin-puzzle/${puzzleId}/pause`, {
