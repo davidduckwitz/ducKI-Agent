@@ -240,13 +240,14 @@ async function servePluginPage(
 
   const ext = target.slice(target.lastIndexOf(".")).toLowerCase();
   res.setHeader("Content-Type", UI_CONTENT_TYPES[ext] ?? "application/octet-stream");
-  // Framing: default 'self' (unverändert). Wird die Web-UI von einer anderen Origin geladen
-  // (z.B. gehostete Cloud-UI, die einen lokalen Agenten steuert, oder Remote/Tailscale),
-  // erlaubt DUCKI_FRAME_ANCESTORS die entsprechenden Origins; dann muss auch das
-  // (nur SAMEORIGIN könnende) X-Frame-Options weichen, damit die CSP greift.
-  const frameAncestors = process.env["DUCKI_FRAME_ANCESTORS"] || "'self'";
-  res.setHeader("Content-Security-Policy", `frame-ancestors ${frameAncestors}`);
-  if (frameAncestors !== "'self'") res.removeHeader("X-Frame-Options");
+  // Framing: Plugin-UIs müssen von der Web-UI einbettbar sein — same-origin (selfhosted mit
+  // Vite-Proxy) UND cross-origin (lokale Setups wie Web-UI auf :8000 -> Agent :3001). Default
+  // erlaubt daher 'self' + jede localhost/127.0.0.1-Origin (jeder Port). DUCKI_FRAME_ANCESTORS
+  // ergänzt Prod-Origins (z.B. die gehostete Cloud-UI). X-Frame-Options (kann nur SAMEORIGIN)
+  // entfernen, sonst blockt es das erlaubte Cross-Origin-Framing.
+  const extra = process.env["DUCKI_FRAME_ANCESTORS"] ? ` ${process.env["DUCKI_FRAME_ANCESTORS"]}` : "";
+  res.setHeader("Content-Security-Policy", `frame-ancestors 'self' http://localhost:* http://127.0.0.1:*${extra}`);
+  res.removeHeader("X-Frame-Options");
   res.setHeader("X-Content-Type-Options", "nosniff");
   // Plugin pages are edited in place and served straight from disk; never let the browser/iframe
   // hold a stale copy (that would hide fresh UI like new buttons after a plugin update).
