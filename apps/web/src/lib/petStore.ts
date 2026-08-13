@@ -27,6 +27,8 @@ export interface PetSettings {
   reactToEvents: boolean;
   /** Show the little speech bubble on reactions. */
   showBubbles: boolean;
+  /** Also surface the pet's speech as an app notification (toast). */
+  notifications: boolean;
   /** Override the pet's natural locomotion ("auto" = use the pet's own). */
   locomotion: LocomotionMode;
   /** Distance from the window bottom the ground pets stand on (status bar height). */
@@ -60,6 +62,7 @@ export const DEFAULT_PET_SETTINGS: PetSettings = {
   followCursor: false,
   reactToEvents: true,
   showBubbles: true,
+  notifications: false,
   locomotion: "auto",
   groundOffset: 28,
 };
@@ -112,6 +115,7 @@ export const usePetStore = create<PetStoreState>()(
         followCursor: state.followCursor,
         reactToEvents: state.reactToEvents,
         showBubbles: state.showBubbles,
+        notifications: state.notifications,
         locomotion: state.locomotion,
         groundOffset: state.groundOffset,
         position: state.position,

@@ -11,6 +11,7 @@ import { useI18n } from "../../lib/i18n";
 import { usePetStore, type LocomotionMode } from "../../lib/petStore";
 import { BUILT_IN_PETS } from "../pet/petRegistry";
 import { getPetById } from "../pet/petRegistry";
+import { usePluginPets } from "../pet/usePluginPets";
 import { PetView } from "../pet/PetView";
 import { SpriteSheetImporter } from "../pet/SpriteSheetImporter";
 import type { PetStateId } from "../pet/petTypes";
@@ -29,6 +30,7 @@ export function PetSettingsPanel() {
   const followCursor = usePetStore((s) => s.followCursor);
   const reactToEvents = usePetStore((s) => s.reactToEvents);
   const showBubbles = usePetStore((s) => s.showBubbles);
+  const notifications = usePetStore((s) => s.notifications);
   const locomotion = usePetStore((s) => s.locomotion);
   const groundOffset = usePetStore((s) => s.groundOffset);
   const customPets = usePetStore((s) => s.customPets);
@@ -43,8 +45,9 @@ export function PetSettingsPanel() {
   const [previewState, setPreviewState] = useState<PetStateId>("idle");
   const [showImporter, setShowImporter] = useState(false);
 
-  const activePet = getPetById(petId, customPets);
-  const allPets = [...BUILT_IN_PETS, ...customPets];
+  const pluginPets = usePluginPets();
+  const activePet = getPetById(petId, [...pluginPets, ...customPets]);
+  const allPets = [...BUILT_IN_PETS, ...pluginPets, ...customPets];
 
   return (
     <div className="space-y-4">
@@ -143,12 +146,12 @@ export function PetSettingsPanel() {
                     <p className="line-clamp-2 text-[11px] text-muted-foreground">{pet.description}</p>
                     <p className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">
                       {t(`pet.locomotion.${pet.locomotion}`)}
-                      {pet.builtIn ? "" : ` - ${t("pet.custom")}`}
+                      {pet.builtIn ? "" : pet.source === "plugin" ? " – Plugin" : ` - ${t("pet.custom")}`}
                     </p>
                   </div>
                 </button>
 
-                {!pet.builtIn && (
+                {!pet.builtIn && pet.source !== "plugin" && (
                   <button
                     type="button"
                     onClick={() => removeCustomPet(pet.id)}
@@ -248,6 +251,12 @@ export function PetSettingsPanel() {
             onChange={(value) => patchSettings({ showBubbles: value })}
             label={t("pet.showBubbles")}
             hint={t("pet.showBubblesHint")}
+          />
+          <CheckRow
+            checked={notifications}
+            onChange={(value) => patchSettings({ notifications: value })}
+            label={t("pet.notifications")}
+            hint={t("pet.notificationsHint")}
           />
         </div>
 

@@ -87,14 +87,18 @@ export interface PetDefinition {
   /** Small glyph used in compact lists and menus. */
   emoji: string;
   locomotion: PetLocomotion;
-  kind: "vector" | "sprite";
+  kind: "vector" | "sprite" | "svg" | "matrix";
   /** Which built-in SVG creature to draw (kind === "vector"). */
   species?: VectorSpecies;
   palette?: PetPalette;
   /** Sheet definition (kind === "sprite"). */
   sheet?: SpriteSheetConfig;
+  /** Inline SVG inner markup for kind === "svg" (plugin-provided pets), drawn in a 0 0 64 64 box. */
+  art?: string;
   builtIn?: boolean;
   author?: string;
+  /** Where the pet came from - "plugin" pets are contributed by an enabled plugin. */
+  source?: "builtin" | "plugin" | "custom";
 }
 
 /** A one-shot instruction from the settings UI to the running pet (e.g. "wave now"). */

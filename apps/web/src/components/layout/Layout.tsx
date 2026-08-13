@@ -27,6 +27,7 @@ import { usePlugins, frontendPlugins } from "../../lib/usePlugins";
 import { useSettingsChangeListener } from "../../lib/useServerQuery";
 import { SetupWizardModal } from "../setup/SetupWizardModal";
 import { PetLayer } from "../pet/PetLayer";
+import { PluginOverlays } from "../plugins/PluginOverlays";
 import { Sidebar } from "./Sidebar";
 import { MobileTopBar } from "./MobileTopBar";
 import { UpdateStatusBar } from "./UpdateStatusBar";
@@ -190,6 +191,9 @@ export function Layout() {
 
       {/* Free-roaming desk pet on top of the whole window (opt-out in settings). */}
       <PetLayer />
+
+      {/* Plugin-contributed full-window overlays (companions, ambient effects, HUDs). */}
+      <PluginOverlays />
     </div>
   );
 }

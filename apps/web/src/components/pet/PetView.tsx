@@ -98,6 +98,33 @@ export function PetView({ pet, state, facing = 1, size, animate = true }: PetVie
     return <SpritePet sheet={pet.sheet} state={state} facing={facing} size={size} animate={animate} />;
   }
 
+  // Plugin-provided pets ship their SVG as inline markup; the same data-state attribute the
+  // engine sets drives the shared pet.css animations, exactly like the built-in vector creatures.
+  if (pet.kind === "svg" && pet.art) {
+    return (
+      <svg
+        className="pet-svg"
+        data-state={animate ? state : "idle"}
+        data-facing={facing}
+        width={size}
+        height={size}
+        viewBox="0 0 64 64"
+        aria-hidden="true"
+        dangerouslySetInnerHTML={{ __html: pet.art }}
+      />
+    );
+  }
+
+  // The matrix pet is an ambient full-window effect (PetLayer renders MatrixRain); in compact
+  // previews/gallery it shows its glyph.
+  if (pet.kind === "matrix") {
+    return (
+      <div style={{ fontSize: Math.round(size * 0.7), lineHeight: 1 }} aria-hidden="true">
+        🟩
+      </div>
+    );
+  }
+
   return (
     <VectorPet
       species={pet.species ?? "duck"}

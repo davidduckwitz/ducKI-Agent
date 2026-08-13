@@ -47,6 +47,19 @@ export interface PluginInfo {
   widgetPage?: string;
   /** Widget placement: "sidebar" | "dashboard" | "both". */
   widgetPlacement?: string;
+  /** Relative path to a full-window overlay page mounted globally by the host. */
+  overlayPage?: string;
+  /** Declarative pet definitions the plugin ships (rendered by the host pet runtime). */
+  pets?: Array<{
+    id: string;
+    name: string;
+    emoji: string;
+    description?: string;
+    locomotion: "ground" | "air";
+    kind: "svg" | "matrix";
+    art?: string;
+    palette?: { primary?: string; secondary?: string; accent?: string; eye?: string };
+  }>;
   /** Emoji/short icon for UI + sidebar. */
   icon?: string;
   /** Sidebar category for a frontend page. */

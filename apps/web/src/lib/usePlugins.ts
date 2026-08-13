@@ -32,3 +32,8 @@ export function widgetPlugins(plugins: PluginInfo[] | undefined, placement: "sid
     return where === placement || where === "both";
   });
 }
+
+/** Enabled, error-free plugins that ship a full-window overlay page (mounted globally by the host). */
+export function overlayPlugins(plugins: PluginInfo[] | undefined): PluginInfo[] {
+  return (plugins ?? []).filter((p) => p.enabled && !p.error && p.overlayPage);
+}

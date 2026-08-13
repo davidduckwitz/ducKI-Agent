@@ -34,6 +34,19 @@ function guardedFetch(allowedHosts?: string[]): typeof fetch {
   }) as typeof fetch;
 }
 
+/** A declarative pet definition a plugin ships (provides.pets), rendered by the host pet runtime. */
+export interface PluginPet {
+  id: string;
+  name: string;
+  emoji: string;
+  description?: string;
+  locomotion: "ground" | "air";
+  kind: "svg" | "matrix";
+  /** Inline SVG inner markup for kind "svg" (drawn in a 0 0 64 64 box, floor at y=58). */
+  art?: string;
+  palette?: { primary?: string; secondary?: string; accent?: string; eye?: string };
+}
+
 /** One loaded plugin's public info (for the management page / diagnostics). */
 export interface LoadedPluginInfo {
   name: string;
@@ -57,6 +70,10 @@ export interface LoadedPluginInfo {
   widgetPage?: string;
   /** Widget placement ("sidebar" | "dashboard" | "both"). */
   widgetPlacement?: string;
+  /** Relative path to an overlay (full-window layer) page, if the plugin ships one. */
+  overlayPage?: string;
+  /** Declarative pet definitions the plugin ships (provides.pets), rendered by the host pet runtime. */
+  pets?: PluginPet[];
   /** Emoji/short icon for UI + sidebar. */
   icon?: string;
   /** Sidebar category ("overview" | "workspace" | "automation" | "knowledge" | "system"). */
@@ -305,6 +322,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean): Prom
   info.frontendPage = manifest.provides.frontendPage;
   info.widgetPage = manifest.provides.widgetPage;
   info.widgetPlacement = manifest.provides.widgetPlacement;
+  info.overlayPage = manifest.provides.overlayPage;
   info.icon = manifest.icon;
   info.category = manifest.category;
   info.trust = manifest.trust;
@@ -361,6 +379,10 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean): Prom
     for (const rel of manifest.provides.skills ?? []) {
       const skillDir = join(dir, rel);
       if (existsSync(join(skillDir, "SKILL.md"))) info.skillDirs.push(skillDir);
+    }
+    if (manifest.provides.pets) {
+      const parsed = readJsonFile(join(dir, manifest.provides.pets)) as { pets?: PluginPet[] };
+      info.pets = Array.isArray(parsed?.pets) ? parsed.pets : [];
     }
   } catch (error) {
     info.error = `failed to resolve provides: ${error instanceof Error ? error.message : String(error)}`;

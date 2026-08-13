@@ -563,6 +563,8 @@ export const translations: Record<Language, TranslationTree> = {
       reactToEventsHint: "Arbeitet, jubelt oder meldet Fehler passend zum Agent-Status.",
       showBubbles: "Sprechblasen zeigen",
       showBubblesHint: "Kurze Kommentare bei Reaktionen und Klicks.",
+      notifications: "Als Notification sprechen",
+      notificationsHint: "Gibt die Sprechblasen-Texte zusätzlich als App-Benachrichtigung (Toast) aus.",
       interactionHint: "Ziehen zum Verschieben, Klick fuer eine Reaktion, Rechtsklick fuer das Menue.",
       resetSettings: "Zuruecksetzen",
       action: {
@@ -1312,6 +1314,8 @@ export const translations: Record<Language, TranslationTree> = {
       reactToEventsHint: "Works, celebrates or shows errors along with the agent status.",
       showBubbles: "Show speech bubbles",
       showBubblesHint: "Short comments on reactions and clicks.",
+      notifications: "Speak as a notification",
+      notificationsHint: "Also surface the speech-bubble text as an app notification (toast).",
       interactionHint: "Drag to move, click for a reaction, right-click for the menu.",
       resetSettings: "Reset",
       action: {

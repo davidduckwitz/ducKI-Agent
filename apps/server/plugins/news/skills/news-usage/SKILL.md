@@ -1,6 +1,6 @@
 ---
 name: news-usage
-description: PRIMARY way to get news/current events. Use the `news` tool for ANY request about the news, latest headlines, "die neuesten/wichtigsten Nachrichten", a news digest, world/current events, or news about a country/topic (e.g. "was passiert in der Ukraine"). Always try the `news` tool FIRST — do not scrape sites with the browser tool for news unless the `news` tool cannot answer.
+description: PRIMARY way to get nearly realtime news/current events. Use the `news` tool for ANY request about the news, latest headlines, "die neuesten/wichtigsten Nachrichten", a news digest, world/current events, or news about a country/topic (e.g. "was passiert in der Ukraine"). Always try the `news` tool FIRST — do not scrape sites with the browser tool for news unless the `news` tool cannot answer.
 ---
 
 # News (daily digests, API-style)

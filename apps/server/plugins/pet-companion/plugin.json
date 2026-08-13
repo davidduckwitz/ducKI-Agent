@@ -1,0 +1,13 @@
+{
+  "name": "pet-companion",
+  "version": "2.0.0",
+  "description": "Erweitert den Desk-Begleiter (Pet) um zusätzliche Charaktere: Bitcoin, Sprech-Pin, UFO, Rakete und einen Matrix-Regen-Effekt. Die Pets werden host-seitig gerendert (kein Overlay-iframe) – das Plugin liefert nur die Pet-Definitionen als Daten über die interne API. Auswahl & Verhalten im Einstellungen-Tab „Character“.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🐾",
+  "category": "overview",
+  "provides": {
+    "pets": "pets.json"
+  },
+  "enabled": true
+}

@@ -214,13 +214,17 @@ const UI_CONTENT_TYPES: Record<string, string> = {
 async function servePluginPage(
   req: import("express").Request,
   res: import("express").Response,
-  page: "settings" | "frontend" | "widget",
+  page: "settings" | "frontend" | "widget" | "overlay",
   rel: string,
 ): Promise<void> {
   const name = String(req.params.name ?? "");
   if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
   const info = (await currentPlugins(req)).find((p) => p.name === name);
-  const pageRel = page === "settings" ? info?.settingsPage : page === "frontend" ? info?.frontendPage : info?.widgetPage;
+  const pageRel =
+    page === "settings" ? info?.settingsPage
+    : page === "frontend" ? info?.frontendPage
+    : page === "overlay" ? info?.overlayPage
+    : info?.widgetPage;
   if (!pageRel) { res.status(404).json(createApiError(`Plugin has no ${page} page`)); return; }
 
   const pageAbs = resolve(pluginsRoot(), name, pageRel);
@@ -244,8 +248,8 @@ async function servePluginPage(
   res.send(readFileSync(target));
 }
 
-function isPageKind(value: string): value is "settings" | "frontend" | "widget" {
-  return value === "settings" || value === "frontend" || value === "widget";
+function isPageKind(value: string): value is "settings" | "frontend" | "widget" | "overlay" {
+  return value === "settings" || value === "frontend" || value === "widget" || value === "overlay";
 }
 
 /** GET /api/plugins/:name/ui/:page  - the page's index (settings|frontend). */

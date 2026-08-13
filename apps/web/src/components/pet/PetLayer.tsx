@@ -11,9 +11,12 @@ import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../lib/store";
 import { usePetStore } from "../../lib/petStore";
 import { useI18n } from "../../lib/i18n";
+import { toastManager } from "../../lib/toast";
 import { getPetById } from "./petRegistry";
 import { usePetEngine, type PetEngine } from "./usePetEngine";
+import { usePluginPets } from "./usePluginPets";
 import { PetView } from "./PetView";
+import { MatrixRain } from "./MatrixRain";
 import type { PetStateId } from "./petTypes";
 import "./pet.css";
 
@@ -42,7 +45,9 @@ export function PetLayer() {
   const agentStatus = useAppStore((s) => s.agentStatus);
   const connected = useAppStore((s) => s.connected);
 
-  const pet = getPetById(petId, customPets);
+  const pluginPets = usePluginPets();
+  const pet = getPetById(petId, [...pluginPets, ...customPets]);
+  const isMatrix = pet.kind === "matrix";
   const locomotion = locomotionMode === "auto" ? pet.locomotion : locomotionMode;
 
   const [bubble, setBubble] = useState<string | null>(null);
@@ -54,6 +59,8 @@ export function PetLayer() {
 
   const say = useCallback(
     (text: string) => {
+      // Text output as a notification (the pet "speaking" through the internal toast API).
+      if (usePetStore.getState().notifications) toastManager.show(text, "info");
       if (!usePetStore.getState().showBubbles) return;
       setBubble(text);
       window.clearTimeout(bubbleTimer.current);
@@ -79,7 +86,7 @@ export function PetLayer() {
   }, [say, t]);
 
   const engine = usePetEngine({
-    enabled,
+    enabled: enabled && !isMatrix,
     size,
     speed,
     locomotion,
@@ -185,6 +192,9 @@ export function PetLayer() {
   }, [menu]);
 
   if (!enabled) return null;
+
+  // The matrix pet is an ambient full-window effect instead of a walking creature.
+  if (isMatrix) return <MatrixRain opacity={opacity} color={pet.palette?.primary} />;
 
   return (
     <>
