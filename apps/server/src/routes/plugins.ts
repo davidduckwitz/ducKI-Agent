@@ -240,7 +240,13 @@ async function servePluginPage(
 
   const ext = target.slice(target.lastIndexOf(".")).toLowerCase();
   res.setHeader("Content-Type", UI_CONTENT_TYPES[ext] ?? "application/octet-stream");
-  res.setHeader("Content-Security-Policy", "frame-ancestors 'self'");
+  // Framing: default 'self' (unverändert). Wird die Web-UI von einer anderen Origin geladen
+  // (z.B. gehostete Cloud-UI, die einen lokalen Agenten steuert, oder Remote/Tailscale),
+  // erlaubt DUCKI_FRAME_ANCESTORS die entsprechenden Origins; dann muss auch das
+  // (nur SAMEORIGIN könnende) X-Frame-Options weichen, damit die CSP greift.
+  const frameAncestors = process.env["DUCKI_FRAME_ANCESTORS"] || "'self'";
+  res.setHeader("Content-Security-Policy", `frame-ancestors ${frameAncestors}`);
+  if (frameAncestors !== "'self'") res.removeHeader("X-Frame-Options");
   res.setHeader("X-Content-Type-Options", "nosniff");
   // Plugin pages are edited in place and served straight from disk; never let the browser/iframe
   // hold a stale copy (that would hide fresh UI like new buttons after a plugin update).
