@@ -51,6 +51,17 @@ const ProvidesSchema = z.object({
   widgetPage: z.string().optional(),
   /** Where the widget is rendered. Default "dashboard". */
   widgetPlacement: z.enum(["sidebar", "dashboard", "both"]).optional(),
+  /** Relative path to an OVERLAY page (a transparent, full-window HTML layer) the host mounts
+   *  globally on top of the whole app for enabled plugins. Unlike a widget it is not boxed:
+   *  the host bridges live app events into it (postMessage) and routes its notify messages back
+   *  out (toasts), and makes it click-through except over the areas the overlay reports as
+   *  interactive. Used for free-roaming companions, ambient effects, HUDs, ... */
+  overlayPage: z.string().optional(),
+  /** Relative path to a pet-pack JSON ({ pets: [...] }). The host's built-in pet runtime renders
+   *  these creatures directly (no iframe) - the plugin only ships their declarative definitions
+   *  (id, name, emoji, locomotion, kind "svg"|"matrix", inline SVG art). Enabled plugins' pets
+   *  join the Character gallery; disabling the plugin removes them. */
+  pets: z.string().optional(),
 }).default({});
 
 export const PluginManifestSchema = z.object({
