@@ -191,6 +191,35 @@ export class ToolStagingManager {
       return [];
     }
   }
+
+  /**
+   * Staged entries with parsed id/toolName, newest first. Used to recover when the
+   * model calls `tool_staging` with action=read/delete but omits the `id` (a common
+   * small-model slip): the newest entry is almost always the one it was just told to read.
+   */
+  async listStagedDetailed(): Promise<Array<{ id: string; toolName: string; file: string; mtimeMs: number }>> {
+    let files: string[];
+    try {
+      files = (await fs.readdir(this.stagingDir)).filter((f) => f.endsWith(".md"));
+    } catch {
+      return [];
+    }
+
+    const rows: Array<{ id: string; toolName: string; file: string; mtimeMs: number }> = [];
+    for (const file of files) {
+      const match = /_([0-9a-f-]{36})\.md$/i.exec(file);
+      if (!match?.[1]) continue;
+      let mtimeMs = 0;
+      try {
+        mtimeMs = (await fs.stat(join(this.stagingDir, file))).mtimeMs;
+      } catch {
+        continue; // vanished between readdir and stat
+      }
+      rows.push({ id: match[1], toolName: file.split("_")[0] ?? "unknown", file, mtimeMs });
+    }
+
+    return rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  }
 }
 
 // Global singleton

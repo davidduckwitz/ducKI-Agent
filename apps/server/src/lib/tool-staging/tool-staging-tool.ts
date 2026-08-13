@@ -46,7 +46,12 @@ export function createToolStagingTool(getManager: () => ToolStagingManager | und
             enum: ["read", "list", "delete"],
             description: "read=fetch content chunk, list=show available staging ids, delete=free the file",
           },
-          id: { type: "string", description: "Staging id (required for read and delete)" },
+          id: {
+            type: "string",
+            description:
+              "Staging id. For 'read' it defaults to the most recently staged response if omitted; " +
+              "for 'delete' an id is required unless exactly one staged response exists.",
+          },
           offset: {
             type: "number",
             description: "Character offset to start reading from (default 0). Use nextOffset from the previous read.",
@@ -84,15 +89,40 @@ export function createToolStagingTool(getManager: () => ToolStagingManager | und
           });
         }
 
-        const id = String(input["id"] ?? "").trim();
-        if (!id) return fail(`${TOOL_STAGING_TOOL_NAME}:${action} requires the field 'id'`);
+        if (action !== "read" && action !== "delete") {
+          return fail(`Unknown action '${action}'. Use read, list or delete.`);
+        }
+
+        // Recover from the common small-model slip of calling read/delete without an `id`.
+        // For `read` we auto-select the newest staged response (read-only, safe, and almost
+        // always the one the staging notice just pointed at). For `delete` we only auto-pick
+        // when there is exactly one, otherwise we return the ids so the model can retry.
+        let id = String(input["id"] ?? "").trim();
+        let autoResolvedFrom: string | undefined;
+        if (!id) {
+          const staged = await manager.listStagedDetailed();
+          if (staged.length === 0) {
+            return fail(
+              `${TOOL_STAGING_TOOL_NAME}:${action} needs an 'id', but there are no staged responses. ` +
+                `The previous tool result was returned inline in full — answer from it directly.`
+            );
+          }
+          if (action === "read" || staged.length === 1) {
+            id = staged[0]!.id;
+            autoResolvedFrom = staged[0]!.toolName;
+          } else {
+            const list = staged.slice(0, 10).map((s) => `${s.id} (${s.toolName})`).join(", ");
+            return fail(
+              `${TOOL_STAGING_TOOL_NAME}:delete needs an 'id'. Available staged ids: ${list}. ` +
+                `Call again with the exact id you want to delete.`
+            );
+          }
+        }
 
         if (action === "delete") {
           const deleted = await manager.deleteStaged(id);
           return deleted ? ok({ deleted: true, id }) : fail(`Staged response '${id}' not found`);
         }
-
-        if (action !== "read") return fail(`Unknown action '${action}'. Use read, list or delete.`);
 
         const staged = await manager.getStagedResponse(id);
         if (!staged) {
@@ -100,6 +130,12 @@ export function createToolStagingTool(getManager: () => ToolStagingManager | und
             `Staged response '${id}' not found or expired. Re-run the original tool call to produce it again.`
           );
         }
+
+        // When the id was inferred (model omitted it), tell the model which one we picked
+        // so it can address the same id explicitly on follow-up chunks.
+        const autoNote = autoResolvedFrom
+          ? `Auto-selected the most recent staged response (id "${id}" from ${autoResolvedFrom}) because no id was given. `
+          : "";
 
         const content = staged.content;
         const total = content.length;
@@ -128,9 +164,10 @@ export function createToolStagingTool(getManager: () => ToolStagingManager | und
             matchCount: matches.length,
             matches,
             note:
-              matches.length === 0
+              autoNote +
+              (matches.length === 0
                 ? "No match. Read sequentially with action=read and offset to inspect the content."
-                : "Excerpts around the first matches. Use action=read with offset for full context.",
+                : "Excerpts around the first matches. Use action=read with offset for full context."),
           });
         }
 
@@ -148,9 +185,11 @@ export function createToolStagingTool(getManager: () => ToolStagingManager | und
           nextOffset: hasMore ? nextOffset : undefined,
           hasMore,
           content: chunk,
-          note: hasMore
-            ? `${total - nextOffset} characters remaining. Call ${TOOL_STAGING_TOOL_NAME} again with offset=${nextOffset} to continue, or use 'search' to jump to what you need.`
-            : `End of content. When you no longer need it, call ${TOOL_STAGING_TOOL_NAME} with action=delete.`,
+          note:
+            autoNote +
+            (hasMore
+              ? `${total - nextOffset} characters remaining. Call ${TOOL_STAGING_TOOL_NAME} again with offset=${nextOffset} to continue, or use 'search' to jump to what you need.`
+              : `End of content. When you no longer need it, call ${TOOL_STAGING_TOOL_NAME} with action=delete.`),
         });
       } catch (error) {
         return fail(error instanceof Error ? error.message : String(error));

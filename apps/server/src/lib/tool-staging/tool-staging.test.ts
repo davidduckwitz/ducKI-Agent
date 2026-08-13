@@ -108,6 +108,47 @@ describe("tool staging", () => {
     expect(result.error).toContain("not found or expired");
   });
 
+  it("auto-selects the most recent staged response when read is called without an id", async () => {
+    const tool = createToolStagingTool(() => manager);
+    const older = await manager.stageToolResponse("http", `OLD\n${BIG}`, "old");
+    // Push the older file's mtime into the past so ordering is deterministic.
+    await fs.utimes(join(dir, `http_${older.id}.md`), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
+    const newer = await manager.stageToolResponse("news", `NEW\n${BIG}`, "new");
+
+    const result = await tool.execute({ action: "read", limit: 500 });
+    expect(result.success).toBe(true);
+    const page = result.data as Record<string, unknown>;
+    expect(page["id"]).toBe(newer.id);
+    expect(page["toolName"]).toBe("news");
+    expect(String(page["note"])).toContain("Auto-selected");
+  });
+
+  it("gives an actionable error when read is called with no id and nothing is staged", async () => {
+    const tool = createToolStagingTool(() => manager);
+    const result = await tool.execute({ action: "read" });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("no staged responses");
+  });
+
+  it("delete without id: deletes the only one, but lists ids when ambiguous", async () => {
+    const tool = createToolStagingTool(() => manager);
+    const a = await manager.stageToolResponse("http", BIG, "a");
+    const b = await manager.stageToolResponse("news", BIG, "b");
+
+    // Two staged -> refuses to guess, lists the ids.
+    const ambiguous = await tool.execute({ action: "delete" });
+    expect(ambiguous.success).toBe(false);
+    expect(ambiguous.error).toContain(a.id);
+    expect(ambiguous.error).toContain(b.id);
+
+    // Down to one -> auto-deletes it.
+    await manager.deleteStaged(a.id);
+    const single = await tool.execute({ action: "delete" });
+    expect(single.success).toBe(true);
+    expect((single.data as Record<string, unknown>)["id"]).toBe(b.id);
+    expect(await manager.listStaged()).toEqual([]);
+  });
+
   it("never stages its own output", async () => {
     const tool = createToolStagingTool(() => manager);
     const staged = await manager.stageToolResponse("http", BIG, "summary");
