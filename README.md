@@ -2,7 +2,7 @@
 
 **A self-hosted, pure-Node.js AI agent platform** — chat, tasks, coding, workflows, persistent memory and a file-first plugin system, all behind one web UI, REST API and WebSocket stream. No cloud lock-in: run it fully local against LM Studio, Ollama, OpenRouter or OpenAI.
 
-[**🌐 Landing Page & Documentation**](https://ducki-ai-agent.davidduckwitz.de/) · [**⚡ Installation**](#quick-start) · [**🧩 Plugin System**](#plugin-system) · [**👤 Author**](https://www.davidduckwitz.de/)
+[**🌐 ducki.cloud**](https://ducki.cloud) · [**⚡ Installation**](https://ducki.cloud/download) · [**📘 Documentation**](https://ducki.cloud/docs) · [**🧩 Plugin System**](#plugin-system) · [**👤 Author**](https://www.davidduckwitz.de/)
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Runtime: Node.js](https://img.shields.io/badge/Runtime-Node.js-339933.svg?logo=node.js&logoColor=white) ![Language: TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6.svg?logo=typescript&logoColor=white) ![Made in Fulda](https://img.shields.io/badge/Made%20in-Fulda%2C%20Germany-red.svg)
 
@@ -35,11 +35,40 @@
 | 🖥️ **Desktop apps** | Two Tauri apps for Windows (frontend + tray-based backend server) |
 | 🦆 **Desk Pet** | A draggable companion that reacts to agent events, fully configurable |
 
-> 📘 Full documentation and guides live on the **[landing page](https://ducki-ai-agent.davidduckwitz.de/)**.
+> 📘 Full documentation and setup guides: **[ducki.cloud/docs](https://ducki.cloud/docs)** · one-command install: **[ducki.cloud/download](https://ducki.cloud/download)**.
 
 ## Quick Start
 
-### Linux/macOS/WSL
+### One-command install (recommended)
+
+Sets up everything (Node, pnpm, build, autostart service) and runs the agent on `http://localhost:3001`:
+
+**Windows** (PowerShell or Terminal)
+
+```powershell
+irm https://ducki.cloud/install.ps1 | iex
+```
+
+**macOS / Linux / Raspberry Pi**
+
+```bash
+curl -fsSL https://ducki.cloud/install.sh | bash
+```
+
+Then open the hosted Web UI at **[ducki.cloud/app](https://ducki.cloud/app)** (Free mode) — it connects to your local agent automatically.
+
+Optional extras:
+
+- **Local Web UI** (fully offline, self-hosted): `install-webui.ps1` (Windows) / `install-webui.sh` (macOS/Linux)
+- **Portable Windows desktop app**: download the `.exe` (with SHA-256 checksum) from **[ducki.cloud/download](https://ducki.cloud/download)**
+
+All commands, copy buttons, checksums and a step-by-step guide (incl. updating & troubleshooting) live on **[ducki.cloud/download](https://ducki.cloud/download)** and **[ducki.cloud/docs](https://ducki.cloud/docs)**.
+
+### From source (development)
+
+Clone this repo, then:
+
+**Linux/macOS/WSL**
 
 ```bash
 pnpm install
@@ -47,7 +76,7 @@ cp .env.example .env
 pnpm dev
 ```
 
-### Windows (PowerShell)
+**Windows (PowerShell)**
 
 ```powershell
 pnpm install
@@ -759,7 +788,9 @@ If DucKI helps you, a donation supports its development into a powerful assistan
 
 ## Links
 
-- **Landing Page & Documentation:** https://ducki-ai-agent.davidduckwitz.de/
+- **Website:** https://ducki.cloud
+- **Installation:** https://ducki.cloud/download
+- **Documentation:** https://ducki.cloud/docs
 - **Author:** https://www.davidduckwitz.de/
 
 ## License
