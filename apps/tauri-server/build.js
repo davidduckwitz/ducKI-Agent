@@ -181,6 +181,28 @@ for (const [name, { dir, pkgJson }] of workspacePkgs) {
 }
 log(`✓ Copied ${workspacePkgs.size} workspace package(s) into node_modules/@ducki`);
 
+// --- Built-in plugins: apps/server/plugins/* holds the actual plugin folders (calendar, notes,
+// pet-companion, ...) - these are runtime data/code, not part of the tsc build, so they never
+// land in dist/ and were previously missing from the packaged app entirely. Bundle them here as
+// "plugins-builtin"; main.rs seeds them into the writable app-data plugins dir on first run.
+// NEVER bundle .secret-key or .state.json - .secret-key is the AES key for encrypted plugin
+// secrets (must be unique per install, not shared from this build machine) and .state.json is
+// local runtime state; both are auto-created fresh by the app.
+const pluginsSrc = path.join(__dirname, '../server/plugins');
+const pluginsDest = path.join(serverDistDest, 'plugins-builtin');
+fs.rmSync(pluginsDest, { recursive: true, force: true });
+if (fs.existsSync(pluginsSrc)) {
+  let pluginCount = 0;
+  for (const entry of fs.readdirSync(pluginsSrc, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue; // skips .secret-key, .state.json (both plain files)
+    copyRecursive(path.join(pluginsSrc, entry.name), path.join(pluginsDest, entry.name));
+    pluginCount += 1;
+  }
+  log(`✓ Bundled ${pluginCount} built-in plugin(s) into resources/server-dist/plugins-builtin`);
+} else {
+  log('⚠ apps/server/plugins not found - packaged app will start with zero plugins');
+}
+
 // Sidecar binary check
 const sidecarPath = path.join(__dirname, 'src-tauri/binaries/node-x86_64-pc-windows-msvc.exe');
 if (fs.existsSync(sidecarPath)) {

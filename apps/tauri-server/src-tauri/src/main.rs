@@ -37,6 +37,56 @@ fn is_backend_running(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
+fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let dest_path = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path)?;
+        } else {
+            std::fs::copy(entry.path(), &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// The built-in plugin folders (calendar, notes, pet-companion, ...) are bundled read-only as a
+/// Tauri resource. Plugins need a writable directory (per-plugin SQLite, encrypted settings, a
+/// freshly generated .secret-key), so on first run each bundled plugin gets copied into the
+/// writable app-data plugins dir - but only if it isn't already there, so app updates can add new
+/// built-in plugins without ever clobbering a user's existing install/customization of one.
+fn seed_builtin_plugins(app: &AppHandle, app_data_dir: &std::path::Path) -> std::path::PathBuf {
+    let plugins_dir = app_data_dir.join("plugins");
+    let _ = std::fs::create_dir_all(&plugins_dir);
+
+    let Ok(resource_dir) = app.path().resource_dir() else {
+        return plugins_dir;
+    };
+    let builtin_dir = resource_dir.join("resources/server-dist/plugins-builtin");
+    let Ok(entries) = std::fs::read_dir(&builtin_dir) else {
+        return plugins_dir;
+    };
+
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else { continue };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let dest = plugins_dir.join(entry.file_name());
+        if dest.exists() {
+            continue; // don't overwrite an existing (possibly user-customized) plugin
+        }
+        if let Err(e) = copy_dir_recursive(&entry.path(), &dest) {
+            eprintln!("[TAURI] Failed to seed plugin {:?}: {}", entry.file_name(), e);
+        } else {
+            println!("[TAURI] Seeded built-in plugin: {}", entry.file_name().to_string_lossy());
+        }
+    }
+
+    plugins_dir
+}
+
 fn start_backend_server(app: &AppHandle, app_state: State<AppState>) -> Result<(), String> {
     let preferred_port = 3001u16;
     let actual_port = find_available_port(preferred_port);
@@ -72,10 +122,12 @@ fn start_backend_server(app: &AppHandle, app_state: State<AppState>) -> Result<(
     let shared_workspace_path = app_data_dir.join("shared-workspace");
     std::fs::create_dir_all(&shared_workspace_path)
         .map_err(|e| format!("Failed to create shared-workspace dir: {}", e))?;
+    let plugins_dir = seed_builtin_plugins(app, &app_data_dir);
 
     println!("[TAURI] Server index: {}", server_index_path.display());
     println!("[TAURI] Working dir:  {}", app_data_dir.display());
     println!("[TAURI] Shared workspace: {}", shared_workspace_path.display());
+    println!("[TAURI] Plugins dir: {}", plugins_dir.display());
 
     let (mut rx, child) = app
         .shell()
@@ -89,6 +141,7 @@ fn start_backend_server(app: &AppHandle, app_state: State<AppState>) -> Result<(
             "SHARED_WORKSPACE_PATH",
             shared_workspace_path.to_string_lossy().to_string(),
         )
+        .env("DUCKI_PLUGINS_DIR", plugins_dir.to_string_lossy().to_string())
         .spawn()
         .map_err(|e| format!("Failed to start server sidecar: {}", e))?;
 

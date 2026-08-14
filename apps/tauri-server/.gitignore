@@ -5,6 +5,7 @@ src-tauri/resources/server-dist
 src-tauri/resources/node_modules
 src-tauri/resources/server.exe
 src-tauri/binaries/*.exe
+.portable-stage/
 
 # Frontend
 dist

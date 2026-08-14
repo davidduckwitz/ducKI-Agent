@@ -9,7 +9,7 @@
     "build:prep": "node build.js",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
-    "dist": "pnpm build:prep && tauri build"
+    "dist": "pnpm -w build:web && pnpm -w build:server && pnpm build:prep && tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0"
