@@ -1,1 +1,0 @@
-{"root":["./src/browser.ts","./src/data-source-tool.ts","./src/filesystem-search.ts","./src/filesystem.ts","./src/git.ts","./src/http.ts","./src/index.ts","./src/sandbox.ts","./src/script-mappings.ts","./src/script-source.ts","./src/shell.ts","./src/skills.ts","./src/weather.ts","./src/workspace-root.ts","./src/browser-features/cookie-detection.ts"],"version":"5.9.3"}

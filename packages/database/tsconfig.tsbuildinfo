@@ -1,1 +1,0 @@
-{"root":["./src/cron.ts","./src/database-factory.ts","./src/index.ts","./src/mysql-tester.ts","./src/plugin-secrets.ts","./src/plugin-settings.ts","./src/plugin-storage.ts","./src/schema.ts","./src/drivers/mysql-driver.ts"],"version":"5.9.3"}
