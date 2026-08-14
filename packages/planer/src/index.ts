@@ -2,7 +2,7 @@ import type { DatabaseService } from "@ducki/database";
 import type { LLMProvider } from "@ducki/providers";
 import type { Logger } from "@ducki/logger";
 import type { Task, TaskStatus, TaskPriority } from "@ducki/shared";
-import { parseMarkdownToPlan } from "./parseMarkdownToPlan";
+import { parseMarkdownToPlan } from "./parseMarkdownToPlan.js";
 
 export { parseMarkdownToPlan };
 

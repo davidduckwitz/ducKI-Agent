@@ -4,7 +4,7 @@ import { resolveScriptSource } from "@ducki/tools";
 import type { ToolExecutor } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
 import type { DynamicToolResolver } from "../executor/executor";
-import { resolveToolAlias, TOOL_ALIAS_TABLE } from "./tool-aliases";
+import { resolveToolAlias, TOOL_ALIAS_TABLE } from "./tool-aliases.js";
 
 export interface ToolManifestEntry {
   name: string;

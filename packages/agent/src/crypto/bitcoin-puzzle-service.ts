@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, appendFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
-import { BitcoinPuzzleSolver, type SolverState, type SolverConfig, type AttemptRecord } from "./bitcoin-puzzle-solver";
+import { BitcoinPuzzleSolver, type SolverState, type SolverConfig, type AttemptRecord } from "./bitcoin-puzzle-solver.js";
 import type { DatabaseService } from "@ducki/database";
 
 /**

@@ -2,6 +2,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 import { spawnSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,29 +46,148 @@ if (copyRecursive(serverDistSrc, serverDistDest)) {
   log('⚠ Server dist not found - make sure to run "pnpm build:server" first!');
 }
 
-// For production distribution:
-// The server expects node_modules to exist. We have two options:
-//
-// 1. Bundled: Copy node_modules into resources (large, ~200MB)
-//    - Benefit: Truly standalone, no external dependencies
-//    - Drawback: Huge bundle size
-//
-// 2. Fallback: Use global pnpm store / monorepo node_modules
-//    - Benefit: Small exe, works in dev environment
-//    - Drawback: Requires pnpm at runtime OR install in resources post-build
-//
-// For now, we'll use option 2 (fallback) which works in monorepo
-// If distributing standalone, users should run "npm install" in resources/server-dist
+// The packaged app runs the server via a bundled Node.js sidecar with no access to the
+// monorepo's node_modules (pnpm symlinks don't survive outside the workspace). `pnpm deploy`
+// turned out to be too fragile for this repo (legacy mode drops nested workspace deps like
+// @libsym/client; modern mode requires a repo-wide lockfile config change). Instead we build the
+// standalone node_modules ourselves: copy each @ducki/* workspace package's `dist` in directly
+// (source of truth is already built), then let plain `npm install` resolve every *external*
+// dependency (merged across @ducki/server and all its workspace deps) into a flat tree.
+const workspaceRoot = path.join(__dirname, '../..');
+const packagesDir = path.join(workspaceRoot, 'packages');
 
-log('\n📦 Dependency handling:');
-log('The bundled server expects node_modules in:');
-log('  resources/server-dist/node_modules/');
-log('');
-log('Options for distribution:');
-log('  1. Monorepo: node_modules resolved from workspace (current)');
-log('  2. Standalone: Run "npm install --prod" in resources/server-dist');
-log('  3. Bundled: Include node_modules (~200MB bundle)');
-log('');
-log('Skipping node_modules copy (pnpm symlinks prevent reliable bundling)');
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
 
-log('✓ Build preparation complete - Server will be bundled standalone with Node.js');
+function packageDirFor(scopedName) {
+  // "@ducki/tools" -> packages/tools
+  const shortName = scopedName.split('/')[1];
+  return path.join(packagesDir, shortName);
+}
+
+// Walk the workspace:* dependency graph starting at @ducki/server to find every internal
+// package that needs its dist bundled, and collect every external dependency along the way.
+const serverPkg = readJson(path.join(__dirname, '../server/package.json'));
+const workspacePkgs = new Map(); // name -> { dir, pkgJson }
+const externalDeps = new Map(); // name -> version range
+
+function collectDeps(pkgJson) {
+  for (const [name, range] of Object.entries(pkgJson.dependencies ?? {})) {
+    if (range === 'workspace:*' || name.startsWith('@ducki/')) {
+      if (workspacePkgs.has(name)) continue;
+      const dir = packageDirFor(name);
+      const depPkgJsonPath = path.join(dir, 'package.json');
+      if (!fs.existsSync(depPkgJsonPath)) {
+        log(`⚠ Workspace package ${name} not found at ${dir} - skipping`);
+        continue;
+      }
+      const depPkgJson = readJson(depPkgJsonPath);
+      workspacePkgs.set(name, { dir, pkgJson: depPkgJson });
+      collectDeps(depPkgJson);
+    } else {
+      externalDeps.set(name, range);
+    }
+  }
+}
+
+collectDeps(serverPkg);
+
+// Re-resolving external deps against the live npm registry with loose semver ranges (e.g.
+// "^3.500.0") is non-reproducible and can outright fail when a fast-moving package (AWS SDK v3
+// splits credentials into dozens of co-versioned sub-packages) briefly has a broken release on
+// the registry. The monorepo's pnpm install already resolved every one of these to an exact,
+// tested version - reuse that instead of letting npm re-resolve from scratch.
+// Try resolving from every package that could plausibly have pulled the dep in - @ducki/server
+// itself, then each workspace package in turn (the one that actually declares it as a
+// dependency is virtually always able to resolve it via pnpm's per-package node_modules).
+const resolveContexts = [
+  createRequire(path.join(__dirname, '../server/package.json')),
+  ...[...workspacePkgs.values()].map(({ dir }) => createRequire(path.join(dir, 'package.json'))),
+];
+function pinnedVersion(name, fallbackRange) {
+  for (const req of resolveContexts) {
+    try {
+      const pkgJsonPath = req.resolve(`${name}/package.json`);
+      return readJson(pkgJsonPath).version;
+    } catch {
+      // try the next context
+    }
+  }
+  log(`⚠ Could not resolve installed version of ${name} from the monorepo - falling back to range "${fallbackRange}"`);
+  return fallbackRange;
+}
+for (const [name, range] of externalDeps) {
+  externalDeps.set(name, pinnedVersion(name, range));
+}
+
+log(`\n📦 Bundling ${workspacePkgs.size} workspace package(s) + ${externalDeps.size} external dependencies...`);
+
+const nodeModulesDest = path.join(serverDistDest, 'node_modules');
+fs.rmSync(nodeModulesDest, { recursive: true, force: true });
+
+// Synthetic package.json with only external deps - npm resolves these into a real,
+// non-symlinked node_modules tree, including nested-only deps like @libsql/client.
+fs.writeFileSync(
+  path.join(serverDistDest, 'package.json'),
+  JSON.stringify(
+    {
+      name: '@ducki/server-dist',
+      version: serverPkg.version,
+      private: true,
+      type: 'module',
+      main: 'index.js',
+      dependencies: Object.fromEntries(externalDeps),
+    },
+    null,
+    2
+  )
+);
+
+log('📦 Running "npm install" for external dependencies (this can take a while)...');
+const npmInstallResult = spawnSync(
+  'npm',
+  ['install', '--omit=dev', '--no-audit', '--no-fund', '--no-package-lock'],
+  { cwd: serverDistDest, stdio: 'inherit', shell: true }
+);
+
+if (npmInstallResult.status !== 0) {
+  log('✗ "npm install" failed - resources/server-dist/node_modules would be incomplete. Aborting.');
+  process.exit(1);
+}
+log('✓ External dependencies installed into resources/server-dist/node_modules');
+
+// npm treats anything in node_modules that isn't one of ITS OWN dependencies as extraneous and
+// prunes it during install - so the @ducki/* workspace packages must be copied in AFTER npm runs,
+// never before.
+fs.mkdirSync(path.join(nodeModulesDest, '@ducki'), { recursive: true });
+
+for (const [name, { dir, pkgJson }] of workspacePkgs) {
+  const shortName = name.split('/')[1];
+  const destDir = path.join(nodeModulesDest, '@ducki', shortName);
+  const distOk = copyRecursive(path.join(dir, 'dist'), path.join(destDir, 'dist'));
+  if (!distOk) {
+    log(`⚠ ${name} has no built dist/ - run "pnpm build:server" first`);
+  }
+  // Minimal package.json so Node's ESM resolver can find the entry point/exports.
+  fs.writeFileSync(
+    path.join(destDir, 'package.json'),
+    JSON.stringify(
+      { name, version: pkgJson.version, type: pkgJson.type ?? 'module', main: pkgJson.main, exports: pkgJson.exports },
+      null,
+      2
+    )
+  );
+}
+log(`✓ Copied ${workspacePkgs.size} workspace package(s) into node_modules/@ducki`);
+
+// Sidecar binary check
+const sidecarPath = path.join(__dirname, 'src-tauri/binaries/node-x86_64-pc-windows-msvc.exe');
+if (fs.existsSync(sidecarPath)) {
+  log('✓ Node sidecar binary present (src-tauri/binaries/node-x86_64-pc-windows-msvc.exe)');
+} else {
+  log('⚠ Node sidecar binary MISSING at src-tauri/binaries/node-x86_64-pc-windows-msvc.exe');
+  log('  Download a matching portable Node.js build and place it there before "tauri build".');
+}
+
+log('\n✓ Build preparation complete - Server will run via the bundled Node.js sidecar');

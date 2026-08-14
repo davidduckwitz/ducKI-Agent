@@ -1,4 +1,4 @@
-import { BitcoinPuzzleService } from "../crypto/bitcoin-puzzle-service";
+import { BitcoinPuzzleService } from "../crypto/bitcoin-puzzle-service.js";
 
 /**
  * DEPRECATED: Verwende stattdessen die REST API `/api/bitcoin-puzzle`

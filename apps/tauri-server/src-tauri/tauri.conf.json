@@ -27,11 +27,15 @@
   },
   "bundle": {
     "active": true,
+    "targets": ["nsis"],
     "icon": [
       "icons/icon.ico"
     ],
     "resources": [
       "resources/server-dist"
+    ],
+    "externalBin": [
+      "binaries/node"
     ],
     "windows": {
       "certificateThumbprint": null,
