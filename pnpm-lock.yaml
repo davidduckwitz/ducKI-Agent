@@ -185,6 +185,9 @@ importers:
       ecpair:
         specifier: ^3.0.1
         version: 3.0.1(typescript@5.9.3)
+      ethereum-cryptography:
+        specifier: ^2.2.1
+        version: 2.2.1
       ethers:
         specifier: ^6.17.0
         version: 6.17.0
