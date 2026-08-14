@@ -8,7 +8,7 @@
     "dev": "node dev.js",
     "build": "pnpm -r --filter=!@ducki/tauri-desktop --filter=!@ducki/tauri-server run build",
     "build:web": "pnpm --filter @ducki/web run build",
-    "build:server": "pnpm --filter @ducki/server run build",
+    "build:server": "pnpm --filter \"@ducki/server...\" run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "skills:validate": "node scripts/validate-skills.mjs",
