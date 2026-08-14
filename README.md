@@ -2,7 +2,7 @@
 
 **A self-hosted, pure-Node.js AI agent platform** — chat, tasks, coding, workflows, persistent memory and a file-first plugin system, all behind one web UI, REST API and WebSocket stream. No cloud lock-in: run it fully local against LM Studio, Ollama, OpenRouter or OpenAI.
 
-[**🌐 ducki.cloud**](https://ducki.cloud) · [**⚡ Installation**](https://ducki.cloud/download) · [**📘 Documentation**](https://ducki.cloud/docs) · [**🧩 Plugin System**](#plugin-system) · [**👤 Author**](https://www.davidduckwitz.de/)
+[**🌐 ducki.cloud**](https://ducki.cloud) · [**⚡ Installation**](https://ducki.cloud/download) · [**📘 Documentation**](https://ducki.cloud/docs) · [**🧩 Plugin System**](#plugin-system) · [**❤️ Sponsor**](https://ducki.cloud/sponsor) · [**👤 Author**](https://www.davidduckwitz.de/)
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Runtime: Node.js](https://img.shields.io/badge/Runtime-Node.js-339933.svg?logo=node.js&logoColor=white) ![Language: TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6.svg?logo=typescript&logoColor=white) ![Made in Fulda](https://img.shields.io/badge/Made%20in-Fulda%2C%20Germany-red.svg)
 
@@ -779,18 +779,26 @@ Contributions, issues and feedback are very welcome — new features, connectors
 2. Run `pnpm typecheck` and relevant tests.
 3. Open a PR with a short change summary and validation steps.
 
-## Support & Donations
+## Sponsors & Support
 
-If DucKI helps you, a donation supports its development into a powerful assistant for everyone — thank you!
+DucKI is free and open source, built in Fulda, Germany. Donations and sponsorships fund development time, servers and new features — and keep the project independent. **Thank you! 🦆**
 
+- **❤️ Become a sponsor:** **[ducki.cloud/sponsor](https://ducki.cloud/sponsor)** — companies and individuals can support DucKI and, if they wish, be credited here and on the sponsor page.
 - **PayPal:** https://www.paypal.me/davidduckwitz
 - **Bitcoin:** `1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G`
+
+### Our sponsors
+
+> No sponsors yet — [be the first](https://ducki.cloud/sponsor) and get listed here (name, and optionally logo & link).
+
+<!-- Sponsors are added here as the project grows. -->
 
 ## Links
 
 - **Website:** https://ducki.cloud
 - **Installation:** https://ducki.cloud/download
 - **Documentation:** https://ducki.cloud/docs
+- **Sponsor:** https://ducki.cloud/sponsor
 - **Author:** https://www.davidduckwitz.de/
 
 ## License
