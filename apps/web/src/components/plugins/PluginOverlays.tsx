@@ -19,6 +19,7 @@
  */
 
 import { useEffect, useRef } from "react";
+import { pluginUiUrl } from "../../lib/backendUrl";
 import { usePlugins, overlayPlugins } from "../../lib/usePlugins";
 import { useAppStore } from "../../lib/store";
 import { toastManager, type ToastType } from "../../lib/toast";
@@ -130,7 +131,7 @@ export function PluginOverlays() {
         <iframe
           key={p.name}
           title={`${p.name} overlay`}
-          src={`/api/plugins/${p.name}/ui/overlay`}
+          src={pluginUiUrl(p.name, "overlay")}
           ref={(el) => {
             if (el) {
               framesRef.current.set(p.name, el);

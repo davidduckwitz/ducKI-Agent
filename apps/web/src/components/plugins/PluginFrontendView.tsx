@@ -1,4 +1,5 @@
 import { useParams } from "react-router-dom";
+import { pluginUiUrl } from "../../lib/backendUrl";
 import { usePlugins } from "../../lib/usePlugins";
 
 /**
@@ -29,7 +30,7 @@ export function PluginFrontendView() {
       </div>
       <iframe
         title={`${name} Frontend`}
-        src={`/api/plugins/${name}/ui/frontend`}
+        src={pluginUiUrl(name, "frontend")}
         className="min-h-0 flex-1 w-full border-0 bg-background"
       />
     </div>

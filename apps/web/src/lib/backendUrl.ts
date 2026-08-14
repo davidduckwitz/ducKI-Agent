@@ -82,6 +82,18 @@ export function getApiBaseUrl(config: BackendConfig = readBackendConfig()): stri
 }
 
 /**
+ * Absolute (or same-origin) URL for a plugin's embedded UI page. Must be built from the
+ * resolved API base, not a hardcoded "/api/…": in the desktop app a relative "/api/…" iframe
+ * src resolves against the Tauri app origin (tauri://localhost) and loads the bundled SPA
+ * instead of the plugin page — the iframe then shows the whole app, recursively. Going through
+ * getApiBaseUrl() yields the agent origin (e.g. http://localhost:3001/api) in that case, and a
+ * proxied "/api/…" in the browser.
+ */
+export function pluginUiUrl(name: string, kind: "widget" | "frontend" | "overlay"): string {
+  return `${getApiBaseUrl()}/plugins/${encodeURIComponent(name)}/ui/${kind}`;
+}
+
+/**
  * Origin for the Socket.IO connection. `undefined` means "use the current page origin",
  * which is what socket.io does when passed no URL.
  */

@@ -1,4 +1,5 @@
 import type { PluginInfo } from "../../lib/api";
+import { pluginUiUrl } from "../../lib/backendUrl";
 import { usePlugins, widgetPlugins } from "../../lib/usePlugins";
 
 /**
@@ -40,7 +41,7 @@ function WidgetFrame({ plugin, height }: { plugin: PluginInfo; height: number })
   return (
     <iframe
       title={`${plugin.name} Widget`}
-      src={`/api/plugins/${plugin.name}/ui/widget`}
+      src={pluginUiUrl(plugin.name, "widget")}
       className="w-full rounded-md border border-border bg-background/40"
       style={{ height }}
     />
