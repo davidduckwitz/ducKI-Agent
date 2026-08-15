@@ -160,6 +160,18 @@ async function authedJson<T>(db: DatabaseService, method: string, path: string, 
   return (await res.json()) as T;
 }
 
+/** Lebenszeichen an die Cloud senden (Geraetename + Version), damit das Dashboard "online seit X" zeigen kann. */
+export async function sendHeartbeat(db: DatabaseService): Promise<void> {
+  const apiKey = await getDecryptedApiKey(db);
+  const baseUrl = await getCloudBaseUrl(db);
+  const jwt = await exchangeForJwt(baseUrl, apiKey);
+  const version = await readAgentVersion();
+  await authedJson(db, "POST", "/api/agent/heartbeat", jwt, {
+    device_name: hostname(),
+    agent_version: version,
+  });
+}
+
 export async function listBackups(db: DatabaseService): Promise<BackupSummary[]> {
   const apiKey = await getDecryptedApiKey(db);
   const baseUrl = await getCloudBaseUrl(db);
