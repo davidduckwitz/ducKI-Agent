@@ -17,13 +17,14 @@
  */
 
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, writeFile, rm, cp } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile, rm, cp, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import * as tar from "tar";
+import { getRootLogger } from "@ducki/logger";
 import {
   type DatabaseService,
   encryptSecret,
@@ -36,11 +37,23 @@ import {
 import { pluginsRoot, loadPlugins } from "@ducki/agent";
 import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
 
+const logger = getRootLogger().child("CloudSync");
+
 const SETTING_API_KEY = "CLOUD_API_KEY";
 const SETTING_BASE_URL = "CLOUD_BASE_URL";
 const DEFAULT_BASE_URL = "https://ducki.cloud";
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 const MAIN_DB_DEFAULT_PATH = "./storage/ducki.db";
+/** Server-Hardcap ist 500MB (siehe AgentBackupController `archive => max:512000`); mit Puffer. */
+const MAX_ARCHIVE_BYTES = 480 * 1024 * 1024;
+/**
+ * Top-level Ordner unter shared-workspace, die reine, jederzeit neu erzeugbare Scratch-/
+ * Cache-Daten sind und beim Backup nicht mitgezogen werden sollen. bitcoin-puzzle-attempts
+ * (packages/agent/src/crypto/bitcoin-puzzle-service.ts) kann alleine >500MB an CSV-Logs
+ * anhaeufen und liess das Backup vorher endlos haengen (voller rekursiver Kopiervorgang +
+ * gzip ueber teils 800MB grosse Einzeldateien, ohne dass der Upload je den Server erreichte).
+ */
+const EXCLUDED_WORKSPACE_DIRS = new Set(["bitcoin-puzzle-attempts"]);
 
 export class CloudSyncError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -185,6 +198,7 @@ export async function createBackup(
   const work = await mkdtemp(join(tmpdir(), "ducki-backup-"));
   const stageDir = join(work, "stage");
   const tarFile = join(work, "backup.tar.gz");
+  logger.info("Backup gestartet", { deviceName: opts.deviceName });
   try {
     await mkdir(join(stageDir, "db"), { recursive: true });
     await mkdir(join(stageDir, "plugins"), { recursive: true });
@@ -196,9 +210,17 @@ export async function createBackup(
     // Plugin-DBs.
     const pluginEntries = await snapshotPluginDbs(join(stageDir, "plugins"));
 
-    // Shared-Workspace (enthaelt bereits coding/ als Unterordner).
+    // Shared-Workspace (enthaelt bereits coding/ als Unterordner). Bekannte Scratch-/
+    // Cache-Ordner (siehe EXCLUDED_WORKSPACE_DIRS) werden uebersprungen.
     if (existsSync(SHARED_WORKSPACE_ROOT)) {
-      await cp(SHARED_WORKSPACE_ROOT, join(stageDir, "shared-workspace"), { recursive: true });
+      await cp(SHARED_WORKSPACE_ROOT, join(stageDir, "shared-workspace"), {
+        recursive: true,
+        filter: (src) => {
+          const rel = src.slice(SHARED_WORKSPACE_ROOT.length).replace(/^[\\/]+/, "");
+          const topLevel = rel.split(/[\\/]/)[0];
+          return !topLevel || !EXCLUDED_WORKSPACE_DIRS.has(topLevel);
+        },
+      });
     }
 
     // Skills.
@@ -219,10 +241,20 @@ export async function createBackup(
       createdAt: new Date().toISOString(),
       plugins: pluginEntries,
       mainDbSourcePath: mainDbPath,
+      excludedWorkspaceDirs: [...EXCLUDED_WORKSPACE_DIRS],
     };
     await writeFile(join(stageDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
 
     await tar.c({ gzip: true, file: tarFile, cwd: stageDir, portable: true }, await readdir(stageDir));
+
+    const archiveSize = (await stat(tarFile)).size;
+    logger.info("Archiv erstellt", { archiveSize });
+    if (archiveSize > MAX_ARCHIVE_BYTES) {
+      throw new CloudSyncError(
+        `Backup zu gross (${(archiveSize / 1048576).toFixed(0)} MB, Limit ${(MAX_ARCHIVE_BYTES / 1048576).toFixed(0)} MB). ` +
+          `Grosse Dateien im Shared-Workspace pruefen (z.B. shared-workspace/*.csv oder generierte Dumps).`
+      );
+    }
 
     const archiveBuffer = await readFile(tarFile);
     const checksum = createHash("sha256").update(archiveBuffer).digest("hex");
@@ -232,6 +264,7 @@ export async function createBackup(
     form.append("manifest", JSON.stringify({ ...manifest, checksum }));
     form.append("device_name", manifest.deviceName);
 
+    logger.info("Lade Backup hoch", { archiveSize });
     const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/api/agent/backup`, {
       method: "POST",
       headers: { Authorization: `Bearer ${jwt}` },
@@ -242,7 +275,11 @@ export async function createBackup(
       throw new CloudSyncError(`Backup-Upload fehlgeschlagen (HTTP ${res.status}): ${text.slice(0, 300)}`, res.status);
     }
     const data = (await res.json()) as { data: BackupSummary };
+    logger.info("Backup abgeschlossen", { backupId: data.data.id, archiveSize });
     return { backup: data.data };
+  } catch (error) {
+    logger.error("Backup fehlgeschlagen", { error: error instanceof Error ? error.message : String(error) });
+    throw error;
   } finally {
     await rm(work, { recursive: true, force: true });
   }
