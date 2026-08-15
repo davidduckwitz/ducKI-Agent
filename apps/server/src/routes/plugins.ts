@@ -247,13 +247,16 @@ async function servePluginPage(
   // Serve läuft (die Web-UI liegt dann auf derselben ts.net-Domain, aber 'self' greift durch den
   // Proxy nicht zuverlässig). Ausserdem die Desktop-App (Tauri-WebView): sie framt die Plugin-UI
   // von tauri://localhost (macOS/Linux) bzw. http(s)://tauri.localhost (Windows) aus — diese
-  // Origins deckt localhost:* NICHT ab. DUCKI_FRAME_ANCESTORS ergänzt weitere Prod-Origins.
+  // Origins deckt localhost:* NICHT ab. Ausserdem die gehostete ducki.cloud-Web-UI: BYO-Nutzer
+  // verbinden dort ihren lokalen Agenten (http://localhost:3001) — als fester Trusted-Origin
+  // hinterlegt, damit das ohne DUCKI_FRAME_ANCESTORS-Konfiguration pro Installation funktioniert.
+  // DUCKI_FRAME_ANCESTORS ergänzt weitere Prod-Origins.
   // X-Frame-Options (kann nur SAMEORIGIN) entfernen, sonst blockt es das erlaubte Cross-Origin-Framing.
-  const tauriOrigins = "tauri://localhost https://tauri.localhost http://tauri.localhost";
+  const trustedOrigins = "tauri://localhost https://tauri.localhost http://tauri.localhost https://ducki.cloud";
   const selfHost = String(req.headers["host"] ?? "").trim();
   const hostOrigins = /^[a-z0-9.-]+(:\d+)?$/i.test(selfHost) ? ` https://${selfHost} http://${selfHost}` : "";
   const extra = process.env["DUCKI_FRAME_ANCESTORS"] ? ` ${process.env["DUCKI_FRAME_ANCESTORS"]}` : "";
-  res.setHeader("Content-Security-Policy", `frame-ancestors 'self' http://localhost:* http://127.0.0.1:* ${tauriOrigins}${hostOrigins}${extra}`);
+  res.setHeader("Content-Security-Policy", `frame-ancestors 'self' http://localhost:* http://127.0.0.1:* ${trustedOrigins}${hostOrigins}${extra}`);
   res.removeHeader("X-Frame-Options");
   res.setHeader("X-Content-Type-Options", "nosniff");
   // Plugin pages are edited in place and served straight from disk; never let the browser/iframe
