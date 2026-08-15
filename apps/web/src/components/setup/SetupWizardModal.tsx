@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronLeft, ChevronRight, Sparkles, X } from "lucide-react";
 import { api } from "../../lib/api";
@@ -26,7 +26,7 @@ function toBool(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
-function parseGateways(raw: string | undefined): Array<{ id: string; portal: string; enabled: boolean; authToken?: string; guildId?: string; channelId?: string; userId?: string }> {
+function parseGateways(raw: string | undefined): Array<{ id: string; portal: string; enabled: boolean; authToken?: string; guildId?: string; channelHint?: string; userId?: string }> {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -40,7 +40,7 @@ function parseGateways(raw: string | undefined): Array<{ id: string; portal: str
         enabled: item["enabled"] !== false,
         authToken: item["authToken"] ? String(item["authToken"]) : undefined,
         guildId: item["guildId"] ? String(item["guildId"]) : undefined,
-        channelId: item["channelId"] ? String(item["channelId"]) : undefined,
+        channelHint: item["channelHint"] ? String(item["channelHint"]) : undefined,
         userId: item["userId"] ? String(item["userId"]) : undefined,
       }));
   } catch {
@@ -55,6 +55,20 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
   const gateways = useMemo(() => parseGateways(settingsMap.get("MESSAGING_GATEWAYS")), [settingsMap]);
   const discordGateway = gateways.find((entry) => entry.portal === "discord");
+  const rawOtherGateways = useMemo(() => {
+    const raw = settingsMap.get("MESSAGING_GATEWAYS");
+    if (!raw) return [] as Record<string, unknown>[];
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((item) => item && typeof item === "object")
+        .map((item) => item as Record<string, unknown>)
+        .filter((item) => item["portal"] !== "discord");
+    } catch {
+      return [];
+    }
+  }, [settingsMap]);
 
   const [step, setStep] = useState(0);
   const [provider, setProvider] = useState<ProviderName>((settingsMap.get("DEFAULT_PROVIDER") as ProviderName | undefined) ?? "lmstudio");
@@ -75,7 +89,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [gatewayEnabled, setGatewayEnabled] = useState(Boolean(discordGateway?.enabled));
   const [discordBotToken, setDiscordBotToken] = useState(discordGateway?.authToken ?? "");
   const [discordGuildId, setDiscordGuildId] = useState(discordGateway?.guildId ?? "");
-  const [discordChannelId, setDiscordChannelId] = useState(discordGateway?.channelId ?? "");
+  const [discordChannelId, setDiscordChannelId] = useState(discordGateway?.channelHint ?? "");
   const [discordAllowedUserId, setDiscordAllowedUserId] = useState(discordGateway?.userId ?? "");
 
   const [backendType, setBackendType] = useState<"local" | "remote">("local");
@@ -88,6 +102,38 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [autoSkillSelection, setAutoSkillSelection] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_SELECTION"), true));
   const [skillBehavior, setSkillBehavior] = useState<SkillBehavior>((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
   const [autoSkillFallbackNone, setAutoSkillFallbackNone] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
+
+  useEffect(() => {
+    if (!open) return;
+    setProvider((settingsMap.get("DEFAULT_PROVIDER") as ProviderName | undefined) ?? "lmstudio");
+    setLmStudioBaseUrl(settingsMap.get("LM_STUDIO_BASE_URL") ?? "http://localhost:1234/v1");
+    setLmStudioModel(settingsMap.get("LM_STUDIO_MODEL") ?? "local-model");
+    setOpenRouterApiKey(settingsMap.get("OPENROUTER_API_KEY") ?? "");
+    setOpenRouterModel(settingsMap.get("OPENROUTER_MODEL") ?? "openrouter/free");
+    setOpenAiApiKey(settingsMap.get("OPENAI_API_KEY") ?? "");
+    setOpenAiModel(settingsMap.get("OPENAI_MODEL") ?? "gpt-4o");
+    setOllamaBaseUrl(settingsMap.get("OLLAMA_BASE_URL") ?? "http://localhost:11434");
+    setOllamaModel(settingsMap.get("OLLAMA_MODEL") ?? "llama3");
+    setClaudeApiKey(settingsMap.get("CLAUDE_API_KEY") ?? "");
+    setClaudeModel(settingsMap.get("CLAUDE_MODEL") ?? "claude-3-5-sonnet-20241022");
+    setNousApiKey(settingsMap.get("NOUS_API_KEY") ?? "");
+    setNousBaseUrl(settingsMap.get("NOUS_BASE_URL") ?? "https://api.nousresearch.com/v1");
+    setNousModel(settingsMap.get("NOUS_MODEL") ?? "nous-hermes-2-mixtral-8x7b-dpo");
+
+    setGatewayEnabled(Boolean(discordGateway?.enabled));
+    setDiscordBotToken(discordGateway?.authToken ?? "");
+    setDiscordGuildId(discordGateway?.guildId ?? "");
+    setDiscordChannelId(discordGateway?.channelHint ?? "");
+    setDiscordAllowedUserId(discordGateway?.userId ?? "");
+
+    setCodingEnabled(toBool(settingsMap.get("CODING_ENABLED"), false));
+    setWikiEnabled(toBool(settingsMap.get("WIKI_ENABLED"), false));
+
+    setAutoSkillSelection(toBool(settingsMap.get("AGENT_AUTO_SKILL_SELECTION"), true));
+    setSkillBehavior((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
+    setAutoSkillFallbackNone(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, settingsMap, discordGateway]);
 
   const saveSetup = useMutation({
     mutationFn: async () => {
@@ -120,21 +166,21 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
         writes.push(api.settings.set("NOUS_MODEL", nousModel));
       }
 
-      const gatewayPayload = gatewayEnabled
+      const discordEntry = gatewayEnabled
         ? [
             {
-              id: "discord_main",
+              id: discordGateway?.id ?? "discord_main",
               portal: "discord",
               name: "Discord Gateway",
               enabled: true,
               authToken: discordBotToken,
               guildId: discordGuildId || undefined,
-              channelId: discordChannelId || undefined,
+              channelHint: discordChannelId || undefined,
               userId: discordAllowedUserId || undefined,
             },
           ]
         : [];
-      writes.push(api.settings.set("MESSAGING_GATEWAYS", JSON.stringify(gatewayPayload)));
+      writes.push(api.settings.set("MESSAGING_GATEWAYS", JSON.stringify([...rawOtherGateways, ...discordEntry])));
 
       writes.push(api.settings.set("CODING_ENABLED", String(codingEnabled)));
       writes.push(api.settings.set("WIKI_ENABLED", String(wikiEnabled)));
