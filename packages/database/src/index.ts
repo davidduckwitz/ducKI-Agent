@@ -870,6 +870,17 @@ export class DatabaseService {
   }
 
   /**
+   * Konsistenten Snapshot der DB in eine neue Datei schreiben (fuer Backups). `VACUUM INTO`
+   * liest den aktuellen, konsistenten Zustand auch im WAL-Modus korrekt aus (anders als ein
+   * rohes fs.copyFile der .db-Datei, das eine noch nicht in die Haupt-Datei geschriebene
+   * WAL-Aenderung verpassen wuerde). destPath darf nicht existieren (SQLite-Vorgabe).
+   */
+  async vacuumInto(destPath: string): Promise<void> {
+    const escaped = destPath.replace(/'/g, "''");
+    await this.client.execute(`VACUUM INTO '${escaped}'`);
+  }
+
+  /**
    * Add skills to EVER_USED_SKILLS set (merge with existing)
    */
   async addEverUsedSkills(skillSlugs: string[]): Promise<void> {
@@ -1195,4 +1206,30 @@ export async function getDatabase(dbPath?: string): Promise<DatabaseService> {
     await instance.initialize();
   }
   return instance;
+}
+
+/**
+ * Schliesst die gecachte DB-Verbindung und verwirft die Singleton-Instanz, damit der naechste
+ * getDatabase()-Aufruf die (z.B. per Restore ausgetauschte) Datei frisch oeffnet. Nur fuer
+ * kontrollierte Restore-Flows gedacht — normale Server-Requests sollen weiter getDatabase()
+ * benutzen, ohne sich um den Instanz-Lifecycle zu kuemmern.
+ */
+export function resetDatabaseInstance(): void {
+  instance?.close();
+  instance = undefined;
+}
+
+/**
+ * Konsistenten Snapshot einer beliebigen SQLite-Datei erstellen (z.B. eine Plugin-DB fuer
+ * Backups), ueber eine kurzlebige, eigene Verbindung — beruehrt NICHT den gecachten
+ * Verbindungspool aus plugin-storage.ts. destPath darf nicht existieren (SQLite-Vorgabe).
+ */
+export async function vacuumSqliteFile(srcPath: string, destPath: string): Promise<void> {
+  const client = createClient({ url: `file:${srcPath}` });
+  try {
+    const escaped = destPath.replace(/'/g, "''");
+    await client.execute(`VACUUM INTO '${escaped}'`);
+  } finally {
+    client.close();
+  }
 }
