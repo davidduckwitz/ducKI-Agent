@@ -60,6 +60,7 @@ import { pluginOAuthRouter } from "./routes/plugin-oauth.js";
 import { PluginManager } from "./lib/plugin-manager.js";
 import { projectsRouter } from "./routes/projects.js";
 import { settingsRouter } from "./routes/settings.js";
+import { syncRouter } from "./routes/sync.js";
 import { credentialRouter, setupCredentialRoutes } from "./routes/credentials.js";
 import { sharedRouter } from "./routes/shared.js";
 import { skillsRouter } from "./routes/skills.js";
@@ -460,6 +461,7 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/tools", toolsRouter);
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);
+	app.use("/api/sync", syncRouter);
 	app.use("/api/provider-models", createProviderModelsRouter(database));
 	app.use("/api/crypto", createCryptoPaymentRouter(database));
 	app.use("/api/bitcoin-puzzle", bitcoinPuzzleRouter);

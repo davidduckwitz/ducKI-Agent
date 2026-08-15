@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, Wallet, Server, type LucideIcon } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, Wallet, Server, CloudUpload, type LucideIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
@@ -13,6 +13,7 @@ import { CredentialManagementSettings } from "./CredentialManagementSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
 import { AnimationSettings } from "./AnimationSettings";
 import { BackendSettings } from "./BackendSettings";
+import { CloudBackupSettings } from "./CloudBackupSettings";
 import { VoiceSettings } from "./VoiceSettings";
 import { CodingAgentSettings } from "./CodingAgentSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
@@ -1231,13 +1232,14 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database", "Browser", "Crypto"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character" | "Backend" | "Voice";
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character" | "Backend" | "Voice" | "Cloud-Backup";
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   ...TAB_ICONS,
   Theme: Palette,
   Character: Palette,
   Backend: Server,
+  "Cloud-Backup": CloudUpload,
   "Chat Cleanup": Trash2,
   "LLM Provider Config": Sliders,
   Credentials: Lock,
@@ -1347,7 +1349,7 @@ export function Settings() {
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
   const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
-  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "Voice", "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "Voice", "Backend", "LLM Provider Config", "Credentials", "Chat Cleanup"];
+  const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "Voice", "Backend", "Cloud-Backup", "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "Voice", "Backend", "Cloud-Backup", "LLM Provider Config", "Credentials", "Chat Cleanup"];
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1487,6 +1489,8 @@ export function Settings() {
 
       {activeTab === "Database" && <DatabaseSettings />}
 
+      {activeTab === "Cloud-Backup" && <CloudBackupSettings />}
+
       {activeTab === "Voice" && (
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">🎙️ Sprache (STT/TTS)</h2>
@@ -1579,7 +1583,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Voice" && activeTab !== "Agent" && (
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Cloud-Backup" && activeTab !== "Voice" && activeTab !== "Agent" && (
         <div className="space-y-4">
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);

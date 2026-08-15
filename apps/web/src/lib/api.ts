@@ -310,6 +310,38 @@ export const api = {
     }>("/settings/database/test", { method: "POST", body: JSON.stringify(payload) }),
   },
 
+  sync: {
+    status: () => request<{ connected: boolean; baseUrl: string }>("/sync/status"),
+    connect: (apiKey: string, baseUrl?: string) =>
+      request<{ connected: boolean; baseUrl: string }>("/sync/connect", {
+        method: "POST",
+        body: JSON.stringify({ apiKey, baseUrl }),
+      }),
+    disconnect: () => request<{ connected: boolean }>("/sync/disconnect", { method: "POST" }),
+    listBackups: () =>
+      request<
+        Array<{
+          id: number;
+          filename: string;
+          device_name: string | null;
+          size_bytes: number;
+          checksum: string | null;
+          manifest: Record<string, unknown> | null;
+          created_at: string;
+        }>
+      >("/sync/backups"),
+    createBackup: (deviceName?: string) =>
+      request<{ backup: { id: number; filename: string; created_at: string; size_bytes: number } }>("/sync/backup", {
+        method: "POST",
+        body: JSON.stringify({ deviceName }),
+      }),
+    restore: () =>
+      request<{ backup: { id: number; filename: string; created_at: string }; restartRequired: true }>(
+        "/sync/restore",
+        { method: "POST" }
+      ),
+  },
+
   plugins: {
     list: () => request<PluginInfo[]>("/plugins"),
     get: (name: string) => request<PluginInfo & { manifest: unknown }>(`/plugins/${name}`),
