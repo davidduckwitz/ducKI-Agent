@@ -15,6 +15,12 @@ import {
   createBackup,
   restoreBackup,
 } from "../lib/cloud-sync.js";
+import {
+  SETTING_SCHEDULE_ENABLED,
+  SETTING_SCHEDULE_INTERVAL_HOURS,
+  SETTING_SCHEDULE_LAST_RUN_AT,
+  DEFAULT_INTERVAL_HOURS,
+} from "../lib/cloud-backup-scheduler.js";
 
 export const syncRouter: IRouter = Router();
 
@@ -85,6 +91,43 @@ syncRouter.post("/restore", async (req, res) => {
     const { backupId } = (req.body ?? {}) as { backupId?: number };
     const result = await restoreBackup(db(req), { backupId });
     res.json(createApiResponse(result));
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+syncRouter.get("/schedule", async (req, res) => {
+  try {
+    const database = db(req);
+    const [enabledRaw, intervalRaw, lastRunAt] = await Promise.all([
+      database.getSetting(SETTING_SCHEDULE_ENABLED),
+      database.getSetting(SETTING_SCHEDULE_INTERVAL_HOURS),
+      database.getSetting(SETTING_SCHEDULE_LAST_RUN_AT),
+    ]);
+    const intervalHours = intervalRaw ? Number(intervalRaw) : NaN;
+    res.json(
+      createApiResponse({
+        enabled: enabledRaw === "true",
+        intervalHours: Number.isFinite(intervalHours) && intervalHours > 0 ? intervalHours : DEFAULT_INTERVAL_HOURS,
+        lastRunAt: lastRunAt ?? null,
+      })
+    );
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+syncRouter.put("/schedule", async (req, res) => {
+  try {
+    const { enabled, intervalHours } = req.body as { enabled?: boolean; intervalHours?: number };
+    const database = db(req);
+    if (typeof enabled === "boolean") {
+      await database.setSetting(SETTING_SCHEDULE_ENABLED, enabled ? "true" : "false");
+    }
+    if (typeof intervalHours === "number" && Number.isFinite(intervalHours) && intervalHours > 0) {
+      await database.setSetting(SETTING_SCHEDULE_INTERVAL_HOURS, String(intervalHours));
+    }
+    res.json(createApiResponse({ ok: true }));
   } catch (error) {
     handleError(res, error);
   }

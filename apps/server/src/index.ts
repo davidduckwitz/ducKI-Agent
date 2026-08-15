@@ -34,6 +34,7 @@ import { createMcpTool } from "./lib/mcp-tool.js";
 import { UpdateManager } from "./lib/update-manager.js";
 import { setupDefaultCronjobs } from "./lib/default-cronjobs.js";
 import { LlmWikiService } from "./lib/llm-wiki-service.js";
+import { CloudBackupScheduler } from "./lib/cloud-backup-scheduler.js";
 import { createWikiTool } from "./lib/wiki-tool.js";
 import { PromptManager } from "./lib/prompt-manager.js";
 import {
@@ -740,6 +741,8 @@ async function bootstrap(): Promise<void> {
 	await wikiService.start();
 	wikiServiceRef.current = wikiService;
 	workflowExecutor.registerTool(createWikiTool(() => wikiServiceRef.current));
+	const cloudBackupScheduler = new CloudBackupScheduler(db, logger.child("CloudBackupScheduler"));
+	cloudBackupScheduler.start();
 
 	app.locals["db"] = db;
 	app.locals["logger"] = logger;

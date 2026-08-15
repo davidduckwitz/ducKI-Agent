@@ -340,6 +340,10 @@ export const api = {
         "/sync/restore",
         { method: "POST", body: JSON.stringify({ backupId }) }
       ),
+    getSchedule: () =>
+      request<{ enabled: boolean; intervalHours: number; lastRunAt: string | null }>("/sync/schedule"),
+    setSchedule: (payload: { enabled?: boolean; intervalHours?: number }) =>
+      request<{ ok: boolean }>("/sync/schedule", { method: "PUT", body: JSON.stringify(payload) }),
   },
 
   plugins: {
