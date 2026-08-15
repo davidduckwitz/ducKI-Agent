@@ -63,7 +63,7 @@ export function CloudBackupSettings() {
   });
 
   const restore = useMutation({
-    mutationFn: () => api.sync.restore(),
+    mutationFn: (backupId?: number) => api.sync.restore(backupId),
     onSuccess: (result) => {
       setError(null);
       setRestartRequired(result.restartRequired);
@@ -132,11 +132,11 @@ export function CloudBackupSettings() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => restore.mutate()}
+                onClick={() => restore.mutate(undefined)}
                 disabled={restore.isPending || !backups.data?.length}
               >
                 <CloudDownload className="w-4 h-4 mr-2" />
-                {restore.isPending ? "Stelle wieder her..." : "Neuestes Backup wiederherstellen"}
+                {restore.isPending && restore.variables === undefined ? "Stelle wieder her..." : "Neuestes Backup wiederherstellen"}
               </Button>
             </div>
 
@@ -147,7 +147,17 @@ export function CloudBackupSettings() {
               {backups.data?.map((b) => (
                 <div key={b.id} className="flex items-center justify-between text-xs p-2 border border-border rounded">
                   <span>{new Date(b.created_at).toLocaleString()} — {b.device_name ?? "unbekanntes Gerät"}</span>
-                  <span className="text-muted-foreground">{formatBytes(b.size_bytes)}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-muted-foreground">{formatBytes(b.size_bytes)}</span>
+                    <button
+                      type="button"
+                      onClick={() => restore.mutate(b.id)}
+                      disabled={restore.isPending}
+                      className="text-primary hover:underline disabled:opacity-50"
+                    >
+                      {restore.isPending && restore.variables === b.id ? "..." : "Wiederherstellen"}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

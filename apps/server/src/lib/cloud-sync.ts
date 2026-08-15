@@ -2,15 +2,15 @@
  * Cloud-Backup/-Restore fuer selbstgehostete (BYO) Agenten gegen die ducki.cloud Laravel-API
  * (siehe `AgentBackupController` im ducki-cloud-v1 Repo). Snapshot-basiert, kein Live-Sync:
  * `createBackup()` packt Haupt-DB, alle Plugin-DBs, das Shared-Workspace und den Skills-Ordner
- * in ein tar.gz und laedt es hoch; `restoreLatestBackup()` laedt das neueste Backup herunter und
- * spielt es an Ort und Stelle zurueck.
+ * in ein tar.gz und laedt es hoch; `restoreBackup()` laedt ein Backup (per ID oder das neueste)
+ * herunter und spielt es an Ort und Stelle zurueck.
  *
  * Auth: wiederverwendet die bestehenden Wave-API-Keys aus /settings/api (POST /api/token
  * tauscht den Key gegen ein 1h-JWT). Der API-Key wird AES-256-GCM-verschluesselt (wie
  * Plugin-Secrets) unter der Setting "CLOUD_API_KEY" in der Haupt-DB abgelegt.
  *
  * Restore ueberschreibt Dateien, die evtl. gerade von der laufenden Server-Instanz offen
- * gehalten werden (Haupt-DB, Plugin-DBs). Dafuer schliesst restoreLatestBackup() vor dem
+ * gehalten werden (Haupt-DB, Plugin-DBs). Dafuer schliesst restoreBackup() vor dem
  * Zurueckspielen alle DB-Verbindungen (closeAllPluginDbs + resetDatabaseInstance); der Aufrufer
  * (Route-Handler) muss den Prozess danach neu starten (Windows haelt offene SQLite-Dateien
  * gesperrt, ein Hot-Swap ist nicht sicher moeglich).
@@ -295,19 +295,20 @@ export interface RestoreResult {
 }
 
 /**
- * Laedt das neueste Backup herunter, verifiziert die Checksumme und spielt es an Ort und Stelle
- * zurueck. Schliesst dafuer alle DB-Verbindungen (Plugin-DBs + Haupt-DB-Singleton) — der
- * Aufrufer MUSS den Server-Prozess danach neu starten, bevor getDatabase() erneut aufgerufen
- * wird (auf Windows bleibt die alte Datei sonst gesperrt / der Prozess haelt noch das alte
- * Handle).
+ * Laedt ein Backup herunter (per opts.backupId eine bestimmte Version, sonst das neueste),
+ * verifiziert die Checksumme und spielt es an Ort und Stelle zurueck. Schliesst dafuer alle
+ * DB-Verbindungen (Plugin-DBs + Haupt-DB-Singleton) — der Aufrufer MUSS den Server-Prozess
+ * danach neu starten, bevor getDatabase() erneut aufgerufen wird (auf Windows bleibt die alte
+ * Datei sonst gesperrt / der Prozess haelt noch das alte Handle).
  */
-export async function restoreLatestBackup(db: DatabaseService): Promise<RestoreResult> {
+export async function restoreBackup(db: DatabaseService, opts: { backupId?: number } = {}): Promise<RestoreResult> {
   const apiKey = await getDecryptedApiKey(db);
   const baseUrl = await getCloudBaseUrl(db);
   const jwt = await exchangeForJwt(baseUrl, apiKey);
 
-  const latest = await authedJson<{ data: BackupSummary }>(db, "GET", "/api/agent/backup/latest", jwt);
-  const backup = latest.data;
+  const path = opts.backupId ? `/api/agent/backup/${opts.backupId}` : "/api/agent/backup/latest";
+  const selected = await authedJson<{ data: BackupSummary }>(db, "GET", path, jwt);
+  const backup = selected.data;
 
   const work = await mkdtemp(join(tmpdir(), "ducki-restore-"));
   const tarFile = join(work, "backup.tar.gz");

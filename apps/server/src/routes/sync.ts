@@ -13,7 +13,7 @@ import {
   getConnectionStatus,
   listBackups,
   createBackup,
-  restoreLatestBackup,
+  restoreBackup,
 } from "../lib/cloud-sync.js";
 
 export const syncRouter: IRouter = Router();
@@ -82,7 +82,8 @@ syncRouter.post("/backup", async (req, res) => {
 
 syncRouter.post("/restore", async (req, res) => {
   try {
-    const result = await restoreLatestBackup(db(req));
+    const { backupId } = (req.body ?? {}) as { backupId?: number };
+    const result = await restoreBackup(db(req), { backupId });
     res.json(createApiResponse(result));
   } catch (error) {
     handleError(res, error);

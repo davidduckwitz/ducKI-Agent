@@ -335,10 +335,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ deviceName }),
       }),
-    restore: () =>
+    restore: (backupId?: number) =>
       request<{ backup: { id: number; filename: string; created_at: string }; restartRequired: true }>(
         "/sync/restore",
-        { method: "POST" }
+        { method: "POST", body: JSON.stringify({ backupId }) }
       ),
   },
 
