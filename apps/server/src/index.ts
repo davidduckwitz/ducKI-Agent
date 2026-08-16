@@ -744,7 +744,12 @@ async function bootstrap(): Promise<void> {
 	workflowExecutor.registerTool(createWikiTool(() => wikiServiceRef.current));
 	const cloudBackupScheduler = new CloudBackupScheduler(db, logger.child("CloudBackupScheduler"));
 	cloudBackupScheduler.start();
-	const cloudHeartbeatService = new CloudHeartbeatService(db, logger.child("CloudHeartbeatService"));
+	const cloudHeartbeatService = new CloudHeartbeatService(db, logger.child("CloudHeartbeatService"), {
+		db,
+		getPlugins: () => pluginManager.getPlugins(),
+		requestPluginReload: () => { pluginManager.requestReload(); },
+		createAgent,
+	});
 	cloudHeartbeatService.start();
 
 	app.locals["db"] = db;

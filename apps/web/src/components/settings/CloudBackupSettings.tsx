@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, CloudDownload, Unlink, Link2, AlertCircle, CheckCircle, Info, Clock } from "lucide-react";
+import { CloudUpload, CloudDownload, Unlink, Link2, AlertCircle, CheckCircle, Info, Clock, Radio } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
@@ -52,6 +52,20 @@ export function CloudBackupSettings() {
     mutationFn: (payload: { enabled?: boolean; intervalHours?: number }) => api.sync.setSchedule(payload),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["sync", "schedule"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const control = useQuery({
+    queryKey: ["sync", "control"],
+    queryFn: () => api.sync.getControl(),
+    enabled: !!status.data?.connected,
+  });
+
+  const setControl = useMutation({
+    mutationFn: (enabled: boolean) => api.sync.setControl(enabled),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sync", "control"] });
     },
     onError: (e: Error) => setError(e.message),
   });
@@ -203,6 +217,25 @@ export function CloudBackupSettings() {
                   Letztes automatisches Backup: {new Date(schedule.data.lastRunAt).toLocaleString()}
                 </p>
               )}
+            </div>
+
+            <div className="space-y-3 p-3 bg-muted rounded-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <div className="text-sm font-medium">Cloud Control</div>
+                    <div className="text-xs text-muted-foreground">
+                      Standardmäßig aus — erlaubt dem Dashboard, Cronjobs/Skills/Plugins/Settings zu sehen und per Befehl zu steuern (bis zu 3 Min. Verzögerung).
+                    </div>
+                  </div>
+                </div>
+                <Switch
+                  checked={!!control.data?.enabled}
+                  disabled={control.isLoading || setControl.isPending}
+                  onCheckedChange={(checked) => setControl.mutate(checked)}
+                />
+              </div>
             </div>
 
             <div className="space-y-2">

@@ -21,6 +21,7 @@ import {
   SETTING_SCHEDULE_LAST_RUN_AT,
   DEFAULT_INTERVAL_HOURS,
 } from "../lib/cloud-backup-scheduler.js";
+import { isCloudControlEnabled, setCloudControlEnabled } from "../lib/cloud-control.js";
 
 export const syncRouter: IRouter = Router();
 
@@ -127,6 +128,28 @@ syncRouter.put("/schedule", async (req, res) => {
     if (typeof intervalHours === "number" && Number.isFinite(intervalHours) && intervalHours > 0) {
       await database.setSetting(SETTING_SCHEDULE_INTERVAL_HOURS, String(intervalHours));
     }
+    res.json(createApiResponse({ ok: true }));
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+syncRouter.get("/control", async (req, res) => {
+  try {
+    res.json(createApiResponse({ enabled: await isCloudControlEnabled(db(req)) }));
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+syncRouter.put("/control", async (req, res) => {
+  try {
+    const { enabled } = req.body as { enabled?: boolean };
+    if (typeof enabled !== "boolean") {
+      res.status(400).json(createApiError("enabled (boolean) ist erforderlich"));
+      return;
+    }
+    await setCloudControlEnabled(db(req), enabled);
     res.json(createApiResponse({ ok: true }));
   } catch (error) {
     handleError(res, error);

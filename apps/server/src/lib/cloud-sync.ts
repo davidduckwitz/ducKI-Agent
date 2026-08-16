@@ -160,16 +160,51 @@ async function authedJson<T>(db: DatabaseService, method: string, path: string, 
   return (await res.json()) as T;
 }
 
-/** Lebenszeichen an die Cloud senden (Geraetename + Version), damit das Dashboard "online seit X" zeigen kann. */
-export async function sendHeartbeat(db: DatabaseService): Promise<void> {
+export interface HeartbeatPendingCommand {
+  id: number;
+  type: string;
+  payload: Record<string, unknown> | null;
+}
+
+/**
+ * Lebenszeichen an die Cloud senden (Geraetename + Version), damit das Dashboard "online seit X"
+ * zeigen kann. stateSnapshot ist optional -- nur mitschicken, wenn Cloud Control lokal aktiv
+ * ist (siehe cloud-control.ts). Gibt die vom Server ausgelieferten offenen Befehle zurueck
+ * (leer, wenn der Server sie nicht ausliefert, z.B. weil die Capability fehlt).
+ */
+export async function sendHeartbeat(
+  db: DatabaseService,
+  opts: { stateSnapshot?: Record<string, unknown> } = {}
+): Promise<HeartbeatPendingCommand[]> {
   const apiKey = await getDecryptedApiKey(db);
   const baseUrl = await getCloudBaseUrl(db);
   const jwt = await exchangeForJwt(baseUrl, apiKey);
   const version = await readAgentVersion();
-  await authedJson(db, "POST", "/api/agent/heartbeat", jwt, {
-    device_name: hostname(),
-    agent_version: version,
-  });
+  const response = await authedJson<{ data: { pendingCommands?: HeartbeatPendingCommand[] } }>(
+    db,
+    "POST",
+    "/api/agent/heartbeat",
+    jwt,
+    {
+      device_name: hostname(),
+      agent_version: version,
+      ...(opts.stateSnapshot ? { state_snapshot: opts.stateSnapshot } : {}),
+    }
+  );
+  return response.data.pendingCommands ?? [];
+}
+
+/** Ergebnis eines per Cloud Control ausgefuehrten Befehls zurueckmelden. */
+export async function reportCommandResult(
+  db: DatabaseService,
+  commandId: number,
+  status: "done" | "failed",
+  result?: Record<string, unknown>
+): Promise<void> {
+  const apiKey = await getDecryptedApiKey(db);
+  const baseUrl = await getCloudBaseUrl(db);
+  const jwt = await exchangeForJwt(baseUrl, apiKey);
+  await authedJson(db, "POST", `/api/agent/commands/${commandId}/result`, jwt, { status, result });
 }
 
 export async function listBackups(db: DatabaseService): Promise<BackupSummary[]> {
