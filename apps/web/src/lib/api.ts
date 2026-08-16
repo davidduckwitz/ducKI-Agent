@@ -344,9 +344,9 @@ export const api = {
       request<{ enabled: boolean; intervalHours: number; lastRunAt: string | null }>("/sync/schedule"),
     setSchedule: (payload: { enabled?: boolean; intervalHours?: number }) =>
       request<{ ok: boolean }>("/sync/schedule", { method: "PUT", body: JSON.stringify(payload) }),
-    getControl: () => request<{ enabled: boolean }>("/sync/control"),
-    setControl: (enabled: boolean) =>
-      request<{ ok: boolean }>("/sync/control", { method: "PUT", body: JSON.stringify({ enabled }) }),
+    getControl: () => request<{ enabled: boolean; heartbeatIntervalMinutes: number }>("/sync/control"),
+    setControl: (payload: { enabled?: boolean; heartbeatIntervalMinutes?: number }) =>
+      request<{ ok: boolean }>("/sync/control", { method: "PUT", body: JSON.stringify(payload) }),
   },
 
   plugins: {

@@ -22,6 +22,11 @@ import {
   DEFAULT_INTERVAL_HOURS,
 } from "../lib/cloud-backup-scheduler.js";
 import { isCloudControlEnabled, setCloudControlEnabled } from "../lib/cloud-control.js";
+import {
+  SETTING_HEARTBEAT_INTERVAL_MINUTES,
+  DEFAULT_HEARTBEAT_INTERVAL_MINUTES,
+  MIN_HEARTBEAT_INTERVAL_MINUTES,
+} from "../lib/cloud-heartbeat.js";
 
 export const syncRouter: IRouter = Router();
 
@@ -136,7 +141,21 @@ syncRouter.put("/schedule", async (req, res) => {
 
 syncRouter.get("/control", async (req, res) => {
   try {
-    res.json(createApiResponse({ enabled: await isCloudControlEnabled(db(req)) }));
+    const database = db(req);
+    const [enabled, intervalRaw] = await Promise.all([
+      isCloudControlEnabled(database),
+      database.getSetting(SETTING_HEARTBEAT_INTERVAL_MINUTES),
+    ]);
+    const intervalMinutes = intervalRaw ? Number(intervalRaw) : NaN;
+    res.json(
+      createApiResponse({
+        enabled,
+        heartbeatIntervalMinutes:
+          Number.isFinite(intervalMinutes) && intervalMinutes >= MIN_HEARTBEAT_INTERVAL_MINUTES
+            ? intervalMinutes
+            : DEFAULT_HEARTBEAT_INTERVAL_MINUTES,
+      })
+    );
   } catch (error) {
     handleError(res, error);
   }
@@ -144,12 +163,14 @@ syncRouter.get("/control", async (req, res) => {
 
 syncRouter.put("/control", async (req, res) => {
   try {
-    const { enabled } = req.body as { enabled?: boolean };
-    if (typeof enabled !== "boolean") {
-      res.status(400).json(createApiError("enabled (boolean) ist erforderlich"));
-      return;
+    const { enabled, heartbeatIntervalMinutes } = req.body as { enabled?: boolean; heartbeatIntervalMinutes?: number };
+    const database = db(req);
+    if (typeof enabled === "boolean") {
+      await setCloudControlEnabled(database, enabled);
     }
-    await setCloudControlEnabled(db(req), enabled);
+    if (typeof heartbeatIntervalMinutes === "number" && heartbeatIntervalMinutes >= MIN_HEARTBEAT_INTERVAL_MINUTES) {
+      await database.setSetting(SETTING_HEARTBEAT_INTERVAL_MINUTES, String(heartbeatIntervalMinutes));
+    }
     res.json(createApiResponse({ ok: true }));
   } catch (error) {
     handleError(res, error);

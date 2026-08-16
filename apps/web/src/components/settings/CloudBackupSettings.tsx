@@ -17,6 +17,13 @@ const INTERVAL_OPTIONS = [
   { value: 168, label: "Wöchentlich" },
 ];
 
+const HEARTBEAT_INTERVAL_OPTIONS = [
+  { value: 1, label: "Jede Minute" },
+  { value: 3, label: "Alle 3 Minuten (Standard)" },
+  { value: 5, label: "Alle 5 Minuten" },
+  { value: 10, label: "Alle 10 Minuten" },
+];
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -63,7 +70,7 @@ export function CloudBackupSettings() {
   });
 
   const setControl = useMutation({
-    mutationFn: (enabled: boolean) => api.sync.setControl(enabled),
+    mutationFn: (payload: { enabled?: boolean; heartbeatIntervalMinutes?: number }) => api.sync.setControl(payload),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["sync", "control"] });
     },
@@ -226,16 +233,37 @@ export function CloudBackupSettings() {
                   <div>
                     <div className="text-sm font-medium">Cloud Control</div>
                     <div className="text-xs text-muted-foreground">
-                      Standardmäßig aus — erlaubt dem Dashboard, Cronjobs/Skills/Plugins/Settings zu sehen und per Befehl zu steuern (bis zu 3 Min. Verzögerung).
+                      Standardmäßig aus — erlaubt dem Dashboard, Cronjobs/Skills/Plugins/Settings zu sehen und per Befehl zu steuern.
                     </div>
                   </div>
                 </div>
                 <Switch
                   checked={!!control.data?.enabled}
                   disabled={control.isLoading || setControl.isPending}
-                  onCheckedChange={(checked) => setControl.mutate(checked)}
+                  onCheckedChange={(checked) => setControl.mutate({ enabled: checked })}
                 />
               </div>
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">Heartbeat-Intervall</Label>
+                <Select
+                  value={String(control.data?.heartbeatIntervalMinutes ?? 3)}
+                  onValueChange={(value) => setControl.mutate({ heartbeatIntervalMinutes: Number(value) })}
+                >
+                  <SelectTrigger className="w-56 h-8 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {HEARTBEAT_INTERVAL_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={String(opt.value)}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Gilt für Online-Status und (falls Cloud Control aktiv) für die Befehlsabholung — kürzere Intervalle machen Befehle schneller wirksam, senden aber häufiger.
+              </p>
             </div>
 
             <div className="space-y-2">
