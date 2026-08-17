@@ -83,6 +83,7 @@ export {
   ProviderConnectionError,
   isProviderConnectionError,
   looksLikeConnectionFailure,
+  isAbortError,
 } from "./errors.js";
 
 // ============================================================

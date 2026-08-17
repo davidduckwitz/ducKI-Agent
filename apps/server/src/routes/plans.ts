@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { resolve } from "node:path";
-import type { Agent } from "@ducki/agent";
+import type { Agent, Plan, PlanStep } from "@ducki/agent";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { parseMarkdownToPlan } from "@ducki/planer";
 import { CODING_WORKSPACE_ROOT } from "@ducki/tools";
@@ -180,6 +180,30 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       ? `\n\nPROJECT DIRECTORY: ${codingSandboxRoot}\nAll file paths are relative to this directory.`
       : "";
 
+    // Build a structured Plan directly from the UI's already-approved steps, so the agent
+    // uses THIS plan instead of silently re-deriving its own via the internal Planner (which
+    // otherwise always ran a fresh LLM call against the flattened prompt text below, ignoring
+    // the exact steps the user already reviewed). Passing it also switches the run loop into
+    // per-step checklist tracking (see AgentRunOptions.existingPlan), so a step that keeps
+    // failing gets a bounded number of repair attempts instead of retrying indefinitely.
+    const existingPlan: Plan = {
+      goal,
+      planType: codingSandboxRoot ? "coding" : "general",
+      steps: steps.map((step, index): PlanStep => ({
+        id: `step_${index + 1}`,
+        title: step.title,
+        description: step.description,
+        toolsNeeded: step.tools,
+        status: "pending",
+        priority: "medium",
+      })),
+      // Not used for gating here (a caller-supplied plan always gets checklist tracking
+      // regardless of complexity, see AgentRunOptions.existingPlan) - just a reasonable
+      // default since the field is required and nothing else estimates it for this plan.
+      estimatedComplexity: "high",
+      totalSteps: steps.length,
+    };
+
     const executionPrompt = [
       "**PLAN EXECUTION**",
       "",
@@ -243,6 +267,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
             const result = await codingAgent.runOnExistingConversation(executionPrompt, {
               stream: true,
+              existingPlan,
               onChunk: (chunk) => {
                 io?.emit("chat:chunk", { content: chunk, conversationId });
               },
@@ -279,6 +304,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
         const result = await agent.run(executionPrompt, {
           stream: true,
+          existingPlan,
           onChunk: (chunk) => {
             io?.emit("chat:chunk", { content: chunk, conversationId });
           },

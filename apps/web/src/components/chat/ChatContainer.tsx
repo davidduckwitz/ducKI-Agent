@@ -111,7 +111,7 @@ export function ChatContainer() {
   // Plan mode kind: "cowork" = general task plan (stays in chat, default), "code" = coding
   // plan that hands off to the Coding Area, null = plan mode off. Default is "cowork" so the
   // agent plans general tasks in chat instead of always producing a coding plan.
-  const [planKind, setPlanKind] = useState<"code" | "cowork" | null>("cowork");
+  const [planKind, setPlanKind] = useState<"code" | "cowork" | null>(null);
   const planMode = planKind !== null;
   const [showScrollDown, setShowScrollDown] = useState(false);
   const [expandedEvents, setExpandedEvents] = useState<Record<string, boolean>>({});

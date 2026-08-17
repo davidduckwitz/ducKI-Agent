@@ -4,6 +4,7 @@ import type {
   AgentEventEmitter as AgentEventEmitterV2,
   AgentRunEventType
 } from "../events/agent-events.js";
+import type { Plan } from "../planner/planner.js";
 
 // Re-export granular event types
 export type { AgentRunEventSnapshot, AgentEventEmitterV2, AgentRunEventType };
@@ -71,6 +72,13 @@ export interface AgentRunOptions {
   attachments?: AgentRunAttachment[];
   /** Client-side UUID for message deduplication */
   localMessageId?: string;
+  /** A plan the caller already built (e.g. the user-approved plan from the UI's Plan tab).
+   *  When set, the run loop uses this INSTEAD OF calling the internal Planner - the agent
+   *  otherwise always re-derives its own plan from the prompt text, discarding whatever
+   *  structured steps the caller already had. Also forces session-checklist step tracking
+   *  for this run regardless of the global AGENT_CHECKLIST_ENABLED/min-complexity settings,
+   *  since a caller-supplied plan is an explicit request to track and verify each step. */
+  existingPlan?: Plan;
 }
 
 export interface AgentRunEvent {

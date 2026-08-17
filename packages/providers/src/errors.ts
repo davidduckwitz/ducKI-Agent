@@ -77,3 +77,16 @@ export function looksLikeConnectionFailure(error: unknown): boolean {
 
   return false;
 }
+
+/** True for a request cancelled via AbortSignal (user clicked Stop, or a run timed out).
+ *  Must never be retried or treated as a connection failure - the caller wants generation
+ *  to stop immediately, not have the agent quietly keep trying under a different name.
+ *  Checks both the OpenAI SDK's own wrapped abort error and a raw fetch/DOMException abort,
+ *  since which one surfaces depends on where in the request lifecycle the abort happened. */
+export function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const name = (error as { name?: unknown }).name;
+  if (name === "AbortError") return true;
+  const ctorName = (error as { constructor?: { name?: unknown } }).constructor?.name;
+  return ctorName === "APIUserAbortError";
+}

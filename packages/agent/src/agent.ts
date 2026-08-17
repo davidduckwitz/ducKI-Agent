@@ -1,6 +1,6 @@
 import { jsonrepair } from "jsonrepair";
 import type { LLMProvider } from "@ducki/providers";
-import { isProviderConnectionError } from "@ducki/providers";
+import { isProviderConnectionError, isAbortError } from "@ducki/providers";
 import type { LLMMessage, ToolResult, LLMContent, ToolCall } from "@ducki/shared";
 import { tokenizeText } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
@@ -82,6 +82,7 @@ Rules:
 5. For dependent calls (result needed as input), emit one at a time and wait for result
 6. Always close with )] - never leave it hanging
 7. When reporting a tool's result back to the user, copy exact values (numbers, times, dates, names) directly from the tool result - never recalculate, estimate, or recall them from your own knowledge
+8. NEVER write text claiming a tool ran, a file was written, or work was "submitted"/"completed" unless you emitted the actual [TOOL:...] marker IN THIS SAME RESPONSE. A sentence like "The X tool was executed" or "all files were submitted as the final solution" with no marker present is a lie - nothing happened. Only use a tool name that is actually in your tool list; do not invent one or reuse a real tool for an unrelated purpose (e.g. "gateway" sends outbound messages to Discord/Telegram/webhooks - it does not write files).
 
 ## Writing files - USE THE BLOCK FORMAT (strongly preferred)
 When writing a file (code, HTML, JSON, any multi-line content), DO NOT embed the content inside JSON. Use the block form instead - the content is taken EXACTLY as written, with no escaping:
@@ -95,7 +96,9 @@ Rules for the block form:
 - The header line holds only simple values as key=value (action, path). No JSON, no ( or { on the header line.
 - Everything between the header line and [/TOOL] is the literal file content - do NOT escape newlines or quotes, do NOT wrap it in JSON.
 - Always end the block with a line containing exactly [/TOOL].
-- This avoids the #1 write failure: broken JSON escaping that corrupts the file. Prefer it for every write/append.`;
+- This avoids the #1 write failure: broken JSON escaping that corrupts the file. Prefer it for every write/append.
+
+If you are instead given tools as a structured/native function-calling list (not writing [TOOL:...] text yourself), the block form above does not apply - there is no heredoc body in a native call. In that case you MUST put the ENTIRE file content as a plain JSON string in the tool's "content" argument, in the SAME call as "action" and "path" - never omit it, never send it in a separate message, and never just describe the file in your own text. A write/append call with no "content" argument does nothing and fails.`;
 
 const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
 Use the available tools to create and manage projects and tasks, then work them through to completion.
@@ -242,6 +245,11 @@ export class Agent {
   private logger: Logger;
   private skillsRoot: string;
   private stopRequested = false;
+  /** Aborts the in-flight LLM request the moment stop() is called or the progress timeout
+   *  fires. Without this, stopRequested is only checked between loop iterations, so a long
+   *  in-flight generation (or one stuck in a reasoning loop) keeps running to completion
+   *  unseen even after the user clicked Stop. */
+  private abortController: AbortController | undefined;
   private toolGraph: ToolExecutionGraph;
   /** Skills loaded into the current/most recent run's prompt - lets resolveToolNameAndInput
    *  recognize a model calling a skill's slug directly (e.g. [TOOL:datum-uhrzeit-tag()])
@@ -535,6 +543,7 @@ export class Agent {
     }
 
     this.stopRequested = false;
+    this.abortController = new AbortController();
     this.status = "running";
     const toolsUsed: string[] = [];
     let iterations = 0;
@@ -601,6 +610,7 @@ export class Agent {
         if (settled || timedOut) return;
         timedOut = true;
         this.stopRequested = true;
+        this.abortController?.abort();
         wrappedOptions.onEvent?.({
           type: "guardrail",
           message: `Agent progress timeout after ${controls.timeoutMs}ms`,
@@ -661,20 +671,26 @@ export class Agent {
   private escapeControlCharsInStrings(text: string): string {
     let out = "";
     let inString = false;
-    let escaped = false;
+    let pendingBackslash = false;
+    // The only characters JSON allows directly after a backslash. Anything else - most
+    // commonly a Windows path like "C:\projekte\..." emitted with un-escaped backslashes -
+    // is invalid JSON that jsonrepair's own invalid-escape recovery silently DROPS (backslash
+    // and all), corrupting the value instead of failing loudly. Doubling the backslash here
+    // turns it into a valid `\\x` escape that decodes back to a literal backslash + x, so the
+    // path (or any other backslash-heavy value) survives intact.
+    const validEscapeChars = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
     for (let i = 0; i < text.length; i++) {
-      const char = text[i];
+      const char = text[i] ?? "";
 
       if (inString) {
-        if (escaped) {
-          out += char;
-          escaped = false;
+        if (pendingBackslash) {
+          pendingBackslash = false;
+          out += validEscapeChars.has(char) ? `\\${char}` : `\\\\${char}`;
           continue;
         }
         if (char === "\\") {
-          out += char;
-          escaped = true;
+          pendingBackslash = true;
           continue;
         }
         if (char === '"') {
@@ -694,6 +710,10 @@ export class Agent {
       }
       out += char;
     }
+
+    // A lone trailing backslash (truncated mid-escape) - preserve it literally rather than
+    // dropping it silently.
+    if (pendingBackslash) out += "\\\\";
 
     return out;
   }
@@ -1846,7 +1866,14 @@ export class Agent {
             break;
           }
           if (c === "\\" && i + 1 < source.length) {
-            value += source[i + 1] ?? "";
+            // Translate JSON-style escapes to their real character - \", \', \\ keep the
+            // literal next char (correct as-is), but \n \t \r were being handled the same
+            // way, i.e. the backslash was just dropped and the bare letter "n"/"t"/"r" kept
+            // literally instead of becoming an actual newline/tab/CR. That silently mangled
+            // any multi-line content that fell through every other JSON.parse-based repair
+            // attempt and only got salvaged by this last-resort hand-rolled parser.
+            const next = source[i + 1] ?? "";
+            value += next === "n" ? "\n" : next === "t" ? "\t" : next === "r" ? "\r" : next;
             i += 2;
             continue;
           }
@@ -1867,7 +1894,14 @@ export class Agent {
             break;
           }
           if (c === "\\" && i + 1 < source.length) {
-            value += source[i + 1] ?? "";
+            // Translate JSON-style escapes to their real character - \", \', \\ keep the
+            // literal next char (correct as-is), but \n \t \r were being handled the same
+            // way, i.e. the backslash was just dropped and the bare letter "n"/"t"/"r" kept
+            // literally instead of becoming an actual newline/tab/CR. That silently mangled
+            // any multi-line content that fell through every other JSON.parse-based repair
+            // attempt and only got salvaged by this last-resort hand-rolled parser.
+            const next = source[i + 1] ?? "";
+            value += next === "n" ? "\n" : next === "t" ? "\t" : next === "r" ? "\r" : next;
             i += 2;
             continue;
           }
@@ -2623,6 +2657,66 @@ export class Agent {
       }
     }
     return { calls, markerCount, unparsed, remaining };
+  }
+
+  /**
+   * Detects the "showed the code instead of writing it" failure mode: the model emits a
+   * substantial markdown code fence (```html/js/... a file's worth of content) but never
+   * emits a `[TOOL:...]` marker at all, so nothing gets written — the fence just renders
+   * as inert text. This is distinct from the malformed/unparsed-marker guardrail above,
+   * which only fires when a `[TOOL:` marker IS present but broken; here there is no marker
+   * to begin with, so extractAllToolCalls silently returns zero calls with nothing to flag.
+   * Weaker/local models fall back to this plain-markdown habit under load even when the
+   * system prompt explicitly requires the heredoc block form (see large-file-writing skill).
+   */
+  private detectUnexecutedCodeFence(response: string): { language: string; lineCount: number } | null {
+    if (response.includes("[TOOL:")) return null; // handled by the marker-based guardrail instead
+
+    const fileLikeLangs = new Set([
+      "html", "htm", "xml", "css", "scss", "js", "jsx", "ts", "tsx", "json", "yaml", "yml",
+      "py", "python", "java", "c", "cpp", "cs", "php", "go", "rs", "rust", "sql", "sh", "bash", "ps1",
+    ]);
+    const fenceRe = /```([A-Za-z0-9_+-]*)\r?\n([\s\S]*?)```/g;
+    let best: { language: string; lineCount: number } | null = null;
+    let match: RegExpExecArray | null;
+    while ((match = fenceRe.exec(response)) !== null) {
+      const language = (match[1] || "").toLowerCase();
+      const body = match[2] ?? "";
+      const lineCount = body.split("\n").filter((l) => l.trim().length > 0).length;
+      // Require either a recognized file-ish language, or enough lines that it reads as a
+      // real file rather than a short illustrative snippet in a normal explanation.
+      if (lineCount >= 8 && (fileLikeLangs.has(language) || lineCount >= 20)) {
+        if (!best || lineCount > best.lineCount) best = { language: language || "text", lineCount };
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Detects the "narrated a fake success" failure mode: the model writes prose CLAIMING a
+   * tool ran and the work is done/submitted, but emits no `[TOOL:...]` marker and no native
+   * tool_call, so nothing actually happened. Distinct from detectUnexecutedCodeFence (which
+   * needs a code fence) - this fires on pure prose, e.g. weak local models that fall back to
+   * the text protocol sometimes invent a plausible-sounding tool name (borrowed from the tool
+   * list in the system prompt, e.g. "the gateway tool") and narrate a completed action instead
+   * of emitting the marker. Only ever checked when toolResultsMap.size === 0 for this
+   * iteration, so it can never misfire on a genuine summary written after a real tool result.
+   */
+  private detectFalseCompletionClaim(response: string): boolean {
+    if (response.includes("[TOOL:")) return false; // a real marker is present, handled elsewhere
+
+    const patterns = [
+      // "the X tool was executed/ran/invoked" / "das X-Tool wurde ausgeführt"
+      /\b(tool)\b[\s\S]{0,60}\b(was|were|has been|have been)\s+(executed|run|called|invoked)\b/i,
+      /\btool[\s\S]{0,40}\bwurde\s+(erfolgreich\s+)?(ausgeführt|aufgerufen)\b/i,
+      // "submitted/delivered as the final solution" / "als finale Lösung übermittelt"
+      /\b(submitted|delivered)\b[\s\S]{0,40}\bas\s+(the\s+)?final\s+(solution|answer|result)\b/i,
+      /\b(übermittelt|eingereicht|abgegeben)\b[\s\S]{0,40}\bals\s+(die\s+)?(finale|endgültige)\s+(lösung|antwort)\b/i,
+      // "all files were submitted/written/created" / "alle Dateien wurden übermittelt/erstellt"
+      /\b(files?)\b[\s\S]{0,40}\b(were|was)\s+(submitted|written|created|saved)\b/i,
+      /\b(dateien?)\b[\s\S]{0,40}\b(wurden?|wurde)\s+(übermittelt|geschrieben|erstellt|gespeichert)\b/i,
+    ];
+    return patterns.some((re) => re.test(response));
   }
 
   private extractAllToolCalls(response: string): {
@@ -3874,10 +3968,24 @@ export class Agent {
 
     // Prefer NATIVE (structured) tool calls when the provider returned them: the model
     // never hand-serialized the call into prose, so there is nothing to leak or mis-parse.
-    // The text `[TOOL:...]` parser remains the fallback for backends without native tools.
-    const extractResult = nativeToolCalls && nativeToolCalls.length > 0
+    // The text `[TOOL:...]` parser ALSO always runs on the accompanying response text and is
+    // merged in, rather than being skipped whenever native calls are present - some local
+    // models (e.g. gpt-oss) emit a bare native call (action/path only, no content) AND
+    // separately write the actual file content as a `[TOOL:filesystem ...]` heredoc block in
+    // the same response, apparently trying to satisfy both conventions at once. Treating
+    // native-present as exclusive silently dropped that heredoc block and the write failed
+    // with "Content required". Merging picks up whichever form actually carried the content.
+    const nativeExtract = nativeToolCalls && nativeToolCalls.length > 0
       ? this.nativeToolCallsToExtractResult(nativeToolCalls)
-      : this.extractAllToolCalls(response);
+      : undefined;
+    const textExtract = this.extractAllToolCalls(response);
+    const extractResult = nativeExtract
+      ? {
+          calls: [...nativeExtract.calls, ...textExtract.calls],
+          markerCount: nativeExtract.markerCount + textExtract.markerCount,
+          unparsed: [...nativeExtract.unparsed, ...textExtract.unparsed],
+        }
+      : textExtract;
     let toolCalls = extractResult.calls;
 
     // Deduplicate tool calls: if same action is called twice in a row, keep only first
@@ -5048,19 +5156,26 @@ export class Agent {
     const toolContext = availableTools.length > 0
       ? `\n\n## Available Tools\n${availableTools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n")}`
       : "";
+    // A caller-supplied plan (e.g. the user-approved plan from the UI's Plan tab) is used
+    // AS-IS instead of calling the Planner - without this, the agent always re-derived its
+    // OWN plan from the flattened prompt text via a fresh LLM call, silently discarding the
+    // structured steps the caller already had (and that the user already reviewed/approved).
+    const usingExternalPlan = Boolean(options.existingPlan);
     const enablePlanningInMode = this.enablePlanning && effectiveMode === "full";
-    let planContext = enablePlanningInMode
-      ? await this.planner.createPlan(effectiveInput, availableTools.map((tool) => tool.name), {
-          currentModel: this.provider.model,
-          budgetUsd: adjustedControls.costBudgetUsd,
-        })
-      : undefined;
+    let planContext = options.existingPlan
+      ? options.existingPlan
+      : enablePlanningInMode
+        ? await this.planner.createPlan(effectiveInput, availableTools.map((tool) => tool.name), {
+            currentModel: this.provider.model,
+            budgetUsd: adjustedControls.costBudgetUsd,
+          })
+        : undefined;
     if (planContext) {
       // source:"auto" marks this as internal run-loop context, not a user-facing plan:
       // the UI only opens its plan panel for source:"plan_mode" events, so an auto-plan
       // in full mode stays a log entry instead of interrupting the run with a modal.
       emit("plan", `Plan erstellt mit ${planContext.steps.length} Schritt(en).`, {
-        source: "auto",
+        source: usingExternalPlan ? "external" : "auto",
         complexity: planContext.estimatedComplexity,
         overallRiskLevel: planContext.overallRiskLevel,
         totalEstimatedCostUsd: planContext.totalEstimatedCostUsd,
@@ -5077,9 +5192,10 @@ export class Agent {
       }
     }
 
-    // === SESSION CHECKLIST: derive from the auto-plan (opt-in, medium/high only) ===
-    // Externalizes the plan's steps into a persisted checklist so the loop can focus on
-    // and verify one step at a time (see docs/session-checklist-plan.md). Default OFF.
+    // === SESSION CHECKLIST: derive from the plan (opt-in via AGENT_CHECKLIST_ENABLED, OR
+    // always-on for a caller-supplied plan - a plan the user explicitly approved and asked
+    // to execute should always get per-step tracking/verification, not just when the global
+    // heuristic threshold happens to be met). See docs/session-checklist-plan.md. ===
     const checklistCfg = {
       enabled: controls.checklistEnabled,
       minComplexity: controls.checklistMinComplexity,
@@ -5099,10 +5215,10 @@ export class Agent {
     let checklistEvidencePushes = 0;
     let checklistLastAdvanceAt = -1;
     if (
-      checklistCfg.enabled &&
+      (checklistCfg.enabled || usingExternalPlan) &&
       planContext &&
       this.conversation.id !== undefined &&
-      this.meetsMinComplexity(planContext.estimatedComplexity, checklistCfg.minComplexity)
+      (usingExternalPlan || this.meetsMinComplexity(planContext.estimatedComplexity, checklistCfg.minComplexity))
     ) {
       const items = await this.checklistManager.deriveFromPlan(planContext, this.conversation.id, checklistRunId);
       if (items.length > 0) {
@@ -5269,6 +5385,9 @@ export class Agent {
     let consecutiveToolFailures = 0;
     const repeatedToolCalls = new Map<string, number>();
     let malformedToolCallAttempts = 0;
+    let unexecutedCodeFenceNudges = 0; // Bounded retries for the "showed code instead of writing it" guardrail
+    let falseCompletionClaimNudges = 0; // Bounded retries for the "narrated a fake success" guardrail
+    let truncatedEmptyResponseNudges = 0; // Bounded retries for the "ran out of tokens while reasoning, said nothing" guardrail
     let toolsJustExecuted = false; // Track if tools were executed in previous iteration
     let emptyResponseAfterTools = false; // Track if we got empty response after tool execution
 
@@ -5481,6 +5600,12 @@ export class Agent {
       // parser downstream - the model never had to hand-serialize the call into prose, so
       // nothing can leak into a file's content.
       let currentNativeToolCalls: ToolCall[] | undefined;
+      // Some backends (reasoning models like gpt-oss) can burn the ENTIRE completion budget
+      // on their hidden "reasoning" channel and return empty `content` with finish_reason
+      // "length" - the model never actually got to answer or call a tool, it just ran out of
+      // room while thinking. Track this so the run loop can nudge it to stop deliberating
+      // instead of silently treating an empty response as "done" (see below).
+      let currentFinishReason: string | undefined;
 
       const generateFromMessages = async (messages: LLMMessage[]): Promise<string> => {
         // DEBUG: Log what's being sent to LLM
@@ -5526,12 +5651,16 @@ export class Agent {
         // function-calling. Backends without it never see `tools` and keep using the
         // text `[TOOL:...]` protocol described in the system prompt.
         const nativeToolsEnabled = this.provider.supportsNativeTools?.() ?? false;
-        const mainGenOptions: { maxTokens: number; tools?: ReturnType<Executor["getToolDefinitions"]> } = { maxTokens: 8192 };
+        const mainGenOptions: { maxTokens: number; tools?: ReturnType<Executor["getToolDefinitions"]>; signal?: AbortSignal } = {
+          maxTokens: 8192,
+          signal: this.abortController?.signal,
+        };
         if (nativeToolsEnabled) {
           mainGenOptions.tools = this.executor.getToolDefinitions();
         }
         // Reset per-turn so a native call from a previous iteration never re-executes.
         currentNativeToolCalls = undefined;
+        currentFinishReason = undefined;
         if (options.stream && this.provider.supportsStreaming()) {
           try {
             // The provider streams internally and resolves with the full response.
@@ -5546,6 +5675,7 @@ export class Agent {
               estimated: result.usage.estimated === true,
             };
             currentNativeToolCalls = result.toolCalls;
+            currentFinishReason = result.finishReason;
             return result.content;
           } catch (e) {
             // A dead endpoint cannot be fixed by asking it again without streaming: the
@@ -5564,6 +5694,7 @@ export class Agent {
               estimated: syncResult.usage.estimated === true,
             };
             currentNativeToolCalls = syncResult.toolCalls;
+            currentFinishReason = syncResult.finishReason;
             return syncResult.content;
           }
         }
@@ -5575,6 +5706,7 @@ export class Agent {
           estimated: result.usage.estimated === true,
         };
         currentNativeToolCalls = result.toolCalls;
+        currentFinishReason = result.finishReason;
         return result.content;
       };
 
@@ -5592,6 +5724,13 @@ export class Agent {
           { logger: this.logger, eventEmitter: this.eventEmitterV2 }
         );
       } catch (error) {
+        // An intentional cancellation (Stop button, progress timeout) must propagate
+        // immediately - none of the compact/minimal-context retry chains below can help
+        // (and would just re-issue requests against an already-aborted signal), so bail
+        // out before any of that machinery runs.
+        if (isAbortError(error)) {
+          throw error;
+        }
         const providerError = error instanceof Error ? error.message : String(error);
         // Shrinking the prompt cannot help when nothing is listening at the endpoint -
         // and isProviderLoadError matches loosely enough (on "context", "token") that an
@@ -5859,6 +5998,31 @@ export class Agent {
       if (toolResultsMap.size > 0) {
         toolsJustExecuted = true;
         emptyResponseAfterTools = false; // Reset recovery flag for this execution batch
+
+        // Track consecutive iterations where EVERY executed tool call failed - the real
+        // signal that the agent is stuck retrying the same broken approach (e.g. the same
+        // file write failing again and again), distinct from maxRepeatedToolCall which only
+        // catches byte-identical repeats and lets a slightly-varied retry through forever.
+        // Resets the moment anything succeeds. The counter and its cap already existed in
+        // config (AGENT_MAX_TOOL_FAILURES / maxConsecutiveToolFailures, with a settings-UI
+        // description already promising this exact stop) but were never actually enforced.
+        const anyToolSucceeded = Array.from(toolResultsMap.values()).some((r) => r.success);
+        consecutiveToolFailures = anyToolSucceeded ? 0 : consecutiveToolFailures + 1;
+
+        if (consecutiveToolFailures >= adjustedControls.maxConsecutiveToolFailures) {
+          this.logger.warn("[RUNLOOP] Stopping after too many consecutive tool failures", {
+            consecutiveFailures: consecutiveToolFailures,
+            maxAllowed: adjustedControls.maxConsecutiveToolFailures,
+          });
+          emit("guardrail", `Abgebrochen: ${consecutiveToolFailures}x in Folge ohne Erfolg`, {
+            consecutiveFailures: consecutiveToolFailures,
+            maxAllowed: adjustedControls.maxConsecutiveToolFailures,
+          });
+          const stopNote = `\n\n_Abgebrochen: ${consecutiveToolFailures} Versuche in Folge sind fehlgeschlagen, ohne dass sich etwas geändert hat. Bitte prüfe die letzten Fehlermeldungen oben oder gib eine gezieltere Anweisung._`;
+          finalResponse = `${cleanedResponse}${stopNote}`;
+          toolsJustExecuted = false;
+          break;
+        }
       }
 
       // Capture this iteration's fresh evidence for later checklist verification. Doing it
@@ -6025,6 +6189,106 @@ export class Agent {
       // either advance (verified), accept (unverified+soft), or retry/skip (failed) so
       // the run doesn't stop with goals still outstanding.
       if (toolResultsMap.size === 0) {
+        // Guardrail: a reasoning-capable backend (e.g. gpt-oss) burned its whole completion
+        // budget on the hidden reasoning channel and never produced any content or tool call
+        // at all - finish_reason "length" with an empty response. Letting this fall through
+        // silently ends the turn with nothing done and no explanation. Nudge the model to
+        // stop deliberating and act directly; this also shortens the context it's reasoning
+        // over on retry (the previous, token-burning turn), which alone often breaks the loop.
+        if (
+          currentFinishReason === "length" &&
+          response.trim().length === 0 &&
+          (!currentNativeToolCalls || currentNativeToolCalls.length === 0) &&
+          truncatedEmptyResponseNudges < 2
+        ) {
+          truncatedEmptyResponseNudges++;
+          this.logger.warn("[TOOL-CALLS] Model exhausted its token budget reasoning and produced nothing, nudging", {
+            attempt: truncatedEmptyResponseNudges,
+          });
+          emit("guardrail", "Modell hat Budget beim Nachdenken verbraucht ohne Ergebnis — fordere direktes Handeln an", {
+            attempt: truncatedEmptyResponseNudges,
+          });
+          const nudgePrompt: LLMMessage = {
+            role: "user",
+            content:
+              `Your last response ran out of room while you were still reasoning and produced no answer and no tool call - nothing happened. ` +
+              `Stop deliberating and act now: pick ONE concrete next step (e.g. write ONE file) and emit its tool call immediately, ` +
+              `without narrating your reasoning first. Do the smallest useful action now, not the whole task at once.`,
+            metadata: { internal: true, kind: "truncated_empty_response_nudge" },
+          };
+          await this.conversation.addMessage(nudgePrompt);
+          this.history.add(nudgePrompt, "truncated_empty_response_nudge");
+          emit("internal_instruction", "Fordere direktes Handeln statt langem Nachdenken an...", {
+            kind: "truncated_empty_response_nudge",
+          });
+          continue;
+        }
+
+        // Guardrail: the model showed a file's worth of code in a plain ``` fence instead
+        // of emitting the [TOOL:filesystem action=write ...] block, so nothing was written.
+        // Nudge it once or twice to actually call the tool before giving up and letting the
+        // fence stand as the final (non-functional) answer.
+        const unexecutedFence = this.detectUnexecutedCodeFence(response);
+        if (unexecutedFence && unexecutedCodeFenceNudges < 2) {
+          unexecutedCodeFenceNudges++;
+          this.logger.warn("[TOOL-CALLS] Detected unexecuted code fence, nudging model to write it", {
+            language: unexecutedFence.language,
+            lineCount: unexecutedFence.lineCount,
+            attempt: unexecutedCodeFenceNudges,
+          });
+          emit("guardrail", "Code wurde angezeigt statt geschrieben — fordere echten Tool-Call an", {
+            language: unexecutedFence.language,
+            lineCount: unexecutedFence.lineCount,
+            attempt: unexecutedCodeFenceNudges,
+          });
+          const nudgePrompt: LLMMessage = {
+            role: "user",
+            content:
+              `You just showed a ${unexecutedFence.language} code block instead of writing it. Showing code in a markdown fence does nothing — no file is created. ` +
+              `Emit the actual tool call now using the block form:\n\n` +
+              `[TOOL:filesystem action=write path=<the file path>]\n<the exact same content, verbatim, no markdown fence>\n[/TOOL]\n\n` +
+              `Do this now — do not describe it, do not show it as a code block again.`,
+            metadata: { internal: true, kind: "unexecuted_code_fence_nudge" },
+          };
+          await this.conversation.addMessage(nudgePrompt);
+          this.history.add(nudgePrompt, "unexecuted_code_fence_nudge");
+          emit("internal_instruction", "Fordere Datei-Schreibvorgang statt Codeanzeige an...", {
+            kind: "unexecuted_code_fence_nudge",
+          });
+          continue;
+        }
+
+        // Guardrail: the model claimed in prose that a tool ran / files were submitted, but
+        // emitted no marker and no native tool_call - nothing actually happened. Nudge it to
+        // emit the real call instead of letting the false claim stand as the final answer.
+        const falseCompletionClaim = this.detectFalseCompletionClaim(response);
+        if (falseCompletionClaim && falseCompletionClaimNudges < 2) {
+          falseCompletionClaimNudges++;
+          this.logger.warn("[TOOL-CALLS] Detected false completion claim with no tool call, nudging model", {
+            attempt: falseCompletionClaimNudges,
+          });
+          emit("guardrail", "Abschluss ohne echten Tool-Call behauptet — fordere echte Ausführung an", {
+            attempt: falseCompletionClaimNudges,
+          });
+          const nudgePrompt: LLMMessage = {
+            role: "user",
+            content:
+              `Your last response claims something was done (a tool ran, files were submitted/created) but you did not actually emit a tool call - no [TOOL:...] marker was present, so NOTHING happened. ` +
+              `Claiming completion without emitting the marker is a critical failure. ` +
+              `If you meant to write a file, emit it now using the block form:\n\n` +
+              `[TOOL:filesystem action=write path=<the file path>]\n<the exact content, verbatim>\n[/TOOL]\n\n` +
+              `Only use a tool name that is actually in your tool list - do not invent or misuse one (e.g. "gateway" sends outbound messages, it does not write files). ` +
+              `Do this now — do not describe or claim it again.`,
+            metadata: { internal: true, kind: "false_completion_claim_nudge" },
+          };
+          await this.conversation.addMessage(nudgePrompt);
+          this.history.add(nudgePrompt, "false_completion_claim_nudge");
+          emit("internal_instruction", "Fordere echte Tool-Ausführung statt Behauptung an...", {
+            kind: "false_completion_claim_nudge",
+          });
+          continue;
+        }
+
         if (checklistActive && this.conversation.id !== undefined) {
           const open = await this.checklistManager.nextOpen(this.conversation.id, checklistRunId);
           if (open) {
@@ -6573,6 +6837,7 @@ export class Agent {
   stop(): void {
     if (this.status === "running") {
       this.stopRequested = true;
+      this.abortController?.abort();
       this.logger.info("Agent stop requested");
       return;
     }

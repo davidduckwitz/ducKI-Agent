@@ -315,7 +315,17 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "write": {
-          if (!content) return { success: false, data: null, error: "Content required for write" };
+          if (!content) {
+            return {
+              success: false,
+              data: null,
+              error:
+                "Content required for write. You called this tool with action:'write' but no 'content' string. " +
+                "If emitting a structured/native tool call, put the full file content as a plain JSON string in the 'content' argument " +
+                "(escape newlines as \\n, quotes as \\\"). If using the [TOOL:...] text format, prefer the block form instead - it takes " +
+                "the content verbatim with no escaping: [TOOL:filesystem action=write path=<path>]\\n<content>\\n[/TOOL]",
+            };
+          }
           if (!overwrite && existsSync(filePath)) {
             return { success: false, data: null, error: `File already exists: ${filePath}` };
           }
@@ -334,7 +344,17 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "append": {
-          if (!content) return { success: false, data: null, error: "Content required for append" };
+          if (!content) {
+            return {
+              success: false,
+              data: null,
+              error:
+                "Content required for append. You called this tool with action:'append' but no 'content' string. " +
+                "If emitting a structured/native tool call, put the content to append as a plain JSON string in the 'content' argument " +
+                "(escape newlines as \\n, quotes as \\\"). If using the [TOOL:...] text format, prefer the block form instead - it takes " +
+                "the content verbatim with no escaping: [TOOL:filesystem action=append path=<path>]\\n<content>\\n[/TOOL]",
+            };
+          }
           const dir = dirname(filePath);
           if (!existsSync(dir) && createDirs) mkdirSync(dir, { recursive: true });
           if (!existsSync(dir) && !createDirs) {

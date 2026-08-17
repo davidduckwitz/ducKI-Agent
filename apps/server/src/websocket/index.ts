@@ -4,6 +4,7 @@ import type { Server as SocketIOServer } from "socket.io";
 import type { Agent, AgentRunEvent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
+import { isAbortError } from "@ducki/providers";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { BitcoinPuzzleService, createScopedFilesystemTool } from "@ducki/agent";
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
@@ -575,11 +576,16 @@ export function setupWebSocket(
           timestamp: new Date().toISOString(),
         });
       } catch (error) {
-        emitToConversation(conversationId, "chat:error", {
-          error: error instanceof Error ? error.message : String(error),
-          conversationId,
-          timestamp: new Date().toISOString(),
-        });
+        // An intentional Stop already got its own "chat:stopped" notice from the chat:stop
+        // handler - surfacing this rejection too would show a confusing second, contradictory
+        // "error" message for what the user asked for on purpose.
+        if (!isAbortError(error)) {
+          emitToConversation(conversationId, "chat:error", {
+            error: error instanceof Error ? error.message : String(error),
+            conversationId,
+            timestamp: new Date().toISOString(),
+          });
+        }
       } finally {
         if (registryRunId) {
           agentRegistry.unregister(registryRunId);

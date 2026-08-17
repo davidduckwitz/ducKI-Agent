@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, FileCode2, ListChecks, MessageSquare, PanelRightClose, Send, Sparkles } from "lucide-react";
+import { Activity, FileCode2, ListChecks, MessageSquare, PanelRightClose, Send, Sparkles, Square, Trash2 } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { useUiStore, type CodingAgentTab } from "../../lib/uiStore";
 import { DuckyMascot } from "../chat/DuckyMascot";
@@ -45,7 +45,12 @@ export function CodingAgentPanel({
   overridePlan,
   onExecutePlan,
   onOpenFile,
+  hasMoreMessages,
+  isLoadingMoreMessages,
+  onLoadMoreMessages,
   onSend,
+  onStop,
+  onClearChat,
 }: {
   messages: RenderedChatMessage[];
   isLoading: boolean;
@@ -56,7 +61,12 @@ export function CodingAgentPanel({
   overridePlan?: Plan | null;
   onExecutePlan?: (plan: Plan) => Promise<void>;
   onOpenFile?: (path: string) => void;
+  hasMoreMessages?: boolean;
+  isLoadingMoreMessages?: boolean;
+  onLoadMoreMessages?: () => void;
   onSend: (text: string, options: { planMode: boolean; includeFile: string | null }) => void;
+  onStop: () => void;
+  onClearChat?: () => void;
 }) {
   const { t } = useI18n();
   const { codingAgentTab, setCodingAgentTab, setCodingAgentOpen } = useUiStore();
@@ -70,6 +80,9 @@ export function CodingAgentPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const activityBottomRef = useRef<HTMLDivElement>(null);
+  const chatViewportRef = useRef<HTMLDivElement>(null);
+  const pendingPrependHeightRef = useRef<number | null>(null);
+  const stickToBottomRef = useRef(true);
 
   // Conversation and tool noise are separated so a run with 40 tool calls does not
   // bury the two sentences the agent actually said.
@@ -100,9 +113,44 @@ export function CodingAgentPanel({
   }, [conversationId]);
 
   useEffect(() => {
-    if (codingAgentTab === "chat") chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
     if (codingAgentTab === "activity") activityBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent, codingAgentTab]);
+
+  // Mirrors the /chat page's scroll-anchoring: prepending older messages must not yank
+  // the viewport, and new messages should only auto-scroll to bottom when the user was
+  // already near it (otherwise it fights with reading older history that was just loaded).
+  useEffect(() => {
+    if (codingAgentTab !== "chat") return;
+    const viewport = chatViewportRef.current;
+    if (!viewport) return;
+
+    if (pendingPrependHeightRef.current !== null) {
+      const previous = pendingPrependHeightRef.current;
+      pendingPrependHeightRef.current = null;
+      const delta = viewport.scrollHeight - previous;
+      viewport.scrollTop = Math.max(0, viewport.scrollTop + delta);
+      return;
+    }
+
+    const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    if (stickToBottomRef.current || distanceToBottom < 300) {
+      setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }), 0);
+    }
+  }, [messages, streamingContent, codingAgentTab]);
+
+  const handleChatScroll = () => {
+    const viewport = chatViewportRef.current;
+    if (!viewport) return;
+
+    const distanceToBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    stickToBottomRef.current = distanceToBottom < 200;
+
+    if (viewport.scrollTop > 120) return;
+    if (!hasMoreMessages || isLoadingMoreMessages) return;
+
+    pendingPrependHeightRef.current = viewport.scrollHeight;
+    onLoadMoreMessages?.();
+  };
 
   const autoGrow = (element: HTMLTextAreaElement | null) => {
     if (!element) return;
@@ -169,6 +217,19 @@ export function CodingAgentPanel({
             size={22}
             title={isLoading ? t("chat.duckyWorkingTitle") : t("chat.duckyIdleTitle")}
           />
+          {onClearChat && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(t("codingPage.clearChatConfirm"))) onClearChat();
+              }}
+              title={t("codingPage.clearChat")}
+              disabled={isLoading || messages.length === 0}
+              className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setCodingAgentOpen(false)}
@@ -181,7 +242,14 @@ export function CodingAgentPanel({
       </div>
 
       {codingAgentTab === "chat" && (
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+        <div
+          ref={chatViewportRef}
+          onScroll={handleChatScroll}
+          className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2"
+        >
+          {isLoadingMoreMessages && (
+            <div className="py-1 text-center text-[10px] text-muted-foreground">{t("chat.loadingOlder")}</div>
+          )}
           {conversation.length === 0 && !isLoading ? (
             <PanelEmpty icon={<MessageSquare className="h-8 w-8" />} title={t("codingPage.noAgentOutput")} />
           ) : (
@@ -327,15 +395,27 @@ export function CodingAgentPanel({
 
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-[10px] text-muted-foreground">{t("codingPage.sendHint")}</span>
-          <button
-            type="button"
-            className="btn-primary shrink-0 px-3 py-1 text-xs"
-            onClick={submit}
-            disabled={!input.trim() || isLoading || disabled}
-          >
-            <Send className="mr-1 inline h-3.5 w-3.5" />
-            {t("codingPage.send")}
-          </button>
+          {isLoading ? (
+            <button
+              type="button"
+              className="flex shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 py-1 text-xs text-background transition hover:opacity-80"
+              onClick={onStop}
+              title={t("chat.stop")}
+            >
+              <Square className="h-3 w-3 fill-current" />
+              {t("chat.stop")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn-primary shrink-0 px-3 py-1 text-xs"
+              onClick={submit}
+              disabled={!input.trim() || disabled}
+            >
+              <Send className="mr-1 inline h-3.5 w-3.5" />
+              {t("codingPage.send")}
+            </button>
+          )}
         </div>
       </div>
     </div>

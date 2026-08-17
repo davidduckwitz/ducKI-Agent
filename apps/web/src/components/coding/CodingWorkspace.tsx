@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerQuery } from "../../lib/useServerQuery";
 import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
 import {
@@ -91,7 +91,7 @@ export function CodingWorkspace() {
   const { t } = useI18n();
   const qc = useQueryClient();
   const { resolvedMode } = useTheme();
-  const { messages, sendMessage, isLoading, streamingContent, setConversationId, setMessages } = useAppStore();
+  const { messages, sendMessage, stopMessage, isLoading, streamingContent, setConversationId, setMessages } = useAppStore();
   const creatingConversationRef = useRef<Record<string, boolean>>({});
 
   const {
@@ -230,11 +230,26 @@ export function CodingWorkspace() {
     })();
   }, [codingSettingReady, codingEnabled, selectedProject, projectConversationMap, setConversationId]);
 
-  const conversationMessagesQuery = useQuery({
+  const conversationMessagesQuery = useInfiniteQuery({
     queryKey: ["coding", "conversation", activeConversationId],
-    queryFn: () => api.chat.getMessages(activeConversationId ?? 0) as Promise<PersistedMessage[]>,
+    queryFn: ({ pageParam }) =>
+      api.chat.getMessagesPage(activeConversationId ?? 0, {
+        beforeId: pageParam as number | undefined,
+        limit: 40,
+      }) as Promise<{ items: PersistedMessage[]; hasMore: boolean; nextBeforeId?: number }>,
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.nextBeforeId : undefined),
     enabled: codingSettingReady && codingEnabled && Boolean(activeConversationId),
     refetchInterval: 3000,
+  });
+
+  const clearCodingMessages = useMutation({
+    mutationFn: (id: number) => api.chat.clearMessages(id),
+    onSuccess: async (_data, clearedId) => {
+      setMessages([] as never);
+      qc.removeQueries({ queryKey: ["coding", "conversation", clearedId] });
+      await qc.invalidateQueries({ queryKey: ["coding", "conversation", clearedId] });
+    },
   });
 
   useEffect(() => {
@@ -253,8 +268,11 @@ export function CodingWorkspace() {
   }, [activeConversationId, conversationMessagesQuery.error, selectedProject, setConversationId, setMessages]);
 
   useEffect(() => {
-    const persisted = conversationMessagesQuery.data;
-    if (!persisted) return;
+    const pages = conversationMessagesQuery.data?.pages;
+    if (!pages) return;
+    // Pages are fetched newest-first (beforeId cursor); each page is already sorted
+    // ascending internally, so reverse the page order to get full chronological history.
+    const persisted = pages.slice().reverse().flatMap((page) => page.items);
 
     const mapped: RenderedChatMessage[] = persisted.map((msg) => {
       const metadata = parseMessageMetadata(msg.metadata);
@@ -837,9 +855,16 @@ export function CodingWorkspace() {
                 overridePlan={handoffPlan}
                 onExecutePlan={executePlan}
                 onOpenFile={openFile}
+                hasMoreMessages={conversationMessagesQuery.hasNextPage}
+                isLoadingMoreMessages={conversationMessagesQuery.isFetchingNextPage}
+                onLoadMoreMessages={() => void conversationMessagesQuery.fetchNextPage()}
                 onSend={(text, options) => {
                   void sendCodingPrompt(text, options);
                 }}
+                onStop={stopMessage}
+                onClearChat={
+                  activeConversationId ? () => clearCodingMessages.mutate(activeConversationId) : undefined
+                }
               />
             </div>
           </>

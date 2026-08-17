@@ -519,6 +519,8 @@ export const translations: Record<Language, TranslationTree> = {
       uploadTitle: "Dateien hochladen",
       filesSelected: "Datei(en) ausgewaehlt",
       deleteFileConfirm: "Datei wirklich loeschen?",
+      clearChat: "Chat leeren",
+      clearChatConfirm: "Chatverlauf wirklich loeschen? Alle Nachrichten und Tool-Aufrufe dieses Chats werden entfernt.",
     },
     logsPage: {
       title: "Logs",
@@ -1270,6 +1272,8 @@ export const translations: Record<Language, TranslationTree> = {
       uploadTitle: "Upload files",
       filesSelected: "file(s) selected",
       deleteFileConfirm: "Really delete this file?",
+      clearChat: "Clear chat",
+      clearChatConfirm: "Really clear this chat's history? All messages and tool calls in this chat will be removed.",
     },
     logsPage: {
       title: "Logs",

@@ -7,7 +7,7 @@ import type {
 } from "openai/resources/chat/completions.js";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent, ToolDefinition, ToolCall } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "./base.js";
-import { ProviderConnectionError, looksLikeConnectionFailure } from "./errors.js";
+import { ProviderConnectionError, looksLikeConnectionFailure, isAbortError } from "./errors.js";
 import { estimateUsage } from "./token-estimate.js";
 
 function sleep(ms: number): Promise<void> {
@@ -245,7 +245,16 @@ export class OpenAIProvider implements LLMProvider {
   private rejectsToolsParam(error: unknown): boolean {
     if (this.getStatusCode(error) !== 400) return false;
     const message = error instanceof Error ? error.message : String(error);
-    return /\btools?\b|function[_ -]?call|tool[_ -]?choice|unsupported|not supported/i.test(message);
+    if (/\btools?\b|function[_ -]?call|tool[_ -]?choice|unsupported|not supported/i.test(message)) {
+      return true;
+    }
+    // Some local backends crash inside the MODEL'S OWN built-in Jinja chat template while
+    // rendering the `tools` param - e.g. LM Studio's bundled gpt-oss template throws
+    // "Function is not a bool value" for any tool with an array parameter (param_spec['items']
+    // mis-evaluates in their minja engine). That's a template bug unrelated to our schema, but
+    // it only ever fires because we sent `tools`, so treat it exactly like "backend can't do
+    // native tools" and fall back to the text protocol instead of failing the whole run.
+    return /jinja|chat template|predict request returned 500/i.test(message);
   }
 
   private getStatusCode(error: unknown): number | undefined {
@@ -338,15 +347,18 @@ export class OpenAIProvider implements LLMProvider {
     let completion;
     try {
       completion = await this.withRateLimitRetry(() =>
-        this.client.chat.completions.create(buildRequest(useNativeTools))
+        this.client.chat.completions.create(buildRequest(useNativeTools), { signal: merged.signal })
       );
     } catch (error) {
+      // An intentional cancellation (Stop button, run timeout) must propagate immediately -
+      // retrying or falling back to a differently-shaped request would just delay it.
+      if (isAbortError(error)) throw error;
       // Backend doesn't implement the `tools` param: disable native tools for this
       // instance and retry once WITHOUT them so the run continues on the text protocol.
       if (useNativeTools && !this.nativeToolsUnsupported && this.rejectsToolsParam(error)) {
         this.nativeToolsUnsupported = true;
         completion = await this.withRateLimitRetry(() =>
-          this.client.chat.completions.create(buildRequest(false))
+          this.client.chat.completions.create(buildRequest(false), { signal: merged.signal })
         );
       } else {
         throw error;
@@ -378,35 +390,45 @@ export class OpenAIProvider implements LLMProvider {
     const openAiMessages = toOpenAIMessages(messages);
     const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
 
-    const createStream = (includeUsage: boolean) =>
-      this.client.chat.completions.create({
-        model: this.model,
-        messages: openAiMessages,
-        temperature: merged.temperature,
-        top_p: merged.topP,
-        max_tokens: merged.maxTokens,
-        stream: true,
-        // Without this the OpenAI streaming protocol never sends a usage chunk at all -
-        // which is why every streamed response reported 0 tokens.
-        ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
-        ...(useNativeTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
-      });
+    // `withTools` is an explicit param (not just closing over `useNativeTools`) so the
+    // tools-rejected retry below can actually drop `tools` from the request - closing over
+    // the outer const would keep resending it since setting nativeToolsUnsupported=true
+    // doesn't change an already-captured value, causing the same backend crash to repeat.
+    const createStream = (includeUsage: boolean, withTools: boolean) =>
+      this.client.chat.completions.create(
+        {
+          model: this.model,
+          messages: openAiMessages,
+          temperature: merged.temperature,
+          top_p: merged.topP,
+          max_tokens: merged.maxTokens,
+          stream: true,
+          // Without this the OpenAI streaming protocol never sends a usage chunk at all -
+          // which is why every streamed response reported 0 tokens.
+          ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
+          ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
+        },
+        { signal: merged.signal }
+      );
 
     let stream: Awaited<ReturnType<typeof createStream>>;
     try {
-      stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported));
+      stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported, useNativeTools));
     } catch (error) {
+      // An intentional cancellation must propagate immediately, not trigger a feature-probing
+      // retry (stream_options / tools) that would just delay the stop the user asked for.
+      if (isAbortError(error)) throw error;
       // Not every OpenAI-compatible server accepts stream_options. Most ignore unknown
       // fields, but one that rejects them must not lose streaming entirely - drop the
       // field once and remember that for this provider instance.
       if (!this.streamOptionsUnsupported && this.rejectsStreamOptions(error)) {
         this.streamOptionsUnsupported = true;
-        stream = await this.withRateLimitRetry(() => createStream(false));
+        stream = await this.withRateLimitRetry(() => createStream(false, useNativeTools));
       } else if (useNativeTools && !this.nativeToolsUnsupported && this.rejectsToolsParam(error)) {
         // Backend can stream but not with `tools`: disable native tools and reopen the
         // stream without them so the run falls back to the text protocol.
         this.nativeToolsUnsupported = true;
-        stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported));
+        stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported, false));
       } else {
         throw error;
       }
@@ -417,6 +439,7 @@ export class OpenAIProvider implements LLMProvider {
     let completionTokens = 0;
     let reportedUsage = false;
     let finalModel = this.model;
+    let finalFinishReason: string | undefined;
     // Tool-call deltas arrive fragmented across chunks, keyed by `index`; accumulate the
     // id/name/arguments pieces per slot and assemble them once the stream ends.
     const toolCallAccum: Array<{ id: string; name: string; arguments: string }> = [];
@@ -445,6 +468,7 @@ export class OpenAIProvider implements LLMProvider {
           reportedUsage = promptTokens > 0 || completionTokens > 0;
         }
         finalModel = chunk.model ?? finalModel;
+        finalFinishReason = choice0?.finish_reason ?? finalFinishReason;
       }
     } catch (error) {
       // The stream can also die mid-flight; classify that the same way as a failure to
@@ -473,12 +497,14 @@ export class OpenAIProvider implements LLMProvider {
         toolCalls: normalizedToolCalls,
         usage: { ...estimate, estimated: true },
         model: finalModel,
+        finishReason: finalFinishReason,
       };
     }
 
     return {
       content: fullContent,
       toolCalls: normalizedToolCalls,
+      finishReason: finalFinishReason,
       usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
       model: finalModel,
     };

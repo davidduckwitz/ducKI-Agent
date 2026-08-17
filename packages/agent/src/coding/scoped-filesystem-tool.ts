@@ -32,8 +32,15 @@ export function normalizeScopedPath(rawPath: string, sandboxRoot: string): strin
   }
 
   // Leading run of segments equal to the SANDBOX TAIL (which always ends in the
-  // project dir), longest match first.
-  for (let take = Math.min(sbSegs.length, pSegs.length); take >= 1; take--) {
+  // project dir), longest match first. Requires at least 2 segments so a project
+  // slug that happens to match an ordinary subfolder name (e.g. a real project here
+  // is literally called "js") is never mistaken for a repeated sandbox prefix -
+  // stripping "js/utils.js" down to "utils.js" would silently misplace a file the
+  // model genuinely meant to put in a js/ subfolder, with no error to signal it. A
+  // bare repeated project name (single segment, e.g. "js/utils.js" meant as the
+  // redundant-prefix case) is left alone; worst case it lands one harmless
+  // directory level deeper instead of being silently discarded.
+  for (let take = Math.min(sbSegs.length, pSegs.length); take >= 2; take--) {
     const sbSuffix = sbLc.slice(sbLc.length - take).join("/");
     const pPrefix = pLc.slice(0, take).join("/");
     if (sbSuffix === pPrefix) {
