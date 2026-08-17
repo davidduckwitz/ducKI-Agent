@@ -26,6 +26,22 @@ function mimeTypeForFormat(format: BrowserPreviewData["format"]): string {
   return "image/jpeg";
 }
 
+/** screenshotStorageUrl/screenshotUrl are always server-provided paths (e.g. "/storage/...")
+ *  and screenshot is always raw base64 bytes - never mix these up by sniffing the string's
+ *  leading characters. JPEG's raw bytes (FF D8 FF...) base64-encode to a string that itself
+ *  starts with "/9j/", so a naive `.startsWith("/")` check misidentifies raw JPEG base64 as a
+ *  storage path and serves it unprefixed, which the <img> then fails to decode. */
+function resolveScreenshotSrc(data: BrowserPreviewData): string | undefined {
+  const storagePath = data.screenshotStorageUrl || data.screenshotUrl;
+  if (storagePath) return storagePath;
+  if (data.screenshot) {
+    return data.screenshot.startsWith("data:")
+      ? data.screenshot
+      : `data:${mimeTypeForFormat(data.format)};base64,${data.screenshot}`;
+  }
+  return undefined;
+}
+
 interface BrowserPreviewProps {
   msg: RenderedChatMessage;
 }
@@ -57,13 +73,7 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
     return null;
   }
 
-  const screenshotSrc = screenshotSource
-    ? screenshotSource.startsWith("data:")
-      ? screenshotSource
-      : screenshotSource.startsWith("/")
-        ? screenshotSource // Storage URL path
-        : `data:${mimeTypeForFormat(data.format)};base64,${screenshotSource}`
-    : undefined;
+  const screenshotSrc = resolveScreenshotSrc(data);
 
   const handleExportHtml = async () => {
     let html = data.htmlContent;
@@ -95,22 +105,13 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
   };
 
   const handleScreenshot = () => {
-    const source = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
-    if (!source) return;
+    const href = resolveScreenshotSrc(data);
+    if (!href) return;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `screenshot-${timestamp}.${data.format ?? "jpg"}`;
     const link = document.createElement("a");
-
-    if (source.startsWith("/")) {
-      // Storage URL - direct link
-      link.href = source;
-    } else if (source.startsWith("data:")) {
-      link.href = source;
-    } else {
-      link.href = `data:${mimeTypeForFormat(data.format)};base64,${source}`;
-    }
-
+    link.href = href;
     link.download = filename;
     document.body.appendChild(link);
     link.click();
@@ -214,14 +215,7 @@ interface BrowserPreviewModalProps {
 export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps) {
   const { controlBrowserSession } = useAppStore();
 
-  const screenshotSource = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
-  const screenshotSrc = screenshotSource
-    ? screenshotSource.startsWith("data:")
-      ? screenshotSource
-      : screenshotSource.startsWith("/")
-        ? screenshotSource
-        : `data:${mimeTypeForFormat(data.format)};base64,${screenshotSource}`
-    : undefined;
+  const screenshotSrc = resolveScreenshotSrc(data);
 
   const handleExportHtml = async () => {
     let html = data.htmlContent;
@@ -253,22 +247,13 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
   };
 
   const handleScreenshot = () => {
-    const source = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
-    if (!source) return;
+    const href = resolveScreenshotSrc(data);
+    if (!href) return;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `screenshot-${timestamp}.${data.format ?? "jpg"}`;
     const link = document.createElement("a");
-
-    if (source.startsWith("/")) {
-      // Storage URL - direct link
-      link.href = source;
-    } else if (source.startsWith("data:")) {
-      link.href = source;
-    } else {
-      link.href = `data:${mimeTypeForFormat(data.format)};base64,${source}`;
-    }
-
+    link.href = href;
     link.download = filename;
     document.body.appendChild(link);
     link.click();

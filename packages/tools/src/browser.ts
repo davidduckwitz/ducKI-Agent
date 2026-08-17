@@ -43,6 +43,11 @@ interface BrowserSession {
   page: import("puppeteer-core").Page;
   launchedAt: string;
   targetUrl?: string;
+  /** Puppeteer fixes headless mode at launch - it can't be toggled on a running browser.
+   *  Recorded so a later launch/screenshot_url call that requests a DIFFERENT headless
+   *  mode (e.g. the user just changed BROWSER_HEADLESS_MODE in Settings) can detect the
+   *  mismatch and relaunch instead of silently reusing a session in the wrong mode. */
+  headless: boolean;
 }
 
 interface BrowserWorkerRequest {
@@ -410,6 +415,7 @@ async function createSession(options: {
     browser,
     page,
     launchedAt: new Date().toISOString(),
+    headless: options.headless ?? true,
   };
   sessions.set(sessionId, session);
 
@@ -437,18 +443,39 @@ async function resolveOrLaunchSession(
   input: Record<string, unknown>
 ): Promise<{ sessionId: string; session: BrowserSession; reused: boolean; browserPath?: string }> {
   const forceNew = input["newSession"] === true || input["newSession"] === "true";
+  const requestedHeadless = input["headless"] === undefined ? true : input["headless"] === true || input["headless"] === "true";
+
   if (!forceNew && defaultSessionId) {
     const existing = sessions.get(defaultSessionId);
     if (existing) {
-      return { sessionId: defaultSessionId, session: existing, reused: true };
+      if (existing.headless === requestedHeadless) {
+        return { sessionId: defaultSessionId, session: existing, reused: true };
+      }
+      // Puppeteer fixes headless mode at launch - it cannot be toggled on a running
+      // browser. If the caller (or a just-changed BROWSER_HEADLESS_MODE setting) now wants
+      // a different mode than this session was actually launched with, reusing it would
+      // silently ignore that change forever (until the session happens to die on its own).
+      // Close it and launch fresh instead.
+      console.info(
+        `[browser] Default session '${defaultSessionId}' is headless=${existing.headless} but headless=${requestedHeadless} was requested - relaunching`
+      );
+      await stopStream(defaultSessionId);
+      try {
+        await existing.browser.close();
+      } catch {
+        // Already gone - fine, we're replacing it anyway.
+      }
+      sessions.delete(defaultSessionId);
+      defaultSessionId = undefined;
+    } else {
+      // Default session died without going through "close" - fall through to relaunch.
+      defaultSessionId = undefined;
     }
-    // Default session died without going through "close" - fall through to relaunch.
-    defaultSessionId = undefined;
   }
 
   const viewport = parseViewports(input["viewport"]);
   const { sessionId, browserPath } = await createSession({
-    headless: input["headless"] === true || input["headless"] === "true",
+    headless: requestedHeadless,
     viewport,
     executablePath: typeof input["executablePath"] === "string" ? input["executablePath"] : undefined,
     userAgent: typeof input["userAgent"] === "string" ? input["userAgent"] : undefined,

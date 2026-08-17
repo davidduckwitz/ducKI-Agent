@@ -1542,7 +1542,11 @@ export class Agent {
       }
 
       const browserAction = String(normalizedInput["action"] ?? "").trim().toLowerCase();
-      if (browserAction === "launch") {
+      // screenshot_url and stream_start can ALSO launch (or reuse) a session, via the same
+      // resolveOrLaunchSession() path as "launch" itself - without these settings injected
+      // here too, a macro call that ends up creating a fresh browser would silently ignore
+      // BROWSER_HEADLESS_MODE and the other launch-time settings that "launch" honors.
+      if (browserAction === "launch" || browserAction === "screenshot_url" || browserAction === "stream_start") {
         if (normalizedInput["newSession"] === undefined) {
           normalizedInput["newSession"] = !controls.browserReuseSession;
         }
