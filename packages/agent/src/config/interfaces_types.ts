@@ -41,6 +41,11 @@ export interface AgentRunResult {
    * repeat of the last one - the client uses this id to recognise that and not show it twice.
    */
   displayMessageId?: string;
+  /** The session-checklist run id used internally for this run, when one was created
+   *  (see AgentRunOptions.existingPlan). Lets a caller that supplied a plan look up this
+   *  run's checklist items afterwards (e.g. to write step-completion status back to a
+   *  saved plan file) without guessing/matching by title. */
+  checklistRunId?: string;
 }
 
 export interface AgentRunContextCaps {
@@ -79,6 +84,18 @@ export interface AgentRunOptions {
    *  for this run regardless of the global AGENT_CHECKLIST_ENABLED/min-complexity settings,
    *  since a caller-supplied plan is an explicit request to track and verify each step. */
   existingPlan?: Plan;
+  /** Overrides controls.timeoutMs (AGENT_TIMEOUT_MS) for this run only. Used by plan
+   *  execution to honor EXECUTION_MODE_TIMEOUT_MINUTES, which is a per-execution safety
+   *  timeout distinct from the agent-wide default. */
+  timeoutMsOverride?: number;
+  /** Overrides checklistCfg.maxItemAttempts for this run only. Used by plan execution to
+   *  honor EXECUTION_MODE_MAX_RETRIES as the retry budget for THIS plan's steps, distinct
+   *  from the agent-wide AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS default. */
+  checklistMaxItemAttemptsOverride?: number;
+  /** Minimum wall-clock gap (ms) between checklist step-verification passes during this
+   *  run. Honors EXECUTION_MODE_VALIDATION_INTERVAL; the checklist otherwise re-verifies
+   *  as soon as new evidence arrives, which this throttles for expensive verify passes. */
+  checklistMinVerifyIntervalMs?: number;
 }
 
 export interface AgentRunEvent {

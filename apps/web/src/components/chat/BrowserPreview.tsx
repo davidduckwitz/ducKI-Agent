@@ -11,8 +11,18 @@ export interface BrowserPreviewData {
   screenshotUrl?: string;
   screenshotStorageUrl?: string;
   screenshotSize?: number;
+  /** Actual encoding of `screenshot`'s bytes (BROWSER_SCREENSHOT_FORMAT, default "jpeg").
+   *  Must match the data: URI's declared MIME type below - a mismatch (e.g. real bytes are
+   *  webp/png but the URI claims jpeg) makes the browser refuse to decode the image at all. */
+  format?: "jpeg" | "png" | "webp";
   htmlContent?: string;
   isStreaming?: boolean;
+}
+
+function mimeTypeForFormat(format: BrowserPreviewData["format"]): string {
+  if (format === "png") return "image/png";
+  if (format === "webp") return "image/webp";
+  return "image/jpeg";
 }
 
 interface BrowserPreviewProps {
@@ -51,7 +61,7 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
       ? screenshotSource
       : screenshotSource.startsWith("/")
         ? screenshotSource // Storage URL path
-        : `data:image/jpeg;base64,${screenshotSource}`
+        : `data:${mimeTypeForFormat(data.format)};base64,${screenshotSource}`
     : undefined;
 
   const handleExportHtml = async () => {
@@ -88,7 +98,7 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
     if (!source) return;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `screenshot-${timestamp}.png`;
+    const filename = `screenshot-${timestamp}.${data.format ?? "jpg"}`;
     const link = document.createElement("a");
 
     if (source.startsWith("/")) {
@@ -97,7 +107,7 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
     } else if (source.startsWith("data:")) {
       link.href = source;
     } else {
-      link.href = `data:image/jpeg;base64,${source}`;
+      link.href = `data:${mimeTypeForFormat(data.format)};base64,${source}`;
     }
 
     link.download = filename;
@@ -200,7 +210,7 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
       ? screenshotSource
       : screenshotSource.startsWith("/")
         ? screenshotSource
-        : `data:image/jpeg;base64,${screenshotSource}`
+        : `data:${mimeTypeForFormat(data.format)};base64,${screenshotSource}`
     : undefined;
 
   const handleExportHtml = async () => {
@@ -237,7 +247,7 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
     if (!source) return;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `screenshot-${timestamp}.png`;
+    const filename = `screenshot-${timestamp}.${data.format ?? "jpg"}`;
     const link = document.createElement("a");
 
     if (source.startsWith("/")) {
@@ -246,7 +256,7 @@ export function BrowserPreviewModal({ data, onClose }: BrowserPreviewModalProps)
     } else if (source.startsWith("data:")) {
       link.href = source;
     } else {
-      link.href = `data:image/jpeg;base64,${source}`;
+      link.href = `data:${mimeTypeForFormat(data.format)};base64,${source}`;
     }
 
     link.download = filename;

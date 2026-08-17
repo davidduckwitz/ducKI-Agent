@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use tauri::menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent, Wry};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
@@ -335,7 +335,12 @@ fn build_tray(app: &AppHandle) -> Result<(), String> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { .. } = event {
+            // Only react to a completed LEFT click here. Reacting to right-clicks too used to
+            // steal focus for the main window right as the native context menu opened, which
+            // made Windows immediately dismiss the menu again - so "Beenden" (and everything
+            // else in it) was effectively unreachable. Right-click showing the menu is native
+            // tray behavior and needs no handling here at all.
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 show_main_window(tray.app_handle());
             }
         });
