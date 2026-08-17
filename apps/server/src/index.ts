@@ -782,6 +782,12 @@ async function bootstrap(): Promise<void> {
 
 	const io = new SocketIOServer(httpServer, {
 		cors: { origin: process.env["CORS_ORIGIN"] ?? "*" },
+		// Default is 1MB, which a full-page browser screenshot (fullPage:true captures the
+		// ENTIRE scrollable height, not just the viewport) can exceed on a long page - as
+		// base64 in a "chat:event" payload, that silently fails to send/render the preview
+		// with no error surfaced anywhere. 10MB covers realistic full-page JPEG/PNG/WebP
+		// screenshots with headroom.
+		maxHttpBufferSize: 10 * 1024 * 1024,
 	});
 	// The gateway status travels in the handshake snapshot and in agent:metrics, so the
 	// client no longer has to poll /agents/live for it.

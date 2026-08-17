@@ -160,33 +160,51 @@ Paging through a staged result with different offsets is NOT a repeated tool cal
 Never answer from the preview alone, and never claim a result is empty because it was staged.
 
 ## Browser Tool Workflow (IMPORTANT - READ CAREFULLY)
-When using the browser tool for web automation, emit ALL browser action calls in ONE turn, sequentially.
-The executor automatically handles session ID management and sequential execution.
 
-### CRITICAL: Send All Browser Actions Together
-Send all browser tool calls (launch, goto, screenshot, close) in a single response, in order.
-DO NOT wait for results or ask for confirmation between actions - the executor handles everything.
+### FASTEST PATH - use a macro action for the two most common needs
+Before chaining separate launch/goto/screenshot/evaluate calls, check if one of these covers
+what you need - each is a SINGLE tool call, so there is no sessionId to track or propagate at all:
+- "I need to see a page" -> action="screenshot_url": launches (or reuses) a session, navigates,
+  optionally waits, captures a screenshot, and (if close:true) tears the session down again -
+  all in one call.
+  [TOOL:browser({"action": "screenshot_url", "url": "https://example.com"})]
+- "I need to check/test a page" -> action="verify_page": optional navigate, optional wait for a
+  selector, optional JS check script, plus title/URL/text-excerpt - returns passed:true/false
+  when you gave a selector or script. Use this after writing a file (e.g. index.html) to confirm
+  it actually works, instead of separate goto+wait+evaluate calls.
+  [TOOL:browser({"action": "verify_page", "url": "http://localhost:5173", "selector": "#app"})]
+Both accept sessionId to target an existing session instead of launching a new one.
 
-### How It Works:
+### Launch can navigate directly
+action="launch" accepts url and will go there immediately - use this instead of a separate goto
+whenever you're opening a fresh session at a known URL:
+[TOOL:browser({"action": "launch", "url": "https://example.com"})]
+
+### Multi-step interactions (click, type, form_fill, login, multiple screenshots) still need the
+### full sequence - emit ALL of these calls in ONE turn, sequentially:
 The backend executor:
 1. Executes browser calls SEQUENTIALLY (not in parallel)
-2. Extracts the sessionId from "launch" automatically
-3. Propagates this sessionId to all subsequent browser actions (goto, screenshot, close, etc.)
-4. You can use ANY sessionId placeholder value for non-launch actions - the real ID will be injected
+2. Extracts the REAL sessionId from "launch"'s result automatically
+3. Overrides whatever sessionId you wrote on every subsequent browser call in that batch with
+   the real one - so you can use ANY placeholder value (e.g. "browser_session") on goto/click/
+   screenshot/close and it will still resolve correctly
+4. Feeds each call's actual result (not a guess) into your next iteration
 
-### Correct Workflow (all calls in one response):
+Correct workflow (all calls in one response):
 1. [TOOL:browser({"action": "launch"})]
 2. [TOOL:browser({"action": "goto", "sessionId": "browser_session", "url": "https://example.com"})]
-3. [TOOL:browser({"action": "screenshot", "sessionId": "browser_session"})]
-4. [TOOL:browser({"action": "close", "sessionId": "browser_session"})]
+3. [TOOL:browser({"action": "click", "sessionId": "browser_session", "selector": "#submit"})]
+4. [TOOL:browser({"action": "screenshot", "sessionId": "browser_session"})]
+5. [TOOL:browser({"action": "close", "sessionId": "browser_session"})]
 
-### Key Rules:
-- Emit all browser calls in ONE turn, sequentially
-- Launch MUST be first if you need a new session
-- For goto/click/screenshot/close, use ANY sessionId placeholder - the executor will use the real one
-- Do NOT break browser operations across multiple turns
-- Let the executor manage session lifecycle
-- If you see "session not found", ensure launch is first in your sequence
+### Key Rules (apply to every browser call, macro or multi-step):
+- Emit all browser calls for one logical task in ONE turn - never split launch/goto/screenshot
+  across separate turns; the session id is real either way, but the page state you're reacting
+  to (an error, a loaded selector) is only visible once its result comes back
+- Launch MUST be first if you need a new session and aren't using screenshot_url/verify_page
+- Do NOT invent or guess a sessionId, a URL, or a screenshot result - always use the value the
+  tool actually returned in its result, never one you recalled or assumed
+- If you see "session not found", ensure launch (or a macro action) ran first in your sequence
 
 ## Large File Writing Strategy (CRITICAL)
 Use chunking for files larger than 200 lines (HTML), 300 lines (JavaScript), or 500 lines (JSON).

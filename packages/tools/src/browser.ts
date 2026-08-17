@@ -24,7 +24,14 @@ type BrowserAction =
   | "login"
   | "pdf"
   | "download"
-  | "close";
+  | "close"
+  // Macro actions: collapse the common multi-step sequences (launch -> goto -> wait ->
+  // screenshot, or goto -> wait -> evaluate) into ONE call. Each round-trip through the
+  // LLM is a chance for a weak/local model to drop the real sessionId or only emit one
+  // step per turn instead of the documented batch - a single macro call removes that
+  // failure mode entirely for the two most common workflows.
+  | "screenshot_url"
+  | "verify_page";
 
 interface BrowserSession {
   browser: import("puppeteer-core").Browser;
@@ -348,6 +355,43 @@ async function createSession(options: {
   return { sessionId, browserPath: executablePath, targetUrl: session.targetUrl };
 }
 
+/**
+ * Reuse the shared default session unless the caller explicitly asks for a brand-new
+ * browser (same policy as action="launch"). Factored out of the "launch" case so the
+ * macro actions (screenshot_url, verify_page) can launch-or-reuse without duplicating
+ * this logic.
+ */
+async function resolveOrLaunchSession(
+  input: Record<string, unknown>
+): Promise<{ sessionId: string; session: BrowserSession; reused: boolean; browserPath?: string }> {
+  const forceNew = input["newSession"] === true || input["newSession"] === "true";
+  if (!forceNew && defaultSessionId) {
+    const existing = sessions.get(defaultSessionId);
+    if (existing) {
+      return { sessionId: defaultSessionId, session: existing, reused: true };
+    }
+    // Default session died without going through "close" - fall through to relaunch.
+    defaultSessionId = undefined;
+  }
+
+  const viewport = parseViewports(input["viewport"]);
+  const { sessionId, browserPath } = await createSession({
+    headless: input["headless"] === true || input["headless"] === "true",
+    viewport,
+    executablePath: typeof input["executablePath"] === "string" ? input["executablePath"] : undefined,
+    userAgent: typeof input["userAgent"] === "string" ? input["userAgent"] : undefined,
+    disableImages: input["disableImages"] === true || input["disableImages"] === "true",
+    blockResources: (input["blockResources"] as "none" | "tracking" | "ads" | "all") || "none",
+    hideAutomation: input["hideAutomation"] !== false && input["hideAutomation"] !== "false",
+    cookieDetection: input["cookieDetection"] === true || input["cookieDetection"] === "true",
+    proxyUrl: typeof input["proxyUrl"] === "string" ? input["proxyUrl"] : undefined,
+  });
+  defaultSessionId = sessionId;
+  const session = await getSession(sessionId);
+  if (!session) throw new Error("Failed to create browser session");
+  return { sessionId, session, reused: false, browserPath };
+}
+
 async function ensureSession(input: Record<string, unknown>): Promise<{ sessionId: string; session: BrowserSession }> {
   const requestedSessionId = String(input["sessionId"] ?? "").trim();
 
@@ -415,6 +459,8 @@ export const browserTool: ToolExecutor = {
             "pdf",
             "download",
             "close",
+            "screenshot_url",
+            "verify_page",
           ],
         },
         sessionId: { type: "string", description: "Browser session id" },
@@ -449,6 +495,9 @@ export const browserTool: ToolExecutor = {
         printBackground: { type: "boolean", description: "Include background graphics in PDF", default: true },
         saveDir: { type: "string", description: "Directory for downloaded file" },
         timeoutMs: { type: "number", description: "Timeout in ms for download/login/navigation waits" },
+        waitMs: { type: "number", description: "For action=screenshot_url without a selector: fixed delay (ms) after navigation before capturing, e.g. to let animations settle", default: 0 },
+        close: { type: "boolean", description: "For action=screenshot_url: close the session immediately after capturing (use when you only need one snapshot, not further interaction)", default: false },
+        extractText: { type: "boolean", description: "For action=verify_page: include up to 5000 chars of the page's visible text in the result", default: true },
       },
       required: ["action"],
     },
@@ -506,56 +555,25 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         // Reuse the shared default session unless the caller explicitly asks for a
         // brand-new browser - this is what stops every agent run from spawning its own
         // browser instance instead of collaborating on one.
-        const forceNew = input["newSession"] === true || input["newSession"] === "true";
-        if (!forceNew && defaultSessionId) {
-          const existing = sessions.get(defaultSessionId);
-          if (existing) {
-            if (input["url"]) {
-              await existing.page.goto(String(input["url"]), { waitUntil: "domcontentloaded" });
-              existing.targetUrl = existing.page.url();
-            }
-            const reusedResult = {
-              sessionId: defaultSessionId,
-              reused: true,
-              currentUrl: existing.page.url(),
-              launchedAt: existing.launchedAt,
-            };
-            console.info(`[browser] Reusing shared session: ${defaultSessionId}`);
-            return ok(reusedResult);
-          }
-          // Default session died without going through "close" - fall through to relaunch.
-          defaultSessionId = undefined;
-        }
-
-        const viewport = parseViewports(input["viewport"]);
-        const { sessionId, browserPath } = await createSession({
-          headless: input["headless"] === true || input["headless"] === "true",
-          viewport,
-          executablePath: typeof input["executablePath"] === "string" ? input["executablePath"] : undefined,
-          userAgent: typeof input["userAgent"] === "string" ? input["userAgent"] : undefined,
-          disableImages: input["disableImages"] === true || input["disableImages"] === "true",
-          blockResources: (input["blockResources"] as "none" | "tracking" | "ads" | "all") || "none",
-          hideAutomation: input["hideAutomation"] !== false && input["hideAutomation"] !== "false",
-          cookieDetection: input["cookieDetection"] === true || input["cookieDetection"] === "true",
-          proxyUrl: typeof input["proxyUrl"] === "string" ? input["proxyUrl"] : undefined,
-        });
-        defaultSessionId = sessionId;
-        const session = await getSession(sessionId);
-        if (browserPath) {
+        const { sessionId, session, reused, browserPath } = await resolveOrLaunchSession(input);
+        if (!reused && browserPath) {
           console.info(`[browser] launching ${browserSelectionLabel(browserPath)} at ${browserPath}`);
         }
-        console.info(`[browser] Session created: ${sessionId}`);
-        if (input["url"] && session) {
+        console.info(`[browser] Session ${reused ? "reused" : "created"}: ${sessionId}`);
+        // launch accepts `url` directly - collapses the documented launch-then-goto
+        // two-step into one call, which also means a caller never needs to guess/repeat
+        // a sessionId for the navigation: it's the same session, same call.
+        if (input["url"]) {
           await session.page.goto(String(input["url"]), { waitUntil: "domcontentloaded" });
           session.targetUrl = session.page.url();
         }
         const result = {
           sessionId,
-          reused: false,
+          reused,
           browserPath: browserPath ?? null,
           browserName: browserPath ? browserSelectionLabel(browserPath) : null,
-          currentUrl: session?.page.url() ?? null,
-          launchedAt: session?.launchedAt,
+          currentUrl: session.page.url(),
+          launchedAt: session.launchedAt,
         };
         console.info(`[browser] Returning launch result:`, JSON.stringify(result));
         return ok(result);
@@ -687,12 +705,123 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           },
         });
       }
+      case "screenshot_url": {
+        // Macro: launch/reuse -> goto -> optional wait -> screenshot -> optional close, in
+        // ONE call. Replaces the documented 3-4 step sequence for the single most common
+        // browser workflow ("show me this page"), removing every intermediate round-trip
+        // where a weak/local model could drop the real sessionId or stop after one step.
+        const url = String(input["url"] ?? "").trim();
+        if (!url) return fail("url is required");
+
+        const { sessionId, session } = await resolveOrLaunchSession(input);
+
+        const waitUntil = String(input["waitUntil"] ?? "domcontentloaded") as "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
+        const navTimeout = Number(input["timeout"] ?? 15000);
+        await session.page.goto(url, { waitUntil, timeout: navTimeout });
+        session.targetUrl = session.page.url();
+
+        const selector = String(input["selector"] ?? "").trim();
+        if (selector) {
+          await session.page.waitForSelector(selector, { timeout: Number(input["timeout"] ?? 10000), visible: true });
+        } else {
+          const waitMs = Number(input["waitMs"] ?? 0);
+          if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+
+        const format = (String(input["screenshotFormat"] ?? "jpeg").trim().toLowerCase() || "jpeg") as "jpeg" | "png" | "webp";
+        const quality = format === "png" ? undefined : Math.max(1, Math.min(100, Number(input["screenshotQuality"] ?? 85)));
+        const buffer = await session.page.screenshot({
+          fullPage: true,
+          type: format,
+          ...(quality !== undefined ? { quality } : {}),
+        });
+        const viewport = session.page.viewport() || { width: 1440, height: 1024 };
+        const title = await session.page.title().catch(() => "");
+
+        const shouldClose = input["close"] === true || input["close"] === "true";
+        if (shouldClose) {
+          await session.browser.close();
+          sessions.delete(sessionId);
+          if (defaultSessionId === sessionId) defaultSessionId = undefined;
+        }
+
+        return ok({
+          sessionId: shouldClose ? null : sessionId,
+          url: session.page.url(),
+          title,
+          closed: shouldClose,
+          bytes: buffer.byteLength,
+          screenshot: Buffer.from(buffer).toString("base64"),
+          metadata: {
+            format,
+            width: viewport.width,
+            height: viewport.height,
+            timestamp: new Date().toISOString(),
+            sizeKb: Math.round(buffer.byteLength / 1024),
+          },
+        });
+      }
       case "evaluate": {
         const { sessionId, session } = await ensureSession(input);
         const script = String(input["script"] ?? "").trim();
         if (!script) return fail("script is required");
         const result = await session.page.evaluate(script);
         return ok({ sessionId, result });
+      }
+      case "verify_page": {
+        // Macro for "does this page actually work": optional navigate -> optional wait for
+        // a selector -> optional check script -> title/URL/text excerpt, in ONE call. Built
+        // for testing/verification after writing a page (e.g. after the filesystem tool
+        // wrote index.html) instead of chaining goto+wait+evaluate+get_content separately.
+        const { sessionId, session } = await ensureSession(input);
+        const url = String(input["url"] ?? "").trim();
+        if (url) {
+          const waitUntil = String(input["waitUntil"] ?? "domcontentloaded") as "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
+          await session.page.goto(url, { waitUntil, timeout: Number(input["timeout"] ?? 15000) });
+          session.targetUrl = session.page.url();
+        }
+
+        const selector = String(input["selector"] ?? "").trim();
+        let selectorFound: boolean | null = null;
+        if (selector) {
+          try {
+            await session.page.waitForSelector(selector, { timeout: Number(input["timeout"] ?? 10000), visible: true });
+            selectorFound = true;
+          } catch {
+            selectorFound = false;
+          }
+        }
+
+        const script = String(input["script"] ?? "").trim();
+        let evaluated: unknown;
+        let evaluateError: string | undefined;
+        if (script) {
+          try {
+            evaluated = await session.page.evaluate(script);
+          } catch (error) {
+            evaluateError = error instanceof Error ? error.message : String(error);
+          }
+        }
+
+        const title = await session.page.title().catch(() => "");
+        const bodyText = input["extractText"] !== false
+          ? await session.page.evaluate(() => document.body?.innerText?.slice(0, 5000) ?? "").catch(() => "")
+          : undefined;
+
+        return ok({
+          sessionId,
+          url: session.page.url(),
+          title,
+          selector: selector || null,
+          selectorFound,
+          script: script || null,
+          evaluated: script ? evaluated ?? null : undefined,
+          evaluateError: evaluateError ?? null,
+          bodyText,
+          // A quick pass/fail summary: no selector/script given means nothing was actually
+          // checked, so that alone is never reported as a "pass".
+          passed: (selector || script) ? selectorFound !== false && !evaluateError : null,
+        });
       }
       case "cookies_get": {
         const { sessionId, session } = await ensureSession(input);
