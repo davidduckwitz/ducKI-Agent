@@ -434,18 +434,6 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
-    key: "AGENT_AUTO_DOWNGRADE",
-    label: "Automatischer Modell-Downgrade",
-    description: "Aus (Standard) = der Agent schlaegt bei Budget-Ueberschreitung nur ein guenstigeres Modell vor. Aktiv = kuenftig autonomer Wechsel erlaubt. Standardmaessig trifft der Agent KEINE Modellentscheidung selbst.",
-    type: "select",
-    section: "Agent",
-    defaultValue: "false",
-    options: [
-      { label: "Aktiv (autonom)", value: "true" },
-      { label: "Aus (nur Vorschlag)", value: "false" },
-    ],
-  },
-  {
     key: "AGENT_ENABLE_VISION",
     label: "Vision-Analyse (Observer)",
     description: "Aktiviert das analyze_ui_layout-Tool zur visuellen Analyse von Screenshots. Benoetigt ein vision-faehiges Modell im aktiven Provider (z. B. multimodales GGUF in LM Studio). Aus = Tool meldet sich deaktiviert.",
@@ -731,14 +719,6 @@ const PREDEFINED_FIELDS: SettingField[] = [
       { label: "Good (Nur sehr schlecht)", value: "good" },
       { label: "Excellent (Nie speichern)", value: "excellent" },
     ],
-  },
-  {
-    key: "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
-    label: "Reasoner Min Confidence",
-    description: "Mindest-Confidence, bevor Reasoner eine Antwort oder Tool-Ausfuehrung uebersteuern darf.",
-    type: "number",
-    section: "Agent",
-    defaultValue: "0.65",
   },
   {
     key: "AGENT_AUTO_SKILL_SELECTION",

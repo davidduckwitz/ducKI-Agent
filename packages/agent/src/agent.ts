@@ -548,6 +548,11 @@ export class Agent {
     const toolsUsed: string[] = [];
     let iterations = 0;
     const controls = await this.loadRuntimeControls();
+    // A caller-scoped timeout (e.g. EXECUTION_MODE_TIMEOUT_MINUTES for plan execution)
+    // takes precedence over the agent-wide AGENT_TIMEOUT_MS default for this run only.
+    if (options.timeoutMsOverride && options.timeoutMsOverride > 0) {
+      controls.timeoutMs = options.timeoutMsOverride;
+    }
 
     // Load ever-used skills for scoring boost (non-blocking)
     try {
@@ -3939,6 +3944,39 @@ export class Agent {
     // by re-parsing the markdown.
     emit("plan", "Plan erstellt", { ...toPlanEventPayload(plan, response), phase: "done" });
 
+    // PLAN_MODE_AUTO_SAVE: persist the plan as a markdown file under
+    // shared-workspace/<PLAN_MODE_MARKDOWN_PATH> so it survives outside the conversation
+    // and can be inspected/edited directly. Default on; failures are logged but never
+    // fail the plan-creation turn itself.
+    try {
+      const autoSaveSetting = await this.db.getSetting("PLAN_MODE_AUTO_SAVE");
+      const autoSaveEnabled = autoSaveSetting === undefined || autoSaveSetting.toLowerCase() !== "false";
+      if (autoSaveEnabled) {
+        const markdownDir = (await this.db.getSetting("PLAN_MODE_MARKDOWN_PATH"))?.trim() || "plans";
+        const slug =
+          plan.goal
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+            .slice(0, 60) || "plan";
+        const savePath = `${markdownDir}/${slug}-${Date.now()}.md`;
+        const writeResult = await this.executor.execute("filesystem", {
+          action: "write",
+          path: savePath,
+          content: response,
+        });
+        if (writeResult.success) {
+          emit("guardrail", `Plan gespeichert: ${savePath}`, { path: savePath });
+        } else {
+          this.logger.warn("Failed to auto-save plan markdown", { path: savePath, error: writeResult.error });
+        }
+      }
+    } catch (error) {
+      this.logger.warn("Failed to auto-save plan markdown", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     return {
       response,
       iterations: 1,
@@ -4260,6 +4298,48 @@ export class Agent {
           error: executed.result.error,
           resultSize: JSON.stringify(executed.result.data).length,
         });
+
+        // Phase 1.5: Self-repair - a failed call is corrected (mechanically, or via a
+        // targeted LLM fix) and re-run immediately, bounded by selfRepairMaxAttempts,
+        // before it's recorded as a permanent failure. This runs BEFORE error tracking/
+        // circuit breaker below so those only ever see the final, post-repair outcome.
+        if (!executed.result.success && toolCall && executed.result.error && controls.selfRepairEnabled) {
+          let repairAttempts = 0;
+          let repairedInput = toolCall.input as Record<string, unknown>;
+          let repairedResult = executed.result;
+          while (!repairedResult.success && repairAttempts < controls.selfRepairMaxAttempts) {
+            const repair = await this.attemptSelfRepair(
+              toolCall.toolName,
+              repairedInput,
+              repairedResult.error ?? "Unknown error",
+              undefined
+            );
+            if (!repair) break;
+            repairAttempts++;
+            this.logger.info("[SELF-REPAIR] Retrying tool call with corrected input", {
+              toolName: toolCall.toolName,
+              attempt: repairAttempts,
+              maxAttempts: controls.selfRepairMaxAttempts,
+            });
+            emit("guardrail", `Selbstkorrektur: ${toolCall.toolName} wird mit korrigierter Eingabe erneut versucht`, {
+              toolName: toolCall.toolName,
+              attempt: repairAttempts,
+            });
+            repairedInput = repair.input;
+            repairedResult = await this.executor.execute(repair.toolName, repair.input);
+          }
+          if (repairAttempts > 0) {
+            executed.result = repairedResult;
+            resultMap.set(executed.id, repairedResult);
+            emit(
+              repairedResult.success ? "guardrail" : "guardrail",
+              repairedResult.success
+                ? `Selbstkorrektur erfolgreich: ${toolCall.toolName}`
+                : `Selbstkorrektur ohne Erfolg nach ${repairAttempts} Versuch(en): ${toolCall.toolName}`,
+              { toolName: toolCall.toolName, attempts: repairAttempts, success: repairedResult.success }
+            );
+          }
+        }
 
         // Phase 1: Track tool failures for error deduplication
         if (!executed.result.success && toolCall && executed.result.error) {
@@ -5199,7 +5279,9 @@ export class Agent {
     const checklistCfg = {
       enabled: controls.checklistEnabled,
       minComplexity: controls.checklistMinComplexity,
-      maxItemAttempts: controls.checklistMaxItemAttempts,
+      // A caller-scoped override (EXECUTION_MODE_MAX_RETRIES for plan execution) takes
+      // precedence over the agent-wide AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS default.
+      maxItemAttempts: options.checklistMaxItemAttemptsOverride ?? controls.checklistMaxItemAttempts,
       skippedPolicy: controls.checklistSkippedPolicy,
     };
     const checklistRunId = `run-${Date.now()}`;
@@ -5214,6 +5296,11 @@ export class Agent {
     // re-verifying identical evidence iteration after iteration.
     let checklistEvidencePushes = 0;
     let checklistLastAdvanceAt = -1;
+    // Wall-clock throttle for the mid-run verify pass (EXECUTION_MODE_VALIDATION_INTERVAL
+    // for plan execution). The evidence-count gate above already avoids re-verifying
+    // unchanged evidence; this additionally caps how OFTEN the (LLM-backed) verifier runs
+    // at all, for callers that want to bound its cost/frequency during a long plan run.
+    let checklistLastVerifyAtMs = 0;
     if (
       (checklistCfg.enabled || usingExternalPlan) &&
       planContext &&
@@ -6062,9 +6149,11 @@ export class Agent {
         checklistActive &&
         this.conversation.id !== undefined &&
         cleanedResponse.trim().length > 0 &&
-        checklistEvidencePushes > checklistLastAdvanceAt // only when fresh evidence arrived since the last check
+        checklistEvidencePushes > checklistLastAdvanceAt && // only when fresh evidence arrived since the last check
+        Date.now() - checklistLastVerifyAtMs >= (options.checklistMinVerifyIntervalMs ?? 0)
       ) {
         checklistLastAdvanceAt = checklistEvidencePushes;
+        checklistLastVerifyAtMs = Date.now();
         try {
           const evidence = this.compileChecklistEvidence(cleanedResponse, checklistEvidenceLog);
           for (let advances = 0; advances < 3; advances++) {
@@ -6798,6 +6887,7 @@ export class Agent {
       toolsUsed,
       conversationId: this.conversation.id,
       ...(sameAsLastDisplayRow ? { displayMessageId: lastDisplayMessageId } : {}),
+      ...(checklistActive ? { checklistRunId } : {}),
     };
   }
 

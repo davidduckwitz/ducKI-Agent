@@ -1,6 +1,8 @@
 import { Router, type IRouter } from "express";
 import { resolve } from "node:path";
-import type { Agent, Plan, PlanStep } from "@ducki/agent";
+import { existsSync, mkdirSync } from "node:fs";
+import type { Agent, AgentRunResult, Plan, PlanStep } from "@ducki/agent";
+import { formatPlanAsMarkdown } from "@ducki/agent";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { parseMarkdownToPlan } from "@ducki/planer";
 import { CODING_WORKSPACE_ROOT } from "@ducki/tools";
@@ -125,6 +127,25 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
     const io = req.app.locals["io"] as import("socket.io").Server | undefined;
 
+    // Execution-mode settings: how this specific plan run behaves, distinct from the
+    // agent-wide defaults (a plan the user just confirmed executing deserves its own,
+    // possibly stricter/longer, budget).
+    const getBoolSetting = async (key: string, fallback: boolean): Promise<boolean> => {
+      const raw = await db?.getSetting(key);
+      if (raw === undefined || raw === null || raw.trim().length === 0) return fallback;
+      return raw.toLowerCase() !== "false";
+    };
+    const getNumberSetting = async (key: string, fallback: number): Promise<number> => {
+      const raw = await db?.getSetting(key);
+      const parsed = raw !== undefined ? Number(raw) : NaN;
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    };
+    const autoCreateProject = await getBoolSetting("EXECUTION_MODE_AUTO_CREATE_PROJECT", true);
+    const maxRetries = Math.max(1, await getNumberSetting("EXECUTION_MODE_MAX_RETRIES", 3));
+    const timeoutMinutes = await getNumberSetting("EXECUTION_MODE_TIMEOUT_MINUTES", 30);
+    const updatePlanFile = await getBoolSetting("EXECUTION_MODE_UPDATE_PLAN_FILE", true);
+    const markdownDir = ((await db?.getSetting("PLAN_MODE_MARKDOWN_PATH"))?.trim()) || "plans";
+
     const body = (req.body ?? {}) as ExecutePlanBody;
     const rawId = Number(req.params.id);
     const planId = Number.isFinite(rawId) && rawId > 0 ? rawId : null;
@@ -175,6 +196,19 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     if (!codingSandboxRoot && body.projectSlug) {
       const slug = safeProjectSlug(String(body.projectSlug));
       if (slug) codingSandboxRoot = resolve(CODING_WORKSPACE_ROOT, slug);
+    }
+    // EXECUTION_MODE_AUTO_CREATE_PROJECT: no project was given at all - create a fresh
+    // coding sandbox from the goal so a plan executed without a pre-selected project still
+    // has somewhere to write files, instead of falling back to the general (unscoped) agent.
+    if (!codingSandboxRoot && autoCreateProject) {
+      const slug = safeProjectSlug(goal) || `plan-${Date.now()}`;
+      const candidateRoot = resolve(CODING_WORKSPACE_ROOT, slug);
+      try {
+        if (!existsSync(candidateRoot)) mkdirSync(candidateRoot, { recursive: true });
+        codingSandboxRoot = candidateRoot;
+      } catch {
+        // Non-critical - falls through to the general agent below.
+      }
     }
     const projectSandboxInfo = codingSandboxRoot
       ? `\n\nPROJECT DIRECTORY: ${codingSandboxRoot}\nAll file paths are relative to this directory.`
@@ -235,6 +269,37 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
     const conversationId = body.conversationId;
 
+    // Writes the plan back to its markdown file with each step's current status checked
+    // off (EXECUTION_MODE_UPDATE_PLAN_FILE). Keyed by conversationId so re-executing the
+    // same plan on the same conversation updates the same file instead of piling up copies.
+    const savePlanProgress = async (planResult: AgentRunResult, executor: Agent | import("@ducki/agent").CodingAgent) => {
+      if (!updatePlanFile || !db || planResult.checklistRunId === undefined) return;
+      try {
+        const items = await db.getChecklist(conversationId, planResult.checklistRunId);
+        const statusByTitle = new Map(items.map((item) => [item.title, item.status]));
+        const updatedPlan: Plan = {
+          ...existingPlan,
+          steps: existingPlan.steps.map((step) => {
+            const dbStatus = statusByTitle.get(step.title);
+            const status: PlanStep["status"] =
+              dbStatus === "done" ? "completed" : dbStatus === "failed" ? "failed" : dbStatus === "in_progress" ? "running" : step.status;
+            return { ...step, status };
+          }),
+        };
+        const markdown = formatPlanAsMarkdown(updatedPlan);
+        const savePath = `${markdownDir}/plan-${conversationId}.md`;
+        await executor.executor.execute("filesystem", { action: "write", path: savePath, content: markdown });
+      } catch (error) {
+        console.warn("Failed to update plan markdown file with execution progress:", error);
+      }
+    };
+
+    const timeoutMsOverride = timeoutMinutes * 60 * 1000;
+    // EXECUTION_MODE_MAX_RETRIES overrides the checklist's per-step attempt budget for THIS
+    // plan run specifically, distinct from the agent-wide AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS
+    // default - a plan the user just confirmed executing may warrant a different budget.
+    const checklistMaxItemAttemptsOverride = maxRetries;
+
     // Start async execution - don't wait for it
     (async () => {
       try {
@@ -268,6 +333,8 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             const result = await codingAgent.runOnExistingConversation(executionPrompt, {
               stream: true,
               existingPlan,
+              timeoutMsOverride,
+              checklistMaxItemAttemptsOverride,
               onChunk: (chunk) => {
                 io?.emit("chat:chunk", { content: chunk, conversationId });
               },
@@ -275,6 +342,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
                 io?.emit("chat:event", { ...event, conversationId });
               },
             });
+            await savePlanProgress(result, codingAgent);
 
             // Emit completion event
             if (io) {
@@ -305,6 +373,8 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
         const result = await agent.run(executionPrompt, {
           stream: true,
           existingPlan,
+          timeoutMsOverride,
+          checklistMaxItemAttemptsOverride,
           onChunk: (chunk) => {
             io?.emit("chat:chunk", { content: chunk, conversationId });
           },
@@ -312,6 +382,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             io?.emit("chat:event", { ...event, conversationId });
           },
         });
+        await savePlanProgress(result, agent);
 
         // Emit completion event
         if (io) {

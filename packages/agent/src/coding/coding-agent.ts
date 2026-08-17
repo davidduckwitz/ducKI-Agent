@@ -5,7 +5,7 @@ import { filesystemTool, gitTool, shellTool, skillsTool } from "@ducki/tools";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
-import type { AgentEventEmitter, AgentRunOptions } from "../config/interfaces_types.js";
+import type { AgentEventEmitter, AgentRunOptions, AgentRunResult } from "../config/interfaces_types.js";
 import { AGENT_HOOK_NAMES, type AgentHook } from "../hooks/index.js";
 import { ToolApprovalPolicy, AllowedActions } from "../tools/tool-approval-policy.js";
 import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
@@ -224,7 +224,7 @@ export class CodingAgent {
   async runOnExistingConversation(
     prompt: string,
     options: AgentRunOptions = {}
-  ): Promise<{ response: string; result?: unknown }> {
+  ): Promise<AgentRunResult> {
     return this.agent.run(prompt, options);
   }
 

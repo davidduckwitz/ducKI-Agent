@@ -346,10 +346,24 @@ export function setupWebSocket(
 
         let attemptProducedOutput = false;
 
+        // PLAN_MODE_ENABLED gates the "plan" agentMode (structured planning without tool
+        // execution) - default on, but an admin can turn it off to force every request
+        // through the normal full run instead.
+        let requestedAgentMode = data.agentMode;
+        if (requestedAgentMode === "plan") {
+          const planModeSetting = await db.getSetting("PLAN_MODE_ENABLED");
+          const planModeEnabled = planModeSetting === undefined || planModeSetting === null
+            ? true
+            : planModeSetting.toLowerCase() !== "false";
+          if (!planModeEnabled) {
+            requestedAgentMode = "full";
+          }
+        }
+
         const runOptions = {
           stream: true,
           attachments: data.attachments,
-          agentMode: data.agentMode,
+          agentMode: requestedAgentMode,
           localMessageId: data.localMessageId,
           onChunk: (chunk: string) => {
             attemptProducedOutput = true;

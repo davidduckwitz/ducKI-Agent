@@ -87,6 +87,20 @@ function isImageFile(path: string): boolean {
   return ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif" || ext === "webp" || ext === "svg";
 }
 
+/**
+ * Derives a project name for auto-creation that is virtually guaranteed unique. The
+ * backend's createProject is idempotent-by-slug (it happily reuses an existing directory
+ * instead of erroring), so a name derived only from a plan's goal/title can silently
+ * collide with an unrelated pre-existing project - a fresh plan handoff or "Execute"
+ * would then land in that stale project instead of a genuinely new, empty one. Appending
+ * a short time-based suffix keeps the name readable while avoiding that collision.
+ */
+function uniqueProjectNameFrom(base: string): string {
+  const trimmed = base.trim().slice(0, 40);
+  const suffix = Date.now().toString(36).slice(-6);
+  return trimmed ? `${trimmed}-${suffix}` : `plan-${suffix}`;
+}
+
 export function CodingWorkspace() {
   const { t } = useI18n();
   const qc = useQueryClient();
@@ -132,6 +146,26 @@ export function CodingWorkspace() {
       setCodingAgentTab("plan");
       // Consume the state so it isn't re-applied on back/forward or reload.
       navigate(location.pathname, { replace: true, state: {} });
+
+      // A plan handed off from chat must land in its OWN fresh coding project - leaving
+      // whatever project was selected before (from a previous session) showed this plan
+      // next to a stale, unrelated file tree and conversation. Mirrors executePlan()'s own
+      // auto-create fallback below, just triggered on arrival instead of on "Execute".
+      void (async () => {
+        try {
+          const name = uniqueProjectNameFrom(String(incoming.goal || incoming.title || "plan"));
+          const created = await api.coding.createProject(name);
+          // The project selector's options come from this cached query - without
+          // refetching it, selectedProject points at a slug the dropdown doesn't list yet,
+          // so the switch doesn't visibly happen even though the state is set correctly.
+          await qc.invalidateQueries({ queryKey: ["coding", "projects"] });
+          await qc.refetchQueries({ queryKey: ["coding", "projects"] });
+          setSelectedProject(created.slug);
+        } catch {
+          // Non-critical - the plan still renders via handoffPlan/overridePlan even if
+          // auto-creation failed here; execute() creates a project lazily as a fallback.
+        }
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.state]);
@@ -592,10 +626,12 @@ export function CodingWorkspace() {
   const executePlan = async (plan: Plan) => {
     let project = selectedProject;
     if (!project) {
-      const base = String(plan.goal || plan.title || "plan").trim();
-      const name = (base.slice(0, 40) || `plan-${Date.now()}`);
+      const name = uniqueProjectNameFrom(String(plan.goal || plan.title || "plan"));
       const created = await api.coding.createProject(name);
       project = created.slug;
+      // The project selector's options come from this cached query - without refetching
+      // it, selectedProject points at a slug the dropdown doesn't list yet.
+      await qc.invalidateQueries({ queryKey: ["coding", "projects"] });
       setSelectedProject(project);
     }
 

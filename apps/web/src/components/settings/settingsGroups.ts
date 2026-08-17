@@ -195,7 +195,6 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_REFLECTION_STORE_MEMORY",
         "AGENT_REFLECTION_META_REVIEW",
         "AGENT_QUALITY_PASS_TIMEOUT_MS",
-        "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
         "AGENT_AUTO_MEMORY",
       ],
     },
@@ -224,7 +223,6 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       keys: [
         "AGENT_COST_BUDGET_USD",
         "AGENT_COST_GOVERNOR_STOP",
-        "AGENT_AUTO_DOWNGRADE",
       ],
     },
     {

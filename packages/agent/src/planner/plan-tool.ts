@@ -146,9 +146,14 @@ export function formatPlanAsMarkdown(plan: Plan): string {
     lines.push("");
   }
 
-  // Add steps with detailed info
+  // Add steps with detailed info. A checkbox is only shown once a step has left "pending"
+  // (i.e. this markdown reflects real execution progress, e.g. EXECUTION_MODE_UPDATE_PLAN_FILE
+  // re-saving the plan mid/post-execution) - a freshly created plan's steps are all
+  // "pending" and render exactly as before (no visible checkbox noise).
   plan.steps.forEach((step, index) => {
-    lines.push(`${index + 1}. **${step.title}**`);
+    const checkbox =
+      step.status === "completed" ? "[x] " : step.status === "failed" ? "[!] " : step.status === "running" ? "[~] " : "";
+    lines.push(`${index + 1}. ${checkbox}**${step.title}**`);
     if (step.description) lines.push(`   ${step.description}`);
 
     const metadata: string[] = [];

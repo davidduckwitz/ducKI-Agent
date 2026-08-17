@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Circle, ListChecks, Loader2, Play, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
+import { useSettings, readFlag } from "../../lib/useSettings";
 import type { Plan } from "../chat/PlanExecutionPanel";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import { PanelEmpty } from "../ui/panel";
@@ -34,6 +35,13 @@ export function CodingPlanPanel({
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefinement, setShowRefinement] = useState(false);
+  const settingsQuery = useSettings();
+  const autoExecuteEnabled = readFlag(settingsQuery.data, "PLAN_MODE_AUTO_EXECUTE");
+  // Set right before a refinement prompt is submitted; consumed by the auto-execute effect
+  // below once the refined plan actually arrives, so a normal (non-refinement) plan event
+  // never triggers an unrequested execution.
+  const refinementPendingRef = useRef(false);
+  const lastAutoExecutedPlanIndexRef = useRef(-1);
 
   const { plan: derivedPlan, planIndex } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -65,20 +73,11 @@ export function CodingPlanPanel({
     [messages, planIndex]
   );
 
-  if (!plan) {
-    return (
-      <PanelEmpty
-        icon={<ListChecks className="h-8 w-8" />}
-        title={t("codingPage.noPlan")}
-        hint={t("codingPage.noPlanHint")}
-      />
-    );
-  }
-
-  const steps = plan.steps ?? [];
+  const steps = plan?.steps ?? [];
   const doneCount = Math.min(eventsSincePlan, steps.length);
 
   const execute = async () => {
+    if (!plan) return;
     setError(null);
     setExecuting(true);
     try {
@@ -100,6 +99,30 @@ export function CodingPlanPanel({
       setExecuting(false);
     }
   };
+
+  // PLAN_MODE_AUTO_EXECUTE: once a refined plan arrives (refinementPendingRef was set right
+  // before submitting the refinement prompt), start execution automatically instead of
+  // waiting for a manual "Execute" click. Never fires for the plan's initial creation or any
+  // other unrelated plan event - only the refinement round-trip sets the pending flag.
+  useEffect(() => {
+    if (!autoExecuteEnabled) return;
+    if (!refinementPendingRef.current) return;
+    if (planIndex < 0 || planIndex === lastAutoExecutedPlanIndexRef.current) return;
+    refinementPendingRef.current = false;
+    lastAutoExecutedPlanIndexRef.current = planIndex;
+    void execute();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planIndex, autoExecuteEnabled]);
+
+  if (!plan) {
+    return (
+      <PanelEmpty
+        icon={<ListChecks className="h-8 w-8" />}
+        title={t("codingPage.noPlan")}
+        hint={t("codingPage.noPlanHint")}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -197,6 +220,7 @@ export function CodingPlanPanel({
           plan={plan}
           onSubmit={(prompt) => {
             setShowRefinement(false);
+            refinementPendingRef.current = true;
             onRefine(prompt);
           }}
           onCancel={() => setShowRefinement(false)}
