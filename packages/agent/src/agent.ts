@@ -2755,6 +2755,34 @@ export class Agent {
     return patterns.some((re) => re.test(response));
   }
 
+  /**
+   * True if `text` is (or is dominated by) a JSON object using the reflection evaluation
+   * schema - "quality"/"issues"/"suggestions"/"shouldRetry" - rather than prose. Used to stop
+   * a confused reflection-pass model from having its own self-critique JSON adopted as the
+   * user-facing response (see Reflection & Self-Improvement Loop).
+   */
+  private looksLikeReflectionSchemaLeak(text: string): boolean {
+    const trimmed = text.trim();
+    const candidate = trimmed.startsWith("```")
+      ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim()
+      : trimmed;
+    if (!candidate.startsWith("{") || !candidate.endsWith("}")) return false;
+
+    try {
+      const parsed = JSON.parse(candidate) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object") {
+        const keys = Object.keys(parsed);
+        const schemaKeyHits = ["quality", "issues", "suggestions", "shouldRetry"].filter((k) =>
+          keys.includes(k)
+        ).length;
+        return schemaKeyHits >= 2;
+      }
+    } catch {
+      // Not valid JSON at all - not a schema leak, just an unusual (but real) answer.
+    }
+    return false;
+  }
+
   private extractAllToolCalls(response: string): {
     calls: Array<{ toolName: string; input: Record<string, unknown> }>;
     markerCount: number;
@@ -4655,6 +4683,13 @@ export class Agent {
     const runStartTime = Date.now();
     const toolsUsedThisRun = new Set<string>(toolsUsed);
 
+    // Reflection only ever sees the response TEXT, never the actual screenshot image - so for
+    // a turn that captured one, it reliably (and wrongly) judges "no screenshot provided" and
+    // has been observed fabricating a fake "[Image: ...]" description of content it never saw.
+    // Tracked across iterations (browserToolsCount is loop-scoped) to gate every reflection
+    // pass below - see the "Reflection & Self-Improvement Loop" section further down.
+    let screenshotCapturedThisRun = false;
+
     // Initialize adjustedControls early so emit() can reference it
     let adjustedControls: AgentRuntimeControls | undefined;
 
@@ -6109,6 +6144,10 @@ export class Agent {
         hasScreenshot: !!this.currentScreenshotMessage,
       });
 
+      if (browserToolsCount > 0 && this.currentScreenshotMessage) {
+        screenshotCapturedThisRun = true;
+      }
+
       // Update finalResponse to cleaned version (for reflection, final output, etc.)
       finalResponse = cleanedResponse;
 
@@ -6578,7 +6617,14 @@ export class Agent {
     let reflectionIssues: string[] = [];
     let reflectionSuggestions: string[] = [];
 
-    if (adjustedControls.enableReflection && adjustedControls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
+    if (screenshotCapturedThisRun) {
+      emit("guardrail", "Reflection skipped (screenshot response)", {
+        reason: "Reflection only evaluates text and cannot see the captured image - " +
+          "running it here previously produced fabricated descriptions of visual content it never saw.",
+      });
+    }
+
+    if (!screenshotCapturedThisRun && adjustedControls.enableReflection && adjustedControls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
       // Normal reflection pass: evaluate response and optionally improve it
       for (let reflectionAttempt = 1; reflectionAttempt <= adjustedControls.reflectionMaxRetries; reflectionAttempt++) {
         let reflectionResult;
@@ -6628,6 +6674,19 @@ export class Agent {
           break;
         }
 
+        // A confused (often smaller/local) reflection model sometimes echoes its own
+        // evaluation object - the exact schema it was asked to produce, with quality/
+        // issues/suggestions keys - into improvedResponse instead of writing prose.
+        // Adopting that verbatim would show raw self-critique JSON to the user as if it
+        // were the answer, so reject anything that parses as that schema.
+        if (this.looksLikeReflectionSchemaLeak(improved)) {
+          emit("guardrail", "Reflection improvement rejected", {
+            reason: "improved_response_is_evaluation_json",
+            attempt: reflectionAttempt,
+          });
+          break;
+        }
+
         // Safety check: Don't replace a good response with a much shorter one
         // (could indicate reflection model is hallucinating or degrading quality)
         const isSignificantlyShorter = improved.length < finalResponse.trim().length * 0.6;
@@ -6652,7 +6711,7 @@ export class Agent {
     let metaReflectionIssues: string[] = [];
     let metaReflectionSuggestions: string[] = [];
 
-    if (adjustedControls.enableReflection && adjustedControls.reflectionMetaReview && finalResponse.trim().length > 0) {
+    if (!screenshotCapturedThisRun && adjustedControls.enableReflection && adjustedControls.reflectionMetaReview && finalResponse.trim().length > 0) {
       let metaReflection;
       try {
         metaReflection = await this.withTimeout(
@@ -6779,7 +6838,7 @@ export class Agent {
     let postIterationIssues: string[] = [];
     let postIterationSuggestions: string[] = [];
 
-    if (adjustedControls.enableReflection && adjustedControls.reflectionPostIteration && finalResponse.trim().length > 0) {
+    if (!screenshotCapturedThisRun && adjustedControls.enableReflection && adjustedControls.reflectionPostIteration && finalResponse.trim().length > 0) {
       let postAssessment;
       try {
         postAssessment = await this.withTimeout(
