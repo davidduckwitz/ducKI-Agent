@@ -66,6 +66,10 @@ export interface GenerateOptions {
   maxTokens?: number;
   tools?: ToolDefinition[];
   stream?: boolean;
+  /** Aborts the in-flight LLM request (e.g. user clicked Stop, or the run timed out).
+   *  Providers that support it forward this to their underlying HTTP client so the
+   *  request is actually cancelled instead of running to completion unseen. */
+  signal?: AbortSignal;
 }
 
 // ============================================================
