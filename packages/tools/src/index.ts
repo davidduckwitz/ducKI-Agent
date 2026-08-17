@@ -8,6 +8,7 @@ import { skillsTool } from "./skills.js";
 import { weatherTool } from "./weather.js";
 
 export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool };
+export { browserFrameEvents } from "./browser.js";
 export {
   createDataSourceTool,
   fetchJson,

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { execSync, fork, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EventEmitter } from "node:events";
 
 type BrowserAction =
   | "detect"
@@ -31,7 +32,11 @@ type BrowserAction =
   // step per turn instead of the documented batch - a single macro call removes that
   // failure mode entirely for the two most common workflows.
   | "screenshot_url"
-  | "verify_page";
+  | "verify_page"
+  // Live preview: CDP screencast pushes frames from the worker to the main process as they
+  // render, instead of the caller polling `screenshot` repeatedly. See browserFrameEvents.
+  | "stream_start"
+  | "stream_stop";
 
 interface BrowserSession {
   browser: import("puppeteer-core").Browser;
@@ -46,9 +51,32 @@ interface BrowserWorkerRequest {
 }
 
 interface BrowserWorkerResponse {
+  kind?: "response";
   id: string;
   result: ToolResult;
 }
+
+/** Pushed unsolicited from the worker whenever a live-streamed session renders a new frame -
+ *  not a response to any pending request, so it's distinguished from BrowserWorkerResponse by
+ *  `kind`. */
+interface BrowserWorkerFrame {
+  kind: "frame";
+  sessionId: string;
+  data: string;
+  format: string;
+  timestamp: string;
+}
+
+type BrowserWorkerMessage = BrowserWorkerResponse | BrowserWorkerFrame;
+
+/**
+ * Emits a "frame" event, `{sessionId, data, format, timestamp}`, for every screencast frame
+ * received from a live-streaming session (see action="stream_start"). This module runs inside
+ * apps/server's main process (the actual browser lives in the forked worker), so the server
+ * can subscribe once at startup and relay frames to the UI over its own transport (socket.io)
+ * without this package needing to know sockets exist.
+ */
+export const browserFrameEvents = new EventEmitter();
 
 // Sessions map - kept alive in main process so they persist across worker restarts
 const mainProcessSessions = new Map<string, { launchedAt: string; url?: string }>();
@@ -56,6 +84,44 @@ const sessions = new Map<string, BrowserSession>();
 // The session every agent/UI reuses by default so a chat doesn't spawn its own browser
 // on every run. Only cleared when that specific session is closed or has died.
 let defaultSessionId: string | undefined;
+// Worker-local: sessions currently live-streaming via CDP screencast, and the most recent
+// frame received for each (so a `screenshot` call can return it instantly instead of paying
+// for a brand-new page.screenshot() capture - see resolveScreenshot()).
+const activeStreams = new Map<string, { client: import("puppeteer-core").CDPSession; onFrame: (...args: any[]) => void }>();
+const lastFrames = new Map<string, { data: string; format: string; width: number; height: number; timestampMs: number }>();
+
+/** A buffered live frame is only useful if it's actually recent - an active stream should
+ *  refresh many times per second, so anything older than this is stale (tab backgrounded,
+ *  page idle, or the stream silently died) and a real capture is safer. */
+const LIVE_FRAME_MAX_AGE_MS = 1500;
+
+function getFreshLiveFrame(sessionId: string): { data: string; format: string; width: number; height: number; timestampMs: number } | undefined {
+  const frame = lastFrames.get(sessionId);
+  if (!frame) return undefined;
+  if (Date.now() - frame.timestampMs > LIVE_FRAME_MAX_AGE_MS) return undefined;
+  return frame;
+}
+
+/** Stops the CDP screencast for a session, if one is running. Safe to call on a session that
+ *  isn't streaming (no-op) - used by action=stream_stop, action=close, and session cleanup. */
+async function stopStream(sessionId: string): Promise<boolean> {
+  const stream = activeStreams.get(sessionId);
+  if (!stream) return false;
+  activeStreams.delete(sessionId);
+  lastFrames.delete(sessionId);
+  try {
+    await stream.client.send("Page.stopScreencast");
+  } catch {
+    // Session/page may already be gone - nothing left to stop.
+  }
+  try {
+    stream.client.off("Page.screencastFrame", stream.onFrame);
+  } catch {
+    // Ignore - client is being torn down anyway.
+  }
+  console.info(`[browser] Live stream stopped: ${sessionId}`);
+  return true;
+}
 const pending = new Map<
   string,
   {
@@ -102,7 +168,11 @@ function ensureWorker(): ChildProcess {
   });
 
   child.on("message", (payload: unknown) => {
-    const message = payload as BrowserWorkerResponse;
+    const message = payload as BrowserWorkerMessage;
+    if (message?.kind === "frame") {
+      browserFrameEvents.emit("frame", message);
+      return;
+    }
     if (!message?.id) return;
     const entry = pending.get(message.id);
     if (!entry || entry.settled) return;
@@ -349,6 +419,8 @@ async function createSession(options: {
   browser.on("disconnected", () => {
     console.warn(`[browser] Session '${sessionId}' disconnected (browser crashed or was closed externally)`);
     sessions.delete(sessionId);
+    activeStreams.delete(sessionId);
+    lastFrames.delete(sessionId);
     if (defaultSessionId === sessionId) defaultSessionId = undefined;
   });
 
@@ -461,6 +533,8 @@ export const browserTool: ToolExecutor = {
             "close",
             "screenshot_url",
             "verify_page",
+            "stream_start",
+            "stream_stop",
           ],
         },
         sessionId: { type: "string", description: "Browser session id" },
@@ -498,6 +572,9 @@ export const browserTool: ToolExecutor = {
         waitMs: { type: "number", description: "For action=screenshot_url without a selector: fixed delay (ms) after navigation before capturing, e.g. to let animations settle", default: 0 },
         close: { type: "boolean", description: "For action=screenshot_url: close the session immediately after capturing (use when you only need one snapshot, not further interaction)", default: false },
         extractText: { type: "boolean", description: "For action=verify_page: include up to 5000 chars of the page's visible text in the result", default: true },
+        preferLive: { type: "boolean", description: "For action=screenshot: if this session is live-streaming (see stream_start) and has a frame from the last 1.5s, return it instantly instead of capturing a fresh full-page screenshot. Faster, but viewport-only (not full scroll height).", default: false },
+        maxWidth: { type: "number", description: "For action=stream_start: max frame width in px", default: 960 },
+        maxHeight: { type: "number", description: "For action=stream_start: max frame height in px", default: 720 },
       },
       required: ["action"],
     },
@@ -667,6 +744,34 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
       }
       case "screenshot": {
         const { sessionId, session } = await ensureSession(input);
+
+        // preferLive: if this session is live-streaming (action=stream_start) and has a
+        // recent frame buffered, return that instantly instead of paying for a fresh
+        // page.screenshot() capture. Opt-in (default false) because a screencast frame is
+        // the VIEWPORT as currently rendered, not a fullPage capture - existing callers that
+        // expect the full scrollable page keep getting exactly that unless they ask for speed
+        // over completeness.
+        if (input["preferLive"] === true || input["preferLive"] === "true") {
+          const live = getFreshLiveFrame(sessionId);
+          if (live) {
+            return ok({
+              sessionId,
+              savedTo: null,
+              bytes: Buffer.byteLength(live.data, "base64"),
+              url: session.page.url(),
+              screenshot: live.data,
+              live: true,
+              metadata: {
+                format: live.format,
+                width: live.width,
+                height: live.height,
+                timestamp: new Date(live.timestampMs).toISOString(),
+                sizeKb: Math.round(Buffer.byteLength(live.data, "base64") / 1024),
+              },
+            });
+          }
+        }
+
         const filePath = String(input["filePath"] ?? "").trim();
         const path = filePath || undefined;
         // Default to jpeg: many local vision model backends (llama.cpp/GGUF loaders via
@@ -695,6 +800,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
           // responsible for keeping this out of the LLM-facing tool result (it's for
           // rendering the preview to the user, not for the model to read as text).
           screenshot: Buffer.from(buffer).toString("base64"),
+          live: false,
           // Metadata for screenshot tracking
           metadata: {
             format,
@@ -704,6 +810,59 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
             sizeKb: Math.round(buffer.byteLength / 1024),
           },
         });
+      }
+      case "stream_start": {
+        // Live preview: starts a CDP screencast for this session. Every rendered frame is
+        // pushed to the main process (browserFrameEvents, forwarded to the UI over socket.io)
+        // AND buffered here so action=screenshot with preferLive:true can return it instantly.
+        const { sessionId, session } = await ensureSession(input);
+        const existing = activeStreams.get(sessionId);
+        if (existing) return ok({ sessionId, streaming: true, alreadyStreaming: true });
+
+        const client = await session.page.target().createCDPSession();
+        const format = (String(input["screenshotFormat"] ?? "jpeg").trim().toLowerCase() === "png" ? "png" : "jpeg") as "jpeg" | "png";
+        const quality = format === "png" ? undefined : Math.max(1, Math.min(100, Number(input["screenshotQuality"] ?? 60)));
+        const maxWidth = Math.max(1, Number(input["maxWidth"] ?? 960));
+        const maxHeight = Math.max(1, Number(input["maxHeight"] ?? 720));
+
+        const onFrame = (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
+          lastFrames.set(sessionId, {
+            data: event.data,
+            format,
+            width: event.metadata?.deviceWidth ?? maxWidth,
+            height: event.metadata?.deviceHeight ?? maxHeight,
+            timestampMs: Date.now(),
+          });
+          if (typeof process.send === "function") {
+            process.send({
+              kind: "frame",
+              sessionId,
+              data: event.data,
+              format,
+              timestamp: new Date().toISOString(),
+            } satisfies BrowserWorkerFrame);
+          }
+          // CDP pauses the screencast after each frame until acknowledged - without this
+          // the stream sends exactly one frame and then stalls forever.
+          client.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => {});
+        };
+        client.on("Page.screencastFrame", onFrame as (...args: unknown[]) => void);
+
+        await client.send("Page.startScreencast", {
+          format,
+          ...(quality !== undefined ? { quality } : {}),
+          maxWidth,
+          maxHeight,
+        });
+
+        activeStreams.set(sessionId, { client, onFrame: onFrame as (...args: unknown[]) => void });
+        console.info(`[browser] Live stream started: ${sessionId}`);
+        return ok({ sessionId, streaming: true, format, maxWidth, maxHeight });
+      }
+      case "stream_stop": {
+        const { sessionId } = await ensureSession(input);
+        const stopped = await stopStream(sessionId);
+        return ok({ sessionId, streaming: false, wasStreaming: stopped });
       }
       case "screenshot_url": {
         // Macro: launch/reuse -> goto -> optional wait -> screenshot -> optional close, in
@@ -740,6 +899,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
 
         const shouldClose = input["close"] === true || input["close"] === "true";
         if (shouldClose) {
+          await stopStream(sessionId);
           await session.browser.close();
           sessions.delete(sessionId);
           if (defaultSessionId === sessionId) defaultSessionId = undefined;
@@ -1016,6 +1176,7 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
         if (!sessionId) return fail("sessionId is required");
         const session = sessions.get(sessionId);
         if (!session) return fail(`Browser session '${sessionId}' not found`);
+        await stopStream(sessionId);
         await session.browser.close();
         sessions.delete(sessionId);
         if (defaultSessionId === sessionId) defaultSessionId = undefined;

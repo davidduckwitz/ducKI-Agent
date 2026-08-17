@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
-import { X, Maximize2, Download, Square, Code2 } from "lucide-react";
+import { X, Maximize2, Download, Square, Code2, Radio } from "lucide-react";
 import { useAppStore } from "../../lib/store";
+import { useLiveBrowserStore } from "../../lib/liveBrowserStore";
 import type { RenderedChatMessage } from "./chatTypes";
 
 export interface BrowserPreviewData {
@@ -141,6 +142,15 @@ export function BrowserPreview({ msg }: BrowserPreviewProps) {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {data.tabId && (
+            <button
+              onClick={() => useLiveBrowserStore.getState().openWindow(data.tabId!, data.url)}
+              className="p-1.5 rounded hover:bg-cyan-500/20 text-cyan-300 transition"
+              title="Live-Ansicht oeffnen"
+            >
+              <Radio className="w-4 h-4" />
+            </button>
+          )}
           <button
             onClick={handleScreenshot}
             className="p-1.5 rounded hover:bg-cyan-500/20 text-cyan-300 transition"

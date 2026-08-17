@@ -5,6 +5,7 @@ import type { AgentEventType } from "../components/chat/chatTypes";
 import { getSocketUrl } from "./backendUrl";
 import { useConnectionStore } from "./connectionStore";
 import { api } from "./api";
+import { useLiveBrowserStore } from "./liveBrowserStore";
 
 const LANGUAGE_STORAGE_KEY = "ducki.language";
 const CLIENT_ID_KEY = "ducki.clientId";
@@ -703,6 +704,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
       // A new/updated session just became visible - keep the session panel in sync.
       void get().refreshBrowserSessions();
+    });
+
+    // Live browser preview: CDP screencast frames for whichever session(s) the user has an
+    // open floating live window for (see liveBrowserStore/LiveBrowserWindow). Frames for a
+    // session with no open window are silently dropped by receiveFrame - the client only
+    // joins a session's room while a window for it is open (see LiveBrowserWindow's effect).
+    socket.on("browser:frame", (frame: { sessionId: string; data: string; format: string; timestamp: string }) => {
+      useLiveBrowserStore.getState().receiveFrame(frame);
     });
 
     // Tool call tracking

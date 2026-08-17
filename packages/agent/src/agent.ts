@@ -180,6 +180,15 @@ action="launch" accepts url and will go there immediately - use this instead of 
 whenever you're opening a fresh session at a known URL:
 [TOOL:browser({"action": "launch", "url": "https://example.com"})]
 
+### Live preview (only if the user asked to watch the browser, or you need MANY screenshots)
+action="stream_start" begins a live view of a session that the user can watch in the UI (a
+floating window they opened, or one you offer them). Once streaming, action="screenshot" with
+preferLive:true returns the most recent live frame instantly instead of capturing a new
+full-page screenshot - much cheaper when you need to check the page repeatedly (e.g. after
+each of several clicks), at the cost of being viewport-only, not the full scroll height.
+Call action="stream_stop" when you're done (or just action="close" the session). Don't start a
+stream for a single one-off screenshot - screenshot_url is the right tool for that.
+
 ### Multi-step interactions (click, type, form_fill, login, multiple screenshots) still need the
 ### full sequence - emit ALL of these calls in ONE turn, sequentially:
 The backend executor:

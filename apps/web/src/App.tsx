@@ -10,6 +10,7 @@ import { ProjectManager } from "./components/projects/ProjectManager";
 import { TaskManager } from "./components/tasks/TaskManager";
 import { ToastDisplay } from "./components/ui/toast-display";
 import { ToolActivityLogger } from "./components/chat/ToolActivityLogger";
+import { LiveBrowserWindowsLayer } from "./components/chat/LiveBrowserWindow";
 import { useI18n } from "./lib/i18n";
 import { initializeCharacterSystem } from "./components/chat/characters";
 
@@ -159,6 +160,7 @@ function AppContent() {
       </Routes>
       <ToastDisplay />
       <ToolActivityLogger toolCalls={toolCalls} onRemoveCall={removeToolCall} />
+      <LiveBrowserWindowsLayer />
     </>
   );
 }

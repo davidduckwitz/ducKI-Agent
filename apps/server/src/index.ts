@@ -25,7 +25,7 @@ import { getRootLogger } from "@ducki/logger";
 import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
 import type { ToolExecutor } from "@ducki/shared";
 import { createProvider, type ProviderName } from "@ducki/providers";
-import { allTools } from "@ducki/tools";
+import { allTools, browserFrameEvents } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
 import { DiscordGatewayClient } from "./lib/discord-gateway-ws.js";
 import { agentRegistry } from "./lib/agent-registry.js";
@@ -793,6 +793,14 @@ async function bootstrap(): Promise<void> {
 	// client no longer has to poll /agents/live for it.
 	setupWebSocket(io, createAgent, db, () => ({ discord: discordGatewayStatus }));
 	app.locals["io"] = io;
+
+	// Live browser preview: the browser tool's CDP screencast frames arrive here as plain
+	// events (packages/tools has no socket/io dependency of its own) - relay each one to
+	// whichever clients joined that session's room (see "browser:stream:join" in
+	// websocket/index.ts). One subscription for the whole process lifetime, not per-request.
+	browserFrameEvents.on("frame", (frame: { sessionId: string; data: string; format: string; timestamp: string }) => {
+		io.to(`browser-stream:${frame.sessionId}`).emit("browser:frame", frame);
+	});
 
 	// Initialize chat tool event broadcaster for real-time progress updates
 	const toolEventBroadcaster = initChatToolEventBroadcaster(logger.child("ChatToolEvents"), io);

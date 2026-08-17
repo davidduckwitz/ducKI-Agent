@@ -37,6 +37,8 @@ const ALLOWED_UI_BROWSER_ACTIONS = new Set([
   "get_content",
   "click",
   "close",
+  "stream_start",
+  "stream_stop",
 ]);
 
 
@@ -618,6 +620,21 @@ export function setupWebSocket(
     socket.on("chat:stop", (data?: { conversationId?: number }) => {
       stopSocketAgents(socket.id);
       emitToConversation(data?.conversationId, "chat:stopped", { timestamp: new Date().toISOString(), conversationId: data?.conversationId });
+    });
+
+    // Live browser preview: a client joins a session's room to receive its CDP screencast
+    // frames (relayed from packages/tools' browserFrameEvents in index.ts). Starting/stopping
+    // the actual screencast is a normal tool call (action=stream_start/stream_stop) - this is
+    // purely the delivery side, so any number of viewers can watch the same session at once.
+    socket.on("browser:stream:join", (data?: { sessionId?: string }) => {
+      const sessionId = String(data?.sessionId ?? "").trim();
+      if (!sessionId) return;
+      socket.join(`browser-stream:${sessionId}`);
+    });
+    socket.on("browser:stream:leave", (data?: { sessionId?: string }) => {
+      const sessionId = String(data?.sessionId ?? "").trim();
+      if (!sessionId) return;
+      socket.leave(`browser-stream:${sessionId}`);
     });
 
     // Task updates
