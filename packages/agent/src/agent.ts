@@ -5410,7 +5410,10 @@ export class Agent {
     // RunJournalEntry) — reminds the model what it already did so it doesn't repeat work.
     // Separate from checklistEvidenceLog: this holds short structured summaries for the
     // acting model, not raw evidence for the verifier.
-    const runJournal: RunJournalEntry[] = [];
+    // Seeded from options.initialRunJournal when a caller (CodingAgent, across its own
+    // plan->verify->iterate attempts) explicitly carries a prior run's journal forward;
+    // regular one-shot callers never set this, so they still start empty as before.
+    const runJournal: RunJournalEntry[] = options.initialRunJournal ? [...options.initialRunJournal] : [];
     const runJournalEnabled = controls.runJournalEnabled;
     // Monotonic counters (survive the log's 40-entry cap) gating the mid-run advance so the
     // Verifier is only invoked when NEW evidence has arrived since the last check — never
@@ -7042,6 +7045,7 @@ export class Agent {
       conversationId: this.conversation.id,
       ...(sameAsLastDisplayRow ? { displayMessageId: lastDisplayMessageId } : {}),
       ...(checklistActive ? { checklistRunId } : {}),
+      ...(runJournalEnabled ? { runJournal } : {}),
     };
   }
 

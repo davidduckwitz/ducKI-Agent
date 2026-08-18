@@ -46,6 +46,11 @@ export interface AgentRunResult {
    *  run's checklist items afterwards (e.g. to write step-completion status back to a
    *  saved plan file) without guessing/matching by title. */
   checklistRunId?: string;
+  /** Final state of this run's Run Journal (see AgentRunOptions.initialRunJournal) - lets a
+   *  caller that seeded the journal (CodingAgent, across its own plan->verify->iterate
+   *  attempts) carry it forward into the next run() call instead of losing it when each
+   *  attempt's runLoop starts a fresh one. Undefined when the run journal is disabled. */
+  runJournal?: RunJournalEntry[];
 }
 
 export interface AgentRunContextCaps {
@@ -96,6 +101,12 @@ export interface AgentRunOptions {
    *  run. Honors EXECUTION_MODE_VALIDATION_INTERVAL; the checklist otherwise re-verifies
    *  as soon as new evidence arrives, which this throttles for expensive verify passes. */
   checklistMinVerifyIntervalMs?: number;
+  /** Seeds this run's Run Journal instead of starting empty - lets a caller that makes
+   *  several run() calls in sequence on purpose (CodingAgent's plan->verify->iterate attempt
+   *  loop) carry prior attempts' journal entries forward, so a retry after a failed verify
+   *  doesn't lose the record of what it already did (see AgentRunResult.runJournal). Opt-in
+   *  and per-call: regular one-shot run() callers never set this and see no behavior change. */
+  initialRunJournal?: RunJournalEntry[];
 }
 
 export interface AgentRunEvent {

@@ -5,7 +5,7 @@ import { filesystemTool, gitTool, shellTool, skillsTool } from "@ducki/tools";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
-import type { AgentEventEmitter, AgentRunOptions, AgentRunResult } from "../config/interfaces_types.js";
+import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, RunJournalEntry } from "../config/interfaces_types.js";
 import { AGENT_HOOK_NAMES, type AgentHook } from "../hooks/index.js";
 import { ToolApprovalPolicy, AllowedShellCommands } from "../tools/tool-approval-policy.js";
 import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
@@ -270,6 +270,11 @@ export class CodingAgent {
     const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
 
     let lastSummary = "";
+    // Carried across attempts (not reset per attempt) so a retry after a failed verify still
+    // remembers what earlier attempts already did - each this.agent.run() call would otherwise
+    // start its own runLoop's journal empty, discarding it the moment this attempt's response
+    // came back, even though attempts 1..N-1 share the same conversation and sandbox.
+    let journal: RunJournalEntry[] = [];
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Soft wall-clock budget: stop before starting another attempt once the deadline has passed
       // rather than burning further attempts. In-flight calls are never interrupted mid-way.
@@ -298,7 +303,8 @@ export class CodingAgent {
         attempt === 1
           ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill)
           : this.buildFollowUpPrompt(goal, lastSummary);
-      const runResult = await this.agent.run(prompt);
+      const runResult = await this.agent.run(prompt, { initialRunJournal: journal });
+      journal = runResult.runJournal ?? journal;
       lastSummary = runResult.response;
 
       // Extract and emit phase events from response
