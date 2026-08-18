@@ -139,6 +139,10 @@ export class OllamaProvider extends OpenAIProvider {
             ...(this.getAuthHeaders?.()),
           },
           body: JSON.stringify(requestBody),
+          // Previously omitted entirely, so Stop's abortController.abort() never actually
+          // cancelled an in-flight Ollama request - the generation ran to completion
+          // regardless, and only the NEXT iteration check noticed stopRequested.
+          signal: merged.signal,
         }
       );
 

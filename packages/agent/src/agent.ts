@@ -6027,8 +6027,13 @@ export class Agent {
       // This ensures we use the cleaned response, not the raw response with [TOOL:...] markers
       // finalResponse = response;  // ← Will be set after executeToolCallsFromResponse()
 
+      // agentTokens is a chars/4 ESTIMATE of how much of the input was system prompt/tools/
+      // skills, purely informational (a breakdown of what's already inside llmTokens.input
+      // below) - it must never be added on top of the provider's real usage. It previously
+      // was (see git history), which double-counted the system prompt on every single
+      // iteration - for a CodingAgent-sized system prompt (6-16k+ chars) that inflated the
+      // displayed "Combined Total" by 1,700-4,000+ tokens per call, every call.
       const agentContextTokens = calculateAgentContextTokens(effectiveMode);
-      const totalInputTokens = (currentResponseTokens.input ?? 0) + agentContextTokens.total;
 
       emit("decision", "LLM response received", {
         iteration: iterations,
@@ -6044,11 +6049,6 @@ export class Agent {
           estimated: currentResponseTokens.estimated === true,
         },
         agentTokens: agentContextTokens,
-        combinedTokens: {
-          input: totalInputTokens,
-          output: currentResponseTokens.output,
-          total: (totalInputTokens ?? 0) + (currentResponseTokens.output ?? 0),
-        },
       });
 
       // Phase 2 cost governor: accumulate this call's cost and surface the running

@@ -7,8 +7,11 @@ import { createApiResponse, createApiError } from "@ducki/shared";
 import type { ToolExecutor } from "@ducki/shared";
 import { loadPlugins, setPluginEnabled, pluginsRoot, parsePluginManifest, validatePluginDir, type LoadedPluginInfo } from "@ducki/agent";
 import type { CodingAgent, AgentEventEmitter } from "@ducki/agent";
+import { isAbortError } from "@ducki/providers";
 import type { DatabaseService } from "@ducki/database";
 import { getPluginSettings, setPluginSetting } from "@ducki/database";
+import { agentRegistry } from "../lib/agent-registry.js";
+import { registerCodingRun, unregisterCodingRun } from "../lib/coding-run-registry.js";
 
 /** Minimal shape of the PluginManager we read off app.locals (avoids a hard type import). */
 interface PluginManagerLike {
@@ -574,6 +577,10 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
     };
 
     void (async () => {
+      // Set as soon as the CodingAgent's conversation exists (see onConversationStarted below),
+      // so the finally block can always clean up registrations regardless of how the run ends.
+      let runConversationId: number | undefined;
+      let agentRegistryRunId: string | undefined;
       try {
         const eventEmitter: AgentEventEmitter = {
           emitChunk(chunk: string) {
@@ -597,7 +604,25 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
         // stagingDir (= stagingRoot/name), matching where the agent is actually writing.
         const verifyCommand = `node "${resolveValidateCliPath()}" "${stagingRoot}" "${name}"`;
 
-        const runResult = await codingAgent.run(goal, { verifyCommand, maxAttempts: 3, timeoutMs: 5 * 60 * 1000 });
+        const runResult = await codingAgent.run(goal, {
+          verifyCommand,
+          maxAttempts: 3,
+          timeoutMs: 5 * 60 * 1000,
+          // Previously this run was invisible to BOTH the agent registry (so the "still
+          // running" snapshot a reconnecting/navigating client gets never listed it - the
+          // Stop button just vanished) and the chat:stop handler (so clicking it did nothing
+          // anyway). Registering here, the moment the conversation exists, closes both gaps.
+          onConversationStarted: (conversationId) => {
+            runConversationId = conversationId;
+            registerCodingRun(conversationId, codingAgent);
+            agentRegistryRunId = agentRegistry.register({
+              source: "chat_http",
+              conversationId,
+              label: `Plugin: ${name}`,
+            });
+            emit("plugin_create_started", { conversationId });
+          },
+        });
 
         // Authoritative re-check, in-process - never trust the agent's own reported "verified".
         const finalCheck = validatePluginDir(stagingRoot, name);
@@ -624,7 +649,14 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
 
         emit("plugin_create_complete", { success: true, name, conversationId: runResult.conversationId, reload });
       } catch (error) {
-        emit("plugin_create_complete", { success: false, name, error: error instanceof Error ? error.message : String(error) });
+        if (isAbortError(error)) {
+          emit("plugin_create_complete", { success: false, stopped: true, name, error: "Vom Nutzer gestoppt" });
+        } else {
+          emit("plugin_create_complete", { success: false, name, error: error instanceof Error ? error.message : String(error) });
+        }
+      } finally {
+        if (runConversationId !== undefined) unregisterCodingRun(runConversationId);
+        if (agentRegistryRunId !== undefined) agentRegistry.unregister(agentRegistryRunId);
       }
     })();
   } catch (error) {

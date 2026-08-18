@@ -7,6 +7,7 @@ import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { isAbortError } from "@ducki/providers";
 import { agentRegistry } from "../lib/agent-registry.js";
+import { stopCodingRun } from "../lib/coding-run-registry.js";
 import { BitcoinPuzzleService, createScopedFilesystemTool, pluginsRoot } from "@ducki/agent";
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
@@ -630,6 +631,10 @@ export function setupWebSocket(
 
     socket.on("chat:stop", (data?: { conversationId?: number }) => {
       stopSocketAgents(socket.id);
+      // A CodingAgent run started from an HTTP route (plugin creation, /api/coding-agent/run)
+      // has no socket of its own to be found by stopSocketAgents above - it's tracked by
+      // conversationId instead (see coding-run-registry.ts), which the client already sends here.
+      if (typeof data?.conversationId === "number") stopCodingRun(data.conversationId);
       emitToConversation(data?.conversationId, "chat:stopped", { timestamp: new Date().toISOString(), conversationId: data?.conversationId });
     });
 

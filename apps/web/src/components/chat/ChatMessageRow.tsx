@@ -90,7 +90,6 @@ export function EventRow({
   const totalTokens = (llmTokens?.total ?? msg.eventData?.totalTokens) as number | undefined;
 
   const agentTokens = msg.eventData?.agentTokens as { system?: number; tools?: number; skills?: number; total?: number } | undefined;
-  const combinedTokens = msg.eventData?.combinedTokens as { input?: number; output?: number; total?: number } | undefined;
 
   if (msg.eventType === "browser_preview") {
     // Browser preview is rendered as a full component without additional props
@@ -189,21 +188,8 @@ export function EventRow({
       </summary>
       <div className="mt-2 pl-6 space-y-2">
         <div className="whitespace-pre-wrap opacity-90">{msg.content}</div>
-        {(inputTokens || outputTokens || totalTokens || agentTokens || combinedTokens) && (
+        {(inputTokens || outputTokens || totalTokens || agentTokens) && (
           <div className="space-y-2">
-            {(agentTokens || combinedTokens) && (
-              <div className="rounded border border-purple-400/30 bg-purple-500/10 p-2">
-                <div className="text-[10px] uppercase tracking-wide text-purple-200/80 mb-1">
-                  🤖 Agent Context Tokens
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-purple-50/90 text-[11px]">
-                  {agentTokens?.system && <div>System: <span className="font-semibold">{agentTokens.system}</span></div>}
-                  {agentTokens?.tools && <div>Tools: <span className="font-semibold">{agentTokens.tools}</span></div>}
-                  {agentTokens?.skills && agentTokens.skills > 0 && <div>Skills: <span className="font-semibold">{agentTokens.skills}</span></div>}
-                  {agentTokens?.total && <div>Subtotal: <span className="font-semibold">{agentTokens.total}</span></div>}
-                </div>
-              </div>
-            )}
             {(inputTokens || outputTokens || totalTokens) && (
               <div className="rounded border border-amber-400/30 bg-amber-500/10 p-2">
                 <div className="text-[10px] uppercase tracking-wide text-amber-200/80 mb-1">
@@ -216,15 +202,16 @@ export function EventRow({
                 </div>
               </div>
             )}
-            {combinedTokens && (
-              <div className="rounded border border-green-400/30 bg-green-500/10 p-2">
-                <div className="text-[10px] uppercase tracking-wide text-green-200/80 mb-1">
-                  ⚡ Combined Total Tokens
+            {agentTokens && (
+              <div className="rounded border border-purple-400/30 bg-purple-500/10 p-2">
+                <div className="text-[10px] uppercase tracking-wide text-purple-200/80 mb-1">
+                  🤖 Davon System-Prompt/Tools/Skills (bereits in "Input" oben enthalten)
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-green-50/90 text-[11px]">
-                  {combinedTokens.input && <div>Input: <span className="font-semibold">{combinedTokens.input}</span></div>}
-                  {combinedTokens.output && <div>Output: <span className="font-semibold">{combinedTokens.output}</span></div>}
-                  {combinedTokens.total && <div>Total: <span className="font-semibold">{combinedTokens.total}</span></div>}
+                <div className="grid grid-cols-2 gap-2 text-purple-50/90 text-[11px]">
+                  {agentTokens?.system && <div>System: <span className="font-semibold">{agentTokens.system}</span></div>}
+                  {agentTokens?.tools && <div>Tools: <span className="font-semibold">{agentTokens.tools}</span></div>}
+                  {agentTokens?.skills && agentTokens.skills > 0 && <div>Skills: <span className="font-semibold">{agentTokens.skills}</span></div>}
+                  {agentTokens?.total && <div>Subtotal: <span className="font-semibold">{agentTokens.total}</span></div>}
                 </div>
               </div>
             )}

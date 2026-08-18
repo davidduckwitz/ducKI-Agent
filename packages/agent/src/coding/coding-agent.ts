@@ -51,6 +51,14 @@ export interface CodingRunOptions {
    * cleanly once the budget is exhausted instead of retrying indefinitely. Omit/0 to disable.
    */
   timeoutMs?: number;
+  /**
+   * Fired once the run's conversation exists (right after the internal startConversation()
+   * call, before the first attempt's LLM call). CodingAgent.run() doesn't return the
+   * conversationId until the WHOLE run finishes - callers that need to reference/cancel this
+   * specific run while it's still in flight (e.g. registering it so the existing Stop button
+   * can find it) have no other way to learn the id early enough to matter.
+   */
+  onConversationStarted?: (conversationId: number) => void;
 }
 
 export interface CodingRunResult {
@@ -241,6 +249,12 @@ export class CodingAgent {
     return this.agent.loadConversation(conversationId);
   }
 
+  /** Stops the current attempt's underlying Agent (aborts the in-flight LLM call and prevents
+   *  further attempts) - delegates to Agent.stop(), which already does the right thing. */
+  stop(): void {
+    this.agent.stop();
+  }
+
   async runOnExistingConversation(
     prompt: string,
     options: AgentRunOptions = {}
@@ -251,6 +265,7 @@ export class CodingAgent {
   async run(goal: string, opts: CodingRunOptions = {}): Promise<CodingRunResult> {
     const maxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
     const conversationId = await this.agent.startConversation({ name: `CodingAgent: ${goal.slice(0, 60)}` });
+    opts.onConversationStarted?.(conversationId);
 
     const detectedSkill = this.autoSelectCodingSkill(goal);
     let verifyCommand = opts.verifyCommand;
@@ -275,6 +290,12 @@ export class CodingAgent {
     // start its own runLoop's journal empty, discarding it the moment this attempt's response
     // came back, even though attempts 1..N-1 share the same conversation and sandbox.
     let journal: RunJournalEntry[] = [];
+    // Detects a non-converging retry loop: the model's edit had literally zero effect on the
+    // verify outcome (exact same error text as the previous attempt). A weak model can burn its
+    // whole maxAttempts budget re-applying a fix that provably doesn't work instead of noticing
+    // and changing approach - this surfaces that signal explicitly instead of retrying blind.
+    let previousVerifyError: string | undefined;
+    let identicalFailureStreak = 0;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Soft wall-clock budget: stop before starting another attempt once the deadline has passed
       // rather than burning further attempts. In-flight calls are never interrupted mid-way.
@@ -303,7 +324,17 @@ export class CodingAgent {
         attempt === 1
           ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill)
           : this.buildFollowUpPrompt(goal, lastSummary);
-      const runResult = await this.agent.run(prompt, { initialRunJournal: journal });
+      // The `deadline` check above only ever fires BETWEEN attempts - a single attempt can run
+      // up to maxIterations tool-call iterations, and Agent's own progress timeout only catches
+      // true stalls (it re-arms on every event, so a model that keeps doing SOMETHING, just
+      // never converging, never trips it). Passing the remaining budget as a real per-attempt
+      // ceiling closes that gap: Agent.run() already turns timeoutMsOverride into a hard,
+      // abort-backed timeout (agent.ts's armTimeout/abortController), no new mechanism needed.
+      const remainingMs = deadline ? deadline - Date.now() : undefined;
+      const runResult = await this.agent.run(prompt, {
+        initialRunJournal: journal,
+        ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
+      });
       journal = runResult.runJournal ?? journal;
       lastSummary = runResult.response;
 
@@ -341,7 +372,32 @@ export class CodingAgent {
         verifyCommand,
         error: verifyError.slice(0, 500),
       });
-      lastSummary = `${lastSummary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`;
+
+      const isIdenticalToPreviousFailure = previousVerifyError !== undefined && verifyError.trim() === previousVerifyError.trim();
+      identicalFailureStreak = isIdenticalToPreviousFailure ? identicalFailureStreak + 1 : 0;
+      previousVerifyError = verifyError;
+
+      if (identicalFailureStreak >= 2) {
+        // Three attempts in a row produced the exact same verify error: the model's edits are
+        // provably not changing the outcome. Burning the rest of maxAttempts would just repeat
+        // this - stop now with a clear, honest diagnosis instead of a generic "failed" summary.
+        this.emit("decision", "Abgebrochen: drei Versuche in Folge mit identischem Verifikationsfehler - keine Konvergenz erkennbar.", {
+          attempt,
+          verifyCommand,
+        });
+        return {
+          success: false,
+          verified: false,
+          summary: `${lastSummary}\n\n[Stopped: ${attempt} attempts in a row produced the exact same verification error - the edits are not changing the outcome:]\n${verifyError}`,
+          attempts: attempt,
+          conversationId,
+          verifyCommand,
+        };
+      }
+
+      lastSummary = isIdenticalToPreviousFailure
+        ? `${lastSummary}\n\nVerification command "${verifyCommand}" failed with the EXACT SAME error as your previous attempt - your last change had NO effect on this outcome. Do not repeat it. Diagnose why that edit didn't fix this specific error, or try a fundamentally different approach:\n${verifyError}`
+        : `${lastSummary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`;
 
       if (attempt === maxAttempts) {
         return {

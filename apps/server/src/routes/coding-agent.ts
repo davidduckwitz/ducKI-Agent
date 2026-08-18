@@ -3,7 +3,10 @@ import type { CodingAgent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import type { AgentEventEmitter } from "@ducki/agent";
+import { isAbortError } from "@ducki/providers";
 import { EventEmitter } from "node:events";
+import { agentRegistry } from "../lib/agent-registry.js";
+import { registerCodingRun, unregisterCodingRun } from "../lib/coding-run-registry.js";
 
 export const codingAgentRouter: IRouter = Router();
 
@@ -119,13 +122,39 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       eventEmitter: phaseEventEmitter,
     });
 
-    const result = await codingAgent.run(goal, {
-      verifyCommand: body.verifyCommand,
-      maxAttempts,
-      ...(timeoutMs > 0 ? { timeoutMs } : {}),
-    });
-
-    res.json(createApiResponse(result));
+    // Same registration this route lacked entirely before: without it, this run was invisible
+    // to both the agentRegistry snapshot (so a client that reconnected/navigated away and back
+    // lost the "still running" signal that re-arms the Stop button) and the chat:stop handler
+    // (so clicking Stop found nothing to stop even if the button had stayed visible).
+    let runConversationId: number | undefined;
+    let agentRegistryRunId: string | undefined;
+    try {
+      const result = await codingAgent.run(goal, {
+        verifyCommand: body.verifyCommand,
+        maxAttempts,
+        ...(timeoutMs > 0 ? { timeoutMs } : {}),
+        onConversationStarted: (conversationId) => {
+          runConversationId = conversationId;
+          registerCodingRun(conversationId, codingAgent);
+          agentRegistryRunId = agentRegistry.register({
+            source: "chat_http",
+            conversationId,
+            label: "CodingAgent (HTTP)",
+          });
+          if (io) io.emit("coding_agent_started", { conversationId });
+        },
+      });
+      res.json(createApiResponse(result));
+    } catch (error) {
+      if (isAbortError(error)) {
+        res.json(createApiResponse({ success: false, verified: false, stopped: true, summary: "Vom Nutzer gestoppt", attempts: 0 }));
+        return;
+      }
+      throw error;
+    } finally {
+      if (runConversationId !== undefined) unregisterCodingRun(runConversationId);
+      if (agentRegistryRunId !== undefined) agentRegistry.unregister(agentRegistryRunId);
+    }
   } catch (error) {
     next(error);
   }

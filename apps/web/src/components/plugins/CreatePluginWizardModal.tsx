@@ -38,6 +38,12 @@ type PluginCreateComplete = {
   name: string;
   error?: string;
   conversationId?: number;
+  stopped?: boolean;
+};
+
+type PluginCreateStarted = {
+  runId: string;
+  conversationId: number;
 };
 
 /** Slugifies first, THEN truncates - cutting the raw prompt to length before slugifying can
@@ -72,7 +78,9 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
     report: "pending",
   });
   const [log, setLog] = useState<string[]>([]);
-  const [result, setResult] = useState<{ success: boolean; error?: string; conversationId?: number } | null>(null);
+  const [result, setResult] = useState<{ success: boolean; error?: string; conversationId?: number; stopped?: boolean } | null>(null);
+  const [liveConversationId, setLiveConversationId] = useState<number | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   const existing = useMemo(() => new Set(existingNames), [existingNames]);
   const nameError = !name
@@ -102,6 +110,8 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
       setPhaseStatuses({ explore: "pending", plan: "pending", edit: "pending", verify: "pending", report: "pending" });
       setLog([]);
       setResult(null);
+      setLiveConversationId(null);
+      setStopping(false);
     }
   }, [open]);
 
@@ -120,9 +130,14 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
       }
       if (event.message) setLog((prev) => [...prev.slice(-49), event.message as string]);
     };
+    const handleStarted = (event: PluginCreateStarted) => {
+      if (event.runId !== runId) return;
+      setLiveConversationId(event.conversationId);
+    };
     const handleComplete = (event: PluginCreateComplete) => {
       if (event.runId !== runId) return;
-      setResult({ success: event.success, error: event.error, conversationId: event.conversationId });
+      setResult({ success: event.success, error: event.error, conversationId: event.conversationId, stopped: event.stopped });
+      setStopping(false);
       if (!event.success) {
         setPhaseStatuses((prev) => {
           const next = { ...prev };
@@ -132,9 +147,11 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
       }
     };
 
+    socket.on("plugin_create_started", handleStarted);
     socket.on("plugin_create_event", handleEvent);
     socket.on("plugin_create_complete", handleComplete);
     return () => {
+      socket.off("plugin_create_started", handleStarted);
       socket.off("plugin_create_event", handleEvent);
       socket.off("plugin_create_complete", handleComplete);
     };
@@ -171,6 +188,12 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
     } finally {
       setStarting(false);
     }
+  };
+
+  const stopRun = () => {
+    if (!socket || liveConversationId === null) return;
+    setStopping(true);
+    socket.emit("chat:stop", { conversationId: liveConversationId });
   };
 
   const enableNow = async () => {
@@ -287,7 +310,15 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
                 </div>
               )}
               {result && (
-                <div className={`rounded-lg border p-3 text-sm ${result.success ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-red-500/30 bg-red-500/10 text-red-200"}`}>
+                <div
+                  className={`rounded-lg border p-3 text-sm ${
+                    result.success
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                      : result.stopped
+                        ? "border-gray-700 bg-gray-900 text-gray-300"
+                        : "border-red-500/30 bg-red-500/10 text-red-200"
+                  }`}
+                >
                   {result.success ? (
                     <div className="flex items-center justify-between gap-3 flex-wrap">
                       <span>Plugin "{name}" erstellt (deaktiviert).</span>
@@ -303,6 +334,8 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
                         <button className="btn-primary" onClick={() => void enableNow()}>Jetzt aktivieren</button>
                       </div>
                     </div>
+                  ) : result.stopped ? (
+                    <p>Gestoppt. Die bisher geschriebenen Dateien bleiben serverseitig zur Pruefung liegen.</p>
                   ) : (
                     <div>
                       <p>Fehlgeschlagen: {result.error ?? "Unbekannter Fehler"}</p>
@@ -329,9 +362,20 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
               Erstellen <ChevronRight className="w-4 h-4" />
             </button>
           ) : isProgressStep ? (
-            <button className="btn-secondary" onClick={onClose}>
-              {result ? "Schliessen" : "Im Hintergrund weiterlaufen lassen"}
-            </button>
+            <div className="flex gap-2">
+              {!result && liveConversationId !== null && (
+                <button
+                  className="rounded border border-red-500/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                  onClick={stopRun}
+                  disabled={stopping}
+                >
+                  {stopping ? "Stoppe …" : "Stoppen"}
+                </button>
+              )}
+              <button className="btn-secondary" onClick={onClose}>
+                {result ? "Schliessen" : "Im Hintergrund weiterlaufen lassen"}
+              </button>
+            </div>
           ) : (
             <button
               className="btn-primary inline-flex items-center gap-2"

@@ -70,13 +70,16 @@ export class ClaudeProvider implements LLMProvider {
     const systemPrompt = extractSystemPrompt(messages);
     const anthropicMessages = toAnthropicMessages(messages);
 
-    const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: merged.maxTokens ?? 4000,
-      system: systemPrompt,
-      messages: anthropicMessages,
-      temperature: merged.temperature,
-    });
+    const response = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: merged.maxTokens ?? 4000,
+        system: systemPrompt,
+        messages: anthropicMessages,
+        temperature: merged.temperature,
+      },
+      { signal: merged.signal }
+    );
 
     const content = response.content
       .filter((block): block is Anthropic.TextBlock => block.type === "text")
@@ -104,13 +107,16 @@ export class ClaudeProvider implements LLMProvider {
     const systemPrompt = extractSystemPrompt(messages);
     const anthropicMessages = toAnthropicMessages(messages);
 
-    const stream = await this.client.messages.stream({
-      model: this.model,
-      max_tokens: merged.maxTokens ?? 4000,
-      system: systemPrompt,
-      messages: anthropicMessages,
-      temperature: merged.temperature,
-    });
+    const stream = await this.client.messages.stream(
+      {
+        model: this.model,
+        max_tokens: merged.maxTokens ?? 4000,
+        system: systemPrompt,
+        messages: anthropicMessages,
+        temperature: merged.temperature,
+      },
+      { signal: merged.signal }
+    );
 
     let fullContent = "";
     let promptTokens = 0;
