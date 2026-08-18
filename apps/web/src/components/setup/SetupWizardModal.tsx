@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronLeft, ChevronRight, Sparkles, X } from "lucide-react";
-import { api } from "../../lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { CheckCircle2, ChevronLeft, ChevronRight, Plug, Sparkles, X, AlertTriangle, ExternalLink } from "lucide-react";
+import { api, type PluginInfo } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { BackendSettings } from "../settings/BackendSettings";
+import { PluginSettingsForm } from "../plugins/PluginSettingsForm";
 
 interface SettingEntry {
   key: string;
@@ -26,49 +28,14 @@ function toBool(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
-function parseGateways(raw: string | undefined): Array<{ id: string; portal: string; enabled: boolean; authToken?: string; guildId?: string; channelHint?: string; userId?: string }> {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((item) => item && typeof item === "object")
-      .map((item) => item as Record<string, unknown>)
-      .map((item, index) => ({
-        id: String(item["id"] ?? `gateway_${index + 1}`),
-        portal: String(item["portal"] ?? "custom"),
-        enabled: item["enabled"] !== false,
-        authToken: item["authToken"] ? String(item["authToken"]) : undefined,
-        guildId: item["guildId"] ? String(item["guildId"]) : undefined,
-        channelHint: item["channelHint"] ? String(item["channelHint"]) : undefined,
-        userId: item["userId"] ? String(item["userId"]) : undefined,
-      }));
-  } catch {
-    return [];
-  }
-}
+/** The wizard step index the generic "Connectors" step lives at (was the Discord-only step). */
+const CONNECTORS_STEP = 2;
 
 export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalProps) {
   const { t } = useI18n();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const settingsMap = useMemo(() => new Map(settings.map((entry) => [entry.key, entry.value])), [settings]);
-
-  const gateways = useMemo(() => parseGateways(settingsMap.get("MESSAGING_GATEWAYS")), [settingsMap]);
-  const discordGateway = gateways.find((entry) => entry.portal === "discord");
-  const rawOtherGateways = useMemo(() => {
-    const raw = settingsMap.get("MESSAGING_GATEWAYS");
-    if (!raw) return [] as Record<string, unknown>[];
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return [];
-      return parsed
-        .filter((item) => item && typeof item === "object")
-        .map((item) => item as Record<string, unknown>)
-        .filter((item) => item["portal"] !== "discord");
-    } catch {
-      return [];
-    }
-  }, [settingsMap]);
 
   const [step, setStep] = useState(0);
   const [provider, setProvider] = useState<ProviderName>((settingsMap.get("DEFAULT_PROVIDER") as ProviderName | undefined) ?? "lmstudio");
@@ -86,11 +53,110 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [nousBaseUrl, setNousBaseUrl] = useState(settingsMap.get("NOUS_BASE_URL") ?? "https://api.nousresearch.com/v1");
   const [nousModel, setNousModel] = useState(settingsMap.get("NOUS_MODEL") ?? "nous-hermes-2-mixtral-8x7b-dpo");
 
-  const [gatewayEnabled, setGatewayEnabled] = useState(Boolean(discordGateway?.enabled));
-  const [discordBotToken, setDiscordBotToken] = useState(discordGateway?.authToken ?? "");
-  const [discordGuildId, setDiscordGuildId] = useState(discordGateway?.guildId ?? "");
-  const [discordChannelId, setDiscordChannelId] = useState(discordGateway?.channelHint ?? "");
-  const [discordAllowedUserId, setDiscordAllowedUserId] = useState(discordGateway?.userId ?? "");
+  // Generic connector-plugin state (plan section 8b) - replaces the old Discord-only fields.
+  // Keyed by plugin name so an arbitrary number of connector plugins (Discord, future Telegram,
+  // ...) can be configured and enabled in one wizard pass.
+  const connectorPluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: () => api.plugins.list(), enabled: open });
+  const connectorPlugins = useMemo(
+    () => (connectorPluginsQuery.data ?? []).filter((p): p is PluginInfo & { connector: NonNullable<PluginInfo["connector"]> } => Boolean(p.connector)),
+    [connectorPluginsQuery.data]
+  );
+  const [connectorEnabled, setConnectorEnabled] = useState<Record<string, boolean>>({});
+  const [connectorValues, setConnectorValues] = useState<Record<string, Record<string, string>>>({});
+  const [connectorMasked, setConnectorMasked] = useState<Record<string, Set<string>>>({});
+  const [connectorTestResult, setConnectorTestResult] = useState<Record<string, { ok: boolean; error?: string } | undefined>>({});
+  const [connectorTesting, setConnectorTesting] = useState<Record<string, boolean>>({});
+  const [connectorSeeded, setConnectorSeeded] = useState<Set<string>>(new Set());
+
+  // Seed each connector plugin's enabled state + current (masked) settings exactly once, the
+  // first time it's seen - never overwrites in-progress edits on later re-renders.
+  useEffect(() => {
+    if (!open) return;
+    for (const plugin of connectorPlugins) {
+      if (connectorSeeded.has(plugin.name)) continue;
+      setConnectorSeeded((prev) => new Set(prev).add(plugin.name));
+      setConnectorEnabled((prev) => (plugin.name in prev ? prev : { ...prev, [plugin.name]: plugin.enabled }));
+      api.plugins
+        .getSettings(plugin.name)
+        .then((result) => {
+          const initial: Record<string, string> = {};
+          const masked = new Set<string>();
+          for (const spec of result.specs) {
+            const raw = result.values[spec.key];
+            if (raw === "***") {
+              masked.add(spec.key);
+              initial[spec.key] = "";
+            } else {
+              initial[spec.key] = raw !== undefined && raw !== null ? String(raw) : "";
+            }
+          }
+          setConnectorValues((prev) => (plugin.name in prev ? prev : { ...prev, [plugin.name]: initial }));
+          setConnectorMasked((prev) => ({ ...prev, [plugin.name]: masked }));
+        })
+        .catch(() => {
+          // Keep the wizard usable even if a plugin's settings can't be loaded - the form just
+          // starts empty for that plugin.
+        });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, connectorPlugins]);
+
+  /**
+   * Persists one connector plugin's settings + enable/disable state, then (only if it ends up
+   * enabled) runs the connectivity test and stores the result inline. Never throws - failures
+   * (including a failed connectivity test) are surfaced in connectorTestResult/console instead
+   * of blocking the caller, per the plan's "soft connectivity check" intent.
+   */
+  async function saveAndTestConnector(pluginName: string): Promise<void> {
+    const plugin = connectorPlugins.find((p) => p.name === pluginName);
+    if (!plugin) return;
+    const enabled = connectorEnabled[pluginName] ?? plugin.enabled;
+    const values = connectorValues[pluginName] ?? {};
+    try {
+      const changedValues: Record<string, string> = {};
+      for (const spec of plugin.settings) {
+        const value = values[spec.key];
+        if (value !== undefined && value !== "") changedValues[spec.key] = value;
+      }
+      if (Object.keys(changedValues).length > 0) {
+        await api.plugins.saveSettings(pluginName, changedValues);
+      }
+      if (enabled) await api.plugins.enable(pluginName);
+      else await api.plugins.disable(pluginName);
+    } catch (error) {
+      setConnectorTestResult((prev) => ({
+        ...prev,
+        [pluginName]: { ok: false, error: error instanceof Error ? error.message : String(error) },
+      }));
+      return;
+    }
+
+    if (!enabled) {
+      setConnectorTestResult((prev) => ({ ...prev, [pluginName]: undefined }));
+      return;
+    }
+
+    setConnectorTesting((prev) => ({ ...prev, [pluginName]: true }));
+    try {
+      const result = await api.plugins.connectorTest(pluginName);
+      setConnectorTestResult((prev) => ({ ...prev, [pluginName]: { ok: result.ok, error: result.error } }));
+    } catch (error) {
+      setConnectorTestResult((prev) => ({
+        ...prev,
+        [pluginName]: { ok: false, error: error instanceof Error ? error.message : String(error) },
+      }));
+    } finally {
+      setConnectorTesting((prev) => ({ ...prev, [pluginName]: false }));
+    }
+  }
+
+  const saveAndTestAllConnectors = useMutation({
+    mutationFn: async () => {
+      for (const plugin of connectorPlugins) {
+        await saveAndTestConnector(plugin.name);
+      }
+    },
+  });
 
   const [backendType, setBackendType] = useState<"local" | "remote">("local");
   const [backendPort, setBackendPort] = useState("3001");
@@ -120,12 +186,6 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
     setNousBaseUrl(settingsMap.get("NOUS_BASE_URL") ?? "https://api.nousresearch.com/v1");
     setNousModel(settingsMap.get("NOUS_MODEL") ?? "nous-hermes-2-mixtral-8x7b-dpo");
 
-    setGatewayEnabled(Boolean(discordGateway?.enabled));
-    setDiscordBotToken(discordGateway?.authToken ?? "");
-    setDiscordGuildId(discordGateway?.guildId ?? "");
-    setDiscordChannelId(discordGateway?.channelHint ?? "");
-    setDiscordAllowedUserId(discordGateway?.userId ?? "");
-
     setCodingEnabled(toBool(settingsMap.get("CODING_ENABLED"), false));
     setWikiEnabled(toBool(settingsMap.get("WIKI_ENABLED"), false));
 
@@ -133,7 +193,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
     setSkillBehavior((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
     setAutoSkillFallbackNone(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, settingsMap, discordGateway]);
+  }, [open, settingsMap]);
 
   const saveSetup = useMutation({
     mutationFn: async () => {
@@ -166,21 +226,18 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
         writes.push(api.settings.set("NOUS_MODEL", nousModel));
       }
 
-      const discordEntry = gatewayEnabled
-        ? [
-            {
-              id: discordGateway?.id ?? "discord_main",
-              portal: "discord",
-              name: "Discord Gateway",
-              enabled: true,
-              authToken: discordBotToken,
-              guildId: discordGuildId || undefined,
-              channelHint: discordChannelId || undefined,
-              userId: discordAllowedUserId || undefined,
-            },
-          ]
-        : [];
-      writes.push(api.settings.set("MESSAGING_GATEWAYS", JSON.stringify([...rawOtherGateways, ...discordEntry])));
+      // Connector plugins (Discord etc.) are saved+enabled+tested via their own dedicated plugin
+      // endpoints (PUT /api/plugins/:name/settings, POST enable/disable, POST connector/test) -
+      // not via the legacy MESSAGING_GATEWAYS setting, which the wizard no longer reads or
+      // writes at all. Run this first so a failed connectivity test never blocks the rest of the
+      // wizard finishing (soft check, per the plan) and so it also covers the case where the
+      // user jumped straight to the summary step via the step tabs instead of clicking "Next"
+      // through the connectors step.
+      for (const plugin of connectorPlugins) {
+        await saveAndTestConnector(plugin.name).catch(() => {
+          // Never abort the whole wizard finish because one connector plugin failed to save/test.
+        });
+      }
 
       writes.push(api.settings.set("CODING_ENABLED", String(codingEnabled)));
       writes.push(api.settings.set("WIKI_ENABLED", String(wikiEnabled)));
@@ -207,7 +264,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const steps = [
     t("setupWizard.steps.llm"),
     "Backend",
-    t("setupWizard.steps.gateway"),
+    t("setupWizard.steps.connectors"),
     t("setupWizard.steps.features"),
     t("setupWizard.steps.agent"),
     t("setupWizard.steps.summary"),
@@ -319,21 +376,83 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
             </div>
           )}
 
-          {step === 2 && (
+          {step === CONNECTORS_STEP && (
             <div className="space-y-3">
-              <h3 className="text-base font-semibold">{t("setupWizard.section.gateway")}</h3>
-              <label className="flex items-center gap-2 text-sm text-gray-300">
-                <input type="checkbox" checked={gatewayEnabled} onChange={(e) => setGatewayEnabled(e.target.checked)} />
-                {t("setupWizard.gateway.enableDiscord")}
-              </label>
-              {gatewayEnabled && (
+              <h3 className="text-base font-semibold flex items-center gap-2"><Plug className="w-4 h-4 text-cyan-300" /> {t("setupWizard.section.connectors")}</h3>
+              <p className="text-xs text-gray-400">{t("setupWizard.connectors.intro")}</p>
+
+              {connectorPluginsQuery.isLoading ? (
+                <p className="text-sm text-gray-400">...</p>
+              ) : connectorPlugins.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-700 bg-gray-900 p-4 text-sm text-gray-400 space-y-2">
+                  <p>{t("setupWizard.connectors.none")}</p>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-cyan-300 underline text-xs"
+                    onClick={() => { onClose(); navigate("/plugins"); }}
+                  >
+                    <ExternalLink className="w-3 h-3" /> {t("setupWizard.connectors.noneLink")}
+                  </button>
+                </div>
+              ) : (
                 <div className="space-y-3">
-                  <input className="input w-full" type="password" value={discordBotToken} onChange={(e) => setDiscordBotToken(e.target.value)} placeholder={t("setupWizard.placeholders.discordBotToken")} />
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <input className="input" value={discordGuildId} onChange={(e) => setDiscordGuildId(e.target.value)} placeholder={t("setupWizard.placeholders.discordGuildId")} />
-                    <input className="input" value={discordChannelId} onChange={(e) => setDiscordChannelId(e.target.value)} placeholder={t("setupWizard.placeholders.discordChannelId")} />
-                    <input className="input" value={discordAllowedUserId} onChange={(e) => setDiscordAllowedUserId(e.target.value)} placeholder={t("setupWizard.placeholders.discordAllowedUserId")} />
-                  </div>
+                  {connectorPlugins.map((plugin) => {
+                    const enabled = connectorEnabled[plugin.name] ?? plugin.enabled;
+                    const values = connectorValues[plugin.name] ?? {};
+                    const masked = connectorMasked[plugin.name];
+                    const testResult = connectorTestResult[plugin.name];
+                    const testing = Boolean(connectorTesting[plugin.name]);
+                    return (
+                      <div key={plugin.name} className="rounded-lg border border-gray-800 bg-gray-900 p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium flex items-center gap-2">
+                              {plugin.icon ?? "🔌"} {plugin.name}
+                              <span className="text-xs font-normal text-gray-500">({plugin.connector.portal})</span>
+                            </div>
+                            {plugin.description && <p className="text-xs text-gray-500 mt-0.5">{plugin.description}</p>}
+                          </div>
+                          <label className="flex items-center gap-2 text-sm text-gray-300 shrink-0">
+                            <input
+                              type="checkbox"
+                              checked={enabled}
+                              onChange={(e) => setConnectorEnabled((prev) => ({ ...prev, [plugin.name]: e.target.checked }))}
+                            />
+                            {t("setupWizard.connectors.enable")}
+                          </label>
+                        </div>
+
+                        {enabled && (
+                          <>
+                            <PluginSettingsForm
+                              specs={plugin.settings}
+                              values={values}
+                              maskedKeys={masked}
+                              onChange={(key, value) =>
+                                setConnectorValues((prev) => ({ ...prev, [plugin.name]: { ...(prev[plugin.name] ?? {}), [key]: value } }))
+                              }
+                            />
+                            <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                className="btn-secondary text-xs"
+                                disabled={testing}
+                                onClick={() => void saveAndTestConnector(plugin.name)}
+                              >
+                                {testing ? t("setupWizard.connectors.testing") : `${t("setupWizard.connectors.save")} & ${t("setupWizard.connectors.test")}`}
+                              </button>
+                              {testResult && (
+                                <span className={`text-xs flex items-center gap-1 ${testResult.ok ? "text-emerald-300" : "text-amber-300"}`}>
+                                  {testResult.ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                                  {testResult.ok ? t("setupWizard.connectors.testOk") : `${t("setupWizard.connectors.testFailed")}: ${testResult.error ?? "?"}`}
+                                </span>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -392,8 +511,15 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 {provider === "openrouter" && <p><strong>{t("setupWizard.summary.openRouterModel")}:</strong> {openRouterModel || "openrouter/free"}</p>}
                 {provider === "claude" && <p><strong>{t("setupWizard.summary.claudeModel")}:</strong> {claudeModel}</p>}
                 {provider === "nous" && <p><strong>{t("setupWizard.summary.nousModel")}:</strong> {nousModel}</p>}
-                <p><strong>{t("setupWizard.summary.gateway")}:</strong> {gatewayEnabled ? t("setupWizard.summary.discordActive") : t("setupWizard.summary.off")}</p>
-                {gatewayEnabled && discordChannelId && <p><strong>{t("setupWizard.summary.discordChannel")}:</strong> {discordChannelId}</p>}
+                <p>
+                  <strong>{t("setupWizard.summary.gateway")}:</strong>{" "}
+                  {connectorPlugins.filter((p) => connectorEnabled[p.name] ?? p.enabled).length > 0
+                    ? connectorPlugins
+                        .filter((p) => connectorEnabled[p.name] ?? p.enabled)
+                        .map((p) => p.connector.portal)
+                        .join(", ")
+                    : t("setupWizard.summary.off")}
+                </p>
                 <p><strong>{t("setupWizard.summary.coding")}:</strong> {codingEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
                 <p><strong>{t("setupWizard.summary.wiki")}:</strong> {wikiEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
                 <p><strong>{t("setupWizard.summary.skillBehavior")}:</strong> {skillBehavior === "automatic" ? t("setupWizard.agent.behaviorAutomatic") : t("setupWizard.agent.behaviorActive")}</p>
@@ -418,8 +544,19 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
               {saveSetup.isPending ? t("setupWizard.saving") : t("setupWizard.finish")}
             </button>
           ) : (
-            <button className="btn-primary inline-flex items-center gap-2" onClick={() => setStep((s) => Math.min(5, s + 1))}>
-              {t("setupWizard.next")} <ChevronRight className="w-4 h-4" />
+            <button
+              className="btn-primary inline-flex items-center gap-2"
+              disabled={saveAndTestAllConnectors.isPending}
+              onClick={async () => {
+                // Leaving the Connectors step: save + soft-test every connector plugin before
+                // marking the step done, without blocking navigation on a failed test.
+                if (step === CONNECTORS_STEP) {
+                  await saveAndTestAllConnectors.mutateAsync().catch(() => {});
+                }
+                setStep((s) => Math.min(5, s + 1));
+              }}
+            >
+              {saveAndTestAllConnectors.isPending && step === CONNECTORS_STEP ? t("setupWizard.connectors.testing") : t("setupWizard.next")} <ChevronRight className="w-4 h-4" />
             </button>
           )}
         </div>

@@ -21,6 +21,20 @@ export {
   type PluginSettingSpec,
   type OAuthConfig,
 } from "./plugin-manifest.js";
+export type {
+  ConnectorTarget,
+  OutboundAttachment,
+  OutboundMessage,
+  InboundAttachment,
+  InboundMessage,
+  ConnectorStatus,
+  ConnectorCapabilities,
+  ConnectorWebhookRequest,
+  ConnectorWebhookResponse,
+  ConnectorContext,
+  ConnectorAdapter,
+  ConnectorModuleExports,
+} from "./connector-types.js";
 
 /**
  * Persist a user enable/disable override to plugins/.state.json. File-first: the manifest

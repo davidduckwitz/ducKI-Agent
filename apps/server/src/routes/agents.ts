@@ -29,19 +29,19 @@ agentsRouter.get("/live", (req, res) => {
     bitcoinPuzzles: runningPuzzlesCount,
   };
 
-  const discordStatus = (req.app.locals["discordGatewayStatus"] as {
-    enabled: boolean;
+  // Generic connector registry status (Discord and any other installed connector plugin).
+  // The "discord" key is kept for backward compat with the existing frontend type/UI.
+  interface ConnectorStatusLike {
     configured: boolean;
     active: boolean;
     connectedAt?: string;
     lastError?: string;
     updatedAt: string;
-  } | undefined) ?? {
-    enabled: false,
-    configured: false,
-    active: false,
-    updatedAt: new Date().toISOString(),
-  };
+  }
+  const connectorRegistryRef = req.app.locals["connectorRegistryRef"] as { current?: { getStatuses(): Record<string, ConnectorStatusLike> } } | undefined;
+  const connectorStatuses = connectorRegistryRef?.current?.getStatuses() ?? {};
+  const defaultStatus: ConnectorStatusLike = { configured: false, active: false, updatedAt: new Date().toISOString() };
+  const discordStatus = connectorStatuses["discord"] ?? defaultStatus;
 
   res.json(createApiResponse({
     ...snapshot,
@@ -51,6 +51,7 @@ agentsRouter.get("/live", (req, res) => {
     gateway: {
       discord: discordStatus,
     },
+    connectorStatuses,
     bitcoinPuzzles: {
       running: runningPuzzlesCount,
       total: allPuzzles.length,

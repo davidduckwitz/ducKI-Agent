@@ -62,6 +62,17 @@ const ProvidesSchema = z.object({
    *  (id, name, emoji, locomotion, kind "svg"|"matrix", inline SVG art). Enabled plugins' pets
    *  join the Character gallery; disabling the plugin removes them. */
   pets: z.string().optional(),
+  /**
+   * A long-lived background connection (WebSocket/polling connector), e.g. a messaging
+   * platform bridge. `module` is an ESM module (relative to the plugin dir) exporting a
+   * `createConnector(manifest)` factory that returns a ConnectorAdapter ({connect, disconnect,
+   * send, getStatus}); `portal` is the stable portal identifier the core `gateway` tool and
+   * connector registry dispatch by (e.g. "discord"). Requires trust: "node".
+   */
+  connector: z.object({
+    module: z.string().min(1),
+    portal: z.string().min(1),
+  }).optional(),
 }).default({});
 
 export const PluginManifestSchema = z.object({

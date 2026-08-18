@@ -660,6 +660,7 @@ export const translations: Record<Language, TranslationTree> = {
       steps: {
         llm: "LLM",
         gateway: "Gateway",
+        connectors: "Connectors",
         features: "Features",
         agent: "Agent",
         summary: "Uebersicht",
@@ -667,6 +668,7 @@ export const translations: Record<Language, TranslationTree> = {
       section: {
         llm: "LLM Einstellungen",
         gateway: "Gateway Einstellungen",
+        connectors: "Connector-Plugins",
         features: "Features aktivieren",
         agent: "Agent & Skills",
         summary: "Uebersicht",
@@ -677,6 +679,19 @@ export const translations: Record<Language, TranslationTree> = {
       },
       gateway: {
         enableDiscord: "Discord Gateway aktivieren",
+      },
+      connectors: {
+        intro: "Jede Messaging-Plattform (Discord etc.) ist ein eigenes Connector-Plugin mit eigener, verschluesselter Konfiguration. Du kannst hier mehrere gleichzeitig aktivieren.",
+        none: "Keine Connector-Plugins installiert.",
+        noneLink: "Zur Plugin-Uebersicht",
+        enable: "Aktivieren",
+        save: "Speichern",
+        test: "Verbindung testen",
+        testing: "Teste...",
+        testOk: "Verbindung ok.",
+        testFailed: "Test fehlgeschlagen",
+        configured: "Konfiguriert",
+        notConfigured: "Nicht konfiguriert",
       },
       features: {
         coding: "Coding Bereich",
@@ -1413,6 +1428,7 @@ export const translations: Record<Language, TranslationTree> = {
       steps: {
         llm: "LLM",
         gateway: "Gateway",
+        connectors: "Connectors",
         features: "Features",
         agent: "Agent",
         summary: "Summary",
@@ -1420,6 +1436,7 @@ export const translations: Record<Language, TranslationTree> = {
       section: {
         llm: "LLM Settings",
         gateway: "Gateway Settings",
+        connectors: "Connector plugins",
         features: "Enable features",
         agent: "Agent & Skills",
         summary: "Summary",
@@ -1430,6 +1447,19 @@ export const translations: Record<Language, TranslationTree> = {
       },
       gateway: {
         enableDiscord: "Enable Discord gateway",
+      },
+      connectors: {
+        intro: "Every messaging platform (Discord etc.) is its own connector plugin with its own encrypted configuration. You can enable several at once here.",
+        none: "No connector plugins installed.",
+        noneLink: "Go to the plugin overview",
+        enable: "Enable",
+        save: "Save",
+        test: "Test connection",
+        testing: "Testing...",
+        testOk: "Connection ok.",
+        testFailed: "Test failed",
+        configured: "Configured",
+        notConfigured: "Not configured",
       },
       features: {
         coding: "Coding area",

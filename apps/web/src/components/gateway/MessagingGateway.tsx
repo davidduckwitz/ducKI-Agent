@@ -1,9 +1,93 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Plus, RefreshCw, Send, Search, MessageSquare, Settings2, Mic, Image as ImageIcon, Smile, Copy, Upload } from "lucide-react";
+import { Plus, RefreshCw, Send, Search, MessageSquare, Settings2, Mic, Image as ImageIcon, Smile, Copy, Upload, Plug, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+
+/**
+ * Connector plugins (provides.connector, e.g. discord-connector) - the new generic replacement
+ * for the old per-portal config rows below. A connector plugin owns its own settings/secrets
+ * (encrypted) and its detail configuration lives in its settingsPage iframe (same mechanism the
+ * plugin management page uses); this panel is only a status overview + link, not a form.
+ */
+function ConnectorsPanel() {
+  const pluginsQuery = useQuery({ queryKey: ["plugins"], queryFn: () => api.plugins.list(), refetchInterval: 5000 });
+  const liveQuery = useQuery({ queryKey: ["agents", "live"], queryFn: () => api.agents.live(), refetchInterval: 3000 });
+  const testMutation = useMutation({ mutationFn: (name: string) => api.plugins.connectorTest(name) });
+
+  const connectorPlugins = (pluginsQuery.data ?? []).filter((p) => p.connector);
+  const statuses = liveQuery.data?.connectorStatuses ?? {};
+
+  if (connectorPlugins.length === 0) {
+    return (
+      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5 shadow-xl shadow-black/20">
+        <h2 className="text-lg font-semibold flex items-center gap-2"><Plug className="w-4 h-4 text-cyan-300" /> Connector-Plugins</h2>
+        <p className="text-sm text-gray-400 mt-2">
+          Keine Connector-Plugins installiert. Discord und weitere Messaging-Plattformen werden als eigenständige Plugins
+          bereitgestellt - installiere z.B. discord-connector über die <button type="button" className="underline text-cyan-300" onClick={() => window.open("/plugins", "_self")}>Plugin-Übersicht</button>.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5 shadow-xl shadow-black/20 space-y-3">
+      <h2 className="text-lg font-semibold flex items-center gap-2"><Plug className="w-4 h-4 text-cyan-300" /> Connector-Plugins</h2>
+      <p className="text-sm text-gray-400">
+        Jede Messaging-Plattform ist ein eigenes Plugin mit eigener, verschlüsselter Konfiguration. Detail-Einstellungen (Bot-Token etc.) über „Konfigurieren“.
+      </p>
+      <div className="space-y-2">
+        {connectorPlugins.map((plugin) => {
+          const portal = plugin.connector?.portal ?? plugin.name;
+          const status = statuses[portal];
+          const active = Boolean(status?.active);
+          const configured = Boolean(status?.configured);
+          return (
+            <div key={plugin.name} className="rounded-xl border border-gray-800 bg-gray-950/60 p-4 flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <div className="font-medium flex items-center gap-2">
+                  {plugin.icon ?? "🔌"} {plugin.name}
+                  <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${active ? "bg-emerald-500/20 text-emerald-300" : configured ? "bg-amber-500/20 text-amber-300" : "bg-gray-800 text-gray-400"}`}>
+                    {active ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                    {active ? "Verbunden" : configured ? "Konfiguriert, nicht verbunden" : "Nicht konfiguriert"}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Portal: {portal}
+                  {status?.lastError ? ` · ${status.lastError}` : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => testMutation.mutate(plugin.name)}
+                  className="inline-flex items-center gap-1 rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-xs text-gray-200 hover:border-gray-500"
+                >
+                  {testMutation.isPending ? "Teste…" : "Verbindung testen"}
+                </button>
+                {plugin.settingsPage ? (
+                  <button
+                    type="button"
+                    onClick={() => window.open(`/api/plugins/${plugin.name}/ui/settings`, "_blank", "width=520,height=760")}
+                    className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-slate-950 hover:bg-cyan-400"
+                  >
+                    <ExternalLink className="w-3 h-3" /> Konfigurieren
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {testMutation.data ? (
+        <p className={`text-xs ${testMutation.data.ok ? "text-emerald-300" : "text-amber-300"}`}>
+          Testergebnis: {testMutation.data.ok ? "ok" : testMutation.data.error ?? "fehlgeschlagen"}
+        </p>
+      ) : null}
+    </section>
+  );
+}
 
 type GatewayConfig = {
   id: string;
@@ -192,11 +276,13 @@ export function MessagingGateway() {
         </button>
       </div>
 
+      <ConnectorsPanel />
+
       <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5 shadow-xl shadow-black/20">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
-              <h2 className="text-lg font-semibold flex items-center gap-2"><Settings2 className="w-4 h-4 text-cyan-300" /> {t("gatewayPage.config")}</h2>
+              <h2 className="text-lg font-semibold flex items-center gap-2"><Settings2 className="w-4 h-4 text-cyan-300" /> {t("gatewayPage.config")} <span className="text-xs font-normal text-gray-500">(Legacy — nur für Portale ohne Connector-Plugin, z.B. Telegram)</span></h2>
               <p className="text-sm text-gray-400">{t("gatewayPage.configHint")}</p>
             </div>
             <button

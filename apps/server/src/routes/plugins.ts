@@ -17,6 +17,16 @@ function pluginManager(req: import("express").Request): PluginManagerLike | unde
   return req.app.locals["pluginManager"] as PluginManagerLike | undefined;
 }
 
+/** Minimal shape of ConnectorRegistry (apps/server/src/lib/connector-registry.ts) we need here. */
+interface ConnectorRegistryLike {
+  hasConnector(portal: string): boolean;
+  reconnectPortal(portal: string): Promise<{ configured: boolean; active: boolean; lastError?: string }>;
+}
+
+function connectorRegistry(req: import("express").Request): ConnectorRegistryLike | undefined {
+  return req.app.locals["connectorRegistry"] as ConnectorRegistryLike | undefined;
+}
+
 /**
  * Read the CURRENT plugin set. Prefers the cached PluginManager (loaded once, refreshed only on
  * enable/disable/install) so ordinary page/settings/invoke requests don't re-scan every manifest,
@@ -148,7 +158,50 @@ pluginsRouter.put("/:name/settings", async (req, res, next) => {
       await setPluginSetting(name, key, value, info.settings);
     }
     const reload = reloadPlugins(req);
-    res.json(createApiResponse({ name, saved: Object.keys(values), reload }));
+
+    // Connector plugins (provides.connector): reconnect immediately with the fresh settings so
+    // a saved token takes effect without a full server restart.
+    let connectorStatus: unknown;
+    const portal = info.connector?.portal;
+    const registry = connectorRegistry(req);
+    if (portal && registry?.hasConnector(portal)) {
+      try {
+        connectorStatus = await registry.reconnectPortal(portal);
+      } catch (error) {
+        connectorStatus = { configured: false, active: false, lastError: error instanceof Error ? error.message : String(error) };
+      }
+    }
+
+    res.json(createApiResponse({ name, saved: Object.keys(values), reload, connectorStatus }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/plugins/:name/connector/test - connectivity test for a connector plugin (plan
+ * section 8b, the setup-wizard's pendant to hermes' check_<platform>_requirements()). Reconnects
+ * the portal with the currently-saved settings and reports whether it came up configured/active.
+ */
+pluginsRouter.post("/:name/connector/test", async (req, res, next) => {
+  try {
+    const name = String(req.params.name ?? "");
+    if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
+    const info = (await currentPlugins(req)).find((p) => p.name === name);
+    if (!info) { res.status(404).json(createApiError("Plugin not found")); return; }
+    const portal = info.connector?.portal;
+    if (!portal) { res.status(400).json(createApiError(`Plugin '${name}' has no provides.connector`)); return; }
+    const registry = connectorRegistry(req);
+    if (!registry?.hasConnector(portal)) {
+      res.status(409).json(createApiError(`Connector '${portal}' is not loaded (plugin disabled or trust != "node"?)`));
+      return;
+    }
+    const status = await registry.reconnectPortal(portal);
+    if (!status.configured) {
+      res.json(createApiResponse({ ok: false, portal, status, error: "Not configured (missing required settings, e.g. bot token)." }));
+      return;
+    }
+    res.json(createApiResponse({ ok: true, portal, status }));
   } catch (error) {
     next(error);
   }

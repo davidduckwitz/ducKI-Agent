@@ -1,0 +1,29 @@
+{
+  "name": "discord-connector",
+  "version": "1.0.0",
+  "description": "Discord-Connector: langlebige Gateway-WebSocket-Verbindung + Outbound-Senden/Reactions/Webhook-Interaktionen. Erstes Connector-Plugin (provides.connector).",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🎮",
+  "category": "automation",
+  "trust": "node",
+  "allowedHosts": ["discord.com", "gateway.discord.gg", "cdn.discordapp.com"],
+  "provides": {
+    "connector": { "module": "connector.js", "portal": "discord" },
+    "settingsPage": "settingsPage/index.html",
+    "skills": ["skills/discord"],
+    "settings": [
+      { "key": "name", "type": "string", "default": "Discord Gateway", "description": "Anzeigename dieser Discord-Konfiguration." },
+      { "key": "authToken", "type": "secret", "required": true, "description": "Discord Bot Token (Developer Portal > Bot > Reset Token). Fällt auf env DISCORD_BOT_TOKEN zurück, falls leer. (1:1 Migration von MessagingGatewayConfig.authToken)" },
+      { "key": "channelHint", "type": "string", "description": "Discord Channel ID / Hint - Standard-Zielkanal, wenn kein expliziter channelId im gateway-Tool-Aufruf angegeben wird." },
+      { "key": "inboundLabel", "type": "string", "description": "Discord User Label / Name - Anzeigename für eingehende Nachrichten ohne eigenen Usernamen." },
+      { "key": "guildId", "type": "string", "description": "Optional: nur Nachrichten aus dieser Guild/Server-ID weiterleiten." },
+      { "key": "userId", "type": "string", "description": "Optional: nur Nachrichten von dieser Discord-User-ID weiterleiten (erlaubte User-ID)." },
+      { "key": "appId", "type": "string", "description": "Discord Application ID (Developer Portal > General Information)." },
+      { "key": "publicKey", "type": "string", "description": "Discord Application Public Key (für Interactions-Webhook-Ed25519-Signaturprüfung, Developer Portal > General Information). Kein Secret - öffentlicher Wert." },
+      { "key": "metadata", "type": "string", "description": "Freitext/JSON-Zusatzdaten für diese Konfiguration (1:1 Migration von MessagingGatewayConfig.metadata)." },
+      { "key": "webhookSecret", "type": "secret", "description": "Discord Webhook URL / Secret - Fallback-Outbound-Transport, falls kein Bot-Token gesetzt ist." }
+    ]
+  },
+  "enabled": true
+}
