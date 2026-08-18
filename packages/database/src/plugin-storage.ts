@@ -25,6 +25,28 @@ export interface PluginStorage {
 }
 
 const clients = new Map<string, Client>();
+const pragmasReady = new Map<string, Promise<void>>();
+
+/**
+ * Same fix as the main DB's applyConnectionPragmas (packages/database/src/index.ts): the
+ * default rollback journal takes an exclusive lock on the whole file for any write, so a
+ * concurrent read/write from another connection (a second dev-server process, or a
+ * settings-page read racing a migration write on boot) fails immediately as
+ * "SQLITE_BUSY: database is locked" instead of waiting. WAL lets readers/writer run
+ * concurrently; busy_timeout makes any remaining contention wait instead of erroring.
+ */
+function applyPragmas(client: Client): Promise<void> {
+  return (async () => {
+    try {
+      await client.execute("PRAGMA journal_mode = WAL");
+      await client.execute("PRAGMA busy_timeout = 5000");
+      await client.execute("PRAGMA synchronous = NORMAL");
+    } catch {
+      // Non-fatal (e.g. file on a network share where WAL is unsupported) - fall back to
+      // default locking behavior rather than breaking plugin storage entirely.
+    }
+  })();
+}
 
 /** Resolve the plugins root once; kept overridable for tests via env. */
 function pluginsRoot(): string {
@@ -54,17 +76,21 @@ export function openPluginDb(name: string): PluginStorage {
     mkdirSync(dirname(filePath), { recursive: true });
     client = createClient({ url: `file:${filePath}` });
     clients.set(name, client);
+    pragmasReady.set(name, applyPragmas(client));
   }
   const c = client;
+  const ensurePragmas = () => pragmasReady.get(name) ?? Promise.resolve();
 
   let kvReady: Promise<unknown> | null = null;
-  const ensureKv = () => (kvReady ??= kvInit(c));
+  const ensureKv = () => (kvReady ??= ensurePragmas().then(() => kvInit(c)));
 
   return {
     async exec(sql, args = []) {
+      await ensurePragmas();
       await c.execute({ sql, args: args as never[] });
     },
     async query<T = Record<string, unknown>>(sql: string, args: unknown[] = []): Promise<T[]> {
+      await ensurePragmas();
       const res = await c.execute({ sql, args: args as never[] });
       return res.rows as unknown as T[];
     },
@@ -83,6 +109,7 @@ export function openPluginDb(name: string): PluginStorage {
       await c.execute({ sql: "DELETE FROM kv WHERE key = ?", args: [key] });
     },
     async close() {
+      pragmasReady.delete(name);
       clients.delete(name);
       c.close();
     },

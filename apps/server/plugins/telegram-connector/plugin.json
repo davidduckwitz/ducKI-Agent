@@ -1,0 +1,23 @@
+{
+  "name": "telegram-connector",
+  "version": "1.0.0",
+  "description": "Telegram-Connector: Long-Polling-Verbindung (Bot API getUpdates) + Outbound-Senden/Anhänge. Zweites Connector-Plugin (provides.connector) nach discord-connector.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "✈️",
+  "category": "automation",
+  "trust": "node",
+  "allowedHosts": ["api.telegram.org"],
+  "provides": {
+    "connector": { "module": "connector.js", "portal": "telegram" },
+    "skills": ["skills/telegram"],
+    "settings": [
+      { "key": "name", "type": "string", "default": "Telegram Gateway", "description": "Anzeigename dieser Telegram-Konfiguration." },
+      { "key": "authToken", "type": "secret", "required": true, "description": "Telegram Bot Token von @BotFather (/newbot bzw. /token). Fällt auf env TELEGRAM_BOT_TOKEN zurück, falls leer." },
+      { "key": "allowedChatId", "type": "string", "description": "Optional: nur Nachrichten aus diesem Chat/Gruppe/Kanal weiterleiten (Telegram chat_id)." },
+      { "key": "allowedUserId", "type": "string", "description": "Optional: nur Nachrichten von dieser Telegram-User-ID weiterleiten." },
+      { "key": "metadata", "type": "string", "description": "Freitext/JSON-Zusatzdaten für diese Konfiguration." }
+    ]
+  },
+  "enabled": true
+}
