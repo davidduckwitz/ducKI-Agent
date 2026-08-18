@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Telegram-Connector — Einstellungen</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 1.25rem; line-height: 1.5; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+  p.hint { margin: 0 0 1rem; opacity: 0.75; font-size: 0.85rem; }
+  label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; font-size: 0.85rem; }
+  input { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; }
+  .row { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+  button { padding: 0.5rem 0.9rem; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .primary { background: #26A5E4; color: #fff; }
+  .ghost { background: #8882; color: inherit; }
+  #status { margin-top: 0.75rem; font-size: 0.85rem; min-height: 1.2em; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+  small { opacity: 0.7; }
+  #liveStatus { margin: 0 0 1rem; padding: 0.5rem 0.75rem; border-radius: 6px; background: #8881; font-size: 0.85rem; }
+  .dot { display: inline-block; width: 0.55em; height: 0.55em; border-radius: 50%; margin-right: 0.4em; background: #999; }
+  .dot.active { background: #16a34a; }
+  .dot.configured { background: #d97706; }
+</style>
+</head>
+<body>
+  <h1>Telegram-Connector</h1>
+  <p class="hint">Bot-Token von @BotFather in Telegram (Befehl <code>/newbot</code>, oder <code>/token</code> für einen bestehenden Bot). Optional: Chat-/User-Filter, um nur bestimmte Absender zu erlauben.</p>
+
+  <div id="liveStatus"><span class="dot" id="statusDot"></span><span id="statusText">Status wird geladen…</span></div>
+
+  <label for="name">Name <small>(Anzeigename dieser Konfiguration)</small></label>
+  <input id="name" type="text" placeholder="Telegram Gateway" autocomplete="off" />
+
+  <label for="authToken">Telegram Bot Token <small>(Secret — wird verschlüsselt gespeichert)</small></label>
+  <input id="authToken" type="password" placeholder="•••• (leer lassen = unverändert / env TELEGRAM_BOT_TOKEN)" autocomplete="off" />
+
+  <label for="allowedChatId">Erlaubte Chat-ID <small>(optional, nur dieser Chat/Gruppe/Kanal)</small></label>
+  <input id="allowedChatId" type="text" placeholder="z.B. -1001234567890" autocomplete="off" />
+
+  <label for="allowedUserId">Erlaubte User-ID <small>(optional)</small></label>
+  <input id="allowedUserId" type="text" placeholder="z.B. 123456789" autocomplete="off" />
+
+  <label for="metadata">Metadata <small>(optional, Freitext/JSON)</small></label>
+  <input id="metadata" type="text" placeholder="" autocomplete="off" />
+
+  <div class="row">
+    <button class="primary" id="save">Speichern</button>
+    <button class="ghost" id="test">Verbindung testen</button>
+  </div>
+  <div id="status"></div>
+
+<script>
+  const NAME = "telegram-connector";
+  const BASE = "/api/plugins/" + NAME;
+  const $ = (id) => document.getElementById(id);
+  const status = (msg, ok) => { const s = $("status"); s.textContent = msg; s.className = ok ? "ok" : "err"; };
+
+  async function loadLiveStatus() {
+    try {
+      const res = await fetch("/api/agents/live");
+      const json = await res.json();
+      const statuses = (json.data && json.data.connectorStatuses) || {};
+      const s = statuses["telegram"];
+      const dot = $("statusDot"); const text = $("statusText");
+      if (!s) { dot.className = "dot"; text.textContent = "Noch kein Status verfügbar."; return; }
+      dot.className = "dot" + (s.active ? " active" : s.configured ? " configured" : "");
+      text.textContent = s.active
+        ? "Verbunden" + (s.connectedAt ? " seit " + new Date(s.connectedAt).toLocaleString() : "")
+        : s.configured
+          ? "Konfiguriert, aber nicht verbunden" + (s.lastError ? " — " + s.lastError : "")
+          : "Nicht konfiguriert" + (s.lastError ? " — " + s.lastError : "");
+    } catch (e) { $("statusText").textContent = "Status konnte nicht geladen werden."; }
+  }
+
+  async function load() {
+    try {
+      const res = await fetch(BASE + "/settings");
+      const json = await res.json();
+      const v = (json.data && json.data.values) || json.values || {};
+      $("name").value = typeof v.name === "string" ? v.name : "";
+      $("authToken").placeholder = v.authToken === "***" ? "•••• (gesetzt — leer lassen = unverändert)" : "•••• (leer lassen = unverändert / env TELEGRAM_BOT_TOKEN)";
+      $("allowedChatId").value = typeof v.allowedChatId === "string" ? v.allowedChatId : "";
+      $("allowedUserId").value = typeof v.allowedUserId === "string" ? v.allowedUserId : "";
+      $("metadata").value = typeof v.metadata === "string" ? v.metadata : "";
+    } catch (e) { status("Konnte Einstellungen nicht laden: " + e.message, false); }
+  }
+
+  async function save() {
+    const values = {
+      name: $("name").value.trim(),
+      allowedChatId: $("allowedChatId").value.trim(),
+      allowedUserId: $("allowedUserId").value.trim(),
+      metadata: $("metadata").value.trim(),
+    };
+    if ($("authToken").value.trim()) values.authToken = $("authToken").value.trim();
+    try {
+      const res = await fetch(BASE + "/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ values }) });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      await fetch(BASE + "/enable", { method: "POST" });
+      status("Gespeichert.", true);
+      $("authToken").value = "";
+      load();
+      setTimeout(loadLiveStatus, 1500);
+    } catch (e) { status("Speichern fehlgeschlagen: " + e.message, false); }
+  }
+
+  async function test() {
+    status("Teste Verbindung…", true);
+    try {
+      const res = await fetch(BASE + "/connector/test", { method: "POST" });
+      const json = await res.json();
+      if (!res.ok || (json.data && json.data.ok === false)) {
+        throw new Error((json.data && json.data.error) || json.error || "Test fehlgeschlagen");
+      }
+      status("Verbindung ok.", true);
+    } catch (e) { status("Test fehlgeschlagen: " + e.message, false); }
+    loadLiveStatus();
+  }
+
+  $("save").onclick = save;
+  $("test").onclick = test;
+  load();
+  loadLiveStatus();
+  setInterval(loadLiveStatus, 10000);
+</script>
+</body>
+</html>

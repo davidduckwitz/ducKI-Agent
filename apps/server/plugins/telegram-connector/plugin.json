@@ -10,6 +10,7 @@
   "allowedHosts": ["api.telegram.org"],
   "provides": {
     "connector": { "module": "connector.js", "portal": "telegram" },
+    "settingsPage": "settingsPage/index.html",
     "skills": ["skills/telegram"],
     "settings": [
       { "key": "name", "type": "string", "default": "Telegram Gateway", "description": "Anzeigename dieser Telegram-Konfiguration." },
