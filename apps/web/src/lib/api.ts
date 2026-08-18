@@ -381,6 +381,8 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ values }),
       }),
+    createRun: (payload: { prompt: string; name: string; category?: string; needsStorage?: boolean; targetHint?: string }) =>
+      request<{ runId: string }>("/plugins/create-run", { method: "POST", body: JSON.stringify(payload) }),
   },
 
   coding: {

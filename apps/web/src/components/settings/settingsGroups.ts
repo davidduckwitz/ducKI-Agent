@@ -173,6 +173,7 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_MAX_TOOL_FAILURES",
         "AGENT_MAX_REPEATED_TOOL_CALL",
         "CODING_ENABLED",
+        "PLUGIN_CREATION_ENABLED",
       ],
     },
     {

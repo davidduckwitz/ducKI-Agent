@@ -1,9 +1,13 @@
 import { Router, type IRouter } from "express";
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
+import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import type { ToolExecutor } from "@ducki/shared";
-import { loadPlugins, setPluginEnabled, pluginsRoot, parsePluginManifest, type LoadedPluginInfo } from "@ducki/agent";
+import { loadPlugins, setPluginEnabled, pluginsRoot, parsePluginManifest, validatePluginDir, type LoadedPluginInfo } from "@ducki/agent";
+import type { CodingAgent, AgentEventEmitter } from "@ducki/agent";
+import type { DatabaseService } from "@ducki/database";
 import { getPluginSettings, setPluginSetting } from "@ducki/database";
 
 /** Minimal shape of the PluginManager we read off app.locals (avoids a hard type import). */
@@ -418,6 +422,154 @@ pluginsRouter.post("/validate", async (req, res, next) => {
     const raw = typeof body.manifest === "string" ? body.manifest : JSON.stringify(body.manifest ?? {});
     const result = parsePluginManifest(raw);
     res.json(createApiResponse(result));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// --- Agent-authored plugin creation ---------------------------------------------------------
+//
+// Lets the coding agent author a brand-new plugin from a prompt + a few options, under hard
+// server-side safety rules (see validatePluginDir / packages/agent/src/plugins/validate-cli.ts):
+// no trust:"node", no moduleTools/connector, no oauth/settingsPage/frontendPage/widgetPage/
+// overlayPage - backend tools + skills only. The created plugin is always left DISABLED; a
+// human must review and enable it via the existing enable/disable endpoints above.
+
+function parseBooleanSetting(value: string | undefined | null, defaultValue: boolean): boolean {
+  if (value == null) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return defaultValue;
+}
+
+/** Absolute path to the compiled validate-cli.js, resolved via the @ducki/agent package
+ *  resolution itself (workspace-symlink-proof) rather than a guessed relative repo path.
+ *  @ducki/agent's package.json only declares an "import" export condition (ESM-only), so this
+ *  must use import.meta.resolve - createRequire().resolve() uses CJS "require" resolution and
+ *  fails with "No exports main defined" since no "require" condition exists. */
+function resolveValidateCliPath(): string {
+  const agentEntryUrl = import.meta.resolve("@ducki/agent");
+  const agentEntryPath = fileURLToPath(agentEntryUrl);
+  return join(dirname(agentEntryPath), "plugins", "validate-cli.js");
+}
+
+function loadPluginManageSkill(): string {
+  const path = join(process.cwd(), "skills", "plugin-manage", "SKILL.md");
+  if (!existsSync(path)) {
+    throw new Error(`plugin-manage skill not found at ${path}`);
+  }
+  return readFileSync(path, "utf8");
+}
+
+function buildPluginCreationGoal(opts: {
+  name: string;
+  prompt: string;
+  category?: string;
+  needsStorage?: boolean;
+  targetHint?: string;
+}): string {
+  const skill = loadPluginManageSkill();
+  return [
+    skill,
+    "---",
+    `You must create a new plugin named exactly "${opts.name}" in the current directory (which IS the plugin's own folder plugins/${opts.name}/ - write plugin.json directly here, not in a subfolder).`,
+    `User request: ${opts.prompt}`,
+    opts.category ? `Requested category: ${opts.category}` : "",
+    opts.needsStorage ? "The plugin should use its own SQLite storage (storage.sqlite: true)." : "The plugin does not need persistent storage - prefer a stateless data-source tool.",
+    opts.targetHint ? `Target API / data source hint: ${opts.targetHint}` : "",
+    "",
+    "Reminder of the hard rules from the skill above: sandboxed trust only, no moduleTools/connector, no oauth/settingsPage/frontendPage/widgetPage/overlayPage. Run the verify command after writing files and fix exactly what it reports.",
+  ].filter(Boolean).join("\n");
+}
+
+pluginsRouter.post("/create-run", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const codingEnabled = parseBooleanSetting(await db.getSetting("CODING_ENABLED"), false);
+    const creationEnabled = parseBooleanSetting(await db.getSetting("PLUGIN_CREATION_ENABLED"), false);
+    if (!codingEnabled || !creationEnabled) {
+      res.status(403).json(createApiError("Plugin creation is disabled"));
+      return;
+    }
+
+    const createCodingAgent = req.app.locals["createCodingAgent"] as
+      | ((options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: AgentEventEmitter }) => CodingAgent)
+      | undefined;
+    if (!createCodingAgent) {
+      res.status(500).json(createApiError("Coding agent factory is not configured"));
+      return;
+    }
+
+    const body = (req.body ?? {}) as {
+      prompt?: string;
+      name?: string;
+      category?: string;
+      needsStorage?: boolean;
+      targetHint?: string;
+    };
+    const name = String(body.name ?? "");
+    const prompt = String(body.prompt ?? "").trim();
+    if (!SAFE_NAME.test(name)) {
+      res.status(400).json(createApiError("'name' must be lowercase-kebab"));
+      return;
+    }
+    if (!prompt) {
+      res.status(400).json(createApiError("'prompt' is required"));
+      return;
+    }
+    const pluginDir = resolve(pluginsRoot(), name);
+    if (existsSync(pluginDir)) {
+      res.status(409).json(createApiError(`A plugin named '${name}' already exists`));
+      return;
+    }
+
+    const runId = randomUUID();
+    mkdirSync(pluginDir, { recursive: true });
+    res.json(createApiResponse({ runId }));
+
+    const io = req.app.locals["io"];
+    const emit = (event: string, data: Record<string, unknown>) => {
+      if (io) io.emit(event, { runId, ...data });
+    };
+
+    void (async () => {
+      try {
+        const eventEmitter: AgentEventEmitter = {
+          emitChunk(chunk: string) {
+            emit("plugin_create_chunk", { chunk });
+          },
+          emitEvent(event: any) {
+            emit("plugin_create_event", { type: event.type, message: event.message, data: event.data, timestamp: event.timestamp });
+          },
+        };
+
+        const codingAgent = createCodingAgent({ sandboxRoot: pluginDir, maxIterations: 40, eventEmitter });
+        const goal = buildPluginCreationGoal({
+          name,
+          prompt,
+          category: body.category,
+          needsStorage: body.needsStorage,
+          targetHint: body.targetHint,
+        });
+        const verifyCommand = `node "${resolveValidateCliPath()}" "${pluginsRoot()}" "${name}"`;
+
+        await codingAgent.run(goal, { verifyCommand, maxAttempts: 3, timeoutMs: 5 * 60 * 1000 });
+
+        // Authoritative re-check, in-process - never trust the agent's own reported "verified".
+        const finalCheck = validatePluginDir(pluginsRoot(), name);
+        if (!finalCheck.ok) {
+          emit("plugin_create_complete", { success: false, name, error: finalCheck.errors.join("; ") });
+          return;
+        }
+
+        setPluginEnabled(name, false);
+        const reload = reloadPlugins(req);
+        emit("plugin_create_complete", { success: true, name, reload });
+      } catch (error) {
+        emit("plugin_create_complete", { success: false, name, error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
   } catch (error) {
     next(error);
   }

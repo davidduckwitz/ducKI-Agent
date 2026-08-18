@@ -813,6 +813,18 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "PLUGIN_CREATION_ENABLED",
+    label: "Plugin-Erstellung durch Agent",
+    description: "Erlaubt dem Coding-Agenten, auf Anfrage eigene Plugins zu erstellen (nur sandboxed, ohne moduleTools/oauth/UI-Seiten, immer deaktiviert zur manuellen Freigabe erzeugt). Benoetigt zusaetzlich 'Coding Area Enabled'.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
     key: "PLAN_MODE_ENABLED",
     label: "Plan-Modus aktiviert",
     description: "Aktiviere Plan-Modus fuer strukturierte Planung ohne Tool-Ausfuehrung",

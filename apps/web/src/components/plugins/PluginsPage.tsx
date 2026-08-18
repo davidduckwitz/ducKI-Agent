@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, type PluginInfo } from "../../lib/api";
 import { toastManager as toast } from "../../lib/toast";
+import { CreatePluginWizardModal } from "./CreatePluginWizardModal";
 
 /** Public plugin catalog API (filterable via ?search= / ?category=). */
 const CATALOG_API = "https://ducki.cloud/api/v1";
@@ -26,6 +27,7 @@ export function PluginsPage() {
   const [search, setSearch] = useState("");
   // Name of the plugin whose iframe settings page is currently expanded (Phase 3), or null.
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -112,12 +114,27 @@ export function PluginsPage() {
 
   return (
     <div className="page space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold">Plugins</h1>
-        <p className="text-sm text-muted-foreground">
-          Datei-basierte Erweiterungen aus <code>plugins/</code> — Tools, Skills und Mappings. Keine node_modules, keine Belastung der Hauptdatenbank.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Plugins</h1>
+          <p className="text-sm text-muted-foreground">
+            Datei-basierte Erweiterungen aus <code>plugins/</code> — Tools, Skills und Mappings. Keine node_modules, keine Belastung der Hauptdatenbank.
+          </p>
+        </div>
+        <button
+          onClick={() => setCreateOpen(true)}
+          className="shrink-0 rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground"
+        >
+          + Plugin erstellen
+        </button>
       </div>
+
+      <CreatePluginWizardModal
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        existingNames={plugins.map((p) => p.name)}
+        onCreated={() => void refresh()}
+      />
 
       <div className="flex gap-2 border-b border-border">
         {(["installed", "catalog"] as const).map((t) => (

@@ -156,6 +156,7 @@ export {
   pluginsRoot,
   parsePluginManifest,
   parseOAuthConfig,
+  validatePluginDir,
   PluginManifestSchema,
   OAuthConfigSchema,
   type PluginLoadResult,

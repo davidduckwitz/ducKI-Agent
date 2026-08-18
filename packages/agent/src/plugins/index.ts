@@ -21,6 +21,7 @@ export {
   type PluginSettingSpec,
   type OAuthConfig,
 } from "./plugin-manifest.js";
+export { validatePluginDir } from "./validate-cli.js";
 export type {
   ConnectorTarget,
   OutboundAttachment,
