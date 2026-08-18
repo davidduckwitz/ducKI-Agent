@@ -1,11 +1,10 @@
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
-import { extractKeywords, resolveWithinRoot } from "@ducki/shared";
+import { extractKeywords } from "@ducki/shared";
 import { browserTool } from "@ducki/tools";
 import { previewSplit, commitSplit } from "../tasks/task-split-service.js";
 import { resolveCanonicalAction } from "../tools/tool-aliases.js";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { basename, extname, resolve } from "node:path";
+import type { ConnectorCapabilities, ConnectorStatus } from "../plugins/connector-types.js";
 
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 type TaskPriority = "low" | "medium" | "high" | "critical";
@@ -167,107 +166,24 @@ function parseGatewayConfigs(rawValue: string | undefined): GatewayConfig[] {
   }
 }
 
-function resolveDiscordBotToken(config: GatewayConfig): string | undefined {
-  const cfgToken = config.authToken?.trim();
-  if (cfgToken) return cfgToken;
-  const envToken = process.env["DISCORD_BOT_TOKEN"]?.trim();
-  return envToken || undefined;
-}
-
 function isHttpUrl(value: string | undefined): boolean {
   const raw = String(value ?? "").trim();
   return /^https?:\/\//i.test(raw);
 }
 
-const SHARED_ROOT = resolve(process.env["SHARED_WORKSPACE_PATH"] ?? "./shared-workspace");
-const MAX_DISCORD_ATTACHMENT_BYTES = 8 * 1024 * 1024; // conservative Discord free-tier per-file limit
-const MAX_DISCORD_ATTACHMENTS = 10; // Discord's per-message attachment limit
-
-const DISCORD_MIME_BY_EXT: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".pdf": "application/pdf",
-  ".txt": "text/plain",
-  ".md": "text/markdown",
-  ".json": "application/json",
-  ".csv": "text/csv",
-  ".zip": "application/zip",
-};
-
-interface DiscordAttachmentFile {
-  name: string;
-  data: Buffer;
-  type: string;
-}
-
 /**
- * Loads shared-workspace files for an outbound Discord send. Paths come from the LLM
- * (tool input), so they're resolved through resolveWithinRoot to reject traversal, and
- * capped in size/count to match Discord's own attachment limits before we ever hit the network.
+ * Minimal shape of apps/server's ConnectorRegistry the gateway tool dispatches through. Kept as
+ * a local duck-typed interface (not a hard import) so packages/agent has no dependency on
+ * apps/server - the real ConnectorRegistry instance is passed in at agent-factory wiring time.
  */
-function loadDiscordAttachments(paths: string[]): DiscordAttachmentFile[] {
-  if (paths.length === 0) return [];
-  if (paths.length > MAX_DISCORD_ATTACHMENTS) {
-    throw new Error(`Too many attachments (${paths.length}); Discord allows at most ${MAX_DISCORD_ATTACHMENTS} per message.`);
-  }
-
-  return paths.map((relativePath) => {
-    const absolute = resolveWithinRoot(SHARED_ROOT, relativePath);
-    if (!existsSync(absolute)) {
-      throw new Error(`Attachment not found in shared workspace: ${relativePath}`);
-    }
-    const size = statSync(absolute).size;
-    if (size > MAX_DISCORD_ATTACHMENT_BYTES) {
-      throw new Error(
-        `Attachment too large: ${relativePath} (${Math.round(size / 1024)}KB, max ${Math.round(MAX_DISCORD_ATTACHMENT_BYTES / 1024)}KB)`
-      );
-    }
-    const ext = extname(absolute).toLowerCase();
-    return {
-      name: basename(absolute),
-      data: readFileSync(absolute),
-      type: DISCORD_MIME_BY_EXT[ext] ?? "application/octet-stream",
-    };
-  });
-}
-
-/**
- * Sends a Discord message, falling back to a plain JSON POST when there are no files
- * (identical behavior to before this feature existed) and to multipart/form-data with
- * payload_json + files[n] parts when attachments are present.
- */
-async function sendDiscordMessageMultipart(
-  url: string,
-  authHeader: string | undefined,
-  content: string,
-  files: DiscordAttachmentFile[]
-): Promise<Response> {
-  if (files.length === 0) {
-    return fetch(url, {
-      method: "POST",
-      headers: {
-        ...(authHeader ? { Authorization: authHeader } : {}),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ content }),
-    });
-  }
-
-  const form = new FormData();
-  form.append("payload_json", JSON.stringify({ content }));
-  files.forEach((file, index) => {
-    form.append(`files[${index}]`, new Blob([new Uint8Array(file.data)], { type: file.type }), file.name);
-  });
-
-  return fetch(url, {
-    method: "POST",
-    headers: authHeader ? { Authorization: authHeader } : undefined,
-    body: form,
-  });
+export interface ConnectorRegistryLike {
+  list(): Array<{ portal: string; pluginName: string; status: ConnectorStatus; capabilities?: ConnectorCapabilities }>;
+  hasConnector(portal: string): boolean;
+  send(
+    portal: string,
+    target: { channelId: string; threadId?: string },
+    message: { text: string; attachments?: Array<{ name: string; path?: string; url?: string; mimeType?: string }> }
+  ): Promise<void>;
 }
 
 function gatewayConversationPrefix(config: GatewayConfig): string {
@@ -331,7 +247,7 @@ async function appendGatewayOutboundMessage(
   }
 }
 
-export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
+export function createWorkflowTools(db: DatabaseService, connectorRegistry?: ConnectorRegistryLike): ToolExecutor[] {
   void db;
   const memoryTool: ToolExecutor = {
     name: "memory",
@@ -972,7 +888,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
             type: "array",
             items: { type: "string" },
             description:
-              "Optional shared-workspace-relative file paths to attach (images/documents), e.g. 'chat-uploads/photo.png'. Discord only. Max 10 files, 8MB each.",
+              "Optional shared-workspace-relative file paths to attach (images/documents), e.g. 'chat-uploads/photo.png'. Support and limits depend on the target portal - check list_configs' supportsAttachments/maxMessageLength first.",
           },
         },
         required: ["action"],
@@ -992,25 +908,37 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
       });
 
       try {
+        // Connector-plugin portals (e.g. discord) take priority - they own their portal
+        // exclusively once loaded. Legacy MESSAGING_GATEWAYS configs remain the transport for
+        // portals with no registered connector plugin (telegram, generic custom webhooks).
+        const connectorEntries = connectorRegistry?.list() ?? [];
         const configs = parseGatewayConfigs(await db.getSetting("MESSAGING_GATEWAYS"));
-        const enabled = configs.filter((cfg) => cfg.enabled);
+        const enabled = configs.filter((cfg) => cfg.enabled && !connectorRegistry?.hasConnector(cfg.portal));
 
         if (action === "list_configs") {
-          return ok(
-            enabled.map((cfg) => ({
-              id: cfg.id,
-              portal: cfg.portal,
-              name: cfg.name,
-              enabled: cfg.enabled,
-              defaultTarget: cfg.channelHint,
-              outboundReady:
-                cfg.portal === "discord"
-                  ? Boolean(resolveDiscordBotToken(cfg) || isHttpUrl(cfg.webhookSecret))
-                  : cfg.portal === "telegram"
-                    ? Boolean(cfg.authToken)
-                    : Boolean(isHttpUrl(cfg.webhookSecret) || isHttpUrl(cfg.authToken)),
-            }))
-          );
+          const connectorList = connectorEntries.map((entry) => ({
+            id: `connector:${entry.portal}`,
+            portal: entry.portal,
+            name: entry.pluginName,
+            enabled: true,
+            defaultTarget: undefined,
+            outboundReady: entry.status.configured,
+            maxMessageLength: entry.capabilities?.maxMessageLength,
+            supportsAttachments: entry.capabilities?.supportsAttachments,
+            supportsReactions: entry.capabilities?.supportsReactions,
+            targetFieldName: entry.capabilities?.targetFieldName ?? "channelId",
+            exampleTarget: entry.capabilities?.exampleTarget,
+          }));
+          const legacyList = enabled.map((cfg) => ({
+            id: cfg.id,
+            portal: cfg.portal,
+            name: cfg.name,
+            enabled: cfg.enabled,
+            defaultTarget: cfg.channelHint,
+            outboundReady: cfg.portal === "telegram" ? Boolean(cfg.authToken) : Boolean(isHttpUrl(cfg.webhookSecret) || isHttpUrl(cfg.authToken)),
+            targetFieldName: "channelId",
+          }));
+          return ok([...connectorList, ...legacyList]);
         }
 
         if (action !== "send") {
@@ -1025,117 +953,85 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           });
         }
 
-        const portalFilter = normalizeGatewayPortal(input["portal"]);
+        const target = String(input["externalConversationId"] ?? input["channelId"] ?? "").trim();
+        const attachmentPaths = Array.isArray(input["attachments"])
+          ? (input["attachments"] as unknown[]).map(String).filter((p) => p.trim().length > 0)
+          : [];
+
+        // 1) Connector-plugin dispatch (e.g. Discord via discord-connector).
+        const portalFilter = input["portal"] ? normalizeGatewayPortal(input["portal"]) : undefined;
         const configId = String(input["configId"] ?? "").trim();
+        const requestedConnectorPortal = configId.startsWith("connector:") ? configId.slice("connector:".length) : undefined;
+        const matchedConnector = requestedConnectorPortal
+          ? connectorEntries.find((e) => e.portal === requestedConnectorPortal)
+          : portalFilter
+            ? connectorEntries.find((e) => e.portal === portalFilter)
+            : (!configId && connectorEntries.length > 0 ? connectorEntries[0] : undefined);
+
+        if (matchedConnector && connectorRegistry) {
+          if (!target) {
+            return failWithDiagnostic(
+              `No target id provided. Set channelId (${matchedConnector.capabilities?.targetFieldName ?? "channelId"}).`,
+              { code: "missing_target", portal: matchedConnector.portal, targetFieldName: matchedConnector.capabilities?.targetFieldName ?? "channelId" }
+            );
+          }
+          if (!matchedConnector.status.configured) {
+            return failWithDiagnostic(`Connector '${matchedConnector.portal}' is not configured (missing settings).`, {
+              code: "not_connected",
+              portal: matchedConnector.portal,
+            });
+          }
+          try {
+            await connectorRegistry.send(
+              matchedConnector.portal,
+              { channelId: target },
+              { text: message, attachments: attachmentPaths.map((p) => ({ name: p.split("/").pop() || p, path: p })) }
+            );
+          } catch (sendError) {
+            return failWithDiagnostic(sendError instanceof Error ? sendError.message : String(sendError), {
+              code: "send_failed",
+              portal: matchedConnector.portal,
+              target,
+            });
+          }
+          const pseudoConfig: GatewayConfig = {
+            id: `connector:${matchedConnector.portal}`,
+            portal: normalizeGatewayPortal(matchedConnector.portal),
+            name: matchedConnector.pluginName,
+            enabled: true,
+          };
+          await appendGatewayOutboundMessage(db, pseudoConfig, target, message, attachmentPaths);
+          return ok({
+            sent: true,
+            portal: matchedConnector.portal,
+            configId: pseudoConfig.id,
+            target,
+            transport: "connector",
+            attachments: attachmentPaths,
+          });
+        }
+
+        // 2) Legacy MESSAGING_GATEWAYS transport (portals without a connector plugin).
         const config = configId
           ? enabled.find((cfg) => cfg.id === configId)
-          : enabled.find((cfg) => (input["portal"] ? cfg.portal === portalFilter : true));
+          : enabled.find((cfg) => (portalFilter ? cfg.portal === portalFilter : true));
 
         if (!config) {
           return failWithDiagnostic("No matching enabled gateway config found. Use gateway action=list_configs first.", {
             code: "config_not_found",
-            requestedPortal: input["portal"] ? portalFilter : undefined,
+            requestedPortal: portalFilter,
             requestedConfigId: configId || undefined,
-            enabledConfigs: enabled.map((cfg) => ({ id: cfg.id, portal: cfg.portal, name: cfg.name })),
+            enabledConfigs: [...connectorEntries.map((e) => ({ id: `connector:${e.portal}`, portal: e.portal })), ...enabled.map((cfg) => ({ id: cfg.id, portal: cfg.portal, name: cfg.name }))],
           });
         }
 
-        const explicitTarget = String(input["externalConversationId"] ?? input["channelId"] ?? "").trim();
-        const target = explicitTarget || String(config.channelHint ?? "").trim();
-        if (!target) {
+        const resolvedTarget = target || String(config.channelHint ?? "").trim();
+        if (!resolvedTarget) {
           return failWithDiagnostic("No target id provided. Set externalConversationId/channelId or configure channelHint in gateway config.", {
             code: "missing_target",
             configId: config.id,
             portal: config.portal,
             defaultTarget: config.channelHint,
-          });
-        }
-
-        if (config.portal === "discord") {
-          const configToken = String(config.authToken ?? "").trim();
-          const envToken = String(process.env["DISCORD_BOT_TOKEN"] ?? "").trim();
-          const tokenSource = configToken ? "config.authToken" : envToken ? "env.DISCORD_BOT_TOKEN" : "none";
-          const botToken = resolveDiscordBotToken(config);
-
-          const attachmentPaths = Array.isArray(input["attachments"])
-            ? (input["attachments"] as unknown[]).map(String).filter((p) => p.trim().length > 0)
-            : [];
-          let attachmentFiles: DiscordAttachmentFile[];
-          try {
-            attachmentFiles = loadDiscordAttachments(attachmentPaths);
-          } catch (attachmentError) {
-            return failWithDiagnostic(
-              attachmentError instanceof Error ? attachmentError.message : String(attachmentError),
-              {
-                code: "attachment_error",
-                configId: config.id,
-                portal: config.portal,
-                target,
-                attachmentPaths,
-              }
-            );
-          }
-          const attachmentNames = attachmentFiles.map((f) => f.name);
-
-          if (botToken) {
-            const response = await sendDiscordMessageMultipart(
-              `https://discord.com/api/v10/channels/${encodeURIComponent(target)}/messages`,
-              `Bot ${botToken}`,
-              message,
-              attachmentFiles
-            );
-            if (!response.ok) {
-              return failWithDiagnostic(`Discord send failed: HTTP ${response.status}`, {
-                code: "discord_http_error",
-                configId: config.id,
-                portal: config.portal,
-                target,
-                transport: "bot_api",
-                tokenSource,
-                status: response.status,
-              });
-            }
-            await appendGatewayOutboundMessage(db, config, target, message, attachmentNames);
-            return ok({
-              sent: true,
-              portal: config.portal,
-              configId: config.id,
-              target,
-              transport: "bot_api",
-              tokenSource,
-              attachments: attachmentNames,
-            });
-          }
-
-          if (isHttpUrl(config.webhookSecret)) {
-            const response = await sendDiscordMessageMultipart(
-              String(config.webhookSecret),
-              undefined,
-              message,
-              attachmentFiles
-            );
-            if (!response.ok) {
-              return failWithDiagnostic(`Discord webhook send failed: HTTP ${response.status}`, {
-                code: "discord_webhook_http_error",
-                configId: config.id,
-                portal: config.portal,
-                target,
-                transport: "webhook",
-                status: response.status,
-              });
-            }
-            await appendGatewayOutboundMessage(db, config, target, message, attachmentNames);
-            return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook", attachments: attachmentNames });
-          }
-
-          return failWithDiagnostic("Discord gateway requires DISCORD_BOT_TOKEN/authToken or webhookSecret webhook URL.", {
-            code: "discord_transport_not_configured",
-            configId: config.id,
-            portal: config.portal,
-            hasEnvBotToken: Boolean(process.env["DISCORD_BOT_TOKEN"]?.trim()),
-            hasConfigBotToken: Boolean(config.authToken),
-            hasWebhookUrl: Boolean(isHttpUrl(config.webhookSecret)),
-            tokenSource,
           });
         }
 
@@ -1151,19 +1047,19 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(botToken)}/sendMessage`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: target, text: message }),
+            body: JSON.stringify({ chat_id: resolvedTarget, text: message }),
           });
           if (!response.ok) {
             return failWithDiagnostic(`Telegram send failed: HTTP ${response.status}`, {
               code: "telegram_http_error",
               configId: config.id,
               portal: config.portal,
-              target,
+              target: resolvedTarget,
               status: response.status,
             });
           }
-          await appendGatewayOutboundMessage(db, config, target, message);
-          return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "bot_api" });
+          await appendGatewayOutboundMessage(db, config, resolvedTarget, message);
+          return ok({ sent: true, portal: config.portal, configId: config.id, target: resolvedTarget, transport: "bot_api" });
         }
 
         const webhook = isHttpUrl(config.webhookSecret)
@@ -1188,7 +1084,7 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
           body: JSON.stringify({
             portal: config.portal,
             configId: config.id,
-            externalConversationId: target,
+            externalConversationId: resolvedTarget,
             replyText: message,
           }),
         });
@@ -1197,12 +1093,12 @@ export function createWorkflowTools(db: DatabaseService): ToolExecutor[] {
             code: "webhook_http_error",
             configId: config.id,
             portal: config.portal,
-            target,
+            target: resolvedTarget,
             status: response.status,
           });
         }
-        await appendGatewayOutboundMessage(db, config, target, message);
-        return ok({ sent: true, portal: config.portal, configId: config.id, target, transport: "webhook" });
+        await appendGatewayOutboundMessage(db, config, resolvedTarget, message);
+        return ok({ sent: true, portal: config.portal, configId: config.id, target: resolvedTarget, transport: "webhook" });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return failWithDiagnostic(message, {

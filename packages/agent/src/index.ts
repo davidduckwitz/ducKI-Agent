@@ -25,7 +25,7 @@ export type { ToolExecutor } from "@ducki/shared";
 export { Reasoner } from "./reasoner/reasoner.js";
 export { Reflection } from "./reflection/reflection.js";
 export { History } from "./history/history.js";
-export { createWorkflowTools } from "./workflow/workflow-tools.js";
+export { createWorkflowTools, type ConnectorRegistryLike } from "./workflow/workflow-tools.js";
 export { createWorkflowManagementTool } from "./workflow/workflow-management-tool.js";
 export { createCronjobManagementTool } from "./cronjob/cronjob-management-tool.js";
 export { WorkflowEngine } from "./workflow/workflow-engine.js";
@@ -166,6 +166,20 @@ export {
   type PluginToolContext,
   type OAuthConfig,
 } from "./plugins/index.js";
+export type {
+  ConnectorTarget,
+  OutboundAttachment,
+  OutboundMessage,
+  InboundAttachment,
+  InboundMessage,
+  ConnectorStatus,
+  ConnectorCapabilities,
+  ConnectorWebhookRequest,
+  ConnectorWebhookResponse,
+  ConnectorContext,
+  ConnectorAdapter,
+  ConnectorModuleExports,
+} from "./plugins/connector-types.js";
 export type { SkillValidationResult, SkillValidationIssue } from "./skill-selector/validate.js";
 
 // Bitcoin Puzzle Solver

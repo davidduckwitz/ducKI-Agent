@@ -12,6 +12,23 @@ import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
 
 export const gatewayRouter: IRouter = Router();
 
+/**
+ * Minimal shape of apps/server/src/lib/connector-registry.ts's ConnectorRegistry this route
+ * needs. Connector-plugin portals (Discord via discord-connector) are dispatched here first;
+ * portals without a registered connector plugin fall back to the legacy MESSAGING_GATEWAYS-based
+ * transport below (telegram, generic custom webhooks) - unchanged.
+ */
+interface GatewayConnectorRegistry {
+  hasConnector(portal: string): boolean;
+  send(portal: string, target: { channelId: string }, message: { text: string }): Promise<void>;
+  reactToMessage(portal: string, target: { channelId: string }, messageId: string, emoji: string): Promise<void>;
+  handleWebhook(portal: string, req: { body: unknown; headers: Record<string, string | string[] | undefined>; rawBody?: string; params: Record<string, string> }): Promise<{ status: number; body?: unknown } | undefined>;
+}
+
+function getConnectorRegistry(req: { app: { locals: Record<string, unknown> } }): GatewayConnectorRegistry | undefined {
+  return req.app.locals["connectorRegistry"] as GatewayConnectorRegistry | undefined;
+}
+
 interface MessagingGatewayConfig {
   id: string;
   portal: "discord" | "telegram" | "slack" | "signal" | "custom";
@@ -849,8 +866,35 @@ async function applyDiscordReactionWithLog(
   channelId: string,
   sourceMessageId: string | undefined,
   emoji: string,
-  phase: "inbound" | "processed" | "error"
+  phase: "inbound" | "processed" | "error",
+  connectorRegistry?: GatewayConnectorRegistry
 ): Promise<void> {
+  // Connector-plugin portals (Discord via discord-connector) react through the registry;
+  // portals without a registered connector never supported reactions anyway (unchanged).
+  if (connectorRegistry?.hasConnector(config.portal)) {
+    if (!sourceMessageId?.trim()) {
+      await appendGatewayEvent(db, conversationId, "Reaction skipped (missing source message id)", {
+        source: "gateway", type: "reaction_skipped", direction: "reaction", portal: config.portal,
+        configId: config.id, phase, emoji, reason: "missing_source_message_id", channelId,
+      });
+      return;
+    }
+    try {
+      await connectorRegistry.reactToMessage(config.portal, { channelId }, sourceMessageId, emoji);
+      await appendGatewayEvent(db, conversationId, `Reaction set: ${emoji}`, {
+        source: "gateway", type: "reaction_set", direction: "reaction", portal: config.portal,
+        configId: config.id, phase, emoji, channelId, sourceMessageId,
+      });
+    } catch (error) {
+      await appendGatewayEvent(db, conversationId, `Reaction failed: ${emoji}`, {
+        source: "gateway", type: "reaction_error", direction: "reaction", portal: config.portal,
+        configId: config.id, phase, emoji, channelId, sourceMessageId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
   if (config.portal !== "discord") return;
 
   if (!sourceMessageId?.trim()) {
@@ -987,7 +1031,8 @@ async function sendGatewayReply(
   externalConversationId: string,
   replyText: string,
   reaction: string,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  connectorRegistry?: GatewayConnectorRegistry
 ): Promise<void> {
   const normalizedReply = replyText.trim();
   if (!normalizedReply) return;
@@ -1000,6 +1045,13 @@ async function sendGatewayReply(
     reaction,
     metadata,
   };
+
+  // Connector-plugin portals (Discord via discord-connector) send through the registry - the
+  // ONE canonical send implementation (chunking/attachments/etc. live in the plugin's send.js).
+  if (connectorRegistry?.hasConnector(config.portal)) {
+    await connectorRegistry.send(config.portal, { channelId: externalConversationId }, { text: normalizedReply });
+    return;
+  }
 
   if (config.portal === "telegram") {
     if (!config.authToken) throw new Error("Telegram gateway requires authToken as bot token for outbound replies");
@@ -1094,6 +1146,7 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
       register: (entry: { source: "chat_http" | "chat_ws" | "task_run" | "gateway_inbound"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
       unregister: (id: string) => void;
     };
+    const connectorRegistry = getConnectorRegistry(req);
 
     const body = req.body as GatewayInboundBody;
 
@@ -1208,7 +1261,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
         externalConversationId,
         body.sourceMessageId,
         "♻️",
-        "processed"
+        "processed",
+        connectorRegistry
       );
 
       await sendGatewayReply(
@@ -1224,7 +1278,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
           userName,
           mode: body.mode ?? "text",
           command: "new_session",
-        }
+        },
+        connectorRegistry
       );
 
       res.json(createApiResponse({
@@ -1261,7 +1316,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
         externalConversationId,
         body.sourceMessageId,
         "👀",
-        "inbound"
+        "inbound",
+        connectorRegistry
       );
 
       await sendGatewayReply(
@@ -1277,7 +1333,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
           userName,
           mode: "voice",
           fallback: "missing_transcript",
-        }
+        },
+        connectorRegistry
       );
 
       await applyDiscordReactionWithLog(
@@ -1287,7 +1344,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
         externalConversationId,
         body.sourceMessageId,
         "⚠️",
-        "error"
+        "error",
+        connectorRegistry
       );
 
       res.json(createApiResponse({
@@ -1312,8 +1370,9 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
       externalConversationId,
       body.sourceMessageId,
       "👀",
-      "inbound"
-    );
+      "inbound",
+        connectorRegistry
+      );
 
     let result: unknown;
     let responseText = "";
@@ -1365,7 +1424,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
         externalConversationId,
         body.sourceMessageId,
         "⚠️",
-        "error"
+        "error",
+        connectorRegistry
       );
     }
 
@@ -1413,7 +1473,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
           configId: config.id,
           channelName,
           userName,
-        }
+        },
+        connectorRegistry
       );
       await appendGatewayEvent(db, conversationId, "Outbound reply sent", {
         source: "gateway",
@@ -1429,7 +1490,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
         externalConversationId,
         body.sourceMessageId,
         "✅",
-        "processed"
+        "processed",
+        connectorRegistry
       );
     } catch (replyError) {
       const replyErrorMessage = replyError instanceof Error ? replyError.message : String(replyError);
@@ -1448,7 +1510,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
         externalConversationId,
         body.sourceMessageId,
         "⚠️",
-        "error"
+        "error",
+        connectorRegistry
       );
       console.error("Gateway outbound reply failed", {
         portal: config.portal,
@@ -1485,9 +1548,29 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
       register: (entry: { source: "chat_http" | "chat_ws" | "task_run" | "gateway_inbound"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
       unregister: (id: string) => void;
     };
+    const connectorRegistry = getConnectorRegistry(req);
 
     const portal = normalizePortal(String(req.params["portal"] ?? "custom"));
     const configId = String(req.params["id"] ?? "").trim();
+
+    // Connector-plugin portals (Discord via discord-connector) own their webhook handling
+    // entirely (signature verification, interaction parsing) - dispatch to the plugin FIRST,
+    // before even looking up a legacy MESSAGING_GATEWAYS config (which a connector-plugin portal
+    // no longer requires). Falls through to the legacy handling below only if the registry has
+    // no connector for this portal, or the connector doesn't implement handleWebhook.
+    if (connectorRegistry?.hasConnector(portal)) {
+      const handled = await connectorRegistry.handleWebhook(portal, {
+        body: req.body,
+        headers: req.headers,
+        rawBody: (req as typeof req & { rawBody?: string }).rawBody,
+        params: req.params as Record<string, string>,
+      });
+      if (handled) {
+        res.status(handled.status).json(handled.body);
+        return;
+      }
+    }
+
     const configs = parseGatewayConfigs(await db.getSetting(SETTINGS_KEY));
     const config = configs.find((entry) => entry.id === configId && entry.portal === portal && entry.enabled);
     if (!config) {
@@ -1733,8 +1816,9 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
             channelName: resolveGatewayChannelName(config, normalized.channelName),
             userName: resolveGatewayUserName(config, normalized.userName),
             command: "new_session",
-          }
-        );
+          },
+        connectorRegistry
+      );
 
         await appendGatewayEvent(db, conversationId, "Outbound reply sent", {
           source: "gateway",
@@ -1800,8 +1884,9 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
             configId: config.id,
             channelName: resolveGatewayChannelName(config, normalized.channelName),
             userName: resolveGatewayUserName(config, normalized.userName),
-          }
-        );
+          },
+        connectorRegistry
+      );
         await appendGatewayEvent(db, conversationId, "Outbound reply sent", {
           source: "gateway",
           type: "outbound_reply",

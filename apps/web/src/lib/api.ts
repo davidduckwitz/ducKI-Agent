@@ -38,7 +38,7 @@ export interface PluginInfo {
   toolNames: string[];
   skillDirs: string[];
   mappings: Array<{ alias: string; tool: string }>;
-  settings: Array<{ key: string; default?: string | number | boolean; type?: string; description?: string }>;
+  settings: Array<{ key: string; default?: string | number | boolean; type?: string; description?: string; required?: boolean; options?: string[] }>;
   /** Relative path to a pure settings page, if the plugin ships one. */
   settingsPage?: string;
   /** Relative path to a frontend (mini-app) page shown as a sidebar link. */
@@ -64,7 +64,20 @@ export interface PluginInfo {
   icon?: string;
   /** Sidebar category for a frontend page. */
   category?: string;
+  /** Connector-plugin declaration (provides.connector), if this plugin ships a long-lived
+   *  background connection (e.g. a messaging platform bridge like Discord). */
+  connector?: { module: string; portal: string };
   error?: string;
+}
+
+export type PluginSettingSpec = PluginInfo["settings"][number];
+
+export interface ConnectorStatus {
+  configured: boolean;
+  active: boolean;
+  connectedAt?: string;
+  lastError?: string;
+  updatedAt: string;
 }
 
 export const api = {
@@ -359,6 +372,15 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    connectorTest: (name: string) =>
+      request<{ ok: boolean; portal: string; status: ConnectorStatus; error?: string }>(`/plugins/${name}/connector/test`, { method: "POST" }),
+    getSettings: (name: string) =>
+      request<{ name: string; specs: PluginSettingSpec[]; values: Record<string, unknown> }>(`/plugins/${name}/settings`),
+    saveSettings: (name: string, values: Record<string, unknown>) =>
+      request<{ name: string; saved: string[]; reload: PluginReload; connectorStatus?: ConnectorStatus }>(`/plugins/${name}/settings`, {
+        method: "PUT",
+        body: JSON.stringify({ values }),
+      }),
   },
 
   coding: {
@@ -577,6 +599,8 @@ export const api = {
             updatedAt: string;
           };
         };
+        /** Generic per-portal connector status (Discord and any other installed connector plugin). */
+        connectorStatuses?: Record<string, ConnectorStatus>;
       }>("/agents/live"),
   },
 

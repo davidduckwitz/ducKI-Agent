@@ -20,14 +20,14 @@ import {
 	type CodingAgent,
 	createScriptTools,
 } from "@ducki/agent";
-import { getDatabase, type DatabaseService } from "@ducki/database";
+import { getDatabase, type DatabaseService, getPluginSettings, setPluginSetting } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
 import type { ToolExecutor } from "@ducki/shared";
 import { createProvider, type ProviderName } from "@ducki/providers";
 import { allTools, browserFrameEvents } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
-import { DiscordGatewayClient } from "./lib/discord-gateway-ws.js";
+import { ConnectorRegistry } from "./lib/connector-registry.js";
 import { agentRegistry } from "./lib/agent-registry.js";
 import { CronjobManager } from "./lib/cronjob-manager.js";
 import { createMcpTool } from "./lib/mcp-tool.js";
@@ -134,96 +134,6 @@ async function listenWithRetry(httpServer: ReturnType<typeof createServer>, host
 	}
 }
 
-function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
-	if (value === undefined) return defaultValue;
-	const normalized = value.trim().toLowerCase();
-	if (["1", "true", "yes", "on"].includes(normalized)) return true;
-	if (["0", "false", "no", "off"].includes(normalized)) return false;
-	return defaultValue;
-}
-
-interface MessagingGatewayBootstrapConfig {
-	id: string;
-	portal: "discord" | "telegram" | "slack" | "signal" | "custom";
-	enabled: boolean;
-	guildId?: string;
-	userId?: string;
-	authToken?: string;
-}
-
-interface DiscordGatewayRuntimeStatus {
-	enabled: boolean;
-	configured: boolean;
-	active: boolean;
-	connectedAt?: string;
-	lastError?: string;
-	updatedAt: string;
-}
-
-function normalizePortal(value: string): MessagingGatewayBootstrapConfig["portal"] {
-	const normalized = value.trim().toLowerCase();
-	if (normalized === "discord" || normalized === "telegram" || normalized === "slack" || normalized === "signal") {
-		return normalized;
-	}
-	return "custom";
-}
-
-function parseGatewayConfigs(raw: string | undefined): MessagingGatewayBootstrapConfig[] {
-	if (!raw) return [];
-	try {
-		const parsed = JSON.parse(raw) as unknown;
-		if (!Array.isArray(parsed)) return [];
-		return parsed
-			.filter((item) => item && typeof item === "object")
-			.map((item) => item as Record<string, unknown>)
-			.map((item, index) => ({
-				id: String(item["id"] ?? `gateway_${index + 1}`),
-				portal: normalizePortal(String(item["portal"] ?? "custom")),
-				enabled: Boolean(item["enabled"] ?? true),
-				guildId: item["guildId"] ? String(item["guildId"]) : undefined,
-				userId: item["userId"] ? String(item["userId"]) : undefined,
-				authToken: item["authToken"] ? String(item["authToken"]) : undefined,
-			}));
-	} catch {
-		return [];
-	}
-}
-
-async function resolveDiscordBridgeConfig(db: Awaited<ReturnType<typeof getDatabase>>): Promise<{
-	botToken?: string;
-	guildId?: string;
-	allowedUserId?: string;
-	configId?: string;
-}> {
-	const envBotToken = process.env["DISCORD_BOT_TOKEN"]?.trim();
-	const envGuildId = process.env["DISCORD_GUILD_ID"]?.trim();
-	const envAllowedUserId = process.env["DISCORD_ALLOWED_USER_ID"]?.trim();
-	if (envBotToken) {
-		return {
-			botToken: envBotToken,
-			guildId: envGuildId,
-			allowedUserId: envAllowedUserId,
-		};
-	}
-
-	const raw = await db.getSetting("MESSAGING_GATEWAYS");
-	const configs = parseGatewayConfigs(raw);
-	const discordConfig = configs.find((entry) => entry.enabled && entry.portal === "discord" && entry.authToken?.trim());
-	if (!discordConfig) {
-		return {
-			guildId: envGuildId,
-			allowedUserId: envAllowedUserId,
-		};
-	}
-
-	return {
-		botToken: discordConfig.authToken?.trim(),
-		guildId: envGuildId ?? discordConfig.guildId?.trim(),
-		allowedUserId: envAllowedUserId ?? discordConfig.userId?.trim(),
-		configId: discordConfig.id,
-	};
-}
-
 function normalizeApiKey(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	if (!trimmed) return undefined;
@@ -286,6 +196,71 @@ async function ensureLogCleanupCron(db: Awaited<ReturnType<typeof getDatabase>>)
 		logger.info("Log cleanup cron job created", { schedule: "0 2 * * * (2 AM daily)" });
 	} catch (error) {
 		logger.warn("Failed to create log cleanup cron job", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+/**
+ * One-time migration (plan section 7): if the legacy MESSAGING_GATEWAYS setting still has a
+ * plaintext Discord entry with a bot token and the discord-connector plugin has no authToken of
+ * its own yet, seed the plugin's encrypted settings store from it - a full 1:1 field mapping of
+ * the old MessagingGatewayConfig shape (routes/gateway.ts) onto the plugin's settings[] (see
+ * plugin.json): name, authToken(secret), channelHint, inboundLabel, guildId, userId, appId,
+ * publicKey, metadata, webhookSecret(secret). Never overwrites an existing plugin setting, and
+ * never throws (a failed migration must not block boot). The legacy setting itself is left in
+ * place (other portals, e.g. telegram/custom webhooks, still read it) - only the Discord entry
+ * is superseded once the connector plugin has its own configured token.
+ */
+async function migrateLegacyDiscordGatewaySettings(db: Awaited<ReturnType<typeof getDatabase>>): Promise<void> {
+	try {
+		const raw = await db.getSetting("MESSAGING_GATEWAYS");
+		if (!raw) return;
+		const parsed = JSON.parse(raw) as unknown;
+		if (!Array.isArray(parsed)) return;
+		const discordEntry = parsed.find(
+			(entry) => entry && typeof entry === "object" && String((entry as Record<string, unknown>)["portal"] ?? "").toLowerCase() === "discord"
+				&& String((entry as Record<string, unknown>)["authToken"] ?? "").trim()
+		) as Record<string, unknown> | undefined;
+		if (!discordEntry) return;
+
+		const specs = [
+			{ key: "name", type: "string" as const },
+			{ key: "authToken", type: "secret" as const },
+			{ key: "channelHint", type: "string" as const },
+			{ key: "inboundLabel", type: "string" as const },
+			{ key: "guildId", type: "string" as const },
+			{ key: "userId", type: "string" as const },
+			{ key: "appId", type: "string" as const },
+			{ key: "publicKey", type: "string" as const },
+			{ key: "metadata", type: "string" as const },
+			{ key: "webhookSecret", type: "secret" as const },
+		];
+		const existing = await getPluginSettings("discord-connector", specs);
+		if (existing["authToken"]) return; // plugin already has its own token - never overwrite
+
+		// Full 1:1 field mapping - every field the old Discord gateway config form exposed.
+		const fieldMap: Array<[key: string, legacyKey: string]> = [
+			["name", "name"],
+			["authToken", "authToken"],
+			["channelHint", "channelHint"],
+			["inboundLabel", "inboundLabel"],
+			["guildId", "guildId"],
+			["userId", "userId"],
+			["appId", "appId"],
+			["publicKey", "publicKey"],
+			["metadata", "metadata"],
+			["webhookSecret", "webhookSecret"],
+		];
+		for (const [key, legacyKey] of fieldMap) {
+			const value = discordEntry[legacyKey];
+			if (value !== undefined && value !== null && String(value).trim()) {
+				await setPluginSetting("discord-connector", key, String(value), specs);
+			}
+		}
+		logger.info("Migrated legacy MESSAGING_GATEWAYS Discord config into discord-connector plugin settings");
+	} catch (error) {
+		logger.warn("Legacy Discord gateway settings migration failed", {
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
@@ -416,7 +391,8 @@ function buildAgentFactory(
 	workflowEngineRef: { current: WorkflowEngine },
 	runtimeTools: ToolExecutor[],
 	wikiServiceRef: { current?: LlmWikiService },
-	pluginManager: PluginManager
+	pluginManager: PluginManager,
+	connectorRegistryProxy: import("@ducki/agent").ConnectorRegistryLike
 ) {
 	return async () => {
 		// Load database settings for agent configuration
@@ -446,7 +422,7 @@ function buildAgentFactory(
 		agent.executor.registerTool(createWikiTool(() => wikiServiceRef.current));
 		// Registered unwrapped on purpose: wrapTools would stage this tool's own chunks.
 		agent.executor.registerTool(createToolStagingTool(() => getToolStagingManager()));
-		for (const tool of createWorkflowTools(db)) {
+		for (const tool of createWorkflowTools(db, connectorRegistryProxy)) {
 			agent.executor.registerTool(tool);
 		}
 		return agent;
@@ -483,108 +459,6 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/tool-staging", createToolStagingRouter());
 	app.use("/api/screenshots", screenshotRouter);
 	app.use("/api/wiki", wikiRouter);
-}
-
-async function bootstrapDiscordGatewayBridge(
-  port: number,
-	db: Awaited<ReturnType<typeof getDatabase>>,
-	status: DiscordGatewayRuntimeStatus
-): Promise<DiscordGatewayClient | undefined> {
-	const enabled = parseBoolean(process.env["DISCORD_GATEWAY_ENABLED"], true);
-	status.enabled = enabled;
-	status.updatedAt = new Date().toISOString();
-	if (!enabled) {
-		status.configured = false;
-		status.active = false;
-		status.lastError = "DISCORD_GATEWAY_ENABLED=false";
-		status.updatedAt = new Date().toISOString();
-		logger.info("Discord Gateway disabled by DISCORD_GATEWAY_ENABLED");
-		return undefined;
-	}
-
-	const resolved = await resolveDiscordBridgeConfig(db);
-	const botToken = resolved.botToken;
-	if (!botToken) {
-		status.configured = false;
-		status.active = false;
-		status.lastError = "Missing Discord bot token";
-		status.updatedAt = new Date().toISOString();
-		logger.warn("Discord Gateway not started: no bot token configured (env DISCORD_BOT_TOKEN or gateway authToken)");
-		return undefined;
-	}
-
-	status.configured = true;
-	status.active = false;
-	status.lastError = undefined;
-	status.updatedAt = new Date().toISOString();
-
-	const guildId = resolved.guildId;
-	const allowedUserId = resolved.allowedUserId;
-	const inboundUrl = process.env["DISCORD_INBOUND_URL"]?.trim() || `http://127.0.0.1:${port}/api/gateway/inbound`;
-
-	const client = new DiscordGatewayClient({
-		botToken,
-		guildId,
-		allowedUserId,
-		onReady: (botUserId) => {
-			status.active = true;
-			status.connectedAt = new Date().toISOString();
-			status.lastError = undefined;
-			status.updatedAt = new Date().toISOString();
-			logger.info("Discord Gateway connected", { botUserId, guildId, allowedUserId, inboundUrl, configId: resolved.configId });
-		},
-		onError: (err) => {
-			status.active = false;
-			status.lastError = err.message;
-			status.updatedAt = new Date().toISOString();
-			// A fatal close needs a config change and will not heal on its own - a WARN
-			// among reconnect noise is too quiet for something that stays broken.
-			if (err.message.includes("Discord Gateway stopped")) {
-				logger.error("Discord Gateway stopped and will not reconnect", { message: err.message });
-			} else {
-				logger.warn("Discord Gateway error", { message: err.message });
-			}
-		},
-		onMessage: async (msg) => {
-			const payload = {
-				portal: "discord",
-				externalConversationId: msg.channelId,
-				sourceMessageId: msg.messageId,
-				channelName: msg.channelName,
-				userName: msg.authorName,
-				message: msg.content,
-				mode: msg.attachments.length > 0 && !msg.content ? "voice" : "text",
-				attachments: msg.attachments.map((attachment) => ({
-					name: attachment.filename,
-					mimeType: attachment.contentType,
-					url: attachment.url,
-				})),
-			};
-
-			try {
-				const response = await fetch(inboundUrl, {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(payload),
-				});
-				if (!response.ok) {
-					const body = await response.text().catch(() => "");
-					logger.warn("Discord inbound bridge returned non-ok", {
-						status: response.status,
-						statusText: response.statusText,
-						body,
-					});
-				}
-			} catch (error) {
-				logger.warn("Discord inbound bridge failed", {
-					message: error instanceof Error ? error.message : String(error),
-				});
-			}
-		},
-	});
-
-	client.start();
-	return client;
 }
 
 async function bootstrap(): Promise<void> {
@@ -630,6 +504,7 @@ async function bootstrap(): Promise<void> {
 	app.use(express.urlencoded({ extended: true }));
 
 	const db = await getDatabase();
+	await migrateLegacyDiscordGatewaySettings(db);
 
 	// Initialize tool staging (hybrid approach: large responses → files, summaries → messages)
 	const toolStagingManager = await initToolStagingManager(logger.child("ToolStaging"));
@@ -638,12 +513,22 @@ async function bootstrap(): Promise<void> {
 	// Initialize screenshot storage (large screenshots → files, summaries → inline)
 	const screenshotStorage = await initScreenshotStorage();
 
-	const discordGatewayStatus: DiscordGatewayRuntimeStatus = {
-		enabled: parseBoolean(process.env["DISCORD_GATEWAY_ENABLED"], true),
-		configured: false,
-		active: false,
-		updatedAt: new Date().toISOString(),
+	// Generic connector registry (Discord etc.). Created near the end of bootstrap (needs `port`
+	// for its inbound loopback URL - see below), but agent/workflow tool wiring needs a stable
+	// reference NOW, so a thin proxy forwards to whatever gets assigned to this ref later. Same
+	// mutable-holder pattern the old discordGatewayStatus object used.
+	const connectorRegistryRef: { current?: ConnectorRegistry } = {};
+	const connectorRegistryProxy: import("@ducki/agent").ConnectorRegistryLike = {
+		list: () => connectorRegistryRef.current?.list() ?? [],
+		hasConnector: (portal: string) => connectorRegistryRef.current?.hasConnector(portal) ?? false,
+		send: (portal, target, message) => {
+			if (!connectorRegistryRef.current) {
+				return Promise.reject(new Error(`Connector registry not ready yet (portal '${portal}')`));
+			}
+			return connectorRegistryRef.current.send(portal, target, message);
+		},
 	};
+
 	const loadedProvider = await loadProviderFromSettings(db);
 	const provider = loadedProvider.provider;
 	logger.info("Provider loaded", { provider: loadedProvider.providerName });
@@ -716,13 +601,13 @@ async function bootstrap(): Promise<void> {
 		}),
 	};
 	workflowExecutor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
-	for (const tool of createWorkflowTools(db)) {
+	for (const tool of createWorkflowTools(db, connectorRegistryProxy)) {
 		workflowExecutor.registerTool(tool);
 	}
 	// Filled in a few lines below, once the wiki service exists - the agent factory only
 	// dereferences it when a run actually calls the wiki tool.
 	const wikiServiceRef: { current?: LlmWikiService } = {};
-	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager);
+	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager, connectorRegistryProxy);
 	const defaultAgent = await createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"), {
 		runWorkflow: (workflowId: string) => workflowEngineRef.current.runWorkflow(workflowId),
@@ -773,7 +658,7 @@ async function bootstrap(): Promise<void> {
 	};
 	app.locals["agentRegistry"] = agentRegistry;
 	app.locals["pluginManager"] = pluginManager;
-	app.locals["discordGatewayStatus"] = discordGatewayStatus;
+	app.locals["connectorRegistryRef"] = connectorRegistryRef;
 	app.locals["cronjobManager"] = cronjobManager;
 	app.locals["updateManager"] = updateManager;
 	app.locals["promptManager"] = promptManager;
@@ -790,8 +675,12 @@ async function bootstrap(): Promise<void> {
 		maxHttpBufferSize: 10 * 1024 * 1024,
 	});
 	// The gateway status travels in the handshake snapshot and in agent:metrics, so the
-	// client no longer has to poll /agents/live for it.
-	setupWebSocket(io, createAgent, db, () => ({ discord: discordGatewayStatus }));
+	// client no longer has to poll /agents/live for it. Generic now: one entry per connector
+	// portal (still keyed "discord" for backward compat with the existing frontend type).
+	setupWebSocket(io, createAgent, db, () => {
+		const statuses = connectorRegistryRef.current?.getStatuses() ?? {};
+		return { discord: statuses["discord"] ?? { enabled: false, configured: false, active: false, updatedAt: new Date().toISOString() }, connectors: statuses };
+	});
 	app.locals["io"] = io;
 
 	// Live browser preview: the browser tool's CDP screencast frames arrive here as plain
@@ -839,15 +728,49 @@ async function bootstrap(): Promise<void> {
 		websocketPath: "/socket.io",
 	});
 
-	const discordGateway = await bootstrapDiscordGatewayBridge(port, db, discordGatewayStatus);
+	// Generic connector registry boot (Discord and any other installed connector plugin - see
+	// apps/server/src/lib/connector-registry.ts and docs/gateway-connector-plugin-plan.md).
+	// Inbound dispatch uses the SAME HTTP loopback the old Discord-only bootstrap used
+	// (POST to /api/gateway/inbound) rather than an in-process function call - a deliberate
+	// deviation from the plan's suggested direct call (see connector-registry.ts docstring and
+	// the final report's "open risk decisions" section: it reuses the already-correct, non-trivial
+	// /inbound processing logic - attachments, voice STT, session-reset commands, reactions -
+	// without a risky rewrite, and keeps future process-isolation optionality open).
+	const connectorRegistry = await ConnectorRegistry.create(async (msg) => {
+		const inboundUrl = process.env["DUCKI_INBOUND_URL"]?.trim() || `http://127.0.0.1:${port}/api/gateway/inbound`;
+		const payload = {
+			portal: msg.portal,
+			externalConversationId: msg.externalConversationId,
+			sourceMessageId: msg.sourceMessageId,
+			channelName: msg.channelName,
+			userName: msg.userName,
+			message: msg.content,
+			mode: msg.attachments && msg.attachments.length > 0 && !msg.content ? "voice" : "text",
+			attachments: (msg.attachments ?? []).map((a) => ({ name: a.filename, mimeType: a.mimeType, url: a.url })),
+		};
+		try {
+			const response = await fetch(inboundUrl, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload),
+			});
+			if (!response.ok) {
+				const body = await response.text().catch(() => "");
+				logger.warn("Connector inbound bridge returned non-ok", { portal: msg.portal, status: response.status, body });
+			}
+		} catch (error) {
+			logger.warn("Connector inbound bridge failed", { portal: msg.portal, message: error instanceof Error ? error.message : String(error) });
+		}
+	});
+	connectorRegistryRef.current = connectorRegistry;
+	app.locals["connectorRegistry"] = connectorRegistry;
+	logger.info("Connectors loaded", { portals: connectorRegistry.list().map((c) => c.portal) });
 
 	const shutdown = (signal: string) => {
 		logger.info("Shutting down", { signal });
 		// Let clients switch to "lost" right away instead of waiting for a socket timeout.
 		broadcastServerShutdown(io);
-		discordGatewayStatus.active = false;
-		discordGatewayStatus.updatedAt = new Date().toISOString();
-		discordGateway?.stop();
+		void connectorRegistry.disconnectAll();
 		cronjobManager.stop();
 		updateManager.stop();
 		wikiService.stop();

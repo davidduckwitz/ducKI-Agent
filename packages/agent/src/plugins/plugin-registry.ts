@@ -74,6 +74,9 @@ export interface LoadedPluginInfo {
   overlayPage?: string;
   /** Declarative pet definitions the plugin ships (provides.pets), rendered by the host pet runtime. */
   pets?: PluginPet[];
+  /** Connector capability declaration (provides.connector), if this plugin ships one. Loaded and
+   *  lifecycle-managed separately by apps/server/src/lib/connector-registry.ts, not by this file. */
+  connector?: { module: string; portal: string };
   /** Emoji/short icon for UI + sidebar. */
   icon?: string;
   /** Sidebar category ("overview" | "workspace" | "automation" | "knowledge" | "system"). */
@@ -323,6 +326,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean): Prom
   info.widgetPage = manifest.provides.widgetPage;
   info.widgetPlacement = manifest.provides.widgetPlacement;
   info.overlayPage = manifest.provides.overlayPage;
+  info.connector = manifest.provides.connector;
   info.icon = manifest.icon;
   info.category = manifest.category;
   info.trust = manifest.trust;
