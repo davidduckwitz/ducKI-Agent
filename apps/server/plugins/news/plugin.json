@@ -1,7 +1,7 @@
 {
   "name": "news",
-  "version": "2.1.0",
-  "description": "Aktuelle Schlagzeilen aus kuratierten, keyless RSS-Feeds (Tagesschau, BBC, Spiegel). Speichert pro Tag und Quelle ein Markdown-Digest in einer plugin-eigenen SQLite-DB (getrennt von der Hauptdatenbank). Abruf höchstens einmal pro Tag (Cache) oder manuell erzwungen; der Agent kann Digests wie über eine API abrufen und weiterverarbeiten.",
+  "version": "2.4.0",
+  "description": "Aktuelle Schlagzeilen aus 19 kuratierten, keyless RSS-Feeds (Tagesschau, BBC, Spiegel, DW, Al Jazeera, Guardian, NYT, Euronews, France 24, Africanews, ABC Australia, Global News Canada, MercoPress u.a. - global und regional). Ein Markdown-Digest pro Tag/Quelle in eigener SQLite-DB, Cache 1x/Tag. Automatische Kategorisierung (Politik, Wirtschaft, Wissenschaft, Sport, Kultur, Gesundheit) mit Filter/Sortierung. Geo-Karte mit gewichteter Orts-Erkennung sowie Layern (Militärbasen, Nuklearanlagen, Unterseekabel, Konfliktzonen, Meeresengpässe, Pipelines, Gammabestrahlungsanlagen, Container-Großhäfen, live Erdbeben/USGS). Inspiriert vom Open-Source-Projekt worldmonitor (koala73/worldmonitor).",
   "author": "DucKI",
   "license": "Proprietary",
   "icon": "📰",

@@ -11,7 +11,9 @@ The `news` tool fetches headlines from curated, keyless RSS/Atom feeds (plus any
 
 **Quick recipe:** most "what's the news / what's happening" requests → `[TOOL:news({"action":"fetch","source":"all","count":10})]`. Topic/country → add `"query"`. "On a map" → `action:"map"`.
 
-Every action is chosen via `action`. Results are consistent objects; article lists live in `articles` (`title`, `link`, `pubDate`, `summary`), and each digest also has a ready-to-save `markdown` field beginning with a dated `# Nachrichten – <source> – <YYYY-MM-DD>` heading.
+Every action is chosen via `action`. Results are consistent objects; article lists live in `articles` (`title`, `link`, `pubDate`, `summary`, `category`), and each digest also has a ready-to-save `markdown` field beginning with a dated `# Nachrichten – <source> – <YYYY-MM-DD>` heading.
+
+**Category & sort:** every article is auto-classified into one category — `politik`, `wirtschaft`, `wissenschaft`, `sport`, `kultur`, `gesundheit`, `sonstiges` — from the feed's own `<category>` tags where present, else keyword-scored from title/summary. Pass `category` to `fetch`/`get`/`latest`/`map` to filter to one category (`"all"` or omitted = no filter). Pass `sort` to change ordering: `date` (default, newest first), `alert` (highest relevance/alert level first), `source` (A-Z), `category` (grouped alphabetically) — each with date as tie-breaker.
 
 ## Actions
 
@@ -31,17 +33,21 @@ Every action is chosen via `action`. Results are consistent objects; article lis
   ```
 - **list** — metadata of all stored digests (`id`, `date`, `source`, `count`, `created_at`).
 - **delete** — remove a digest by `id`, or by `date` + `source`.
-- **map** — like `fetch`, but each returned article is geolocated via a built-in gazetteer (major countries/cities). Returns a `points` array `[{lat, lng, place, title, source, link, pubDate}]` for map display, plus `located` (how many were placed). Use for "show the news on a map" / location-based questions.
+- **map** — like `fetch`, but each returned article is geolocated via a built-in gazetteer (cities, countries, demonyms). Returns a `points` array `[{lat, lng, place, title, source, link, pubDate}]` for map display, plus `located` (how many were placed). Use for "show the news on a map" / location-based questions.
   ```
   [TOOL:news({"action": "map", "source": "all", "count": 40})]
   ```
 - **sources** — the available source keys (`builtin`, `custom`, `default`).
+- **layers** — geo layers for the map: static — `military_bases`, `nuclear_sites`, `undersea_cables`, `conflict_zones`, `chokepoints` (maritime straits/canals), `pipelines` (major oil/gas pipelines), `radiation_sources` (136 industrial gamma-irradiator facilities, IAEA DIIF), `major_ports` (25 largest container ports); live — `earthquakes` (USGS, past 24h, magnitude ≥ 4.5, keyless, fetched fresh each call; `earthquakesError` set if the live fetch failed).
 
 ## Custom sources
 Users can add their own RSS/Atom feeds in the plugin settings (`custom_feeds` = JSON `{"key":"https://…"}`). Those keys then work everywhere a `source` is accepted. Only public `http(s)` hosts are allowed (localhost/private IPs are blocked). Built-in keys cannot be overridden.
 
 ## Parameters
-`source`: `tagesschau` (DE) · `tagesschau-ausland` (DE world) · `bbc` (EN) · `bbc-world` (EN world) · `spiegel` (DE). Omitted → the plugin's configured default. `count`: 1–30 (default 10). `query`: case-insensitive filter over title + summary (applied to the returned list; the full day is still stored).
+`source`: `tagesschau` (DE) · `tagesschau-ausland` (DE world) · `bbc` (EN) · `bbc-world` (EN world) · `spiegel` (DE) · `dw` (EN) · `aljazeera` (EN) · `guardian-world` (EN) · `nyt-world` (EN) · `euronews` (EN) · `sky-world` (EN) · `ntv` (DE) · `zeit` (DE) · `deutschlandfunk` (DE) · `france24` (EN) · `africanews` (EN) · `abc-au` (EN, Australia) · `global-news-ca` (EN, Canada) · `mercopress` (EN, South America). Omitted → the plugin's configured default. `count`: 1–30 (default 10). `query`: case-insensitive filter over title + summary (applied to the returned list; the full day is still stored).
+
+## Location matching (for `map`)
+Each article's title + summary is scored against a gazetteer (cities, countries, demonyms/nationality adjectives) using word-boundary matching, with title hits weighted 3x over summary hits and the most-mentioned/most-specific match (city beats country) winning — not just the first substring found. This reduces mis-assignment when a country is only mentioned in passing but a city is the actual focus.
 
 ## Guidance
 - When the user asks for **N** items (e.g. "die 10 wichtigsten"), pass `count: N` and report N — the feed holds up to 30, so don't stop short.
