@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { ArrowDown, Plus, Trash2, X } from "lucide-react";
 import { useAppStore, type ChatAttachment, registerChatCompleteCallback } from "../../lib/store";
 import { useUiStore } from "../../lib/uiStore";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
@@ -328,6 +328,17 @@ export function ChatContainer() {
     staleTime: 1000 * 60 * 5,  // 5 minutes - prevent aggressive refetch
     gcTime: 0,                 // No cache - delete immediately to prevent carry-over
   });
+
+  // Fetched directly by id (not derived from the paginated sidebar list) so a conversation
+  // created by the plugin wizard still resolves its pluginContext even once it has scrolled
+  // off the currently-loaded page. Drives the [CODING_CONTEXT] marker in handleSend below.
+  const activeConversationQuery = useQuery({
+    queryKey: ["chat", "conversation", conversationId],
+    queryFn: () => api.chat.getConversation(conversationId!),
+    enabled: Boolean(conversationId),
+    staleTime: 1000 * 60 * 5,
+  });
+  const pluginContext = activeConversationQuery.data?.pluginContext ?? undefined;
 
   const conversations = conversationsQuery.data?.pages.flatMap((page) => page.items) ?? [];
 
@@ -762,11 +773,27 @@ export function ChatContainer() {
     const finalInput = `${input.trim()}${uploadSummary}`.trim();
     if (!finalInput) return;
 
+    // Conversation was created by the plugin wizard (packages/agent CodingAgent): wrap the
+    // prompt in the same [CODING_CONTEXT] marker CodingWorkspace.tsx uses, so the server (see
+    // agent.ts's isCodingContextRun check + websocket/index.ts's sandbox resolution) treats this
+    // as a coding run with a proper iteration budget and scopes the filesystem tool to the
+    // plugin's own folder instead of misclassifying a short follow-up as "lightweight".
+    const contentToSend = pluginContext
+      ? [
+          "[CODING_CONTEXT]",
+          `project=${pluginContext}`,
+          "Your working directory IS this plugin's folder (plugins/" + pluginContext + "/). Use file paths RELATIVE to it,",
+          "e.g. \"plugin.json\" or \"tools/foo.tool.json\". Do NOT prefix paths with the plugin name, \"plugins/\", or an absolute path.",
+          "",
+          finalInput,
+        ].join("\n")
+      : finalInput;
+
     void sendMessage(
-      finalInput,
+      contentToSend,
       attachments.length > 0 ? attachments : undefined,
       planMode ? "plan" : undefined,
-      undefined,
+      pluginContext ? finalInput : undefined,
       chatProvider,
       chatModel
     );

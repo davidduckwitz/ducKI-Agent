@@ -7,8 +7,9 @@ import { join } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter, AgentRunOptions, AgentRunResult } from "../config/interfaces_types.js";
 import { AGENT_HOOK_NAMES, type AgentHook } from "../hooks/index.js";
-import { ToolApprovalPolicy, AllowedActions } from "../tools/tool-approval-policy.js";
+import { ToolApprovalPolicy, AllowedShellCommands } from "../tools/tool-approval-policy.js";
 import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
+import { createScopedShellTool } from "./scoped-shell-tool.js";
 
 const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
 
@@ -148,11 +149,29 @@ export class CodingAgent {
       },
     ];
 
-    // Phase 2: Create approval policy for safe coding (restrict destructive operations)
+    // Phase 2: Create approval policy for safe coding (restrict destructive operations).
+    // "node" is included because CodingAgent-driven flows (e.g. agent-authored plugin
+    // creation) run a verify step as `node <validate-script>` via the shell tool.
     const codingApprovalPolicy = new ToolApprovalPolicy([
-      // Only allow safe shell commands: no rm -rf, git force-push, etc.
-      new AllowedActions("shell", ["ls", "pwd", "cd", "cat", "grep", "find", "npm", "yarn", "git"], "Only safe shell commands allowed in coding mode"),
+      // Only allow safe shell commands: no rm -rf, git force-push, arbitrary binaries, etc.
+      new AllowedShellCommands(
+        ["ls", "pwd", "cd", "cat", "grep", "find", "npm", "yarn", "git", "node"],
+        "Only safe shell commands allowed in coding mode"
+      ),
     ]);
+    disciplineHooks.push({
+      name: "coding-discipline-shell-approval",
+      priority: 50,
+      handler: async (context: any) => {
+        const toolName = context.toolName as string;
+        const input = (context.input as Record<string, unknown>) ?? {};
+        const check = await codingApprovalPolicy.check(toolName, input);
+        if (!check.approved) {
+          return { proceed: false, reason: check.reason ?? "Blocked by coding approval policy" };
+        }
+        return { proceed: true };
+      },
+    });
 
     this.agent = new Agent(provider, db, eventEmitter, {
       name: options.name ?? "CodingAgent",
@@ -165,7 +184,8 @@ export class CodingAgent {
     });
 
     const fsTool = options.sandboxRoot ? createScopedFilesystemTool(options.sandboxRoot) : filesystemTool;
-    for (const tool of [fsTool, gitTool, shellTool, skillsTool, ...(options.extraTools ?? [])]) {
+    const shTool = options.sandboxRoot ? createScopedShellTool(options.sandboxRoot) : shellTool;
+    for (const tool of [fsTool, shTool, gitTool, skillsTool, ...(options.extraTools ?? [])]) {
       this.agent.executor.registerTool(tool);
     }
   }
@@ -421,23 +441,25 @@ export class CodingAgent {
    * decides success" existed only in the system directive - the agent had no way to know
    * which command its work would actually be judged by.
    */
-  private buildInitialPrompt(goal: string, verifyCommand: string | undefined, detectedSkill: string | undefined): string {
-    const parts: string[] = [`Goal: ${goal}`, ""];
+  /** Shared with buildFollowUpPrompt (see there for why this must not be initial-attempt-only). */
+  private pathHandlingBlock(): string[] {
+    if (!this.sandboxRoot) return [];
+    return [
+      `Project root: ${this.sandboxRoot}`,
+      "",
+      "CRITICAL PATH HANDLING:",
+      `- ONLY use RELATIVE paths from the project root (e.g., 'src/index.ts', 'package.json', 'docs/README.md')`,
+      `- NEVER use absolute paths (no leading /)`,
+      `- NEVER include 'shared-workspace' or 'coding' in your file paths`,
+      `- ALL file operations (filesystem AND shell) are automatically scoped to ${this.sandboxRoot}`,
+      `- Examples of CORRECT paths: 'index.html', 'src/app.ts', 'config/settings.json'`,
+      `- Examples of WRONG paths: '/apps/server/...', 'shared-workspace/...', 'coding/...'`,
+      "",
+    ];
+  }
 
-    if (this.sandboxRoot) {
-      parts.push(
-        `Project root: ${this.sandboxRoot}`,
-        "",
-        "CRITICAL PATH HANDLING:",
-        `- ONLY use RELATIVE paths from the project root (e.g., 'src/index.ts', 'package.json', 'docs/README.md')`,
-        `- NEVER use absolute paths (no leading /)`,
-        `- NEVER include 'shared-workspace' or 'coding' in your file paths`,
-        `- ALL file operations are automatically scoped to ${this.sandboxRoot}`,
-        `- Examples of CORRECT paths: 'index.html', 'src/app.ts', 'config/settings.json'`,
-        `- Examples of WRONG paths: '/apps/server/...', 'shared-workspace/...', 'coding/...'`,
-        ""
-      );
-    }
+  private buildInitialPrompt(goal: string, verifyCommand: string | undefined, detectedSkill: string | undefined): string {
+    const parts: string[] = [`Goal: ${goal}`, "", ...this.pathHandlingBlock()];
 
     parts.push(
       "Work in these phases, and EXPLICITLY STATE the phase you are starting and completing:",
@@ -483,10 +505,11 @@ export class CodingAgent {
   private buildFollowUpPrompt(goal: string, previousSummaryWithVerification: string): string {
     return [
       "Your previous attempt did not pass verification. Diagnose the ACTUAL failure below and fix it - do not repeat the same approach blindly.",
+      this.pathHandlingBlock().join("\n"),
       `Original goal: ${goal}`,
       "Previous attempt summary and verification output:",
       previousSummaryWithVerification,
-    ].join("\n\n");
+    ].filter((part) => part !== "").join("\n\n");
   }
 }
 

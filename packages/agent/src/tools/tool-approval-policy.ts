@@ -149,6 +149,40 @@ export class DenyTool implements ToolApprovalRule {
 }
 
 /**
+ * Restricts the `shell` tool to a leading-command allowlist. Unlike `AllowedActions`, which
+ * checks an `action` field, the shell tool takes a free-form `command` string with no `action`
+ * - checking `input.action` against it always sees `""` and denies every call. This rule checks
+ * the actual leading executable of each `&&`/`;`/`|`/`||`-separated segment instead, so a chained
+ * command like "npm test && rm -rf /" is rejected unless every segment's leading command is
+ * allowed (not just the first one).
+ */
+export class AllowedShellCommands implements ToolApprovalRule {
+  readonly name = "allowed-shell-commands";
+  readonly description: string;
+
+  constructor(readonly commands: string[], readonly reason: string = "Shell command not allowed") {
+    this.description = `Allow only these leading commands in a shell call: ${commands.join(", ")}`;
+  }
+
+  async check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult> {
+    if (toolName !== "shell") return { approved: true };
+
+    const command = String(input["command"] ?? "").trim();
+    if (!command) return { approved: false, reason: "Empty shell command" };
+
+    const allowed = new Set(this.commands.map((c) => c.toLowerCase()));
+    const segments = command.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean);
+    for (const segment of segments) {
+      const leading = (segment.split(/\s+/)[0] ?? "").toLowerCase();
+      if (!allowed.has(leading)) {
+        return { approved: false, reason: `${this.reason}: '${leading}'` };
+      }
+    }
+    return { approved: true };
+  }
+}
+
+/**
  * Requires confirmation for specific tool/action combinations.
  */
 export class RequireConfirmation implements ToolApprovalRule {

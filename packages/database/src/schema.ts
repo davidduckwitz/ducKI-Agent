@@ -7,6 +7,11 @@ export const conversations = sqliteTable("conversations", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
   projectId: integer("project_id").references(() => projects.id),
+  /** Plugin slug (matches plugins/<slug>/) if this conversation was created by the
+   *  agent-authored plugin wizard. Lets the chat continuation path re-derive the same
+   *  [CODING_CONTEXT] marker CodingWorkspace uses, so follow-up messages get a proper
+   *  coding iteration budget and the filesystem tool scoped to the plugin's own folder. */
+  pluginContext: text("plugin_context"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });

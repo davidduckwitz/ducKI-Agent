@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { ChevronLeft, ChevronRight, Sparkles, X, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { api } from "../../lib/api";
 import { useAppStore } from "../../lib/store";
@@ -36,18 +37,23 @@ type PluginCreateComplete = {
   success: boolean;
   name: string;
   error?: string;
+  conversationId?: number;
 };
 
-function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+/** Slugifies first, THEN truncates - cutting the raw prompt to length before slugifying can
+ *  chop a word in half (e.g. "...bitcoin-kurs-von-ein" instead of "...bitcoin-kurs"). Also
+ *  trims back to the last full word boundary so a length-cut never leaves a stray fragment. */
+function slugify(input: string, maxLength = 40): string {
+  const full = input.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  if (full.length <= maxLength) return full;
+  const truncated = full.slice(0, maxLength);
+  const lastHyphen = truncated.lastIndexOf("-");
+  return lastHyphen > 0 ? truncated.slice(0, lastHyphen) : truncated;
 }
 
 export function CreatePluginWizardModal({ open, onClose, existingNames, onCreated }: CreatePluginWizardModalProps) {
   const socket = useAppStore((s) => s.socket);
+  const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [prompt, setPrompt] = useState("");
   const [name, setName] = useState("");
@@ -66,7 +72,7 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
     report: "pending",
   });
   const [log, setLog] = useState<string[]>([]);
-  const [result, setResult] = useState<{ success: boolean; error?: string } | null>(null);
+  const [result, setResult] = useState<{ success: boolean; error?: string; conversationId?: number } | null>(null);
 
   const existing = useMemo(() => new Set(existingNames), [existingNames]);
   const nameError = !name
@@ -78,7 +84,7 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
         : null;
 
   useEffect(() => {
-    if (!nameTouched) setName(slugify(prompt.slice(0, 40)));
+    if (!nameTouched) setName(slugify(prompt));
   }, [prompt, nameTouched]);
 
   useEffect(() => {
@@ -116,7 +122,7 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
     };
     const handleComplete = (event: PluginCreateComplete) => {
       if (event.runId !== runId) return;
-      setResult({ success: event.success, error: event.error });
+      setResult({ success: event.success, error: event.error, conversationId: event.conversationId });
       if (!event.success) {
         setPhaseStatuses((prev) => {
           const next = { ...prev };
@@ -283,14 +289,24 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
               {result && (
                 <div className={`rounded-lg border p-3 text-sm ${result.success ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200" : "border-red-500/30 bg-red-500/10 text-red-200"}`}>
                   {result.success ? (
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
                       <span>Plugin "{name}" erstellt (deaktiviert).</span>
-                      <button className="btn-primary shrink-0" onClick={() => void enableNow()}>Jetzt aktivieren</button>
+                      <div className="flex gap-2 shrink-0">
+                        {result.conversationId !== undefined && (
+                          <button
+                            className="btn-secondary"
+                            onClick={() => { onClose(); navigate(`/chat?conversationId=${result.conversationId}`); }}
+                          >
+                            Im Chat weiterentwickeln
+                          </button>
+                        )}
+                        <button className="btn-primary" onClick={() => void enableNow()}>Jetzt aktivieren</button>
+                      </div>
                     </div>
                   ) : (
                     <div>
                       <p>Fehlgeschlagen: {result.error ?? "Unbekannter Fehler"}</p>
-                      <p className="mt-1 text-xs text-red-300/80">Dateien bleiben zur manuellen Pruefung in plugins/{name} liegen.</p>
+                      <p className="mt-1 text-xs text-red-300/80">Das Plugin wurde nicht aktiviert und erscheint nicht in der Liste. Die geschriebenen Dateien bleiben serverseitig zur Pruefung liegen.</p>
                     </div>
                   )}
                 </div>

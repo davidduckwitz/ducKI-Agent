@@ -79,6 +79,7 @@ export {
   DenyTool,
   RequireConfirmation,
   AllowedActions,
+  AllowedShellCommands,
 } from "./tools/tool-approval-policy.js";
 export {
   InputNormalizerPipeline,

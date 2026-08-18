@@ -92,6 +92,10 @@ export const api = {
       const query = params.toString();
       return request<{ items: unknown[]; hasMore: boolean; nextBeforeId?: number }>(`/chat/conversations/page${query ? `?${query}` : ""}`);
     },
+    getConversation: (conversationId: number) =>
+      request<{ id: number; name: string; projectId: number | null; pluginContext: string | null; createdAt: string; updatedAt: string }>(
+        `/chat/conversations/${conversationId}`
+      ),
     getMessages: (conversationId: number) => request<unknown[]>(`/chat/conversations/${conversationId}/messages`),
     getMessagesPage: (conversationId: number, args?: { limit?: number; beforeId?: number }) => {
       const params = new URLSearchParams();

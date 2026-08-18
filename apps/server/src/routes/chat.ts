@@ -155,6 +155,28 @@ chatRouter.get("/conversations/page", async (req, res, next) => {
   }
 });
 
+/** GET /chat/conversations/:id - single conversation row (name, projectId, pluginContext, ...).
+ *  Needed by the chat UI to reliably resolve a conversation's pluginContext even when it has
+ *  scrolled off the currently-loaded page of the sidebar's paginated conversation list. */
+chatRouter.get("/conversations/:id", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const conversationId = parseInt(req.params["id"] ?? "0");
+    if (!Number.isFinite(conversationId) || conversationId <= 0) {
+      res.status(400).json(createApiError("Invalid conversation id"));
+      return;
+    }
+    const conversation = await db.getConversation(conversationId);
+    if (!conversation) {
+      res.status(404).json(createApiError("Conversation not found"));
+      return;
+    }
+    res.json(createApiResponse(conversation));
+  } catch (error) {
+    next(error);
+  }
+});
+
 chatRouter.get("/conversations/:id/messages", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;

@@ -115,6 +115,35 @@ export function sanitizeCodeContent(raw: unknown): unknown {
 }
 
 /**
+ * filesystemTool's own JSON-schema `definition` - what the model actually reads to decide how to
+ * call the tool, especially under native function-calling - hardcodes shared-workspace framing
+ * ("All paths are scoped to shared-workspace for safety.", the first path example being
+ * "/shared-workspace/config.json", "use this for paths like ./shared-workspace"). That text is
+ * correct for the UNSCOPED tool (regular chat), but actively misleads a sandboxed CodingAgent
+ * into constructing shared-workspace-shaped paths even though it's confined to a completely
+ * different sandbox - the top-level `description` string got a "(scoped to ...)" suffix already,
+ * but these nested schema strings did not, so the model kept seeing the old guidance. Deep-clones
+ * the definition (plain JSON-schema data, safe to structurally clone) and rewrites just the
+ * misleading strings, leaving every other field (action enum, all other parameter docs) intact.
+ */
+function scopedFilesystemDefinition(sandboxRoot: string): typeof filesystemTool.definition {
+  const cloned = JSON.parse(JSON.stringify(filesystemTool.definition)) as typeof filesystemTool.definition;
+  cloned.description = `File system operations, scoped to ${sandboxRoot}. Required parameters: action (the operation), path (file/directory path, RELATIVE to the sandbox root - never shared-workspace). Directories and files take different actions: list/mkdir operate on directories, read/write/append/edit/copy operate on files.`;
+  const properties = cloned.parameters?.properties as Record<string, { description?: string }> | undefined;
+  if (properties?.["path"]) {
+    properties["path"].description =
+      `REQUIRED: File or directory path RELATIVE to the sandbox root (${sandboxRoot}). Examples: config.json, ./data/file.txt, data/subfolder/. NEVER prefix with shared-workspace, coding/, an absolute path, or the sandbox path itself. A path without a file extension is usually a directory - use action:'list' for it.`;
+  }
+  if (properties?.["action"]) {
+    properties["action"].description = String(properties["action"].description ?? "").replace(
+      /use this for paths like \.\/shared-workspace/i,
+      "use this for a directory path relative to the sandbox root"
+    );
+  }
+  return cloned;
+}
+
+/**
  * Wraps the generic filesystem tool so a CodingAgent confined to a sandbox
  * (e.g. shared-workspace/coding/<project>) is hard-locked to that root.
  * basePath and safeMode are always forced here, overriding whatever the LLM
@@ -127,7 +156,7 @@ export function createScopedFilesystemTool(sandboxRoot: string): ToolExecutor {
   return {
     name: filesystemTool.name,
     description: `${filesystemTool.description} (scoped to ${sandboxRoot})`,
-    definition: filesystemTool.definition,
+    definition: scopedFilesystemDefinition(sandboxRoot),
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
       const scopedInput: Record<string, unknown> = { ...input, basePath: sandboxRoot, safeMode: true };
       // Calls that came from a NATIVE tool_call or the heredoc write block deliver content

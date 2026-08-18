@@ -1,5 +1,6 @@
 {
   "disabled": [
+    "btc-preis-tes",
     "github-connector",
     "telegram-connector"
   ]

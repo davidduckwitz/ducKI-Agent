@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Server as SocketIOServer } from "socket.io";
 import type { Agent, AgentRunEvent } from "@ducki/agent";
@@ -6,7 +7,7 @@ import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { isAbortError } from "@ducki/providers";
 import { agentRegistry } from "../lib/agent-registry.js";
-import { BitcoinPuzzleService, createScopedFilesystemTool } from "@ducki/agent";
+import { BitcoinPuzzleService, createScopedFilesystemTool, pluginsRoot } from "@ducki/agent";
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
@@ -514,7 +515,17 @@ export function setupWebSocket(
           // other tools. Normal chats skip this entirely.
           const codingSlug = extractCodingProjectSlug(prompt);
           if (codingSlug) {
-            const sandboxRoot = resolve(CODING_WORKSPACE_ROOT, codingSlug);
+            // A [CODING_CONTEXT] project slug normally names a Coding Area project under
+            // CODING_WORKSPACE_ROOT, but the same marker is reused (see plugin-context tagging
+            // in routes/plugins.ts create-run) to continue an agent-authored plugin's own
+            // conversation - those live under plugins/<slug>/ instead. Try the coding-workspace
+            // path first (unchanged behavior for real projects), fall back to the plugins root
+            // only if that doesn't exist.
+            const codingProjectRoot = resolve(CODING_WORKSPACE_ROOT, codingSlug);
+            const pluginRoot = resolve(pluginsRoot(), codingSlug);
+            const sandboxRoot = existsSync(codingProjectRoot) ? codingProjectRoot
+              : existsSync(pluginRoot) ? pluginRoot
+              : codingProjectRoot;
             const [scopedFs] = wrapTools([createScopedFilesystemTool(sandboxRoot)]);
             if (scopedFs) {
               runAgent.executor.registerTool(scopedFs);

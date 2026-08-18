@@ -352,8 +352,15 @@ export class Agent {
     // Phase 1: Initialize hook registry and event emitter V2
     this.hookRegistry = new HookRegistry(this.logger);
     if (options.hooks) {
+      // AgentOptions.hooks is a flat AgentHook[] with no lifecycle-event field, so the only
+      // event they can be registered under is beforeTool - the sole consumer today
+      // (executeToolCallsFromResponse) and the only shape every existing hook handler expects
+      // (reads context.toolName/context.input). Registering under `hook.name` (the hook's own
+      // identifier, e.g. "coding-discipline-read-before-edit") instead of the event name was the
+      // bug: executeHooks(AGENT_HOOK_NAMES.BEFORE_TOOL, ...) looks up the "beforeTool" bucket,
+      // which stayed empty, so every hook passed this way was silently never invoked.
       for (const hook of options.hooks) {
-        this.hookRegistry.register(hook.name, hook);
+        this.hookRegistry.register(AGENT_HOOK_NAMES.BEFORE_TOOL, hook);
       }
     }
 
@@ -4282,6 +4289,24 @@ export class Agent {
             error: preflight.error,
           });
           resultMap.set(callId, { success: false, data: null, error: preflight.error });
+          continue;
+        }
+
+        // Phase 2 (was previously registered but never invoked - see HookRegistry): give
+        // beforeTool hooks (e.g. CodingAgent's read-before-edit discipline and shell command
+        // approval policy) a chance to block this specific call before it executes.
+        const hookResult = await this.executeHookSafely(AGENT_HOOK_NAMES.BEFORE_TOOL, {
+          toolName: call.toolName,
+          input: preflight.input,
+          preflight: { validated: true },
+        });
+        if (!hookResult.proceed) {
+          this.logger.warn("[TOOL-CALLS] Blocked by beforeTool hook", {
+            callId,
+            toolName: call.toolName,
+            reason: hookResult.reason,
+          });
+          resultMap.set(callId, { success: false, data: null, error: hookResult.reason ?? "Blocked by beforeTool hook" });
           continue;
         }
 

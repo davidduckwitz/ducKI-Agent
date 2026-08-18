@@ -7,6 +7,7 @@ export {
   DenyTool,
   RequireConfirmation,
   AllowedActions,
+  AllowedShellCommands,
 } from "./tool-approval-policy.js";
 
 export {

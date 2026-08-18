@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, rmSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -454,6 +454,39 @@ function resolveValidateCliPath(): string {
   return join(dirname(agentEntryPath), "plugins", "validate-cli.js");
 }
 
+/**
+ * Where an in-progress/failed agent-authored plugin lives WHILE it's being written - a sibling
+ * of plugins/, never a subdirectory of it. loadPlugins() scans every directory directly under
+ * plugins/ unconditionally (no dotdir/name filtering), so a half-written or rejected attempt
+ * left there - as an earlier version of this endpoint did - shows up immediately in the general
+ * plugin list with a raw ENOENT/schema error, before anyone reviewed it. Only a directory that
+ * passes validatePluginDir gets moved (renameSync) into plugins/<name>/ at all.
+ */
+function pluginStagingRoot(): string {
+  return join(dirname(pluginsRoot()), ".plugin-staging");
+}
+
+/** Best-effort cleanup of abandoned staging dirs (failed runs nobody looked at) older than a
+ *  day, so repeated failed attempts don't accumulate on disk forever. Never throws. */
+function cleanupStalePluginStaging(): void {
+  try {
+    const root = pluginStagingRoot();
+    if (!existsSync(root)) return;
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(root, entry.name);
+      try {
+        if (statSync(dir).mtimeMs < cutoff) rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Best-effort - one bad entry never blocks the rest.
+      }
+    }
+  } catch {
+    // Staging cleanup is opportunistic housekeeping, never a request-blocking concern.
+  }
+}
+
 function loadPluginManageSkill(): string {
   const path = join(process.cwd(), "skills", "plugin-manage", "SKILL.md");
   if (!existsSync(path)) {
@@ -473,7 +506,7 @@ function buildPluginCreationGoal(opts: {
   return [
     skill,
     "---",
-    `You must create a new plugin named exactly "${opts.name}" in the current directory (which IS the plugin's own folder plugins/${opts.name}/ - write plugin.json directly here, not in a subfolder).`,
+    `You must create a new plugin named exactly "${opts.name}" in the current directory (which IS the plugin's own folder - write plugin.json directly here, not in a subfolder).`,
     `User request: ${opts.prompt}`,
     opts.category ? `Requested category: ${opts.category}` : "",
     opts.needsStorage ? "The plugin should use its own SQLite storage (storage.sqlite: true)." : "The plugin does not need persistent storage - prefer a stateless data-source tool.",
@@ -518,14 +551,21 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
       res.status(400).json(createApiError("'prompt' is required"));
       return;
     }
-    const pluginDir = resolve(pluginsRoot(), name);
-    if (existsSync(pluginDir)) {
+    const finalDir = resolve(pluginsRoot(), name);
+    if (existsSync(finalDir)) {
       res.status(409).json(createApiError(`A plugin named '${name}' already exists`));
+      return;
+    }
+    cleanupStalePluginStaging();
+    const stagingRoot = pluginStagingRoot();
+    const stagingDir = join(stagingRoot, name);
+    if (existsSync(stagingDir)) {
+      res.status(409).json(createApiError(`A previous creation attempt for '${name}' is still on disk (staging) - pick a different name or wait for it to be cleaned up`));
       return;
     }
 
     const runId = randomUUID();
-    mkdirSync(pluginDir, { recursive: true });
+    mkdirSync(stagingDir, { recursive: true });
     res.json(createApiResponse({ runId }));
 
     const io = req.app.locals["io"];
@@ -544,7 +584,7 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
           },
         };
 
-        const codingAgent = createCodingAgent({ sandboxRoot: pluginDir, maxIterations: 40, eventEmitter });
+        const codingAgent = createCodingAgent({ sandboxRoot: stagingDir, maxIterations: 40, eventEmitter });
         const goal = buildPluginCreationGoal({
           name,
           prompt,
@@ -552,20 +592,37 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
           needsStorage: body.needsStorage,
           targetHint: body.targetHint,
         });
-        const verifyCommand = `node "${resolveValidateCliPath()}" "${pluginsRoot()}" "${name}"`;
+        // Points validate-cli at the STAGING root, not pluginsRoot() - it resolves
+        // join(pluginsRoot, name) internally, so passing stagingRoot here makes it check
+        // stagingDir (= stagingRoot/name), matching where the agent is actually writing.
+        const verifyCommand = `node "${resolveValidateCliPath()}" "${stagingRoot}" "${name}"`;
 
-        await codingAgent.run(goal, { verifyCommand, maxAttempts: 3, timeoutMs: 5 * 60 * 1000 });
+        const runResult = await codingAgent.run(goal, { verifyCommand, maxAttempts: 3, timeoutMs: 5 * 60 * 1000 });
 
         // Authoritative re-check, in-process - never trust the agent's own reported "verified".
-        const finalCheck = validatePluginDir(pluginsRoot(), name);
+        const finalCheck = validatePluginDir(stagingRoot, name);
         if (!finalCheck.ok) {
+          // Left in staging (never moved into plugins/), so it's invisible to loadPlugins() -
+          // nothing broken ever reaches the general plugin list. Stays on disk for manual
+          // inspection until cleanupStalePluginStaging() reclaims it after 24h.
           emit("plugin_create_complete", { success: false, name, error: finalCheck.errors.join("; ") });
           return;
         }
 
+        renameSync(stagingDir, finalDir);
         setPluginEnabled(name, false);
         const reload = reloadPlugins(req);
-        emit("plugin_create_complete", { success: true, name, reload });
+
+        // Tag the CodingAgent's own conversation as belonging to this plugin, so continuing
+        // it later in the regular chat re-derives the same [CODING_CONTEXT] marker
+        // CodingWorkspace uses (proper coding iteration budget + filesystem tool scoped to
+        // this plugin's folder, see the sandbox fallback in websocket/index.ts) instead of
+        // being misclassified as a tiny-budget lightweight/chatbot run.
+        if (runResult.conversationId !== undefined) {
+          await db.updateConversation(runResult.conversationId, { pluginContext: name });
+        }
+
+        emit("plugin_create_complete", { success: true, name, conversationId: runResult.conversationId, reload });
       } catch (error) {
         emit("plugin_create_complete", { success: false, name, error: error instanceof Error ? error.message : String(error) });
       }
