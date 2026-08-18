@@ -48,6 +48,8 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     checklistMaxItemAttempts: parseInt(process.env["AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS"] ?? "3"),
     checklistSkippedPolicy: ((process.env["AGENT_CHECKLIST_SKIPPED_POLICY"] ?? "soft").toLowerCase() === "strict" ? "strict" : "soft") as "soft" | "strict",
 
+    runJournalEnabled: (process.env["AGENT_RUN_JOURNAL_ENABLED"] ?? "true").toLowerCase() !== "false",
+
     enableVision: (process.env["AGENT_ENABLE_VISION"] ?? "true").toLowerCase() !== "false",
 
     reasonerUseToolMinConfidence: parseFloat(process.env["AGENT_REASONER_MIN_CONFIDENCE"] ?? "0.7"),

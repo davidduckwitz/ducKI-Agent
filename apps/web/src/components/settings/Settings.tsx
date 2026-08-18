@@ -671,6 +671,18 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "AGENT_RUN_JOURNAL_ENABLED",
+    label: "Run-Journal",
+    description: "Agent merkt sich waehrend eines Laufs (unabhaengig von der Checkliste), welche Aktionen er bereits ausgefuehrt hat (Dateien geschrieben, APIs aufgerufen, Tools genutzt), und bekommt das pro Iteration als kurze Erinnerung im Prompt, um Doppelarbeit zu vermeiden. Rein im Arbeitsspeicher, nicht persistiert. Standard: an.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "true",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_REFLECTION_STORE_MEMORY",
     label: "Reflection -> Memory",
     description: "Speichert Reflection-Erkenntnisse (Issues/Qualitaet) als lernbare Long-Term Memory.",

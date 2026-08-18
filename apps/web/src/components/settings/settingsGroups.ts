@@ -11,6 +11,7 @@ import {
   Sparkles,
   Target,
   ListChecks,
+  ScrollText,
   Database,
   BookOpen,
   HardDrive,
@@ -215,6 +216,13 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_CHECKLIST_MIN_COMPLEXITY",
         "AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS",
         "AGENT_CHECKLIST_SKIPPED_POLICY",
+      ],
+    },
+    {
+      name: "Run-Journal",
+      icon: ScrollText,
+      keys: [
+        "AGENT_RUN_JOURNAL_ENABLED",
       ],
     },
     {

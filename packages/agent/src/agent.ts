@@ -48,7 +48,7 @@ import { ToolHealthMonitor } from "./tool-health/tool-health-monitor.js";
 import { ThinkBlockParser } from "./parsers/think-block-parser.js";
 import { ToolDependencyChecker } from "./tool-strategy/tool-dependencies.js";
 
-import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType } from "./config/interfaces_types";
+import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType, RunJournalEntry } from "./config/interfaces_types";
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
 
 /**
@@ -3409,6 +3409,7 @@ export class Agent {
       // skipped — a better default especially for smaller models that need more tries.
       checklistMaxItemAttempts: 3,
       checklistSkippedPolicy: "soft",
+      runJournalEnabled: true,
       enableVision: true,
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
@@ -3508,6 +3509,7 @@ export class Agent {
         })(),
         checklistMaxItemAttempts: this.parseNumberSetting(get("AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS"), defaults.checklistMaxItemAttempts, 1, 5),
         checklistSkippedPolicy: (get("AGENT_CHECKLIST_SKIPPED_POLICY") ?? "").toLowerCase() === "strict" ? "strict" : defaults.checklistSkippedPolicy,
+        runJournalEnabled: this.parseBooleanSetting(get("AGENT_RUN_JOURNAL_ENABLED"), defaults.runJournalEnabled),
         enableVision: this.parseBooleanSetting(get("AGENT_ENABLE_VISION"), defaults.enableVision),
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
@@ -4052,7 +4054,7 @@ export class Agent {
     iterations: number,
     repeatedToolCalls: Map<string, number>,
     nativeToolCalls?: ToolCall[]
-  ): Promise<{ resultMap: Map<string, ToolResult>; cleanedResponse: string; browserToolsCount: number }> {
+  ): Promise<{ resultMap: Map<string, ToolResult>; cleanedResponse: string; browserToolsCount: number; journalEntries: RunJournalEntry[] }> {
     this.logger.info("[TOOL-CALLS] Starting extraction and execution", {
       responseLength: response.length,
       hasToolMarkers: /\[TOOL:/.test(response),
@@ -4140,6 +4142,7 @@ export class Agent {
     }
 
     const resultMap = new Map<string, ToolResult>();
+    const journalEntries: RunJournalEntry[] = [];
 
     if (toolCalls.length === 0) {
       this.logger.info("[TOOL-CALLS] No tool calls found, skipping execution");
@@ -4154,7 +4157,7 @@ export class Agent {
         .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
         .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove other <|...> markers
         .trim();
-      return { resultMap, cleanedResponse, browserToolsCount: 0 };
+      return { resultMap, cleanedResponse, browserToolsCount: 0, journalEntries };
     }
 
     // Emit initial tool-call detection event
@@ -4522,6 +4525,12 @@ export class Agent {
         // Lead with what ran, not with the internal call id: "call_1a2b3c: Success" told
         // the reader nothing about which tool produced it.
         const resultSummary = toolCall ? summarizeToolCall(toolCall.toolName, toolCall.input) : "tool";
+        journalEntries.push({
+          iteration: iterations,
+          toolName: toolCall?.toolName ?? "unknown",
+          summary: resultSummary,
+          success: executed.result.success,
+        });
         const resultOutcome = executed.result.success
           ? "OK"
           : `Fehler: ${executed.result.error ?? "unbekannt"}`;
@@ -4574,7 +4583,7 @@ export class Agent {
     // Count browser tools for iteration control
     const browserToolsCount = toolCalls.filter(c => this.isBrowserTool(c.toolName)).length;
 
-    return { resultMap, cleanedResponse, browserToolsCount };
+    return { resultMap, cleanedResponse, browserToolsCount, journalEntries };
   }
 
   /**
@@ -4658,6 +4667,21 @@ export class Agent {
       `send the message, fetch the data — do not just describe it). Do ONLY this one step, ` +
       `then continue. Never skip ahead or redo a step already marked [x].`
     );
+  }
+
+  /**
+   * Renders the last few Run Journal entries as a compact system-prompt block so the
+   * model can see what it already did this run and avoid repeating it. Only the most
+   * recent entries are shown (independent of how many are retained in memory) to keep
+   * the per-iteration token cost bounded.
+   */
+  private renderRunJournalHint(journal: RunJournalEntry[]): string {
+    if (journal.length === 0) return "";
+    const recent = journal.slice(-15);
+    const list = recent
+      .map((e, idx) => `${idx + 1}. [${e.success ? "ok" : "fail"}] ${e.summary}`)
+      .join("\n");
+    return `\n\n## Actions taken so far this run\n${list}\nDo not repeat an action already listed above unless it failed or the task requires it again.`;
   }
 
   /** First failure string from an item's stored verifyState JSON, if any. */
@@ -5357,6 +5381,12 @@ export class Agent {
     // has already rolled out of the message window by the time it is verified at loop end,
     // which caused correctly-completed steps to be falsely reported as failed/skipped.
     const checklistEvidenceLog: string[] = [];
+    // Always-on, checklist-independent record of tool actions taken this run (see
+    // RunJournalEntry) — reminds the model what it already did so it doesn't repeat work.
+    // Separate from checklistEvidenceLog: this holds short structured summaries for the
+    // acting model, not raw evidence for the verifier.
+    const runJournal: RunJournalEntry[] = [];
+    const runJournalEnabled = controls.runJournalEnabled;
     // Monotonic counters (survive the log's 40-entry cap) gating the mid-run advance so the
     // Verifier is only invoked when NEW evidence has arrived since the last check — never
     // re-verifying identical evidence iteration after iteration.
@@ -5589,6 +5619,10 @@ export class Agent {
         }
       }
 
+      // Run journal: always-on (unless disabled), checklist-independent reminder of
+      // actions already taken this run. Reassigned each iteration; buildMessages closes over it.
+      const runJournalHint = runJournalEnabled ? this.renderRunJournalHint(runJournal) : "";
+
       const dynamicMemorySignals = [
         effectiveInput,
         ...activeSkillSlugs,
@@ -5736,7 +5770,7 @@ export class Agent {
           : "";
         const systemMessage: LLMMessage = {
           role: "system",
-          content: `${clippedPrompt}${clippedDynamicMemory}${checklistHint}`,
+          content: `${clippedPrompt}${clippedDynamicMemory}${checklistHint}${runJournalHint}`,
         };
 
         const contextMessages = buildConversationWindow(
@@ -6126,7 +6160,7 @@ export class Agent {
       });
 
       // Now extract and execute tools (which will add results after the assistant message)
-      const { resultMap: toolResultsMap, cleanedResponse, browserToolsCount } = await this.executeToolCallsFromResponse(
+      const { resultMap: toolResultsMap, cleanedResponse, browserToolsCount, journalEntries } = await this.executeToolCallsFromResponse(
         response,
         adjustedControls,
         options,
@@ -6135,6 +6169,11 @@ export class Agent {
         repeatedToolCalls,
         currentNativeToolCalls
       );
+
+      if (runJournalEnabled && journalEntries.length > 0) {
+        runJournal.push(...journalEntries);
+        if (runJournal.length > 30) runJournal.splice(0, runJournal.length - 30);
+      }
 
       this.logger.info("[RUNLOOP] Tool-call extraction and execution complete", {
         iteration: iterations,

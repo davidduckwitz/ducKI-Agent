@@ -138,6 +138,18 @@ export interface SkillScore {
   overlap: number;
 }
 
+/**
+ * One entry in the per-run Run Journal: a short, structured record of a single
+ * tool call taken during the current run, used to remind the model what it has
+ * already done (see AgentRuntimeControls.runJournalEnabled).
+ */
+export interface RunJournalEntry {
+  iteration: number;
+  toolName: string;
+  summary: string;
+  success: boolean;
+}
+
 export interface AgentRuntimeControls {
   // Execution
   maxIterations: number;
@@ -323,6 +335,16 @@ export interface AgentRuntimeControls {
    * Settings key: AGENT_CHECKLIST_SKIPPED_POLICY
    */
   checklistSkippedPolicy: "soft" | "strict";
+
+  // Run Journal
+  /**
+   * Always-on, checklist-independent in-memory log of actions taken during a run
+   * (tool + short summary + success/fail), injected into the system prompt each
+   * iteration so the model does not repeat work it already did. No DB persistence.
+   * Default true.
+   * Settings key: AGENT_RUN_JOURNAL_ENABLED
+   */
+  runJournalEnabled: boolean;
 
   // Vision ("Observer" — Phase 4)
   /**
