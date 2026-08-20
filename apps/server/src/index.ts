@@ -392,7 +392,8 @@ function buildAgentFactory(
 	runtimeTools: ToolExecutor[],
 	wikiServiceRef: { current?: LlmWikiService },
 	pluginManager: PluginManager,
-	connectorRegistryProxy: import("@ducki/agent").ConnectorRegistryLike
+	connectorRegistryProxy: import("@ducki/agent").ConnectorRegistryLike,
+	promptManager: PromptManager
 ) {
 	return async () => {
 		// Load database settings for agent configuration
@@ -401,9 +402,13 @@ function buildAgentFactory(
 			maxIterationsSetting,
 			parsed: maxIterationsSetting ? parseInt(maxIterationsSetting) : undefined,
 		});
-		const agentOptions = maxIterationsSetting
-			? { maxIterations: parseInt(maxIterationsSetting) }
-			: {};
+		// The Memory settings UI lets a user edit system.md via PromptManager - without this it
+		// was a dead letter, saved to the DB/file but never read back into any Agent instance.
+		const customSystemPrompt = await promptManager.getPrompt("system");
+		const agentOptions = {
+			...(maxIterationsSetting ? { maxIterations: parseInt(maxIterationsSetting) } : {}),
+			...(customSystemPrompt.trim() ? { systemPrompt: customSystemPrompt } : {}),
+		};
 
 		const agent = new Agent(providerRef.current, db, undefined, agentOptions);
 		// Wrap tools to broadcast events and handle response staging
@@ -607,7 +612,9 @@ async function bootstrap(): Promise<void> {
 	// Filled in a few lines below, once the wiki service exists - the agent factory only
 	// dereferences it when a run actually calls the wiki tool.
 	const wikiServiceRef: { current?: LlmWikiService } = {};
-	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager, connectorRegistryProxy);
+	const promptManager = new PromptManager(db, logger.child("PromptManager"));
+	await promptManager.initialize();
+	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager, connectorRegistryProxy, promptManager);
 	const defaultAgent = await createAgent();
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"), {
 		runWorkflow: (workflowId: string) => workflowEngineRef.current.runWorkflow(workflowId),
@@ -621,8 +628,6 @@ async function bootstrap(): Promise<void> {
 	await setupDefaultCronjobs(db, logger);
 	const updateManager = new UpdateManager(db, logger.child("UpdateManager"));
 	updateManager.start();
-	const promptManager = new PromptManager(db, logger.child("PromptManager"));
-	await promptManager.initialize();
 	const wikiService = new LlmWikiService(db, logger.child("LlmWikiService"));
 	await wikiService.start();
 	wikiServiceRef.current = wikiService;

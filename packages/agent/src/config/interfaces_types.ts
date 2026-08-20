@@ -107,6 +107,11 @@ export interface AgentRunOptions {
    *  doesn't lose the record of what it already did (see AgentRunResult.runJournal). Opt-in
    *  and per-call: regular one-shot run() callers never set this and see no behavior change. */
   initialRunJournal?: RunJournalEntry[];
+  /** The delivery channel this run's response will go out on (e.g. "discord", "telegram",
+   *  "cli"), when known to the caller (gateway/chat routes). Selects a short formatting hint
+   *  appended to the system prompt (see prompt/guidance-blocks.ts::platformHintGuidance) -
+   *  undefined/"web" gets no hint since the default chat UI renders full markdown fine. */
+  channelHint?: string;
 }
 
 export interface AgentRunEvent {

@@ -2,6 +2,7 @@ import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import type { LLMMessage } from "@ducki/shared";
 import { extractKeywords, scoreKeywordRelevance, tokenizeText } from "@ducki/shared";
+import { jaccardSimilarity } from "../utils/text-similarity.js";
 
 /** When true (the default), memories the agent learns on its own become immediately
  *  recallable instead of waiting in a review queue. Set to "false" to keep every
@@ -290,10 +291,16 @@ export class MemorySystem {
   async buildSystemContext(conversationId?: number): Promise<string> {
     const scoped = await this.getKnowledgePool(conversationId, true);
     const global = await this.getKnowledgePool(undefined, true);
-    const combined: string[] = [];
+    // Merge by importance (both pools already come importance-sorted from the DB, but a plain
+    // concatenation loses that once combined) before capping at 8. Without this, an active
+    // conversation with 8+ scoped auto-learned memories filled the cap and `break`d before the
+    // global pool - where the user's saved Memory/Profile info lives (importance 9, no
+    // conversationId) - was ever reached, so the agent silently never saw it.
+    const merged = [...scoped, ...global].sort((a, b) => b.importance - a.importance);
 
-    for (const item of [...scoped, ...global]) {
-      const normalized = this.normalize(item);
+    const combined: string[] = [];
+    for (const item of merged) {
+      const normalized = this.normalize(item.content);
       if (!normalized) continue;
       if (combined.some((existing) => this.similarity(existing, normalized) >= 0.9)) continue;
       combined.push(normalized);
@@ -311,8 +318,8 @@ export class MemorySystem {
     const scoped = await this.getKnowledgePool(conversationId, true);
     const global = await this.getKnowledgePool(undefined, true);
     const scored = [...scoped, ...global]
-      .map((content) => {
-        const normalized = this.normalize(content);
+      .map((item) => {
+        const normalized = this.normalize(item.content);
         const score = this.similarity(signalText, normalized) + this.profileBoost(signalText, normalized);
         return { content: normalized, score };
       })
@@ -357,10 +364,13 @@ export class MemorySystem {
     return value as Record<string, unknown>;
   }
 
-  private async getKnowledgePool(conversationId: number | undefined, includeSemantic: boolean): Promise<string[]> {
+  private async getKnowledgePool(
+    conversationId: number | undefined,
+    includeSemantic: boolean
+  ): Promise<Array<{ content: string; importance: number }>> {
     const longTerm = await this.db.getMemories(conversationId, "long-term", "approved");
     const semantic = includeSemantic ? await this.db.getMemories(conversationId, "semantic", "approved") : [];
-    return [...longTerm, ...semantic].map((entry) => entry.content);
+    return [...longTerm, ...semantic].map((entry) => ({ content: entry.content, importance: entry.importance }));
   }
 
   private profileBoost(signal: string, content: string): number {
@@ -427,22 +437,6 @@ export class MemorySystem {
   }
 
   private similarity(a: string, b: string): number {
-    if (!a || !b) return 0;
-    if (a === b) return 1;
-
-    // Unicode-aware tokenization: the previous /[^a-z0-9]+/ split treated every umlaut as
-    // a word boundary, so "Ausführung" became ["ausf","hrung"] and two German memories
-    // saying the same thing looked unrelated - defeating duplicate detection.
-    const aTokens = new Set(tokenizeText(a, { removeStopwords: false }));
-    const bTokens = new Set(tokenizeText(b, { removeStopwords: false }));
-    if (aTokens.size === 0 || bTokens.size === 0) return 0;
-
-    let intersection = 0;
-    for (const token of aTokens) {
-      if (bTokens.has(token)) intersection++;
-    }
-
-    const union = new Set([...aTokens, ...bTokens]).size;
-    return union === 0 ? 0 : intersection / union;
+    return jaccardSimilarity(a, b);
   }
 }

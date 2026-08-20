@@ -391,6 +391,25 @@ export const sessionChecklist = sqliteTable("session_checklist", {
 export type SessionChecklistInsert = typeof sessionChecklist.$inferInsert;
 export type SessionChecklistSelect = typeof sessionChecklist.$inferSelect;
 
+// ============================================================
+// Skill Usage (persistent per-skill stats, feeds the skill curator cron job)
+// ============================================================
+// SkillSelector's own in-memory metrics reset on every process restart and carry
+// no durable "last used" timestamp - this table is the persistent counterpart,
+// written alongside it so a periodic curator job can find skills nobody has
+// used in a while (see cronjob-manager.ts::runSkillCuratorJob).
+export const skillUsage = sqliteTable("skill_usage", {
+  slug: text("slug").primaryKey(),
+  totalUses: integer("total_uses").notNull().default(0),
+  successfulUses: integer("successful_uses").notNull().default(0),
+  avgIterations: real("avg_iterations").notNull().default(0),
+  lastUsedAt: text("last_used_at").notNull(),
+  status: text("status").notNull().default("active"), // active, stale
+});
+
+export type SkillUsageInsert = typeof skillUsage.$inferInsert;
+export type SkillUsageSelect = typeof skillUsage.$inferSelect;
+
 export type ConversationInsert = typeof conversations.$inferInsert;
 export type ConversationSelect = typeof conversations.$inferSelect;
 export type MessageInsert = typeof messages.$inferInsert;

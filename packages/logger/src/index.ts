@@ -32,6 +32,19 @@ export interface LoggerOptions {
   logFile?: string | undefined;
   module?: string | undefined;
   colorize?: boolean;
+  /**
+   * When true, debug/info entries are held in an in-memory ring buffer instead of being
+   * printed immediately - only warn/error print right away, and printing one first flushes
+   * the buffered debug/info trail (dimmed) that led up to it. Lets a terminal UI (the CLI)
+   * stay quiet during normal operation while still surfacing the recent diagnostic context
+   * the moment something actually goes wrong, instead of either seeing everything or
+   * nothing. Off by default - existing callers (the server) are unaffected.
+   */
+  quiet?: boolean;
+  /** Internal: shared buffer reference passed from parent to child() loggers so they flush together. */
+  buffer?: LogEntry[];
+  /** Max buffered debug/info entries kept for a flush-on-warn/error. Default 50. */
+  maxBufferSize?: number;
 }
 
 class Logger {
@@ -39,12 +52,18 @@ class Logger {
   private logFile?: string;
   private module?: string;
   private colorize: boolean;
+  private quiet: boolean;
+  private buffer: LogEntry[];
+  private maxBufferSize: number;
 
   constructor(options: LoggerOptions = {}) {
     this.level = options.level ?? "info";
     this.logFile = options.logFile;
     this.module = options.module;
     this.colorize = options.colorize ?? true;
+    this.quiet = options.quiet ?? false;
+    this.buffer = options.buffer ?? [];
+    this.maxBufferSize = options.maxBufferSize ?? 50;
 
     if (this.logFile) {
       const dir = dirname(this.logFile);
@@ -78,7 +97,12 @@ class Logger {
   }
 
   private log(level: LogLevel, message: string, context?: Record<string, unknown>): void {
-    if (!this.shouldLog(level)) return;
+    // In quiet mode, debug/info are always captured into the buffer (bypassing the normal
+    // level filter, so a "warn"-level console can still surface debug context on failure);
+    // warn/error still respect shouldLog as before.
+    const isLowSeverity = level === "debug" || level === "info";
+    if (!this.quiet && !this.shouldLog(level)) return;
+    if (this.quiet && !isLowSeverity && !this.shouldLog(level)) return;
 
     const entry: LogEntry = {
       level,
@@ -90,6 +114,34 @@ class Logger {
 
     const formatted = this.formatMessage(entry);
 
+    // File output happens regardless of quiet mode - a log file should still get everything.
+    if (this.logFile) {
+      try {
+        appendFileSync(this.logFile, formatted + "\n");
+      } catch (err) {
+        // Surface the write failure once on the console instead of silently dropping
+        // log lines - losing logs invisibly makes production issues unreviewable.
+        console.error(`[Logger] Failed to write to log file ${this.logFile}:`, err);
+      }
+    }
+
+    if (this.quiet && isLowSeverity) {
+      this.buffer.push(entry);
+      if (this.buffer.length > this.maxBufferSize) this.buffer.shift();
+      return;
+    }
+
+    if (this.quiet && this.buffer.length > 0) {
+      // Something actually went wrong - flush the debug/info trail that led up to it,
+      // dimmed so it visually reads as background context rather than the main message.
+      const dim = "\x1b[2m";
+      for (const buffered of this.buffer) {
+        const line = this.formatMessage(buffered);
+        console.error(this.colorize && process.stdout.isTTY ? `${dim}${line}${RESET}` : line);
+      }
+      this.buffer.length = 0;
+    }
+
     // Route warn/error to stderr so process managers and log shippers that split
     // stdout/stderr (or filter by level) actually see them.
     const write = level === "warn" || level === "error" ? console.error : console.log;
@@ -99,17 +151,6 @@ class Logger {
       write(`${COLORS[level]}${formatted}${RESET}`);
     } else {
       write(formatted);
-    }
-
-    // File output
-    if (this.logFile) {
-      try {
-        appendFileSync(this.logFile, formatted + "\n");
-      } catch (err) {
-        // Surface the write failure once on the console instead of silently dropping
-        // log lines - losing logs invisibly makes production issues unreviewable.
-        console.error(`[Logger] Failed to write to log file ${this.logFile}:`, err);
-      }
     }
   }
 
@@ -135,6 +176,9 @@ class Logger {
       logFile: this.logFile,
       module: this.module ? `${this.module}:${module}` : module,
       colorize: this.colorize,
+      quiet: this.quiet,
+      buffer: this.buffer,
+      maxBufferSize: this.maxBufferSize,
     });
   }
 

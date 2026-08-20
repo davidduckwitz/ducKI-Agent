@@ -140,6 +140,7 @@ export { SkillSelectionService, skillSelectionService } from "./skill-selector/s
 export { SkillSelector, skillSelector } from "./skill-selector/selector.js";
 export type { SkillMetrics } from "./skill-selector/selector.js";
 export { SkillRegistry, skillRegistry, AVAILABLE_SKILLS, populateSkillBundles } from "./skill-selector/skill-registry.js";
+export { jaccardSimilarity } from "./utils/text-similarity.js";
 export {
   parseFrontmatter,
   normalizeFrontmatter,

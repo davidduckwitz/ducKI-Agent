@@ -21,6 +21,7 @@ export type { DataSourceToolConfig, DataSourceRequestStep, DataSourceParamSpec }
 export { FILESYSTEM_ACTIONS } from "./filesystem.js";
 export type { FilesystemAction } from "./filesystem.js";
 export { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "./workspace-root.js";
+export { stripStopMarkers, stripTrailingJsonArgTail, CONTENT_STOP_MARKERS } from "./content-sanitizer.js";
 export { globFiles, grepFiles } from "./filesystem-search.js";
 export type { GrepMatch, GlobOptions, GrepOptions } from "./filesystem-search.js";
 export { runScriptInSandbox, sanitizeRuntimeValue } from "./sandbox.js";

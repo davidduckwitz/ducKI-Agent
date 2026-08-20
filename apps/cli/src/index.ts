@@ -5,13 +5,20 @@ import { stdin as input, stdout as output } from "node:process";
 import { config as loadEnv } from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLogger } from "@ducki/logger";
+import { createLogger, setRootLogger } from "@ducki/logger";
 import { getDatabase, type DatabaseService } from "@ducki/database";
 import { createDefaultProvider } from "@ducki/providers";
 import { Agent, WorkflowEngine, createWorkflowManagementTool } from "@ducki/agent";
 import { allTools } from "@ducki/tools";
+import { box, renderEvent, promptLabel, responseLabel, errorLine, dim, Spinner } from "./ui.js";
+import { listInstalledSkills } from "./skills.js";
 
-const logger = createLogger({ module: "CLI" });
+// Quiet mode: debug/info log lines (from Agent's internal getRootLogger() calls, e.g. tool
+// parser diagnostics) are buffered instead of printed - they only ever surface, dimmed, right
+// before a warn/error that they led up to. Keeps the chat transcript free of raw log noise
+// while still giving real debugging context the moment something actually fails.
+const logger = createLogger({ module: "CLI", quiet: true });
+setRootLogger(logger);
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 loadEnv({ path: resolve(moduleDir, "../../../.env") });
@@ -33,7 +40,7 @@ async function main() {
 
   switch (command) {
     case "chat":
-      await chatCommand(agent);
+      await chatCommand(agent, provider.name);
       break;
     case "run":
       await runCommand(agent, args.slice(1).join(" "));
@@ -44,60 +51,104 @@ async function main() {
     case "tools":
       toolsCommand(agent);
       break;
+    case "skills":
+      skillsCommand();
+      break;
     default:
       printHelp();
   }
 }
 
-async function chatCommand(agent: Agent) {
-  console.log("\x1b[36m╔════════════════════════════════╗\x1b[0m");
-  console.log("\x1b[36m║     DucKI Agent - Chat Mode    ║\x1b[0m");
-  console.log("\x1b[36m╚════════════════════════════════╝\x1b[0m");
-  console.log('Tippe "exit" zum Beenden.\n');
+async function chatCommand(agent: Agent, providerName: string) {
+  const skillCount = listInstalledSkills().length;
+  console.log(box("DucKI Agent - Chat Mode", `Provider: ${providerName} | Skills: ${skillCount}`));
+  console.log(dim('Tippe "exit" zum Beenden, "/skills" fuer eine Liste, oder "/skill-slug deine Nachricht" um einen Skill direkt aufzurufen.\n'));
 
   const convId = await agent.startConversation({ name: "CLI Chat" });
   const rl = readline.createInterface({ input, output });
 
   while (true) {
-    const userInput = await rl.question("\x1b[32mDu: \x1b[0m");
+    const userInput = await rl.question(promptLabel());
     if (userInput.toLowerCase() === "exit") break;
     if (!userInput.trim()) continue;
+    if (userInput.trim() === "/skills") {
+      skillsCommand();
+      continue;
+    }
 
-    process.stdout.write("\x1b[33mDucKI: \x1b[0m");
-
+    // Spinning "/" plus elapsed time fills the gap between submitting the question and the
+    // first response token - onEvent clears it for each status line (tool_call, plan, ...) so
+    // those print cleanly above it, and it resumes on its own on the next tick.
+    const spinner = new Spinner();
+    spinner.start();
+    let printedLabel = false;
     try {
-      const result = await agent.run(userInput, {
+      await agent.run(userInput, {
         stream: true,
-        onChunk: (chunk) => process.stdout.write(chunk),
+        onEvent: (event) => {
+          const line = renderEvent(event);
+          if (line) {
+            spinner.clear();
+            console.log(line);
+          }
+        },
+        onChunk: (chunk) => {
+          if (!printedLabel) {
+            spinner.stop();
+            process.stdout.write(responseLabel());
+            printedLabel = true;
+          }
+          process.stdout.write(chunk);
+        },
       });
+      spinner.stop();
       console.log("\n");
     } catch (error) {
-      console.error("\x1b[31mFehler:\x1b[0m", error instanceof Error ? error.message : String(error));
+      spinner.stop();
+      console.error(errorLine(error instanceof Error ? error.message : String(error)));
     }
   }
 
   rl.close();
-  console.log("\nAuf Wiedersehen!");
+  console.log(dim("\nAuf Wiedersehen!"));
 }
 
 async function runCommand(agent: Agent, task: string) {
   if (!task) {
-    console.error("Bitte eine Aufgabe angeben: ducki run <aufgabe>");
+    console.error(errorLine("Bitte eine Aufgabe angeben: ducki run <aufgabe>"));
     process.exit(1);
   }
 
-  console.log(`\nFühre aus: ${task}\n`);
+  console.log(box("Aufgabe", task));
   await agent.startConversation();
 
+  const spinner = new Spinner();
+  spinner.start();
+  let printedLabel = false;
   const result = await agent.run(task, {
     stream: true,
-    onChunk: (chunk) => process.stdout.write(chunk),
+    onEvent: (event) => {
+      const line = renderEvent(event);
+      if (line) {
+        spinner.clear();
+        console.log(line);
+      }
+    },
+    onChunk: (chunk) => {
+      if (!printedLabel) {
+        spinner.stop();
+        process.stdout.write(responseLabel());
+        printedLabel = true;
+      }
+      process.stdout.write(chunk);
+    },
   });
+  spinner.stop();
 
-  console.log("\n\n---");
-  console.log(`Iterationen: ${result.iterations}`);
+  console.log(dim("\n\n---"));
+  console.log(dim(`Iterationen: ${result.iterations}`));
   if (result.toolsUsed.length > 0) {
-    console.log(`Tools verwendet: ${result.toolsUsed.join(", ")}`);
+    console.log(dim(`Tools verwendet: ${result.toolsUsed.join(", ")}`));
   }
 }
 
@@ -121,6 +172,15 @@ function toolsCommand(agent: Agent) {
   }
 }
 
+function skillsCommand() {
+  const skills = listInstalledSkills();
+  console.log(`\nInstallierte Skills (${skills.length}):`);
+  for (const skill of skills) {
+    console.log(`  - ${skill.slug}: ${skill.description ?? "(keine Beschreibung)"}`);
+  }
+  console.log('\nAufruf: "/skill-slug deine Nachricht" ruft einen Skill explizit auf (bis zu 5 gestapelt).');
+}
+
 function printHelp() {
   console.log(`
 DucKI Agent CLI
@@ -130,6 +190,11 @@ Verwendung:
   ducki run <task>    Aufgabe ausführen
   ducki tasks         Aufgaben anzeigen
   ducki tools         Tools anzeigen
+  ducki skills        Skills anzeigen
+
+Im Chat:
+  /skills                     Skills auflisten
+  /skill-slug deine Nachricht Skill explizit aufrufen (bis zu 5 gestapelt)
   `);
 }
 

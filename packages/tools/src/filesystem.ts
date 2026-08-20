@@ -15,6 +15,7 @@ import { resolve, dirname, join, extname } from "node:path";
 import { globFiles, grepFiles } from "./filesystem-search.js";
 import { randomBytes } from "node:crypto";
 import { SHARED_WORKSPACE_ROOT } from "./workspace-root.js";
+import { stripStopMarkers } from "./content-sanitizer.js";
 
 const SHARED_BASE_PATH = SHARED_WORKSPACE_ROOT;
 
@@ -250,6 +251,9 @@ export const filesystemTool: ToolExecutor = {
         .replace(/\\n/g, "\n")
         .replace(/\\t/g, "\t")
         .replace(/\\r/g, "\r");
+      // Cut off any leaked tool-call / stop-token syntax a weak model mangled into
+      // the content string (no-op unless a marker is actually present).
+      content = stripStopMarkers(content) as string;
     }
 
     try {
@@ -385,6 +389,7 @@ export const filesystemTool: ToolExecutor = {
               .replace(/\\n/g, "\n")
               .replace(/\\t/g, "\t")
               .replace(/\\r/g, "\r");
+            newString = stripStopMarkers(newString) as string;
           }
           if (oldString) {
             oldString = oldString

@@ -9,6 +9,9 @@ import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent, ToolDefiniti
 import type { LLMProvider, ProviderOptions } from "./base.js";
 import { ProviderConnectionError, looksLikeConnectionFailure, isAbortError } from "./errors.js";
 import { estimateUsage } from "./token-estimate.js";
+import { getRootLogger } from "@ducki/logger";
+
+const logger = getRootLogger().child("OpenAIProvider");
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -163,9 +166,8 @@ export function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageP
       hasImageUrl = (m.content as LLMContent[]).some((part) => part.type === "image_url");
     }
 
-    // DEBUG: Log vision messages
     if (isVisionMessage || hasImageUrl) {
-      console.log("[DEBUG toOpenAIMessages] Vision message detected:", {
+      logger.debug("Vision message detected", {
         source: metadata.source,
         contentType: typeof m.content,
         contentIsArray: Array.isArray(m.content),
@@ -330,7 +332,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
-    console.log("[DEBUG OpenAIProvider.generate] Provider name:", this.name, "Type:", this.constructor.name);
+    logger.debug("generate() called", { providerName: this.name, type: this.constructor.name });
     const merged = { ...this.defaultOptions, ...options };
     const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
 

@@ -7,6 +7,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parsePluginManifest, parseOAuthConfig, type PluginManifest, type PluginToolMapping, type PluginSettingSpec, type OAuthConfig } from "./plugin-manifest.js";
+import { withManifestCache } from "../skill-selector/skill-cache.js";
 
 /**
  * Runtime context handed to a plugin's async script tools and module tools. Sandboxed sync
@@ -128,30 +129,35 @@ function readJsonFile(path: string): unknown {
  */
 export function listPluginSkillDirs(root = pluginsRoot()): string[] {
   if (!existsSync(root)) return [];
-  const disabled = readDisabledState(root);
-  const dirs: string[] = [];
   let entries: string[];
   try {
     entries = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
   } catch {
     return [];
   }
-  for (const name of entries) {
-    if (disabled.has(name)) continue;
-    const manifestPath = join(root, name, "plugin.json");
-    if (!existsSync(manifestPath)) continue;
-    try {
-      const parsed = parsePluginManifest(readFileSync(manifestPath, "utf8"));
-      if (!parsed.ok || !parsed.manifest || parsed.manifest.name !== name) continue;
-      for (const rel of parsed.manifest.provides.skills ?? []) {
-        const skillDir = join(root, name, rel);
-        if (existsSync(join(skillDir, "SKILL.md"))) dirs.push(skillDir);
+  const watchedFiles = [join(root, ".state.json"), ...entries.map((name) => join(root, name, "plugin.json"))];
+  // Cached: re-parsing every plugin.json on every agent turn is wasted work when nothing
+  // changed. Watches .state.json (enable/disable overrides) + each plugin.json (mtime/size).
+  return withManifestCache(`plugin-skills:${root}`, watchedFiles, () => {
+    const disabled = readDisabledState(root);
+    const dirs: string[] = [];
+    for (const name of entries) {
+      if (disabled.has(name)) continue;
+      const manifestPath = join(root, name, "plugin.json");
+      if (!existsSync(manifestPath)) continue;
+      try {
+        const parsed = parsePluginManifest(readFileSync(manifestPath, "utf8"));
+        if (!parsed.ok || !parsed.manifest || parsed.manifest.name !== name) continue;
+        for (const rel of parsed.manifest.provides.skills ?? []) {
+          const skillDir = join(root, name, rel);
+          if (existsSync(join(skillDir, "SKILL.md"))) dirs.push(skillDir);
+        }
+      } catch {
+        // skip broken manifest
       }
-    } catch {
-      // skip broken manifest
     }
-  }
-  return dirs;
+    return dirs;
+  });
 }
 
 /** Build a ToolExecutor from a plugin script-tool config. Async tools (with `async:true`)

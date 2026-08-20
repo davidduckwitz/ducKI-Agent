@@ -29,6 +29,8 @@ import { createScriptTools } from "./tools/script-tools.js";
 import { createVisionTools } from "./vision/vision-tools.js";
 import { ToolExecutionGraph } from "./executor/tool-graph.js";
 import { skillSelector } from "./skill-selector/selector.js";
+import { withManifestCache, listSkillMdFiles } from "./skill-selector/skill-cache.js";
+import { taskRulesGuidance, platformHintGuidance, type PlatformChannel } from "./prompt/guidance-blocks.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
@@ -1011,7 +1013,30 @@ export class Agent {
     return extras;
   }
 
+  /**
+   * Re-scans skills/plugin-skills on disk, but only re-parses SKILL.md content when a
+   * SKILL.md/plugin.json actually changed (mtime/size) since the last call - see
+   * skill-cache.ts. Editing a skill still takes effect on the very next turn (no
+   * restart needed), it just skips the readFileSync+frontmatter-parse work when nothing
+   * changed, since this runs on effectively every agent turn.
+   */
   private loadSkillManifests(): SkillManifest[] {
+    let pluginSkillDirs: string[] = [];
+    try {
+      pluginSkillDirs = listPluginSkillDirs();
+    } catch {
+      // plugin skill scan is best-effort; never block the built-in skills
+    }
+    const watchedFiles = [
+      ...listSkillMdFiles(this.skillsRoot),
+      ...pluginSkillDirs.map((dir) => join(dir, "SKILL.md")),
+    ];
+    return withManifestCache(`skills:${this.skillsRoot}`, watchedFiles, () =>
+      this.loadSkillManifestsUncached(pluginSkillDirs)
+    );
+  }
+
+  private loadSkillManifestsUncached(pluginSkillDirs: string[]): SkillManifest[] {
     if (!existsSync(this.skillsRoot)) return [];
     const dirs = readdirSync(this.skillsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory());
     const result: SkillManifest[] = [];
@@ -1035,26 +1060,22 @@ export class Agent {
 
     // Merge skills provided by enabled plugins (plugins/<name>/skills/<skill>). This is how a
     // plugin extends the agent's behavior/UX without any frontend injection - its skills join
-    // progressive disclosure like built-in ones. Re-read each call for hot-reload.
-    try {
-      for (const skillDir of listPluginSkillDirs()) {
-        const skillPath = join(skillDir, "SKILL.md");
-        if (!existsSync(skillPath)) continue;
-        const slug = basename(skillDir);
-        if (result.some((s) => s.slug === slug)) continue; // built-in wins on slug clash
-        const fm = this.parseFrontmatter(readFileSync(skillPath, "utf8"));
-        result.push({
-          slug,
-          name: fm.name ?? slug,
-          description: fm.description,
-          path: skillPath,
-          primarySkills: fm.primarySkills ?? [],
-          relatedSkills: fm.relatedSkills ?? [],
-          fallbackSkills: fm.fallbackSkills ?? [],
-        });
-      }
-    } catch {
-      // plugin skill scan is best-effort; never block the built-in skills
+    // progressive disclosure like built-in ones.
+    for (const skillDir of pluginSkillDirs) {
+      const skillPath = join(skillDir, "SKILL.md");
+      if (!existsSync(skillPath)) continue;
+      const slug = basename(skillDir);
+      if (result.some((s) => s.slug === slug)) continue; // built-in wins on slug clash
+      const fm = this.parseFrontmatter(readFileSync(skillPath, "utf8"));
+      result.push({
+        slug,
+        name: fm.name ?? slug,
+        description: fm.description,
+        path: skillPath,
+        primarySkills: fm.primarySkills ?? [],
+        relatedSkills: fm.relatedSkills ?? [],
+        fallbackSkills: fm.fallbackSkills ?? [],
+      });
     }
 
     return result;
@@ -5484,6 +5505,9 @@ export class Agent {
           .join("\n\n")}`
       : "";
 
+    const taskRules = taskRulesGuidance();
+    const platformHint = platformHintGuidance(options.channelHint as PlatformChannel | undefined);
+
     const baseSystemPrompt =
       this.systemPrompt +
       installedSkillsContext +
@@ -5492,7 +5516,8 @@ export class Agent {
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
       memoryContext +
       conversationSummaryContext +
-      "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- Treat only explicit requests to send, post, answer, or reply on Discord as outbound gateway operations, not normal chat replies.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- If the Discord target is unclear, ask for the target channel instead of guessing.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
+      platformHint +
+      taskRules;
 
     const compactBaseSystemPrompt =
       this.systemPrompt +
@@ -5502,14 +5527,16 @@ export class Agent {
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
       memoryContext +
       conversationSummaryContext +
-      "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- Treat only explicit requests to send, post, answer, or reply on Discord as outbound gateway operations, not normal chat replies.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- If the Discord target is unclear, ask for the target channel instead of guessing.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
+      platformHint +
+      taskRules;
 
     const minimalBaseSystemPrompt =
       this.systemPrompt +
       toolContext +
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
       memoryContext +
-      "\n\n## Task Rules\n- Create a project before creating project-specific tasks when the work should be tracked long-term.\n- Mark a task running before execution and completed or failed when finished.\n- Persist results in the database so the UI can show progress.\n- Use tools whenever state must change.\n- Never repeat the exact same tool call more than once without changing input or strategy.\n- If a tool fails, correct parameters based on the error before retrying.\n- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n- Treat only explicit requests to send, post, answer, or reply on Discord as outbound gateway operations, not normal chat replies.\n- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n- If the Discord target is unclear, ask for the target channel instead of guessing.\n- Never guess localhost/default Discord endpoints if gateway configs exist; rely on gateway tool diagnostics and configured transports.";
+      platformHint +
+      taskRules;
 
     const estimatePromptTokens = (text: string): number => {
       return Math.ceil(text.length / 4);
@@ -7008,10 +7035,15 @@ export class Agent {
       this.conversation.id
     );
 
-    // Record skill usage metrics (P2.3)
+    // Record skill usage metrics (P2.3). Also persisted to skill_usage so it survives
+    // restarts and carries a real last-used timestamp - skillSelector's own metricsCache
+    // is in-memory only and feeds the curator job's "unused for N days" check.
     for (const skillSlug of activeSkillSlugs) {
       const success = finalResponse.trim().length > 0 && !finalResponse.includes("fehlgeschlagen");
       skillSelector.recordSkillUsage(skillSlug, success, iterations);
+      this.db.recordSkillUsage(skillSlug, success, iterations).catch(() => {
+        // best-effort; never fail the turn over usage-tracking persistence
+      });
     }
 
     // Prune old skill metrics periodically

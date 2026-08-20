@@ -1390,7 +1390,8 @@ gatewayRouter.post("/inbound", async (req, res, next) => {
         ].join("\n"),
         async (runAgent) => {
           await runAgent.loadConversation(conversationId);
-        }
+        },
+        { channelHint: config.portal }
       );
       responseText = runResult.result.response;
       result = runResult.result;
@@ -1709,7 +1710,8 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
             ].join("\n"),
             async (runAgent) => {
               await runAgent.loadConversation(conversationId);
-            }
+            },
+            { channelHint: config.portal }
           );
           const responseText = result.result.response;
           const reaction = pickAgentReaction(responseText);
@@ -1850,7 +1852,8 @@ gatewayRouter.post("/:portal/:id/webhook", async (req, res, next) => {
         ].join("\n"),
         async (runAgent) => {
           await runAgent.loadConversation(conversationId);
-        }
+        },
+        { channelHint: config.portal }
       );
       const responseText = result.result.response;
       const reaction = pickAgentReaction(responseText);

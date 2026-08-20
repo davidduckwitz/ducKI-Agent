@@ -1,5 +1,5 @@
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
-import { filesystemTool } from "@ducki/tools";
+import { filesystemTool, stripStopMarkers, stripTrailingJsonArgTail } from "@ducki/tools";
 
 const toSegments = (p: string): string[] =>
   p.replace(/\\/g, "/").replace(/\/+$/, "").split("/").filter(Boolean);
@@ -53,65 +53,19 @@ export function normalizeScopedPath(rawPath: string, sandboxRoot: string): strin
 }
 
 /**
- * Tool-call / stop-token markers that a weak local model sometimes emits INSIDE
- * the file-content string when it mangles the closing quote of the write call.
- * We cut the content at the earliest such marker so it never lands in the file.
- */
-const CONTENT_STOP_MARKERS = [
-  "<|tool_call>",
-  "<tool_call|>",
-  "<|tool_call|>",
-  "</tool_call>",
-  "<tool_call>",
-  "<|tool_call_start|>",
-  "<|tool_call_end|>",
-  "[/TOOL]",
-  "[TOOL:",
-  "<|im_end|>",
-  "<|im_start|>",
-  "<end_of_turn>",
-  "<start_of_turn>",
-  "<|endoftext|>",
-  "<|eot_id|>",
-];
-
-/**
  * Strip leaked tool-call syntax from a would-be file content. Two conservative
- * passes so real code is never corrupted:
- *   1. Cut everything from the earliest tool-call / stop marker onward (e.g.
- *      "...</body><tool_call|>" -> "...</body>"). Markers never occur in real code.
- *   2. If (and only if) a marker was cut, also remove a trailing run of pure
- *      tool-call wrapper closers ")]" left dangling by the JSON arg wrapper
- *      (e.g. "...</body>'\">])" -> "...</body>'\">"). We touch only ) and ]
- *      (never } or code chars), so balanced code is left intact.
- * Additionally, a quote-led arg-wrapper tail like "})", "})]" or "}]" at the very
- * end (the '"' + '}' + ')' that closes the JSON string+object+call) is stripped,
- * since real source files effectively never end in that exact punctuation run.
+ * passes so real code is never corrupted, then a sandbox-specific pass that's
+ * only safe for text-protocol content (see stripTrailingJsonArgTail's doc):
+ *   1. stripStopMarkers cuts everything from the earliest tool-call / stop
+ *      marker onward, plus a trailing run of dangling wrapper closers ")]".
+ *   2. stripTrailingJsonArgTail additionally removes a quote-led arg-wrapper
+ *      tail like "})", "})]" or "}]" even when no marker was found - real
+ *      source files effectively never end in that exact punctuation run, but
+ *      a native/heredoc call's verbatim content legitimately could (e.g. JSON
+ *      ending in `"}`), which is why this step isn't in the shared base.
  */
 export function sanitizeCodeContent(raw: unknown): unknown {
-  if (typeof raw !== "string") return raw;
-  let s = raw;
-
-  let cutIdx = -1;
-  for (const m of CONTENT_STOP_MARKERS) {
-    const i = s.indexOf(m);
-    if (i !== -1 && (cutIdx === -1 || i < cutIdx)) cutIdx = i;
-  }
-  const markerCut = cutIdx !== -1;
-  if (markerCut) s = s.slice(0, cutIdx);
-
-  if (markerCut) {
-    // Dangling wrapper brackets that the terminator left behind.
-    s = s.replace(/["'`,\s]*[)\]][)\]"'`,\s]*$/, "");
-  }
-
-  // Quote-led JSON arg-wrapper tail: `"` closing the content string, then the
-  // `}` closing the args object and `)`/`]` closing the call. Real files don't
-  // end in `"})` / `"})]` / `"}]`, so this is safe to strip whether or not a
-  // marker was seen.
-  s = s.replace(/["'`]\s*\}\s*\)?\s*\]?\s*$/, "");
-
-  return s;
+  return stripTrailingJsonArgTail(stripStopMarkers(raw));
 }
 
 /**

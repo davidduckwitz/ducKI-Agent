@@ -5,6 +5,9 @@ import { OpenAIProvider } from "./openai-provider.js";
 import type { ProviderOptions } from "./base.js";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
+import { getRootLogger } from "@ducki/logger";
+
+const logger = getRootLogger().child("OllamaProvider");
 
 function transformMessageForOllama(message: LLMMessage): { message: ChatCompletionMessageParam; images?: string[] } {
   // Only transform user messages with content arrays
@@ -79,7 +82,7 @@ export class OllamaProvider extends OpenAIProvider {
    * We transform messages and add a custom fetch handler to inject images into the API request.
    */
   override async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
-    console.log("[DEBUG OllamaProvider.generate] Called with", messages.length, "messages");
+    logger.debug("generate() called", { messageCount: messages.length });
     const merged = { ...this.getDefaultOptions?.() ?? {}, ...options };
 
     // Transform messages: extract images and keep text separate
@@ -91,9 +94,8 @@ export class OllamaProvider extends OpenAIProvider {
       if (!msg) continue; // Skip undefined messages
       const { message, images } = transformMessageForOllama(msg);
 
-      // DEBUG: Log transformations
       if (images && images.length > 0) {
-        console.log(`[DEBUG OllamaProvider] Message ${i}: Found ${images.length} images`);
+        logger.debug("Found images in message", { index: i, imageCount: images.length });
       }
 
       transformedMessages.push(message);
@@ -102,7 +104,7 @@ export class OllamaProvider extends OpenAIProvider {
       }
     }
 
-    console.log("[DEBUG OllamaProvider.generate] Transformed messages, messageImages map size:", messageImages.size);
+    logger.debug("Transformed messages", { messageImagesMapSize: messageImages.size });
 
     try {
       const client = (this as any).client as OpenAI;

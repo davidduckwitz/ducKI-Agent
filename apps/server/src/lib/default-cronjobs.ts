@@ -23,6 +23,26 @@ export async function setupDefaultCronjobs(db: DatabaseService, logger: Logger):
         description: "Runs every Sunday at 2 AM",
       });
     }
+
+    const hasSkillCuratorJob = existing.some((job) => job.name === "Skill Curator");
+    if (!hasSkillCuratorJob) {
+      await db.createCronJob({
+        name: "Skill Curator",
+        schedule: "0 3 * * 0", // Sonntag 3 Uhr morgens
+        targetType: "skill_curation",
+        targetRef: "auto",
+        enabled: 1,
+        payload: JSON.stringify({
+          staleDays: 30,
+          overlapThreshold: 0.6,
+        }),
+      });
+
+      logger.info("Default skill curator cronjob created", {
+        schedule: "0 3 * * 0",
+        description: "Runs every Sunday at 3 AM",
+      });
+    }
   } catch (error) {
     logger.warn("Failed to setup default cronjobs", {
       error: error instanceof Error ? error.message : String(error),

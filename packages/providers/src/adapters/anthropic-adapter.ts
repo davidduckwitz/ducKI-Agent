@@ -2,6 +2,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { LLMMessage, LLMResponse, GenerateOptions } from "@ducki/shared";
 import type { ProviderOptions } from "../base.js";
 import { BaseAdapter } from "./base-adapter.js";
+import { getRootLogger } from "@ducki/logger";
+
+const logger = getRootLogger().child("AnthropicAdapter");
 
 /**
  * Anthropic Claude adapter with support for:
@@ -17,7 +20,7 @@ export class AnthropicAdapter extends BaseAdapter {
     super(options);
     this.validateConfiguration();
 
-    console.log("[DEBUG AnthropicAdapter] Initializing with:", {
+    logger.debug("Initializing", {
       hasApiKey: !!this.apiKey,
       apiKeyStart: this.apiKey?.substring(0, 20),
       model: this.model,

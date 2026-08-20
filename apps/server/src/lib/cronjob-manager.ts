@@ -1,6 +1,10 @@
 import type { Agent } from "@ducki/agent";
+import { AVAILABLE_SKILLS, jaccardSimilarity } from "@ducki/agent";
 import { computeNextRun, type CronJobSelect, type DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
+import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { runAgentWithRepairRetry } from "./agent-retry.js";
 import { ChatCleanupService } from "./chat-cleanup-service.js";
 import { agentRegistry } from "./agent-registry.js";
@@ -135,6 +139,10 @@ export class CronjobManager {
 
     if (job.targetType === "cleanup") {
       return this.runCleanupJob(job);
+    }
+
+    if (job.targetType === "skill_curation") {
+      return this.runSkillCuratorJob(job);
     }
 
     switch (job.targetType) {
@@ -410,5 +418,66 @@ export class CronjobManager {
     const cleanup = new ChatCleanupService(this.db, this.logger);
     const result = await cleanup.runGlobalCleanup();
     return JSON.stringify(result);
+  }
+
+  /**
+   * LLM-free, periodic skill hygiene pass - a pragmatic stand-in for a full curator: marks
+   * skills nobody has used in a while as "stale" (never deletes) and flags description pairs
+   * that look like they might overlap, for a human to review. Writes a report next to the
+   * other agent-authored reports the user already keeps in shared-workspace/reports/.
+   */
+  private async runSkillCuratorJob(job: CronJobSelect): Promise<string> {
+    interface CuratorPayload {
+      staleDays?: number;
+      overlapThreshold?: number;
+    }
+    const payload = this.parsePayload<CuratorPayload>(job.payload);
+    const staleDays = payload.staleDays ?? 30;
+    const overlapThreshold = payload.overlapThreshold ?? 0.6;
+
+    const usage = await this.db.getSkillUsageAll();
+    const staleCutoff = Date.now() - staleDays * 24 * 60 * 60 * 1000;
+
+    const staleSlugs: string[] = [];
+    for (const row of usage) {
+      if (row.status === "stale") continue;
+      if (new Date(row.lastUsedAt).getTime() < staleCutoff) {
+        await this.db.markSkillStale(row.slug);
+        staleSlugs.push(row.slug);
+      }
+    }
+
+    const overlaps: Array<{ a: string; b: string; score: number }> = [];
+    for (let i = 0; i < AVAILABLE_SKILLS.length; i++) {
+      for (let j = i + 1; j < AVAILABLE_SKILLS.length; j++) {
+        const skillA = AVAILABLE_SKILLS[i]!;
+        const skillB = AVAILABLE_SKILLS[j]!;
+        const score = jaccardSimilarity(skillA.description ?? "", skillB.description ?? "");
+        if (score >= overlapThreshold) {
+          overlaps.push({ a: skillA.slug, b: skillB.slug, score });
+        }
+      }
+    }
+
+    const report = [
+      "# Skill Curator Report",
+      `Generated: ${new Date().toISOString()}`,
+      "",
+      `## Stale skills (unused for ${staleDays}+ days) - marked, not deleted`,
+      staleSlugs.length > 0 ? staleSlugs.map((s) => `- ${s}`).join("\n") : "(none)",
+      "",
+      `## Possibly overlapping skills (description similarity >= ${overlapThreshold})`,
+      overlaps.length > 0
+        ? overlaps.map((o) => `- ${o.a} <-> ${o.b} (${o.score.toFixed(2)})`).join("\n")
+        : "(none)",
+      "",
+      `Tracked skills without any usage data yet: ${Math.max(0, AVAILABLE_SKILLS.length - usage.length)}`,
+    ].join("\n") + "\n";
+
+    const reportDir = join(SHARED_WORKSPACE_ROOT, "reports");
+    if (!existsSync(reportDir)) mkdirSync(reportDir, { recursive: true });
+    writeFileSync(join(reportDir, "skill-curator-report.md"), report, "utf8");
+
+    return `Marked ${staleSlugs.length} stale skill(s), found ${overlaps.length} possibly-overlapping pair(s). Report: shared-workspace/reports/skill-curator-report.md`;
   }
 }

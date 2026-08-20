@@ -32,6 +32,7 @@ import type {
   LlmWikiEntrySelect,
   DynamicToolInsert,
   DynamicToolSelect,
+  SkillUsageSelect,
 } from "./schema.js";
 
 export type { LibSQLDatabase };
@@ -150,6 +151,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS crypto_portfolio_history (id INTEGER PRIMARY KEY AUTOINCREMENT, total_value_usd REAL NOT NULL, btc_balance TEXT, btc_value_usd REAL, eth_balance TEXT, eth_value_usd REAL, xrp_balance TEXT, xrp_value_usd REAL, timestamp INTEGER NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS crypto_price_history (id INTEGER PRIMARY KEY AUTOINCREMENT, currency TEXT NOT NULL, price REAL NOT NULL, price_usd REAL NOT NULL, change_24h REAL, market_cap REAL, volume_24h REAL, timestamp INTEGER NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS session_checklist (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), run_id TEXT, step_index INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance_criteria TEXT, constraint_kind TEXT, status TEXT NOT NULL DEFAULT 'pending', confidence TEXT, verify_state TEXT, attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS skill_usage (slug TEXT PRIMARY KEY, total_uses INTEGER NOT NULL DEFAULT 0, successful_uses INTEGER NOT NULL DEFAULT 0, avg_iterations REAL NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active')`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -904,6 +906,48 @@ export class DatabaseService {
     // Merge with new skills
     const merged = Array.from(new Set([...everUsed, ...skillSlugs])).sort();
     await this.setSetting("EVER_USED_SKILLS", JSON.stringify(merged));
+  }
+
+  /**
+   * Upsert persistent per-skill usage stats (survives restarts, unlike SkillSelector's
+   * in-memory metricsCache). Called once per active skill after a turn completes, mirroring
+   * the existing skillSelector.recordSkillUsage() call site. Re-activates a "stale" skill on
+   * a fresh use, since a skill someone just used again is by definition no longer unused.
+   */
+  async recordSkillUsage(slug: string, success: boolean, iterations: number): Promise<void> {
+    const now = new Date().toISOString();
+    const existing = await this.db.select().from(schema.skillUsage).where(eq(schema.skillUsage.slug, slug)).get();
+    if (!existing) {
+      await this.db.insert(schema.skillUsage).values({
+        slug,
+        totalUses: 1,
+        successfulUses: success ? 1 : 0,
+        avgIterations: iterations,
+        lastUsedAt: now,
+        status: "active",
+      }).run();
+      return;
+    }
+    const totalUses = existing.totalUses + 1;
+    const successfulUses = existing.successfulUses + (success ? 1 : 0);
+    const avgIterations = (existing.avgIterations * existing.totalUses + iterations) / totalUses;
+    await this.db.update(schema.skillUsage).set({
+      totalUses,
+      successfulUses,
+      avgIterations,
+      lastUsedAt: now,
+      status: "active",
+    }).where(eq(schema.skillUsage.slug, slug)).run();
+  }
+
+  /** All persisted skill-usage rows, for the skill curator cron job. */
+  async getSkillUsageAll(): Promise<SkillUsageSelect[]> {
+    return this.db.select().from(schema.skillUsage).all();
+  }
+
+  /** Marks a skill "stale" (unused for longer than the curator's threshold). Never deletes. */
+  async markSkillStale(slug: string): Promise<void> {
+    await this.db.update(schema.skillUsage).set({ status: "stale" }).where(eq(schema.skillUsage.slug, slug)).run();
   }
 
   /**

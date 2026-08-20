@@ -14,3 +14,16 @@ loadEnv({ path: resolve(moduleDir, "../../../.env") });
 if (!process.env["SHARED_WORKSPACE_PATH"]) {
   process.env["SHARED_WORKSPACE_PATH"] = resolve(moduleDir, "../../server/shared-workspace");
 }
+
+/**
+ * Same problem, same fix, for the database: `@ducki/database`'s getDatabase() resolves
+ * DATABASE_PATH (default "./storage/ducki.db") relative to process.cwd(). The repo .env
+ * sets that same relative value, so the CLI - started from apps/cli - was opening its own
+ * apps/cli/storage/ducki.db instead of the server's apps/server/storage/ducki.db. Two
+ * separate SQLite files meant two separate memory stores and two separate skill-usage
+ * histories - the CLI never saw anything the server's agent had learned/used, and vice
+ * versa. Pin it to the server's absolute path unless the user already set one explicitly.
+ */
+if (!process.env["DATABASE_PATH"] || process.env["DATABASE_PATH"] === "./storage/ducki.db") {
+  process.env["DATABASE_PATH"] = resolve(moduleDir, "../../server/storage/ducki.db");
+}

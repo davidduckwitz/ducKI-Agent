@@ -4,6 +4,9 @@ import OpenAI from "openai";
 import { OpenAIProvider } from "./openai-provider.js";
 import type { ProviderOptions } from "./base.js";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
+import { getRootLogger } from "@ducki/logger";
+
+const logger = getRootLogger().child("LMStudioProvider");
 
 export class LMStudioProvider extends OpenAIProvider {
   override readonly name = "lmstudio";
@@ -44,7 +47,7 @@ export class LMStudioProvider extends OpenAIProvider {
     const omitAuth = !normalized ||
       ["lm-studio", "not-needed", "none", "null", "undefined"].includes(normalized);
 
-    console.log("[DEBUG LMStudioProvider] Initializing with storedApiKey:", {
+    logger.debug("Initializing with storedApiKey", {
       hasApiKey: !!apiKey,
       normalizedLength: normalizedApiKey.length,
       omitAuth,
@@ -59,7 +62,7 @@ export class LMStudioProvider extends OpenAIProvider {
         return fetch(input, init);
       }
 
-      console.log("[DEBUG LMStudioProvider.customFetch] Intercepting chat/completions request, omitAuth:", omitAuth, "hasToken:", !!normalizedApiKey);
+      logger.debug("Intercepting chat/completions request", { omitAuth, hasToken: !!normalizedApiKey });
 
       // Handle auth headers
       const headers = new Headers(init?.headers ?? {});
@@ -67,13 +70,13 @@ export class LMStudioProvider extends OpenAIProvider {
       if (omitAuth) {
         // Remove Authorization header if no auth needed
         headers.delete("Authorization");
-        console.log("[DEBUG LMStudioProvider.customFetch] Removed Authorization header (omitAuth=true)");
+        logger.debug("Removed Authorization header (omitAuth=true)");
       } else if (normalizedApiKey) {
         // Add Authorization header with Bearer token if we have a key
         headers.set("Authorization", `Bearer ${normalizedApiKey}`);
-        console.log("[DEBUG LMStudioProvider.customFetch] Set Authorization header with token");
+        logger.debug("Set Authorization header with token");
       } else {
-        console.log("[DEBUG LMStudioProvider.customFetch] WARNING: No token to set!");
+        logger.warn("customFetch: no token to set for Authorization header");
       }
 
       const finalInit = { ...init, headers };
@@ -93,7 +96,7 @@ export class LMStudioProvider extends OpenAIProvider {
       fetch: customFetch,
     });
 
-    console.log("[DEBUG LMStudioProvider] Replaced client with custom fetch handler (omitAuth:", omitAuth, ")");
+    logger.debug("Replaced client with custom fetch handler", { omitAuth });
   }
 
   private getDefaultOptions() {
