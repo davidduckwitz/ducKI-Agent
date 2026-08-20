@@ -1,0 +1,16 @@
+{
+  "explorer.excludeGitIgnore": true,
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/target": true,
+    "**/.turbo": true,
+    "**/.vite": true,
+    "**/coverage": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/target": true
+  }
+}

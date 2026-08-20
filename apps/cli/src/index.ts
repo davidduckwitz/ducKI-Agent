@@ -10,7 +10,7 @@ import { getDatabase, type DatabaseService } from "@ducki/database";
 import { createDefaultProvider } from "@ducki/providers";
 import { Agent, WorkflowEngine, createWorkflowManagementTool } from "@ducki/agent";
 import { allTools } from "@ducki/tools";
-import { box, renderEvent, promptLabel, responseLabel, errorLine, dim, Spinner } from "./ui.js";
+import { box, renderEvent, promptLabel, responseLabel, errorLine, dim, Spinner, StreamRenderer } from "./ui.js";
 import { listInstalledSkills } from "./skills.js";
 
 // Quiet mode: debug/info log lines (from Agent's internal getRootLogger() calls, e.g. tool
@@ -77,20 +77,27 @@ async function chatCommand(agent: Agent, providerName: string) {
     }
 
     // Spinning "/" plus elapsed time fills the gap between submitting the question and the
-    // first response token - onEvent clears it for each status line (tool_call, plan, ...) so
-    // those print cleanly above it, and it resumes on its own on the next tick.
+    // first response token. Once streaming starts, the spinner is done - any *later* event
+    // (a second tool-call round, a trailing "Cost usage updated") must never call
+    // spinner.clear() again, since that blindly \r-overwrites whatever the renderer already
+    // put on the current line, corrupting the response text mid-sentence. Instead it breaks
+    // to a fresh line first (via the renderer's atLineStart) so it can't collide with it.
     const spinner = new Spinner();
     spinner.start();
     let printedLabel = false;
+    const renderer = new StreamRenderer();
     try {
       await agent.run(userInput, {
         stream: true,
         onEvent: (event) => {
           const line = renderEvent(event);
-          if (line) {
+          if (!line) return;
+          if (spinner.isActive) {
             spinner.clear();
-            console.log(line);
+          } else if (!renderer.atLineStart) {
+            process.stdout.write("\n");
           }
+          console.log(line);
         },
         onChunk: (chunk) => {
           if (!printedLabel) {
@@ -98,13 +105,15 @@ async function chatCommand(agent: Agent, providerName: string) {
             process.stdout.write(responseLabel());
             printedLabel = true;
           }
-          process.stdout.write(chunk);
+          renderer.write(chunk);
         },
       });
       spinner.stop();
+      renderer.flush();
       console.log("\n");
     } catch (error) {
       spinner.stop();
+      renderer.flush();
       console.error(errorLine(error instanceof Error ? error.message : String(error)));
     }
   }
@@ -125,14 +134,18 @@ async function runCommand(agent: Agent, task: string) {
   const spinner = new Spinner();
   spinner.start();
   let printedLabel = false;
+  const renderer = new StreamRenderer();
   const result = await agent.run(task, {
     stream: true,
     onEvent: (event) => {
       const line = renderEvent(event);
-      if (line) {
+      if (!line) return;
+      if (spinner.isActive) {
         spinner.clear();
-        console.log(line);
+      } else if (!renderer.atLineStart) {
+        process.stdout.write("\n");
       }
+      console.log(line);
     },
     onChunk: (chunk) => {
       if (!printedLabel) {
@@ -140,10 +153,11 @@ async function runCommand(agent: Agent, task: string) {
         process.stdout.write(responseLabel());
         printedLabel = true;
       }
-      process.stdout.write(chunk);
+      renderer.write(chunk);
     },
   });
   spinner.stop();
+  renderer.flush();
 
   console.log(dim("\n\n---"));
   console.log(dim(`Iterationen: ${result.iterations}`));

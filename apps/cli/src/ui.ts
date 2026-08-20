@@ -94,6 +94,10 @@ export class Spinner {
   private frameIndex = 0;
   private startTime = 0;
 
+  get isActive(): boolean {
+    return this.timer !== undefined;
+  }
+
   start(): void {
     if (!useColor) return; // non-TTY output (piped/redirected): an animated line is just noise
     this.startTime = Date.now();
@@ -118,5 +122,80 @@ export class Spinner {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.clear();
+  }
+}
+
+/**
+ * Local models occasionally emit literal two-character `\n`/`\t`/`\r` escape sequences in
+ * prose responses (as if writing a JSON string) instead of real control characters - the
+ * same class of leak `packages/tools/src/filesystem.ts` already unescapes for file content.
+ * Chat responses never went through that step, so they printed as literal backslash-n text.
+ */
+function unescapeLiteralSequences(text: string): string {
+  return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r");
+}
+
+/** Lightweight, best-effort markdown-to-ANSI for one complete line: bold, inline code, blockquotes, headings. */
+function styleMarkdownLine(line: string): string {
+  if (!useColor) return line;
+
+  const blockquote = /^>\s?(.*)$/.exec(line);
+  if (blockquote) return `${DIM}│ ${blockquote[1]}${RESET}`;
+
+  const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+  if (heading) return `${BOLD}${CYAN}${heading[2]}${RESET}`;
+
+  return line
+    .replace(/\*\*(.+?)\*\*/g, `${BOLD}$1${RESET}`)
+    .replace(/`([^`]+)`/g, `${CYAN}$1${RESET}`);
+}
+
+/**
+ * Buffers streamed chunks into complete lines before printing, so unescaping and markdown
+ * styling (both of which need a whole line/marker-pair to work correctly) can't be corrupted
+ * by an arbitrary mid-sequence chunk boundary. A trailing partial line is held back and only
+ * flushed once a newline completes it or flush() is called at the end of the stream - in
+ * practice this still reads as live streaming, since most lines complete within a token or
+ * two of chunks, just like `glow`/`mdcat`-style markdown-aware terminal renderers.
+ */
+export class StreamRenderer {
+  private buffer = "";
+  // Tracks whether the LAST thing actually written to stdout ended in a newline - not
+  // whether `buffer` is empty, since buffered-but-unflushed text hasn't reached the
+  // terminal yet and so can't have moved the cursor. Defaults to false: a renderer is
+  // always constructed right after printing a response label ("DucKI: ") with no newline.
+  private cursorAtLineStart = false;
+
+  /** True if the terminal cursor is at the start of a fresh line (safe to print onto directly). */
+  get atLineStart(): boolean {
+    return this.cursorAtLineStart;
+  }
+
+  write(rawChunk: string): void {
+    this.buffer += rawChunk;
+
+    // Hold back a lone trailing backslash - it may be the start of an escape sequence split
+    // across this chunk boundary and the next one.
+    let pending = this.buffer;
+    const heldBackslash = pending.endsWith("\\") && !pending.endsWith("\\\\");
+    if (heldBackslash) pending = pending.slice(0, -1);
+
+    const unescaped = unescapeLiteralSequences(pending);
+    const lines = unescaped.split("\n");
+    const trailing = lines.pop() ?? "";
+
+    for (const line of lines) {
+      process.stdout.write(styleMarkdownLine(line) + "\n");
+      this.cursorAtLineStart = true;
+    }
+    this.buffer = trailing + (heldBackslash ? "\\" : "");
+  }
+
+  /** Emits whatever partial line is still buffered - call once the stream ends. */
+  flush(): void {
+    if (this.buffer.length === 0) return;
+    process.stdout.write(styleMarkdownLine(unescapeLiteralSequences(this.buffer)));
+    this.cursorAtLineStart = false;
+    this.buffer = "";
   }
 }
