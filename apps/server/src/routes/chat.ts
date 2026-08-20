@@ -2,7 +2,10 @@ import { Router, type IRouter } from "express";
 import type { Agent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createApiResponse, createApiError } from "@ducki/shared";
+import { getRootLogger } from "@ducki/logger";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
+
+const logger = getRootLogger().child("ChatRoute");
 import { ChatCleanupService } from "../lib/chat-cleanup-service.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { writeFileSync, unlinkSync } from "fs";
@@ -93,7 +96,7 @@ chatRouter.post("/transcribe", async (req, res, next) => {
 
     const elapsed = Date.now() - startTime;
 
-    console.log(`[Transcribe] ✅ SUCCESS in ${elapsed}ms: "${text.substring(0, 100)}"`);
+    logger.debug("Transcribe success", { elapsedMs: elapsed, textPreview: text.substring(0, 100) });
 
     res.json(
       createApiResponse({
@@ -102,7 +105,7 @@ chatRouter.post("/transcribe", async (req, res, next) => {
     );
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[Transcribe] ❌ Error: ${errorMsg}`);
+    logger.error("Transcribe failed", { error: errorMsg });
     res.status(500).json(
       createApiError(`Transkription fehlgeschlagen: ${errorMsg}`)
     );

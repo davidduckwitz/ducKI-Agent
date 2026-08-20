@@ -126,6 +126,17 @@ export { AgentBenchmark, type BenchmarkResult } from "./performance/benchmarks.j
 export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
 export { createScopedFilesystemTool, sanitizeCodeContent } from "./coding/scoped-filesystem-tool.js";
+export { CODING_ALLOWED_SHELL_COMMANDS, condenseVerifyOutput } from "./coding/coding-agent.js";
+export {
+  ensureCheckpointRepo,
+  createCheckpoint,
+  listCheckpoints,
+  diffCheckpoint,
+  restoreCheckpoint,
+} from "./coding/checkpoints.js";
+export type { Checkpoint, CheckpointDiff } from "./coding/checkpoints.js";
+export { TodoList, createTodoTool } from "./coding/todo-tool.js";
+export type { TodoItem, TodoStatus } from "./coding/todo-tool.js";
 // Context compression & memory optimization
 export { TokenCounter } from "./context/token-counter.js";
 export type { ModelTokenConfig } from "./context/token-counter.js";

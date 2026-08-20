@@ -32,6 +32,7 @@ import { skillSelector } from "./skill-selector/selector.js";
 import { withManifestCache, listSkillMdFiles } from "./skill-selector/skill-cache.js";
 import { taskRulesGuidance, platformHintGuidance, type PlatformChannel } from "./prompt/guidance-blocks.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
+import { TokenCounter } from "./context/token-counter.js";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
 import { createDynamicToolResolver } from "./dynamic-tools/dynamic-tool-resolver.js";
@@ -59,6 +60,60 @@ import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillMani
  * agent-like classes (e.g. CodingAgent) can compose it into their own system
  * prompt without risking drift from the actual parser behavior.
  */
+/**
+ * Read-only tool calls whose result is fully superseded by a later identical call.
+ *
+ * A coding run reads a file, edits it, and reads it again to check the edit - so the same file
+ * lands in the context two or three times, and every later iteration pays for all of those
+ * copies again. Only the newest one can possibly be accurate after an edit; the older ones are
+ * pure cost AND a correctness hazard, because the model can quote a stale version of a file it
+ * has already changed.
+ *
+ * Restricted to tools that only observe. A `write`, a shell command or an HTTP POST is an EVENT
+ * - two identical calls are two things that happened, and collapsing them would rewrite history.
+ */
+const DEDUPABLE_READ_ONLY_CALLS: Record<string, ReadonlySet<string> | true> = {
+  filesystem: new Set(["read", "list", "glob", "grep", "stat", "exists", "outline"]),
+  git: new Set(["status", "diff", "log", "branch"]),
+  diagnostics: true,
+};
+
+/**
+ * True for a call that only observes. Shares DEDUPABLE_READ_ONLY_CALLS with the context
+ * de-duplicator on purpose: "safe to collapse an older copy of" and "safe to run while the
+ * tool is considered unhealthy" are the same property - the call changes nothing.
+ */
+export function isReadOnlyToolCall(toolName: string, input: Record<string, unknown>): boolean {
+  const allowed = DEDUPABLE_READ_ONLY_CALLS[toolName];
+  if (!allowed) return false;
+  if (allowed === true) return true;
+  return allowed.has(String(input["action"] ?? "").toLowerCase());
+}
+
+export function buildToolResultDedupeKey(
+  toolName: string,
+  input: Record<string, unknown>
+): string | undefined {
+  const allowed = DEDUPABLE_READ_ONLY_CALLS[toolName];
+  if (!allowed) return undefined;
+
+  if (allowed !== true) {
+    const action = String(input["action"] ?? "").toLowerCase();
+    if (!allowed.has(action)) return undefined;
+  }
+
+  // Key on the WHOLE input, key-sorted: a read of lines 1-100 and a read of lines 500-600 are
+  // different information and must not collapse into one another. Only a byte-identical call
+  // is treated as a repeat.
+  const normalized = Object.keys(input)
+    .filter((key) => input[key] !== undefined)
+    .sort()
+    .map((key) => `${key}=${JSON.stringify(input[key])}`)
+    .join("&");
+
+  return `${toolName}|${normalized}`;
+}
+
 export const TOOL_CALL_FORMAT_BLOCK = `## Tool Call Format - CRITICAL RULES
 Emit tool calls EXACTLY in this format (JSON must be valid and complete):
 [TOOL:toolName({"key": "value", "number": 123})]
@@ -137,6 +192,17 @@ You DO have live access through tools. NEVER tell the user you cannot get news/w
 
 ### Data-SOURCE tools vs data-CONSUMER tools (CRITICAL)
 A tool whose inputs are the very data the user is asking for is a CONSUMER (it processes/summarizes data you already have), NOT a source. Example: a "weather_summary" tool that requires temperature/precipitation/station_id as input cannot fetch the weather - it summarizes weather you already fetched. When a request needs live data, first FETCH it (http/browser/shell), then optionally pass it to a consumer tool. Never tell the user you cannot get the data because a consumer tool needs inputs - get the data yourself with the http/browser/shell tools.
+
+## Reading files - line numbers are DISPLAY ONLY
+The filesystem tool's "read" action prefixes every line as "<n>: content". Those numbers are NOT
+part of the file:
+- When passing text back to "edit" as oldString, copy only what comes AFTER "<n>: ".
+- When writing content with "write"/"append", never include them - doing so corrupts the file.
+- Use them to target the next read (offset) and to map an error like "app.ts(42,5)" onto a line.
+- For a large file, "outline" lists its functions/classes with line numbers for a fraction of the
+  tokens of a full read; read only the region you actually need afterwards.
+- Prefer "grep"/"glob" to locate something over reading files speculatively, and emit independent
+  reads in ONE response so they run as a single batch.
 
 ## Responding to Tool Results - CRITICAL
 When you receive tool execution results (messages marked as "tool" role):
@@ -4287,8 +4353,12 @@ export class Agent {
           continue;
         }
 
-        // Phase 2: Check circuit breaker status
-        if (!this.circuitBreaker.canExecute(call.toolName)) {
+        // Phase 2: Check circuit breaker status. Read-only calls are exempt: every recovery
+        // instruction our tools give ("read the file first", "use action:'list'", "grep for it")
+        // asks the model to OBSERVE something, so blocking observation is exactly what turns a
+        // recoverable mistake into an unrecoverable run. Nothing is mutated by letting them
+        // through, and they cannot be what broke the tool in the first place.
+        if (!isReadOnlyToolCall(call.toolName, call.input) && !this.circuitBreaker.canExecute(call.toolName)) {
           const circuitStatus = this.circuitBreaker.getStatus(call.toolName);
           const skipReason = `Tool circuit breaker is ${circuitStatus.status} after ${circuitStatus.failureCount} failures`;
 
@@ -4459,9 +4529,14 @@ export class Agent {
           );
         }
 
-        // Phase 2: Record result in circuit breaker
+        // Phase 2: Record result in circuit breaker. The error text travels with it - without
+        // it the breaker cannot tell an outage from a mistyped argument and trips on both.
         if (toolCall) {
-          this.circuitBreaker.recordResult(toolCall.toolName, executed.result.success);
+          this.circuitBreaker.recordResult(
+            toolCall.toolName,
+            executed.result.success,
+            executed.result.error
+          );
         }
 
         // A successful browser screenshot carries the actual image as base64 in
@@ -4538,6 +4613,12 @@ export class Agent {
           content: resultContent,
           toolCallId: executed.id,
         };
+        // Stamp read-only results with an identity so the context builder can drop superseded
+        // copies of the same read instead of paying for the file twice (see buildToolResultDedupeKey).
+        const dedupeKey = toolCall ? buildToolResultDedupeKey(toolCall.toolName, toolCall.input) : undefined;
+        if (dedupeKey) {
+          toolResultMessage.metadata = { toolName: toolCall!.toolName, dedupeKey };
+        }
         await this.conversation.addMessage(toolResultMessage);
         this.history.add(toolResultMessage, toolCall?.toolName ?? "unknown");
 
@@ -5606,8 +5687,45 @@ export class Agent {
     const maxSystemPromptChars = withOverride(contextCaps?.maxSystemPromptChars, basMaxSystemPromptChars, 2000);
     const maxDynamicMemoryChars = withOverride(contextCaps?.maxDynamicMemoryChars, basMaxDynamicMemoryChars, 0);
     const maxContextMessages = withOverride(contextCaps?.maxContextMessages, basMaxContextMessages, 1);
-    const maxContextChars = withOverride(contextCaps?.maxContextChars, basMaxContextChars, 2000);
+    const configuredMaxContextChars = withOverride(contextCaps?.maxContextChars, basMaxContextChars, 2000);
     const maxContextMessageChars = withOverride(contextCaps?.maxContextMessageChars, basMaxContextMessageChars, 200);
+
+    // Model-aware context ceiling. A single hard-coded character budget is wrong in both
+    // directions: 120k chars (~30k tokens) overflows a small local model - which costs a full
+    // wasted round-trip plus the compact/minimal retry chain below - while capping a 200k or
+    // 1M-token model at a fraction of its window, so the agent forgets its own goal with most
+    // of the context sitting unused.
+    //
+    // Applied ONLY when the model's window is actually known. TokenCounter's own fallback for
+    // an unrecognised name is the 4096-token `local` entry, and deriving a budget from that
+    // would collapse the window to the 4000-char floor for every model missing from its table
+    // - which is most local models and most OpenRouter slugs. An unknown model therefore keeps
+    // the configured character budget, exactly as before this became model-aware.
+    const CHARS_PER_TOKEN = 3.5;
+    const modelDerivedMaxContextChars = (() => {
+      try {
+        if (!TokenCounter.findModelConfig(this.provider.model)) return undefined;
+        const budget = TokenCounter.getContextBudget(this.provider.model, {
+          // generateFromMessages requests up to 8192 output tokens.
+          reserveOutputTokens: 8192,
+          systemPromptTokens: estimatePromptTokens(baseSystemPrompt),
+        });
+        // A model whose whole window is smaller than the output reservation yields a negative
+        // budget; that is a table/configuration mismatch, not an instruction to send nothing.
+        if (budget.availableTokens <= 0) return undefined;
+        return Math.max(4000, Math.floor(budget.availableTokens * CHARS_PER_TOKEN));
+      } catch {
+        return undefined;
+      }
+    })();
+
+    const hasExplicitContextCharCap =
+      contextCaps?.maxContextChars !== undefined || process.env["AGENT_MAX_CONTEXT_CHARS"] !== undefined;
+    const maxContextChars = modelDerivedMaxContextChars === undefined
+      ? configuredMaxContextChars
+      : hasExplicitContextCharCap
+        ? Math.min(configuredMaxContextChars, modelDerivedMaxContextChars)
+        : modelDerivedMaxContextChars;
 
     if (contextCaps) {
       emit("guardrail", "Run-specific context caps applied", {
@@ -5740,6 +5858,11 @@ export class Agent {
           assistantMessageCount: allMessages.filter((m) => m.role === "assistant").length,
         });
 
+        // Superseded read-only results, collapsed to a one-line note. The walk below runs
+        // NEWEST-FIRST, so the first time a key is seen is the most recent (and only valid)
+        // result for it; every earlier copy is stale.
+        const seenDedupeKeys = new Set<string>();
+
         for (let index = allMessages.length - 1; index >= 0; index--) {
           const message = allMessages[index];
           if (!message) continue;
@@ -5747,6 +5870,24 @@ export class Agent {
           // Tool results are CRITICAL - never skip them even if messageLimit reached
           // They contain the results that the LLM needs to process
           const isToolResult = message.role === "tool";
+
+          if (isToolResult) {
+            const metadata = typeof message.metadata === "object" && message.metadata !== null
+              ? (message.metadata as Record<string, unknown>)
+              : undefined;
+            const dedupeKey = typeof metadata?.["dedupeKey"] === "string" ? (metadata["dedupeKey"] as string) : undefined;
+            if (dedupeKey) {
+              if (seenDedupeKeys.has(dedupeKey)) {
+                const note =
+                  "[Superseded: this result was replaced by a newer, identical read later in the conversation. " +
+                  "Use that one - it reflects the current state of the file.]";
+                selected.push({ ...message, content: note });
+                usedChars += note.length;
+                continue;
+              }
+              seenDedupeKeys.add(dedupeKey);
+            }
+          }
 
           // For non-tool messages, respect the limit
           if (!isToolResult && selected.length >= Math.max(1, messageLimit)) break;
@@ -5823,9 +5964,21 @@ export class Agent {
         const clippedDynamicMemory = includeDynamicMemory
           ? this.truncateText(dynamicMemoryContext, Math.max(0, contextOptions?.dynamicMemoryLimit ?? maxDynamicMemoryChars))
           : "";
+
+        // PROMPT CACHE PREFIX. Everything in this message is computed ONCE per run (directive,
+        // tool-call protocol, tool definitions, skills, plan, memory, platform hints), so it is
+        // byte-identical on every iteration and can be served from the provider's prompt cache.
+        //
+        // The volatile per-iteration text (dynamic memory, checklist focus, run journal) used to
+        // be concatenated onto the END of this string. That single detail defeated caching
+        // entirely: a cache prefix must match exactly, so appending text that changes each
+        // iteration invalidated the whole system prompt every time and re-billed all of it at
+        // full price. It now travels as a trailing message instead - which is also where a
+        // reminder belongs, since recency is what makes a model actually follow it.
         const systemMessage: LLMMessage = {
           role: "system",
-          content: `${clippedPrompt}${clippedDynamicMemory}${checklistHint}${runJournalHint}`,
+          content: clippedPrompt,
+          cacheControl: "ephemeral",
         };
 
         const contextMessages = buildConversationWindow(
@@ -5833,7 +5986,12 @@ export class Agent {
           contextOptions?.charLimit ?? maxContextChars
         );
 
-        return [systemMessage, ...contextMessages];
+        const volatileSuffix = `${clippedDynamicMemory}${checklistHint}${runJournalHint}`.trim();
+        const suffixMessages: LLMMessage[] = volatileSuffix
+          ? [{ role: "user", content: volatileSuffix }]
+          : [];
+
+        return [systemMessage, ...contextMessages, ...suffixMessages];
       };
 
       let currentResponseTokens: { input?: number; output?: number; total?: number; estimated?: boolean } = {};
@@ -6261,15 +6419,29 @@ export class Agent {
         consecutiveToolFailures = anyToolSucceeded ? 0 : consecutiveToolFailures + 1;
 
         if (consecutiveToolFailures >= adjustedControls.maxConsecutiveToolFailures) {
+          // Name the actual errors. "10x in Folge ohne Erfolg" on its own says nothing about
+          // WHY, and the failing calls are almost always the same single mistake repeated -
+          // which is precisely the thing the user needs to see to fix it.
+          const failureReasons = [...new Set(
+            Array.from(toolResultsMap.values())
+              .filter((r) => !r.success && r.error)
+              .map((r) => String(r.error).replace(/\s+/g, " ").slice(0, 200))
+          )].slice(0, 3);
+
           this.logger.warn("[RUNLOOP] Stopping after too many consecutive tool failures", {
             consecutiveFailures: consecutiveToolFailures,
             maxAllowed: adjustedControls.maxConsecutiveToolFailures,
+            failureReasons,
           });
           emit("guardrail", `Abgebrochen: ${consecutiveToolFailures}x in Folge ohne Erfolg`, {
             consecutiveFailures: consecutiveToolFailures,
             maxAllowed: adjustedControls.maxConsecutiveToolFailures,
+            failureReasons,
           });
-          const stopNote = `\n\n_Abgebrochen: ${consecutiveToolFailures} Versuche in Folge sind fehlgeschlagen, ohne dass sich etwas geändert hat. Bitte prüfe die letzten Fehlermeldungen oben oder gib eine gezieltere Anweisung._`;
+          const errorDetail = failureReasons.length > 0
+            ? `\n\nLetzte Fehler:\n${failureReasons.map((reason) => `- ${reason}`).join("\n")}`
+            : "";
+          const stopNote = `\n\n_Abgebrochen: ${consecutiveToolFailures} Versuche in Folge sind fehlgeschlagen, ohne dass sich etwas geändert hat._${errorDetail}`;
           finalResponse = `${cleanedResponse}${stopNote}`;
           toolsJustExecuted = false;
           break;

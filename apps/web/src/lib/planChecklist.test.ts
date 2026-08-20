@@ -1,0 +1,161 @@
+import { describe, expect, it } from "vitest";
+import { findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "./planChecklist";
+import type { RenderedChatMessage } from "../components/chat/chatTypes";
+
+let nextId = 0;
+const event = (eventType: string, eventData?: Record<string, unknown>): RenderedChatMessage => ({
+  id: `e${nextId++}`,
+  role: "event",
+  content: "",
+  timestamp: new Date().toISOString(),
+  eventType: eventType as RenderedChatMessage["eventType"],
+  ...(eventData ? { eventData } : {}),
+});
+
+/** Shape the agent actually emits (agent.ts: phase created/progress/done). */
+const checklistEvent = (
+  statuses: string[],
+  phase: "created" | "progress" | "done" = "progress"
+): RenderedChatMessage =>
+  event("checklist", {
+    phase,
+    runId: "run-1",
+    total: statuses.length,
+    doneCount: statuses.filter((s) => s === "done").length,
+    items: statuses.map((status, index) => ({ index, title: `Schritt ${index + 1}`, status })),
+  });
+
+const steps = [
+  { title: "Schritt 1" },
+  { title: "Schritt 2" },
+  { title: "Schritt 3" },
+  { title: "Schritt 4" },
+];
+
+describe("findLatestChecklist", () => {
+  it("returns null when the run produced no checklist", () => {
+    // A plain coding chat has no plan execution and therefore no per-step truth. The panel
+    // must show nothing rather than invent progress - which is what the old tool-call counter
+    // did, and why finished runs showed the wrong steps ticked.
+    const messages = [event("plan", { goal: "g" }), event("tool_call"), event("tool_result")];
+    expect(findLatestChecklist(messages)).toBeNull();
+  });
+
+  it("takes the NEWEST event, not an accumulation of them", () => {
+    const messages = [
+      checklistEvent(["pending", "pending", "pending", "pending"], "created"),
+      checklistEvent(["done", "pending", "pending", "pending"]),
+      checklistEvent(["done", "done", "pending", "pending"]),
+    ];
+    const snapshot = findLatestChecklist(messages)!;
+    expect(snapshot.doneCount).toBe(2);
+    expect(snapshot.statusByIndex.get(1)).toBe("done");
+    expect(snapshot.statusByIndex.get(2)).toBe("pending");
+  });
+
+  it("ignores unrelated events that come after it", () => {
+    const messages = [
+      checklistEvent(["done", "done", "pending", "pending"]),
+      event("tool_call"),
+      event("reasoning"),
+    ];
+    expect(findLatestChecklist(messages)?.doneCount).toBe(2);
+  });
+
+  it("survives a malformed payload by looking further back", () => {
+    const messages = [
+      checklistEvent(["done", "pending", "pending", "pending"]),
+      event("checklist", { phase: "progress", items: "not-an-array" }),
+    ];
+    expect(findLatestChecklist(messages)?.doneCount).toBe(1);
+  });
+
+  it("recomputes doneCount when the event omits it", () => {
+    const messages = [
+      event("checklist", {
+        items: [
+          { index: 0, title: "Schritt 1", status: "done" },
+          { index: 1, title: "Schritt 2", status: "done" },
+          { index: 2, title: "Schritt 3", status: "pending" },
+        ],
+      }),
+    ];
+    expect(findLatestChecklist(messages)?.doneCount).toBe(2);
+  });
+});
+
+describe("resolveStepStatus", () => {
+  it("matches by step index", () => {
+    const snapshot = findLatestChecklist([checklistEvent(["done", "failed", "pending", "pending"])]);
+    expect(resolveStepStatus(snapshot, steps[0]!, 0)).toBe("done");
+    expect(resolveStepStatus(snapshot, steps[1]!, 1)).toBe("failed");
+    expect(resolveStepStatus(snapshot, steps[2]!, 2)).toBe("pending");
+  });
+
+  it("falls back to the title when the index is missing", () => {
+    const messages = [
+      event("checklist", {
+        items: [{ title: "Schritt 3", status: "done" }],
+        total: 4,
+        doneCount: 1,
+      }),
+    ];
+    const snapshot = findLatestChecklist(messages);
+    expect(resolveStepStatus(snapshot, { title: "  schritt 3  " }, 99)).toBe("done");
+  });
+
+  it("returns undefined without a checklist", () => {
+    expect(resolveStepStatus(null, steps[0]!, 0)).toBeUndefined();
+  });
+});
+
+describe("firstOpenStepIndex", () => {
+  it("points at the first unfinished step", () => {
+    const snapshot = findLatestChecklist([checklistEvent(["done", "done", "pending", "pending"])]);
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(2);
+  });
+
+  it("skips past a failed or skipped step instead of parking on it", () => {
+    // A counter-based marker sat on the wrong row as soon as anything went other than
+    // perfectly - "2 completed" pointed at step 3 even when step 2 had failed.
+    const snapshot = findLatestChecklist([checklistEvent(["done", "failed", "skipped", "pending"])]);
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(3);
+  });
+
+  it("is the first step while nothing has been done yet", () => {
+    const snapshot = findLatestChecklist([checklistEvent(["pending", "pending", "pending", "pending"], "created")]);
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(0);
+  });
+
+  it("is -1 once every step reached a terminal state", () => {
+    const snapshot = findLatestChecklist([checklistEvent(["done", "done", "done", "skipped"], "done")]);
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(-1);
+  });
+
+  it("treats an unverified step as still open", () => {
+    // "unverified" means the agent could not prove it - not that it is finished.
+    const snapshot = findLatestChecklist([checklistEvent(["done", "unverified", "pending", "pending"], "done")]);
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(1);
+  });
+});
+
+describe("the regression this replaced", () => {
+  it("marks steps done DURING a run, not only after it", () => {
+    // The old rendering required !isLoading for a step to count as done, so mid-run the list
+    // showed a single spinner and nothing ticked - the reported "stays on the first step".
+    const snapshot = findLatestChecklist([checklistEvent(["done", "done", "pending", "pending"])]);
+    const doneDuringRun = steps.filter((step, index) => resolveStepStatus(snapshot, step, index) === "done");
+    expect(doneDuringRun).toHaveLength(2);
+  });
+
+  it("does not equate tool activity with completed steps", () => {
+    // Twelve tool events, one completed step. The old panel would have ticked off all four.
+    const messages = [
+      checklistEvent(["done", "pending", "pending", "pending"]),
+      ...Array.from({ length: 12 }, () => event("tool_call")),
+    ];
+    const snapshot = findLatestChecklist(messages)!;
+    expect(snapshot.doneCount).toBe(1);
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(1);
+  });
+});

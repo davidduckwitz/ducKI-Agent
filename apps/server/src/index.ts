@@ -25,7 +25,7 @@ import { getRootLogger } from "@ducki/logger";
 import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
 import type { ToolExecutor } from "@ducki/shared";
 import { createProvider, type ProviderName } from "@ducki/providers";
-import { allTools, browserFrameEvents } from "@ducki/tools";
+import { allTools, browserFrameEvents, stopAllBackgroundProcesses } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
 import { ConnectorRegistry } from "./lib/connector-registry.js";
 import { agentRegistry } from "./lib/agent-registry.js";
@@ -276,7 +276,7 @@ async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabas
 	if (providerName === "lmstudio") {
 		const rawApiKey = readSettingValue(settingMap, "LM_STUDIO_API_KEY", "LM_STUDIO_API_KEY");
 		const normalizedKey = normalizeApiKey(rawApiKey);
-		console.log("[DEBUG loadProviderFromSettings] LM Studio config:", {
+		logger.debug("loadProviderFromSettings: LM Studio config", {
 			hasRawApiKey: !!rawApiKey,
 			rawKeyLength: rawApiKey?.length ?? 0,
 			hasNormalizedKey: !!normalizedKey,
@@ -314,7 +314,7 @@ async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabas
 	if (providerName === "claude") {
 		const rawKey = readSettingValue(settingMap, "CLAUDE_API_KEY", "CLAUDE_API_KEY");
 		const normalizedKey = normalizeApiKey(rawKey);
-		console.log("[DEBUG loadProviderFromSettings] Claude config:", {
+		logger.debug("loadProviderFromSettings: Claude config", {
 			hasRawApiKey: !!rawKey,
 			rawKeyLength: rawKey?.length ?? 0,
 			hasNormalizedKey: !!normalizedKey,
@@ -398,7 +398,7 @@ function buildAgentFactory(
 	return async () => {
 		// Load database settings for agent configuration
 		const maxIterationsSetting = await db.getSetting("AGENT_MAX_ITERATIONS");
-		console.log("[buildAgentFactory] Loading agent settings", {
+		logger.debug("buildAgentFactory: loading agent settings", {
 			maxIterationsSetting,
 			parsed: maxIterationsSetting ? parseInt(maxIterationsSetting) : undefined,
 		});
@@ -586,6 +586,27 @@ async function bootstrap(): Promise<void> {
 		workflowExecutor.registerTool(tool);
 	}
 
+	// Optional cheap model for the coding agent's read-only exploration sub-agent. Built once:
+	// a run can call explore several times, and re-creating a provider per call would re-read
+	// credentials and re-open a client for no benefit. Unset means "use the main model", which
+	// is exactly the previous behaviour.
+	const explorerProvider = (() => {
+		const model = (process.env["DUCKI_EXPLORE_MODEL"] ?? "").trim();
+		if (!model) return undefined;
+		const name = (process.env["DUCKI_EXPLORE_PROVIDER"] ?? process.env["LLM_PROVIDER"] ?? "openrouter").trim() as ProviderName;
+		try {
+			const created = createProvider({ name, model });
+			logger.info("Explorer provider configured", { provider: name, model });
+			return created;
+		} catch (error) {
+			logger.warn("Could not create explorer provider, falling back to the main model", {
+				model,
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return undefined;
+		}
+	})();
+
 	const createCodingAgentFactory = (options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: any }): CodingAgent => {
 		// If sandboxRoot is provided, combine it with CODING_ROOT
 		// Frontend sends just the project slug, server combines it with CODING_ROOT
@@ -596,6 +617,7 @@ async function bootstrap(): Promise<void> {
 		return createCodingAgent(providerRef.current, db, options?.eventEmitter, {
 			sandboxRoot: resolvedSandboxRoot,
 			maxIterations: options?.maxIterations,
+			...(explorerProvider ? { explorerProvider } : {}),
 		});
 	};
 
@@ -780,6 +802,10 @@ async function bootstrap(): Promise<void> {
 		updateManager.stop();
 		wikiService.stop();
 		toolStagingManager.stop();
+		// Background processes the shell tool started (a dev server the agent launched) are
+		// children of this process but do not die with it - without this they keep running and
+		// keep holding their port after a restart.
+		stopAllBackgroundProcesses();
 		void mcpRegistry.shutdown();
 		io.close();
 		httpServer.close(() => {

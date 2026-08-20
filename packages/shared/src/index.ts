@@ -31,6 +31,17 @@ export interface LLMMessage {
   toolCallId?: string;
   toolCalls?: ToolCall[];
   metadata?: string | Record<string, unknown>;
+  /**
+   * Marks this message as the end of a cacheable prompt prefix. Providers that support
+   * explicit prompt caching (Anthropic, and Anthropic models via OpenRouter) attach a
+   * cache breakpoint here; everything from the start of the request up to and including
+   * this message is then billed at the cached rate on subsequent calls.
+   *
+   * Only set it on content that is IDENTICAL across the calls of a run - a static system
+   * prompt and the tool definitions. A breakpoint on text that changes every iteration
+   * invalidates the cache on every iteration and costs more than it saves.
+   */
+  cacheControl?: "ephemeral";
 }
 
 export interface ToolCall {
@@ -55,6 +66,10 @@ export interface LLMResponse {
      *  path; an approximation is more useful than zeros, but must not be presented as a
      *  measured value. */
     estimated?: boolean;
+    /** Input tokens served from the prompt cache (billed at a fraction of the normal rate). */
+    cachedInputTokens?: number;
+    /** Input tokens written INTO the cache by this call (billed at a premium, once). */
+    cacheWriteTokens?: number;
   };
   model?: string;
   finishReason?: string;

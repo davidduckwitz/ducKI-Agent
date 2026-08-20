@@ -425,6 +425,39 @@ export const api = {
         method: "POST",
         body: JSON.stringify(data),
       }),
+    deletionPreview: (project: string, conversationId?: number) =>
+      request<{
+        project: string;
+        fileCount: number;
+        totalBytes: number;
+        conversations: Array<{ id: number; name: string; messageCount: number }>;
+      }>(
+        `/coding/projects/${encodeURIComponent(project)}/deletion-preview${
+          conversationId ? `?conversationId=${conversationId}` : ""
+        }`
+      ),
+    deleteProject: (project: string, conversationId?: number) =>
+      request<{ deleted: boolean; project: string; deletedConversationIds: number[] }>(
+        `/coding/projects/${encodeURIComponent(project)}${conversationId ? `?conversationId=${conversationId}` : ""}`,
+        { method: "DELETE" }
+      ),
+    listCheckpoints: (project: string) =>
+      request<{ project: string; checkpoints: Array<{ sha: string; label: string; createdAt: string }> }>(
+        `/coding/projects/${encodeURIComponent(project)}/checkpoints`
+      ),
+    checkpointDiff: (project: string, sha: string) =>
+      request<{
+        project: string;
+        sha: string;
+        files: Array<{ path: string; added: number; removed: number }>;
+        patch: string;
+        truncated: boolean;
+      }>(`/coding/projects/${encodeURIComponent(project)}/checkpoints/${encodeURIComponent(sha)}/diff`),
+    restoreCheckpoint: (project: string, sha: string) =>
+      request<{ project: string; restored: boolean; safetyCheckpoint?: { sha: string; label: string } }>(
+        `/coding/projects/${encodeURIComponent(project)}/checkpoints/${encodeURIComponent(sha)}/restore`,
+        { method: "POST" }
+      ),
   },
 
   skills: {

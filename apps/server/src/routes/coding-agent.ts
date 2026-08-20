@@ -38,12 +38,12 @@ async function resolveCodingIterations(
 ): Promise<number> {
   const flat = parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS"), 0);
   if (typeof stepCount === "number" && Number.isFinite(stepCount)) {
-    if (stepCount <= 3) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_SIMPLE"), flat || 20);
-    if (stepCount <= 7) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_MEDIUM"), flat || 50);
-    return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_COMPLEX"), flat || 100);
+    if (stepCount <= 3) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_SIMPLE"), flat || 15);
+    if (stepCount <= 7) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_MEDIUM"), flat || 30);
+    return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_COMPLEX"), flat || 60);
   }
   if (flat > 0) return flat;
-  return clientOverride && clientOverride > 0 ? clientOverride : 50;
+  return clientOverride && clientOverride > 0 ? clientOverride : 40;
 }
 
 codingAgentRouter.use(async (req, res, next) => {
@@ -81,6 +81,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       maxAttempts?: number;
       maxIterations?: number;
       stepCount?: number;
+      conversationId?: number;
     };
     const goal = String(body.goal ?? "").trim();
     if (!goal) {
@@ -94,6 +95,23 @@ codingAgentRouter.post("/run", async (req, res, next) => {
     const maxIterationsPerAttempt = await resolveCodingIterations(db, body.stepCount, body.maxIterations);
     const maxAttempts = parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ATTEMPTS"), body.maxAttempts ?? 3);
     const timeoutMs = parseIntSetting(await db.getSetting("CODING_AGENT_TIMEOUT_MS"), 0);
+
+    // A run started from an existing chat continues IN that chat instead of opening a second
+    // session for it. Validated here rather than trusted: a bogus id would otherwise surface
+    // as an opaque "conversation not found" from deep inside the agent.
+    const requestedConversationId =
+      typeof body.conversationId === "number" && Number.isFinite(body.conversationId) && body.conversationId > 0
+        ? body.conversationId
+        : undefined;
+    let reuseConversationId: number | undefined;
+    if (requestedConversationId !== undefined) {
+      const existing = await db.getConversation(requestedConversationId).catch(() => undefined);
+      if (!existing) {
+        res.status(404).json(createApiError(`Conversation ${requestedConversationId} not found`));
+        return;
+      }
+      reuseConversationId = requestedConversationId;
+    }
 
     // Create an event emitter that broadcasts phase events over WebSocket
     const phaseEventEmitter: AgentEventEmitter = {
@@ -111,6 +129,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
             message: event.message,
             data: event.data,
             timestamp: event.timestamp,
+            ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),
           });
         }
       },
@@ -132,6 +151,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       const result = await codingAgent.run(goal, {
         verifyCommand: body.verifyCommand,
         maxAttempts,
+        ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),
         ...(timeoutMs > 0 ? { timeoutMs } : {}),
         onConversationStarted: (conversationId) => {
           runConversationId = conversationId;

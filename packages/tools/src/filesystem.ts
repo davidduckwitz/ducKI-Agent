@@ -11,8 +11,9 @@ import {
   renameSync,
   unlinkSync,
 } from "node:fs";
-import { resolve, dirname, join, extname } from "node:path";
+import { resolve, dirname, join, extname, relative } from "node:path";
 import { globFiles, grepFiles } from "./filesystem-search.js";
+import { outlineFile, renderOutline } from "./outline.js";
 import { randomBytes } from "node:crypto";
 import { SHARED_WORKSPACE_ROOT } from "./workspace-root.js";
 import { stripStopMarkers } from "./content-sanitizer.js";
@@ -22,10 +23,47 @@ const SHARED_BASE_PATH = SHARED_WORKSPACE_ROOT;
 export const FILESYSTEM_ACTIONS = [
   "read", "write", "append", "edit", "delete",
   "list", "mkdir", "exists", "stat", "move", "copy",
-  "glob", "grep",
+  "glob", "grep", "outline",
 ] as const;
 
 export type FilesystemAction = typeof FILESYSTEM_ACTIONS[number];
+
+/** Lines returned by `read` when the caller gives no explicit limit. */
+const DEFAULT_READ_LINES = 2000;
+/** Longest single line `read` returns verbatim before clipping it. */
+const MAX_READ_LINE_CHARS = 2000;
+
+/**
+ * Undoes the `<n>: ` prefix that `read` adds, for the case where a model copies a snippet
+ * straight out of a read result into an `edit`'s oldString.
+ *
+ * Deliberately all-or-nothing and only applied as a FALLBACK after the literal match failed
+ * (see the edit action): a config file can legitimately contain a line like `8080: backend`,
+ * and stripping that unconditionally would edit the wrong text. Requires every non-empty line
+ * to carry the prefix and the numbers to ascend by one, which prose and real config never do.
+ */
+export function stripLineNumberPrefixes(text: string): string {
+  const lines = text.split("\n");
+  const numbers: number[] = [];
+  const stripped: string[] = [];
+
+  for (const line of lines) {
+    if (line.trim() === "") {
+      stripped.push(line);
+      continue;
+    }
+    const match = /^\s*(\d+): (.*)$/.exec(line);
+    if (!match) return text;
+    numbers.push(Number(match[1]));
+    stripped.push(match[2]!);
+  }
+
+  if (numbers.length === 0) return text;
+  for (let i = 1; i < numbers.length; i++) {
+    if (numbers[i] !== numbers[i - 1]! + 1) return text;
+  }
+  return stripped.join("\n");
+}
 
 interface PathOptions {
   basePath?: string;
@@ -59,6 +97,21 @@ function pathKind(candidate: string): "file" | "directory" | "other" | "missing"
   } catch {
     return "missing";
   }
+}
+
+/**
+ * Renders a search hit as a path the model can hand straight back to `read`.
+ *
+ * Relative to the SCOPE ROOT (the sandbox, or the shared workspace), never to the directory
+ * that happened to be searched. Those two differ the moment a search is narrowed to a
+ * subfolder: a `grep` under `scripts/` would report `foo.js`, and the follow-up
+ * `read("foo.js")` resolves against the workspace root and finds nothing. Reporting against
+ * the same base that every path is resolved against makes the result round-trip by
+ * construction, and still costs a fraction of an absolute path repeated across hundreds of hits.
+ */
+function toDisplayPath(absolutePath: string, scopeRoot: string): string {
+  const rel = relative(scopeRoot, absolutePath).replace(/\\/g, "/");
+  return rel && !rel.startsWith("..") ? rel : absolutePath;
 }
 
 function listDirectory(dirPath: string): Array<{ name: string; type: string; path: string }> {
@@ -132,6 +185,11 @@ function stripRedundantBaseSegment(relative: string, base: string): string {
   return segments.join("/");
 }
 
+/** The base every relative path is resolved against - the same choice resolvePath makes. */
+function displayScopeRoot(basePath: string | undefined): string {
+  return basePath ? resolve(basePath) : SHARED_BASE_PATH;
+}
+
 function resolvePath(inputPath: string, options: PathOptions): string {
   const trimmed = String(inputPath ?? "").trim();
   const scopedBase = options.basePath ? resolve(options.basePath) : undefined;
@@ -182,7 +240,7 @@ export const filesystemTool: ToolExecutor = {
       properties: {
         action: {
           type: "string",
-          enum: ["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy", "glob", "grep"],
+          enum: ["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy", "glob", "grep", "outline"],
           description:
             "Operation to perform: read (content of a SINGLE FILE - for a directory use list instead), " +
             "write (create/overwrite file), append (add to file), " +
@@ -200,13 +258,15 @@ export const filesystemTool: ToolExecutor = {
         },
         content: { type: "string", description: "Content to write (for write/append). Use actual line breaks (newlines) in multiline content - each line should be on a separate line, not escaped as \\n." },
         offset: { type: "number", description: "For read: first line to return (0-indexed, default 0)" },
-        limit: { type: "number", description: "For read: maximum number of lines to return" },
+        limit: { type: "number", description: "For read: maximum number of lines to return (default 2000)" },
         maxBytes: { type: "number", description: "For read: byte cap before truncation (default 262144 = 256KB)" },
+        raw: { type: "boolean", default: false, description: "For read: return the file verbatim, without line-number prefixes." },
         pattern: { type: "string", description: "For glob: file path pattern (e.g. **/*.ts). For grep: regex to search." },
         filePattern: { type: "string", description: "For grep: optional glob pattern to restrict which files to search" },
         caseSensitive: { type: "boolean", default: false, description: "For grep: case-sensitive match (default false)" },
         maxResults: { type: "number", description: "For glob/grep: maximum results to return (default: 1000 for glob, 500 for grep)" },
-        oldString: { type: "string", description: "For edit: exact existing text to replace. Must match exactly once unless replaceAll is set." },
+        includeIgnored: { type: "boolean", default: false, description: "For glob/grep: also search node_modules, .git, dist, build output and .gitignore'd paths. Off by default - leave it off unless you specifically need a dependency's source." },
+        oldString: { type: "string", description: "For edit: exact existing text to replace, WITHOUT the '<n>: ' line-number prefixes that read adds. Must match exactly once unless replaceAll is set." },
         newString: { type: "string", description: "For edit: text to replace oldString with." },
         replaceAll: { type: "boolean", default: false, description: "For edit: replace every occurrence of oldString instead of requiring a unique match." },
         encoding: { type: "string", default: "utf8" },
@@ -283,39 +343,56 @@ export const filesystemTool: ToolExecutor = {
               },
             };
           }
-          const offset = (input["offset"] as number | undefined) ?? 0;
-          const limit = input["limit"] as number | undefined;
+          const offset = Math.max(0, (input["offset"] as number | undefined) ?? 0);
+          const limit = (input["limit"] as number | undefined) ?? DEFAULT_READ_LINES;
           const maxBytes = (input["maxBytes"] as number | undefined) ?? 262144;
+          // Programmatic callers that need the file byte-for-byte (no line numbers, no
+          // range footer) opt out here; the agent-facing default is the numbered form.
+          const rawMode = input["raw"] === true;
 
           const raw = readFileSync(filePath, "utf8");
+          const lines = raw.split("\n");
+          const totalLines = lines.length;
+          const sliced = lines.slice(offset, offset + limit);
+          const shownTo = offset + sliced.length;
+          const remaining = totalLines - shownTo;
 
-          if (offset > 0 || limit !== undefined) {
-            const lines = raw.split("\n");
-            const totalLines = lines.length;
-            const sliced = lines.slice(offset, limit !== undefined ? offset + limit : undefined);
+          if (rawMode) {
             const text = sliced.join("\n");
-            const remaining = totalLines - (offset + sliced.length);
             if (text.length > maxBytes) {
-              return {
-                success: true,
-                data: text.slice(0, maxBytes) + `\n[... truncated at ${maxBytes} bytes]`,
-              };
+              return { success: true, data: `${text.slice(0, maxBytes)}\n[... truncated at ${maxBytes} bytes]` };
             }
-            const suffix = remaining > 0 ? `\n[lines ${offset + 1}–${offset + sliced.length} of ${totalLines}]` : "";
-            return { success: true, data: text + suffix };
+            return { success: true, data: text };
           }
 
-          if (raw.length > maxBytes) {
-            const lineCount = raw.split("\n").length;
+          // Line numbers let the model address a region precisely on the next read and map
+          // compiler/linter output (which is always "file(line,col)") straight onto content.
+          // A single minified line would otherwise blow the whole budget, so cap line width.
+          const numbered = sliced
+            .map((line, index) => {
+              const body = line.length > MAX_READ_LINE_CHARS
+                ? `${line.slice(0, MAX_READ_LINE_CHARS)} …[line truncated, ${line.length} chars total]`
+                : line;
+              return `${offset + index + 1}: ${body}`;
+            })
+            .join("\n");
+
+          const footer = remaining > 0
+            ? `\n[lines ${offset + 1}-${shownTo} of ${totalLines}. ${remaining} more - re-read with offset:${shownTo} for the next block, or use action:"grep" to jump straight to what you need.]`
+            : offset > 0
+              ? `\n[lines ${offset + 1}-${shownTo} of ${totalLines}]`
+              : "";
+
+          if (numbered.length > maxBytes) {
             return {
               success: true,
               data:
-                raw.slice(0, maxBytes) +
-                `\n[... truncated: file is ${raw.length} bytes (${lineCount} lines), showing first ${maxBytes}. Use offset/limit to read specific sections.]`,
+                numbered.slice(0, maxBytes) +
+                `\n[... truncated: file is ${raw.length} bytes (${totalLines} lines), showing first ${maxBytes}. Use offset/limit to read specific sections.]`,
             };
           }
 
-          return { success: true, data: raw };
+          return { success: true, data: numbered + footer };
         }
 
         case "write": {
@@ -411,9 +488,31 @@ export const filesystemTool: ToolExecutor = {
             };
           }
           const original = readFileSync(filePath, "utf8");
-          const occurrences = original.split(oldString).length - 1;
+          let occurrences = original.split(oldString).length - 1;
+
+          // Fallback, never a blind rewrite: `read` returns numbered lines, so a model that
+          // copies a snippet verbatim brings the "12: " prefixes with it. Only try the
+          // stripped form once the literal text has already failed to match.
           if (occurrences === 0) {
-            return { success: false, data: null, error: `oldString not found in file: ${filePath}` };
+            const destripped = stripLineNumberPrefixes(oldString);
+            if (destripped !== oldString) {
+              const strippedOccurrences = original.split(destripped).length - 1;
+              if (strippedOccurrences > 0) {
+                oldString = destripped;
+                occurrences = strippedOccurrences;
+              }
+            }
+          }
+
+          if (occurrences === 0) {
+            return {
+              success: false,
+              data: null,
+              error:
+                `oldString not found in file: ${filePath}. The text must match the file EXACTLY, ` +
+                `including indentation, and WITHOUT the "<n>: " line-number prefixes that the read action adds. ` +
+                `Re-read the relevant lines and copy the content after the colon.`,
+            };
           }
           if (occurrences > 1 && !replaceAll) {
             return {
@@ -554,8 +653,18 @@ export const filesystemTool: ToolExecutor = {
           const pattern = input["pattern"] as string | undefined;
           if (!pattern) return { success: false, data: null, error: "pattern required for glob" };
           const maxResults = (input["maxResults"] as number | undefined) ?? 1000;
-          const matches = globFiles(filePath, pattern, { maxResults });
-          return { success: true, data: { matches, count: matches.length } };
+          const includeIgnored = (input["includeIgnored"] as boolean | undefined) ?? false;
+          const matches = globFiles(filePath, pattern, { maxResults, includeIgnored });
+          const globScope = displayScopeRoot(input["basePath"] as string | undefined);
+          return {
+            success: true,
+            data: {
+              searchedIn: toDisplayPath(filePath, globScope) || ".",
+              matches: matches.map((m) => toDisplayPath(m, globScope)),
+              count: matches.length,
+              truncated: matches.length >= maxResults,
+            },
+          };
         }
 
         case "grep": {
@@ -564,8 +673,53 @@ export const filesystemTool: ToolExecutor = {
           const filePattern = input["filePattern"] as string | undefined;
           const maxResults = (input["maxResults"] as number | undefined) ?? 500;
           const caseSensitive = (input["caseSensitive"] as boolean | undefined) ?? false;
-          const matches = grepFiles(filePath, pattern, { filePattern, maxResults, caseSensitive });
-          return { success: true, data: { matches, count: matches.length } };
+          const includeIgnored = (input["includeIgnored"] as boolean | undefined) ?? false;
+          let matches;
+          try {
+            matches = grepFiles(filePath, pattern, { filePattern, maxResults, caseSensitive, includeIgnored });
+          } catch (grepError) {
+            return {
+              success: false,
+              data: null,
+              error: grepError instanceof Error ? grepError.message : String(grepError),
+            };
+          }
+          const grepScope = displayScopeRoot(input["basePath"] as string | undefined);
+          return {
+            success: true,
+            data: {
+              searchedIn: toDisplayPath(filePath, grepScope) || ".",
+              matches: matches.map((m) => ({ path: toDisplayPath(m.path, grepScope), line: m.line, text: m.text })),
+              count: matches.length,
+              truncated: matches.length >= maxResults,
+            },
+          };
+        }
+
+        case "outline": {
+          const outlineKind = pathKind(filePath);
+          if (outlineKind === "missing") {
+            return { success: false, data: null, error: `File not found: ${filePath}` };
+          }
+          if (outlineKind === "directory") {
+            return {
+              success: false,
+              data: null,
+              error: `Cannot outline: '${filePath}' is a directory. Use action:"list" for directories.`,
+            };
+          }
+          const outline = outlineFile(filePath);
+          return {
+            success: true,
+            data: {
+              path: filePath,
+              totalLines: outline.totalLines,
+              analyzer: outline.source,
+              outline: renderOutline(filePath, outline),
+              symbolCount: outline.symbols.length,
+              note: `This is the file's SHAPE, not its content. Read the lines you actually need with action:"read" and offset/limit.`,
+            },
+          };
         }
 
         default:

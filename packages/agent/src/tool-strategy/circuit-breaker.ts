@@ -12,6 +12,37 @@ export interface CircuitBreakerState {
 }
 
 /**
+ * Errors that mean the TOOL ITSELF is currently unusable, as opposed to this particular call
+ * having been made wrongly.
+ *
+ * The distinction is what the whole breaker hinges on. A circuit breaker exists to stop
+ * hammering a dependency that is down; it is the wrong instrument for "the model passed a bad
+ * argument". Our tools are mostly local and multi-action - `filesystem` alone covers read,
+ * write, edit, grep and more - so counting every failed call against one shared name meant five
+ * bad edits could block `read` for the next minute, which is exactly the action every one of
+ * those error messages tells the model to perform in order to recover. The run then had no way
+ * out and died on the consecutive-failure guardrail.
+ *
+ * So the default is NOT to trip: only these genuinely systemic signatures count. A model that
+ * keeps calling a tool wrongly is caught by the run loop's own consecutive-failure guardrail,
+ * which is tool-agnostic and therefore cannot deadlock a recovery path.
+ */
+const SYSTEMIC_FAILURE_PATTERNS: RegExp[] = [
+  /\btimed?\s?out\b|\bETIMEDOUT\b/i,
+  /\bECONNREFUSED\b|\bECONNRESET\b|\bENOTFOUND\b|\bEHOSTUNREACH\b|socket hang up/i,
+  /\bEACCES\b|\bEPERM\b|permission denied/i,
+  /\bENOSPC\b|\bEMFILE\b|\bENFILE\b|no space left/i,
+  /\bEAI_AGAIN\b|network error|fetch failed/i,
+  /is not a function|is not defined|Cannot read propert/i, // the tool implementation itself crashed
+  /not found\. Available tools/i,                          // the tool does not exist at all
+];
+
+export function isSystemicToolFailure(error: string | undefined): boolean {
+  if (!error) return false;
+  return SYSTEMIC_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+}
+
+/**
  * Tool Circuit Breaker - prevents repeated execution of failing tools
  * States:
  * - closed: healthy, tool can be executed
@@ -80,8 +111,18 @@ export class ToolCircuitBreaker {
   /**
    * Record tool execution result
    */
-  recordResult(toolName: string, success: boolean): void {
+  recordResult(toolName: string, success: boolean, error?: string): void {
     const breaker = this.getOrCreate(toolName);
+
+    // A usage error is not an outage. Recording it as a success would be wrong too (it must
+    // not reset a real failure streak), so it simply does not move the breaker at all.
+    if (!success && !isSystemicToolFailure(error)) {
+      this.logger.debug("Tool failure not counted against the circuit breaker (usage error)", {
+        toolName,
+        error: error?.slice(0, 200),
+      });
+      return;
+    }
 
     if (success) {
       if (breaker.status === "half-open") {

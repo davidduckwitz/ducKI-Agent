@@ -69,9 +69,32 @@ describe("filesystem-search (PR3)", () => {
       expect(results.some((p) => p.endsWith("helper.ts"))).toBe(true);
     });
 
-    it("finds .js files recursively", () => {
+    it("finds .js files recursively but skips build output", () => {
+      // dist/ is in DEFAULT_IGNORED_DIRS, so dist/bundle.js is intentionally not returned.
       const results = globFiles(dir, "**/*.js");
+      expect(results).toHaveLength(1);
+      expect(results[0]).toContain("format.js");
+    });
+
+    it("walks ignored directories when includeIgnored is set", () => {
+      const results = globFiles(dir, "**/*.js", { includeIgnored: true });
       expect(results).toHaveLength(2);
+      expect(results.some((p) => p.includes("bundle.js"))).toBe(true);
+    });
+
+    it("skips node_modules by default", () => {
+      mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true });
+      writeFileSync(join(dir, "node_modules", "pkg", "index.ts"), "export const dep = 1;");
+      const results = globFiles(dir, "**/*.ts");
+      expect(results.every((p) => !p.includes("node_modules"))).toBe(true);
+    });
+
+    it("honours .gitignore entries", () => {
+      writeFileSync(join(dir, ".gitignore"), "generated/\n");
+      mkdirSync(join(dir, "generated"));
+      writeFileSync(join(dir, "generated", "api.ts"), "export const gen = 1;");
+      const results = globFiles(dir, "**/*.ts");
+      expect(results.every((p) => !p.includes("generated"))).toBe(true);
     });
 
     it("finds only root-level files with *.md", () => {

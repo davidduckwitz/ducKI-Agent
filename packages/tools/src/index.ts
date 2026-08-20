@@ -6,8 +6,11 @@ import { browserTool } from "./browser.js";
 import { shellTool } from "./shell.js";
 import { skillsTool } from "./skills.js";
 import { weatherTool } from "./weather.js";
+import { diagnosticsTool } from "./diagnostics.js";
 
-export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool };
+export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool, diagnosticsTool };
+export { runDiagnostics, invalidateDiagnosticsCache } from "./diagnostics.js";
+export type { Diagnostic } from "./diagnostics.js";
 export { browserFrameEvents } from "./browser.js";
 export {
   createDataSourceTool,
@@ -21,8 +24,9 @@ export type { DataSourceToolConfig, DataSourceRequestStep, DataSourceParamSpec }
 export { FILESYSTEM_ACTIONS } from "./filesystem.js";
 export type { FilesystemAction } from "./filesystem.js";
 export { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "./workspace-root.js";
+export { stopAllBackgroundProcesses } from "./shell.js";
 export { stripStopMarkers, stripTrailingJsonArgTail, CONTENT_STOP_MARKERS } from "./content-sanitizer.js";
-export { globFiles, grepFiles } from "./filesystem-search.js";
+export { globFiles, grepFiles, DEFAULT_IGNORED_DIRS } from "./filesystem-search.js";
 export type { GrepMatch, GlobOptions, GrepOptions } from "./filesystem-search.js";
 export { runScriptInSandbox, sanitizeRuntimeValue } from "./sandbox.js";
 export type { SandboxRuntime, SandboxVarNames, SandboxExecutionResult } from "./sandbox.js";
@@ -38,7 +42,7 @@ export {
 } from "./script-mappings.js";
 export type { ScriptMapping } from "./script-mappings.js";
 
-export const allTools: ToolExecutor[] = [filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool];
+export const allTools: ToolExecutor[] = [filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool, diagnosticsTool];
 
 export function getToolByName(name: string): ToolExecutor | undefined {
   return allTools.find((t) => t.name === name);

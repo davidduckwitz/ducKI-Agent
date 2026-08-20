@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, Circle, ListChecks, Loader2, Play, Sparkles 
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
+import { findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "../../lib/planChecklist";
 import { useSettings, readFlag } from "../../lib/useSettings";
 import type { Plan } from "../chat/PlanExecutionPanel";
 import type { RenderedChatMessage } from "../chat/chatTypes";
@@ -12,9 +13,13 @@ import { PlanRefinementDialog } from "./PlanRefinementDialog";
 const COMPLEXITY_LABEL: Record<number, string> = { 1: "niedrig", 3: "mittel", 5: "hoch" };
 
 /**
- * Plan view for the coding agent panel. Deliberately simpler than the chat page's
- * PlanExecutionPanel: step state here is derived from the tool events that arrived
- * after the plan, not from the chat page's heuristics - those stay where they are.
+ * Plan view for the coding agent panel.
+ *
+ * Per-step state comes from the agent's own checklist events (see lib/planChecklist), which is
+ * the only place that actually knows whether a step completed. It used to be inferred from how
+ * many tool calls had happened since the plan was announced - a number unrelated to step
+ * completion, and additionally suppressed while the run was in progress, so the list never
+ * ticked anything off until the run ended and then ticked off the wrong things.
  */
 export function CodingPlanPanel({
   messages,
@@ -62,19 +67,14 @@ export function CodingPlanPanel({
   // over from the chat page (which lives in a different conversation).
   const plan = derivedPlan ?? overridePlan ?? null;
 
-  // Rough live progress: count tool activity after the plan announcement. Enough to see
-  // that something is happening without pretending to know which step is running.
-  const eventsSincePlan = useMemo(
-    () =>
-      planIndex < 0
-        ? 0
-        : messages.slice(planIndex + 1).filter((m) => m.eventType === "tool_call" || m.eventType === "tool_result")
-            .length,
-    [messages, planIndex]
-  );
+  // Real per-step state from the agent's own checklist (see lib/planChecklist for why this
+  // replaced a tool-call counter, and why the logic lives in a testable module).
+  const checklist = useMemo(() => findLatestChecklist(messages), [messages]);
 
   const steps = plan?.steps ?? [];
-  const doneCount = Math.min(eventsSincePlan, steps.length);
+  const statusOf = (step: { title: string }, index: number) => resolveStepStatus(checklist, step, index);
+  const runningIndex = useMemo(() => firstOpenStepIndex(checklist, steps), [checklist, steps]);
+  const doneCount = checklist?.doneCount ?? 0;
 
   const execute = async () => {
     if (!plan) return;
@@ -130,7 +130,12 @@ export function CodingPlanPanel({
         <p className="text-sm font-semibold leading-snug">{plan.title || plan.goal}</p>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
           <span className="chip">
-            {t("codingPage.planSteps")}: {steps.length}
+            {/* Only claim progress when the agent actually reported it. Without a checklist
+                (a plain coding chat rather than a plan execution) there is no per-step truth,
+                and inventing one is what made this panel misleading in the first place. */}
+            {checklist
+              ? `${t("codingPage.planSteps")}: ${doneCount}/${steps.length}`
+              : `${t("codingPage.planSteps")}: ${steps.length}`}
           </span>
           {typeof plan.complexity === "number" && (
             <span className="chip">{COMPLEXITY_LABEL[plan.complexity] ?? plan.complexity}</span>
@@ -146,26 +151,58 @@ export function CodingPlanPanel({
 
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
         {steps.map((step, index) => {
-          const done = index < doneCount && !isLoading;
-          const running = index === doneCount && isLoading;
+          const status = statusOf(step, index);
+          const done = status === "done";
+          const failed = status === "failed";
+          const unverified = status === "unverified";
+          const skipped = status === "skipped";
+          const running = isLoading && !done && !failed && !skipped && index === runningIndex;
+
           return (
             <div
               key={`${step.title}-${index}`}
               className={`rounded-lg border p-2 transition-colors ${
-                running ? "border-primary/50 bg-primary/5" : "border-border bg-background/40"
+                running
+                  ? "border-primary/50 bg-primary/5"
+                  : failed
+                    ? "border-destructive/40 bg-destructive/5"
+                    : "border-border bg-background/40"
               }`}
             >
               <div className="flex items-start gap-2">
                 {done ? (
                   <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                ) : failed ? (
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+                ) : unverified ? (
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
                 ) : running ? (
                   <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
                 ) : (
-                  <Circle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                  <Circle
+                    className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
+                      skipped ? "text-muted-foreground/30" : "text-muted-foreground/50"
+                    }`}
+                  />
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium">
                     {index + 1}. {step.title}
+                    {(failed || unverified || skipped) && (
+                      <span
+                        className={`ml-1.5 text-[10px] font-normal ${
+                          failed ? "text-destructive" : unverified ? "text-amber-500" : "text-muted-foreground"
+                        }`}
+                      >
+                        (
+                        {failed
+                          ? t("codingPage.stepFailed")
+                          : unverified
+                            ? t("codingPage.stepUnverified")
+                            : t("codingPage.stepSkipped")}
+                        )
+                      </span>
+                    )}
                   </p>
                   {step.description && (
                     <p className="mt-0.5 whitespace-pre-wrap text-[11px] leading-snug text-muted-foreground">

@@ -40,6 +40,19 @@ describe("filesystem tool (PR3)", () => {
         safeMode: true,
       });
       expect(result.success).toBe(true);
+      expect(result.data).toBe("1: ok");
+    });
+
+    it("returns the file verbatim with raw:true", async () => {
+      writeFileSync(join(dir, "allowed.txt"), "ok");
+      const result = await exec({
+        action: "read",
+        path: "allowed.txt",
+        basePath: dir,
+        safeMode: true,
+        raw: true,
+      });
+      expect(result.success).toBe(true);
       expect(result.data).toBe("ok");
     });
   });
@@ -205,8 +218,9 @@ describe("filesystem tool (PR3)", () => {
         safeMode: false,
       });
       expect(result.success).toBe(true);
-      const lines = (result.data as string).split("\n").filter((l) => l.startsWith("line"));
+      const lines = (result.data as string).split("\n").filter((l) => /^\d+: line /.test(l));
       expect(lines).toHaveLength(5);
+      expect(lines[0]).toBe("1: line 1");
     });
 
     it("truncates at maxBytes", async () => {
@@ -229,7 +243,9 @@ describe("filesystem tool (PR3)", () => {
         safeMode: false,
       });
       expect(result.success).toBe(true);
-      expect(result.data as string).toContain("[lines 6–8 of 20]");
+      // 12 lines remain after this window, so the footer also tells the model how to continue.
+      expect(result.data as string).toContain("[lines 6-8 of 20.");
+      expect(result.data as string).toContain("offset:8");
     });
   });
 

@@ -6,7 +6,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type CodingAgentTab = "chat" | "plan" | "activity";
+export type CodingAgentTab = "chat" | "plan" | "changes" | "activity";
 
 /** Beyond these the panel would squeeze the editor into uselessness / vanish itself. */
 export const CODING_AGENT_MIN_WIDTH = 280;

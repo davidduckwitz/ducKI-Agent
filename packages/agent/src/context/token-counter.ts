@@ -181,22 +181,40 @@ export class TokenCounter {
   /**
    * Get model config by model name (fuzzy matching)
    */
-  static getModelConfig(modelName: string): ModelTokenConfig {
+  /**
+   * Looks up a model WITHOUT falling back, so a caller can tell "this model has a known
+   * context window" apart from "we have no idea".
+   *
+   * That distinction matters: getModelConfig's fallback is the tiny 4096-token `local` entry,
+   * which is a reasonable default for *estimating* a cost but catastrophic for *deriving* a
+   * context budget - every model missing from the table (most local models, most OpenRouter
+   * slugs) would silently be treated as a 4k model.
+   */
+  static findModelConfig(modelName: string): ModelTokenConfig | undefined {
     // Try exact match first
     if (this.MODEL_CONFIGS.has(modelName)) {
       return this.MODEL_CONFIGS.get(modelName)!;
     }
 
-    // Try fuzzy match
+    // Try fuzzy match. Only a name CONTAINING a known key counts (e.g. "gpt-4o-mini" ->
+    // "gpt-4o", "anthropic/claude-sonnet-5" -> "claude-sonnet-5"). The reverse direction -
+    // a known key containing the given name - used to match too, which let a short or
+    // partial name land on an arbitrary unrelated entry.
     const normalized = modelName.toLowerCase();
+    if (!normalized) return undefined;
+    let best: { key: string; config: ModelTokenConfig } | undefined;
     for (const [key, config] of this.MODEL_CONFIGS.entries()) {
-      if (normalized.includes(key.toLowerCase()) || key.toLowerCase().includes(normalized)) {
-        return config;
-      }
+      if (key === "local") continue;
+      const lowerKey = key.toLowerCase();
+      if (!normalized.includes(lowerKey)) continue;
+      // Longest key wins, so "claude-3-5-sonnet" is preferred over a shorter prefix of it.
+      if (!best || lowerKey.length > best.key.length) best = { key: lowerKey, config };
     }
+    return best?.config;
+  }
 
-    // Default to local model
-    return this.MODEL_CONFIGS.get("local")!;
+  static getModelConfig(modelName: string): ModelTokenConfig {
+    return this.findModelConfig(modelName) ?? this.MODEL_CONFIGS.get("local")!;
   }
 
   /**

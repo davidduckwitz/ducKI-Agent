@@ -24,6 +24,7 @@ import { useUiStore, CODING_AGENT_MIN_WIDTH, CODING_AGENT_MAX_WIDTH } from "../.
 import { useIsMobile } from "../../lib/useMediaQuery";
 import { useTheme } from "../theme/ThemeProvider";
 import { extractChangedFiles } from "../../lib/extractChangedFiles";
+import { toastManager } from "../../lib/toast";
 import { PanelEmpty } from "../ui/panel";
 import { SplitHandle } from "../ui/split-handle";
 import { CodingEditorTabs } from "./CodingEditorTabs";
@@ -106,7 +107,15 @@ export function CodingWorkspace() {
   const qc = useQueryClient();
   const { resolvedMode } = useTheme();
   const { messages, sendMessage, stopMessage, isLoading, streamingContent, setConversationId, setMessages } = useAppStore();
-  const creatingConversationRef = useRef<Record<string, boolean>>({});
+  // One in-flight promise per project slug. A boolean "am I creating?" flag only ever
+  // protected the effect below from itself; the other two callers (sendCodingPrompt,
+  // executePlan) checked the resolved map instead and happily started a SECOND create while
+  // the first was still in flight. Handing every caller the same promise makes a duplicate
+  // structurally impossible rather than merely unlikely.
+  const creatingConversationRef = useRef<Record<string, Promise<number>>>({});
+  // Projects deleted in this session. A deleted project must never get a conversation again,
+  // and the selection effect can still be holding its slug for one render after the delete.
+  const deletedProjectsRef = useRef<Set<string>>(new Set());
 
   const {
     selectedProject,
@@ -196,6 +205,7 @@ export function CodingWorkspace() {
 
   const [newProjectName, setNewProjectName] = useState("");
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [showPlanPanel, setShowPlanPanel] = useState(false);
@@ -227,6 +237,75 @@ export function CodingWorkspace() {
     localStorage.setItem(PROJECT_CONVERSATION_MAP_KEY, JSON.stringify(projectConversationMap));
   }, [projectConversationMap]);
 
+  // Mirror of the map that is readable (and writable) SYNCHRONOUSLY. React state only becomes
+  // visible on the next render, which is exactly the window in which a second caller would
+  // otherwise still see "no conversation for this project" and create another one.
+  //
+  // Seeded from the persisted state once and then maintained by the only two functions that
+  // change the mapping (ensureProjectConversation and forgetProjectConversation), which both
+  // write here BEFORE calling setProjectConversationMap. Re-assigning it from state on every
+  // render would be the one thing that can undo such a synchronous write - between the write
+  // and React processing the state update, a render would put the stale map back and the next
+  // caller would create a duplicate after all.
+  const projectConversationMapRef = useRef(projectConversationMap);
+
+  /** Forget a mapping whose conversation no longer exists server-side, so the next ensure
+   *  call creates a fresh one instead of failing against a deleted id forever. */
+  const forgetProjectConversation = useCallback((project: string, conversationId: number) => {
+    if (projectConversationMapRef.current[project] === conversationId) {
+      const next = { ...projectConversationMapRef.current };
+      delete next[project];
+      projectConversationMapRef.current = next;
+    }
+    delete creatingConversationRef.current[project];
+    setProjectConversationMap((prev) => {
+      if (prev[project] !== conversationId) return prev;
+      const next = { ...prev };
+      delete next[project];
+      return next;
+    });
+  }, []);
+
+  /**
+   * The single place a `[Coding] <project>` conversation is created.
+   *
+   * Three call sites used to create one independently - the selection effect, sending a
+   * prompt, and executing a plan - each checking only the already-resolved map. Handing a
+   * plan over from chat fires all three within the same tick: the effect starts creating for
+   * the freshly-created project, and "Execute" runs before that request comes back, so both
+   * create one and the user ends up with two sessions for a single project. Concurrent
+   * callers now await the same promise, and the resolved id is written to the synchronous
+   * mirror before the promise is cleared, so there is no gap where a caller can miss it.
+   */
+  const ensureProjectConversation = useCallback(async (project: string): Promise<number> => {
+    if (deletedProjectsRef.current.has(project)) {
+      throw new Error(`Coding project "${project}" was deleted`);
+    }
+
+    const known = projectConversationMapRef.current[project];
+    if (known) return known;
+
+    const inFlight = creatingConversationRef.current[project];
+    if (inFlight) return inFlight;
+
+    const pending = (async () => {
+      const created = await api.chat.createConversation({ name: `[Coding] ${project}` });
+      projectConversationMapRef.current = {
+        ...projectConversationMapRef.current,
+        [project]: created.conversationId,
+      };
+      setProjectConversationMap((prev) => ({ ...prev, [project]: created.conversationId }));
+      return created.conversationId;
+    })();
+
+    creatingConversationRef.current[project] = pending;
+    try {
+      return await pending;
+    } finally {
+      delete creatingConversationRef.current[project];
+    }
+  }, []);
+
   const settingsQuery = useSettings();
   const codingEnabled = readFlag(settingsQuery.data, "CODING_ENABLED");
   const codingSettingReady = settingsReady(settingsQuery);
@@ -242,27 +321,12 @@ export function CodingWorkspace() {
       return;
     }
 
-    if (creatingConversationRef.current[selectedProject]) {
-      return;
-    }
-
-    creatingConversationRef.current[selectedProject] = true;
-
-    void (async () => {
-      try {
-        const created = await api.chat.createConversation({ name: `[Coding] ${selectedProject}` });
-        setProjectConversationMap((prev) => ({
-          ...prev,
-          [selectedProject]: created.conversationId,
-        }));
-        setConversationId(created.conversationId);
-      } catch {
+    void ensureProjectConversation(selectedProject)
+      .then((conversationId) => setConversationId(conversationId))
+      .catch(() => {
         // Keep UI responsive; user can retry by reselecting project.
-      } finally {
-        delete creatingConversationRef.current[selectedProject];
-      }
-    })();
-  }, [codingSettingReady, codingEnabled, selectedProject, projectConversationMap, setConversationId]);
+      });
+  }, [codingSettingReady, codingEnabled, selectedProject, projectConversationMap, setConversationId, ensureProjectConversation]);
 
   const conversationMessagesQuery = useInfiniteQuery({
     queryKey: ["coding", "conversation", activeConversationId],
@@ -318,8 +382,13 @@ export function CodingWorkspace() {
           try {
             const parsed = JSON.parse(msg.toolResult) as { eventType?: string; data?: Record<string, unknown> };
             const type = parsed.eventType;
+            // Must stay in sync with the chat page's identical list (ChatContainer). This copy
+            // had drifted and was missing "checklist" and "assistant_text": a reloaded coding
+            // session therefore lost the per-step checklist state entirely, which is exactly
+            // the data the plan panel needs to tick steps off.
             if (
               type === "plan" ||
+              type === "checklist" ||
               type === "iteration" ||
               type === "tool_call" ||
               type === "tool_result" ||
@@ -331,7 +400,8 @@ export function CodingWorkspace() {
               type === "mode_selected" ||
               type === "browser_preview" ||
               type === "thinking" ||
-              type === "internal_instruction"
+              type === "internal_instruction" ||
+              type === "assistant_text"
             ) {
               eventType = type;
             }
@@ -384,6 +454,16 @@ export function CodingWorkspace() {
     queryFn: () => api.coding.listProjects() as Promise<Array<{ slug: string; name: string }>>,
     enabled: codingSettingReady && codingEnabled,
   });
+
+  // The server's project list is the authority on whether a slug exists, so it is also what
+  // lifts a delete tombstone. Clearing it at each creation call site instead would mean every
+  // future path that creates a project has to remember to do so - and the ones that already
+  // exist (plan handoff, executePlan) do not go through the create mutation at all.
+  useEffect(() => {
+    for (const project of projectsQuery.data ?? []) {
+      deletedProjectsRef.current.delete(project.slug);
+    }
+  }, [projectsQuery.data]);
 
   useEffect(() => {
     if (!selectedProject) return;
@@ -442,11 +522,74 @@ export function CodingWorkspace() {
     }
   }, [currentPlan?.id]);
 
+  // What a delete would actually remove. Fetched only while the dialog is open, so the
+  // confirmation can name real numbers instead of asking the user to trust the word "alles".
+  const deletionPreviewQuery = useQuery({
+    queryKey: ["coding", "deletion-preview", projectToDelete],
+    queryFn: () =>
+      api.coding.deletionPreview(
+        projectToDelete!,
+        projectToDelete ? projectConversationMapRef.current[projectToDelete] : undefined
+      ),
+    enabled: Boolean(projectToDelete),
+  });
+
+  const deleteProject = useMutation({
+    mutationFn: (project: string) =>
+      api.coding.deleteProject(project, projectConversationMapRef.current[project]),
+    onSuccess: async (result, project) => {
+      // Everything that must happen BEFORE the first await, because the selection effect runs
+      // on the very next render: while `selectedProject` still names the deleted project and
+      // its mapping is gone, that effect would happily create a fresh conversation for a
+      // project that no longer exists. Deselecting and marking it deleted in the same
+      // synchronous block closes that window; the guard in ensureProjectConversation covers
+      // the remainder.
+      deletedProjectsRef.current.add(project);
+      const known = projectConversationMapRef.current[project];
+      if (known !== undefined) forgetProjectConversation(project, known);
+      delete creatingConversationRef.current[project];
+
+      const wasSelected = selectedProject === project;
+      if (wasSelected) {
+        // setSelectedProject clears open tabs and drafts on a real change; the chat has to be
+        // cleared here, otherwise the deleted project's messages stay on screen under the
+        // next project's name.
+        setSelectedProject("");
+        setConversationId(undefined);
+        setMessages([]);
+      }
+
+      const remaining = (await qc.fetchQuery({
+        queryKey: ["coding", "projects"],
+        queryFn: () => api.coding.listProjects() as Promise<Array<{ slug: string; name: string }>>,
+      })) as Array<{ slug: string }>;
+
+      if (wasSelected) {
+        setSelectedProject(remaining.find((entry) => entry.slug !== project)?.slug ?? "");
+      }
+
+      qc.removeQueries({ queryKey: ["coding", "files", project] });
+      qc.removeQueries({ queryKey: ["coding", "checkpoints", project] });
+      setProjectToDelete(null);
+      toastManager.success(
+        result.deletedConversationIds.length > 0
+          ? `Projekt "${project}" und ${result.deletedConversationIds.length} zugehoerige(r) Chat(s) geloescht.`
+          : `Projekt "${project}" geloescht.`
+      );
+    },
+    onError: (error: unknown) => {
+      toastManager.error(error instanceof Error ? error.message : "Loeschen fehlgeschlagen");
+    },
+  });
+
   const createProject = useMutation({
     mutationFn: (name: string) => api.coding.createProject(name),
     onSuccess: async (data: { created: boolean; slug: string; path: string }) => {
       setNewProjectName("");
       setShowCreateProjectModal(false);
+      // Recreating a slug that was deleted earlier in this session makes it a live project
+      // again - without lifting the tombstone it would be permanently unable to open a chat.
+      deletedProjectsRef.current.delete(data.slug);
 
       // First refetch projects to ensure the new project is in the list
       await qc.invalidateQueries({ queryKey: ["coding", "projects"] });
@@ -568,7 +711,7 @@ export function CodingWorkspace() {
     if (!text || !selectedProject) return;
 
     setIsEnsuringConversation(true);
-    let ensuredConversationId = activeConversationId;
+    let ensuredConversationId = projectConversationMapRef.current[selectedProject];
 
     try {
       if (ensuredConversationId) {
@@ -576,12 +719,7 @@ export function CodingWorkspace() {
           await api.chat.getMessages(ensuredConversationId);
         } catch (error) {
           if (isConversationNotFoundError(error)) {
-            setProjectConversationMap((prev) => {
-              if (prev[selectedProject] !== ensuredConversationId) return prev;
-              const next = { ...prev };
-              delete next[selectedProject];
-              return next;
-            });
+            forgetProjectConversation(selectedProject, ensuredConversationId);
             ensuredConversationId = undefined;
           } else {
             throw error;
@@ -590,12 +728,7 @@ export function CodingWorkspace() {
       }
 
       if (!ensuredConversationId) {
-        const created = await api.chat.createConversation({ name: `[Coding] ${selectedProject}` });
-        ensuredConversationId = created.conversationId;
-        setProjectConversationMap((prev) => ({
-          ...prev,
-          [selectedProject]: ensuredConversationId as number,
-        }));
+        ensuredConversationId = await ensureProjectConversation(selectedProject);
       }
 
       setConversationId(ensuredConversationId);
@@ -635,14 +768,8 @@ export function CodingWorkspace() {
       setSelectedProject(project);
     }
 
-    let convId = projectConversationMap[project];
-    if (!convId) {
-      const created = await api.chat.createConversation({ name: `[Coding] ${project}` });
-      convId = created.conversationId;
-      const ensuredProject = project;
-      setProjectConversationMap((prev) => ({ ...prev, [ensuredProject]: convId as number }));
-      setConversationId(convId);
-    }
+    const convId = await ensureProjectConversation(project);
+    setConversationId(convId);
 
     const steps = (plan.steps ?? []).map((s) => ({
       title: s.title,
@@ -698,6 +825,16 @@ export function CodingWorkspace() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => setProjectToDelete(selectedProject)}
+            disabled={!selectedProject}
+            title={t("codingPage.deleteProjectTitle")}
+            aria-label={t("codingPage.deleteProjectTitle")}
+            className="shrink-0 rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-accent hover:text-destructive disabled:opacity-40"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
 
           {renaming ? (
             <div className="flex min-w-0 flex-1 items-center gap-1">
@@ -886,6 +1023,7 @@ export function CodingWorkspace() {
                 isLoading={isLoading || isEnsuringConversation}
                 streamingContent={streamingContent}
                 conversationId={activeConversationId}
+                project={selectedProject}
                 activeFilePath={selectedPath}
                 disabled={!selectedProject}
                 overridePlan={handoffPlan}
@@ -938,6 +1076,71 @@ export function CodingWorkspace() {
                 >
                   <Plus className="mr-1 inline h-4 w-4" />
                   {t("common.create")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {projectToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <h2 className="text-lg font-semibold">{t("codingPage.deleteProjectTitle")}</h2>
+              <button className="rounded p-1 hover:bg-accent" onClick={() => setProjectToDelete(null)}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm">
+                {t("codingPage.deleteProjectQuestion")}{" "}
+                <span className="font-mono font-semibold">{projectToDelete}</span>
+              </p>
+
+              {deletionPreviewQuery.isLoading && (
+                <p className="text-xs text-muted-foreground">{t("codingPage.deleteProjectLoading")}</p>
+              )}
+
+              {deletionPreviewQuery.data && (
+                <ul className="space-y-1 rounded-md border border-border bg-muted/30 p-3 text-xs">
+                  <li>
+                    {t("codingPage.deleteProjectFiles")}: <strong>{deletionPreviewQuery.data.fileCount}</strong>
+                    {deletionPreviewQuery.data.totalBytes > 0 && (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        ({Math.max(1, Math.round(deletionPreviewQuery.data.totalBytes / 1024))} KB)
+                      </span>
+                    )}
+                  </li>
+                  <li>
+                    {t("codingPage.deleteProjectChats")}:{" "}
+                    <strong>{deletionPreviewQuery.data.conversations.length}</strong>
+                    {deletionPreviewQuery.data.conversations.length > 0 && (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        (
+                        {deletionPreviewQuery.data.conversations.reduce((sum, c) => sum + c.messageCount, 0)}{" "}
+                        {t("codingPage.deleteProjectMessages")})
+                      </span>
+                    )}
+                  </li>
+                </ul>
+              )}
+
+              <p className="text-xs text-destructive">{t("codingPage.deleteProjectWarning")}</p>
+
+              <div className="flex justify-end gap-2">
+                <button className="btn-secondary" onClick={() => setProjectToDelete(null)}>
+                  {t("common.cancel")}
+                </button>
+                <button
+                  className="btn-primary bg-destructive hover:bg-destructive/90"
+                  onClick={() => deleteProject.mutate(projectToDelete)}
+                  disabled={deleteProject.isPending}
+                >
+                  <Trash2 className="mr-1 inline h-4 w-4" />
+                  {t("codingPage.deleteProjectConfirm")}
                 </button>
               </div>
             </div>

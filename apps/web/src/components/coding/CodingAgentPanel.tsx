@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, FileCode2, ListChecks, MessageSquare, PanelRightClose, Send, Sparkles, Square, Trash2 } from "lucide-react";
+import { Activity, FileCode2, GitCompare, ListChecks, MessageSquare, PanelRightClose, Send, Sparkles, Square, Trash2 } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { useUiStore, type CodingAgentTab } from "../../lib/uiStore";
 import { DuckyMascot } from "../chat/DuckyMascot";
@@ -10,6 +10,8 @@ import type { Plan } from "../chat/PlanExecutionPanel";
 import { extractChangedFiles } from "../../lib/extractChangedFiles";
 import { PanelEmpty } from "../ui/panel";
 import { CodingPlanPanel } from "./CodingPlanPanel";
+import { CodingChangesPanel } from "./CodingChangesPanel";
+import { CodingTodoStrip, type CodingTodoItem } from "./CodingTodoStrip";
 
 /**
  * Strip raw tool-call markers from an assistant message for the coding CHAT tab.
@@ -40,6 +42,7 @@ export function CodingAgentPanel({
   isLoading,
   streamingContent,
   conversationId,
+  project,
   activeFilePath,
   disabled,
   overridePlan,
@@ -56,6 +59,7 @@ export function CodingAgentPanel({
   isLoading: boolean;
   streamingContent: string;
   conversationId?: number;
+  project: string;
   activeFilePath: string;
   disabled: boolean;
   overridePlan?: Plan | null;
@@ -107,6 +111,18 @@ export function CodingAgentPanel({
     return out;
   }, [messages]);
   const events = useMemo(() => messages.filter((msg) => msg.role === "event"), [messages]);
+
+  // The agent's own checklist, taken from the LAST event that carried one. Each todo tool call
+  // emits the full list, so the newest event is always the complete current state - no merging,
+  // and no chance of showing a half-updated list.
+  const todoItems = useMemo<CodingTodoItem[]>(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const candidate = messages[index];
+      const items = candidate?.eventData?.["todo_items"];
+      if (Array.isArray(items)) return items as CodingTodoItem[];
+    }
+    return [];
+  }, [messages]);
 
   useEffect(() => {
     setExpandedEvents({});
@@ -185,6 +201,7 @@ export function CodingAgentPanel({
   const tabs: Array<{ key: CodingAgentTab; label: string; icon: typeof MessageSquare; count?: number }> = [
     { key: "chat", label: t("codingPage.tabChat"), icon: MessageSquare },
     { key: "plan", label: t("codingPage.tabPlan"), icon: ListChecks },
+    { key: "changes", label: "Änderungen", icon: GitCompare },
     { key: "activity", label: t("codingPage.tabActivity"), icon: Activity, count: events.length },
   ];
 
@@ -241,6 +258,8 @@ export function CodingAgentPanel({
         </div>
       </div>
 
+      {(codingAgentTab === "chat" || codingAgentTab === "activity") && <CodingTodoStrip items={todoItems} />}
+
       {codingAgentTab === "chat" && (
         <div
           ref={chatViewportRef}
@@ -278,6 +297,10 @@ export function CodingAgentPanel({
           {isLoading && <StreamingRow compactMode streamingContent={streamingContent} t={t} />}
           <div ref={chatBottomRef} />
         </div>
+      )}
+
+      {codingAgentTab === "changes" && (
+        <CodingChangesPanel project={project} onOpenFile={onOpenFile} refreshKey={isLoading ? 0 : messages.length} />
       )}
 
       {codingAgentTab === "plan" && (

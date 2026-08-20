@@ -1,8 +1,11 @@
 import { DatabaseService } from "@ducki/database";
 import * as schema from "@ducki/database";
 import { eq } from "drizzle-orm";
+import { getRootLogger } from "@ducki/logger";
 import { getWallet } from "../crypto/wallets/index.js";
 import { getApiProvider } from "../crypto/api-providers/index.js";
+
+const logger = getRootLogger().child("CryptoService");
 
 export interface CryptoAddress {
   id?: number;
@@ -208,7 +211,7 @@ export class CryptoService {
         })
         .run();
     } catch (error) {
-      console.error("Failed to save API credentials:", error);
+      logger.error("Failed to save API credentials", { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -218,18 +221,17 @@ export class CryptoService {
     apiSecret?: string
   ): Promise<{ success: boolean; message: string }> {
     try {
-      console.log(`[Crypto] Testing ${provider} API connection with key: ${apiKey.substring(0, 10)}...`);
+      logger.debug("Testing API connection", { provider, keyPrefix: apiKey.substring(0, 10) });
 
       const apiProvider = getApiProvider(provider, apiKey, apiSecret);
-      console.log(`[Crypto] API Provider created: ${apiProvider.constructor.name}`);
+      logger.debug("API provider created", { provider: apiProvider.constructor.name });
 
       // Test with a known Bitcoin address for Bitref
       if (provider === "bitref") {
         const testAddress = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"; // Valid SegWit address
-        console.log(`[Crypto] Testing Bitref balance for address: ${testAddress}`);
 
         const balance = await apiProvider.getBalance(testAddress);
-        console.log(`[Crypto] Bitref balance result:`, balance);
+        logger.debug("Bitref balance result", { testAddress, balance });
 
         return {
           success: true,
@@ -240,10 +242,9 @@ export class CryptoService {
       // Test with Etherscan
       if (provider === "etherscan") {
         const testAddress = "0x0000000000000000000000000000000000000000"; // Burn address
-        console.log(`[Crypto] Testing Etherscan balance for address: ${testAddress}`);
 
         const balance = await apiProvider.getBalance(testAddress);
-        console.log(`[Crypto] Etherscan balance result:`, balance);
+        logger.debug("Etherscan balance result", { testAddress, balance });
 
         return {
           success: true,
@@ -254,10 +255,9 @@ export class CryptoService {
       // Test with XRP Ledger
       if (provider === "xrpscan") {
         const testAddress = "rN7n7otQDd6FczFgLdmqtXSVE7upbtykqd"; // Bitstamp wallet
-        console.log(`[Crypto] Testing XRP Ledger balance for address: ${testAddress}`);
 
         const balance = await apiProvider.getBalance(testAddress);
-        console.log(`[Crypto] XRP Ledger balance result:`, balance);
+        logger.debug("XRP Ledger balance result", { testAddress, balance });
 
         return {
           success: true,

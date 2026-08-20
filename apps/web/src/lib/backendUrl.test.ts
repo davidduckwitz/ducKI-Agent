@@ -55,7 +55,9 @@ describe("backendUrl", () => {
   it("uses an absolute localhost origin on desktop", () => {
     setDesktop(true);
     store({ type: "local", port: 4123 });
-    expect(getApiBaseUrl()).toBe("http://localhost:4123");
+    // REST goes through the "/api" base (same as the remote and browser branches, and what
+    // pluginUiUrl builds on); the socket connects to the bare origin.
+    expect(getApiBaseUrl()).toBe("http://localhost:4123/api");
     expect(getSocketUrl()).toBe("http://localhost:4123");
   });
 

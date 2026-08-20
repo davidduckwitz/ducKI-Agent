@@ -987,6 +987,11 @@ ${currentPlan.markdown ? `\n**Detaillierter Plan:**\n${currentPlan.markdown}` : 
           sandboxRoot: sandboxRoot,
           stepCount,
           maxIterations: calculatedIterations,
+          // Run inside THIS chat. Without it the server opened its own
+          // "CodingAgent: <goal>" conversation, so executing a plan from the chat produced a
+          // second session in the sidebar that held the entire transcript, while the chat the
+          // user was actually watching only ever received the summary pasted in below.
+          conversationId,
         }),
       }).then((r) => r.json());
 

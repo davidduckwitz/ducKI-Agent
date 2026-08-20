@@ -40,10 +40,10 @@ describe("filesystem tool - directory vs file handling", () => {
     expect(names).toEqual(["a.txt", "sub"]);
   });
 
-  it("read still returns file content unchanged", async () => {
+  it("read returns file content with line numbers", async () => {
     const result = await run({ action: "read", path: join(root, "a.txt") });
     expect(result.success).toBe(true);
-    expect(result.data).toBe("hello");
+    expect(result.data).toBe("1: hello");
   });
 
   it("read reports a missing path as not found", async () => {

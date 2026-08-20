@@ -110,7 +110,24 @@ function fromOpenAIToolCalls(
   return calls.length > 0 ? calls : undefined;
 }
 
-export function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageParam[] {
+export interface ToOpenAIMessagesOptions {
+  /**
+   * Render a cacheable system message as content PARTS carrying `cache_control`.
+   *
+   * Off by default, and deliberately so: the parts form is what OpenRouter needs to place an
+   * explicit Anthropic cache breakpoint, but plenty of OpenAI-COMPATIBLE servers (llama.cpp,
+   * older LM Studio builds, various local runtimes) only accept a plain string for the system
+   * role and either reject the request or silently drop the prompt. Those backends have no
+   * prompt cache to address anyway, and OpenAI's own caching is automatic and needs no field -
+   * so only the gateway that actually benefits opts in.
+   */
+  emitCacheControl?: boolean;
+}
+
+export function toOpenAIMessages(
+  messages: LLMMessage[],
+  options: ToOpenAIMessagesOptions = {}
+): ChatCompletionMessageParam[] {
   // A role:"tool" message is only valid if a PRECEDING assistant message in the same
   // request echoes a tool_call with the same id. The agent stamps every tool result with
   // an internal id (e.g. "batch_1_0") but stores assistant turns as plain text WITHOUT
@@ -153,7 +170,14 @@ export function toOpenAIMessages(messages: LLMMessage[]): ChatCompletionMessageP
       return { role: "assistant", content };
     }
     if (m.role === "system") {
-      return { role: "system", content: typeof m.content === "string" ? m.content : "system prompt" };
+      const text = typeof m.content === "string" ? m.content : "system prompt";
+      if (options.emitCacheControl && m.cacheControl === "ephemeral") {
+        return {
+          role: "system",
+          content: [{ type: "text", text, cache_control: { type: "ephemeral" } }],
+        } as unknown as ChatCompletionMessageParam;
+      }
+      return { role: "system", content: text };
     }
 
     // For user messages with vision content
@@ -194,6 +218,15 @@ export class OpenAIProvider implements LLMProvider {
   /** Set once a server has rejected `stream_options`, so the retry without it happens
    *  only on the first stream instead of on every single call. */
   private streamOptionsUnsupported = false;
+  /**
+   * Whether this backend understands an explicit `cache_control` breakpoint. Only the
+   * OpenRouter subclass does - see ToOpenAIMessagesOptions.emitCacheControl for why this is
+   * opt-in rather than always-on.
+   */
+  protected emitsPromptCacheControl(): boolean {
+    return false;
+  }
+
   /** Master switch for native tool-calling. Defaults on; set DUCKI_NATIVE_TOOLS=0/false
    *  to force the legacy [TOOL:...] text protocol for every request. */
   private readonly nativeToolsConfigured: boolean;
@@ -338,7 +371,7 @@ export class OpenAIProvider implements LLMProvider {
 
     const buildRequest = (withTools: boolean) => ({
       model: this.model,
-      messages: toOpenAIMessages(messages),
+      messages: toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl() }),
       temperature: merged.temperature,
       top_p: merged.topP,
       max_tokens: merged.maxTokens,
@@ -377,6 +410,11 @@ export class OpenAIProvider implements LLMProvider {
         promptTokens: completion.usage?.prompt_tokens ?? 0,
         completionTokens: completion.usage?.completion_tokens ?? 0,
         totalTokens: completion.usage?.total_tokens ?? 0,
+        // Reported by OpenAI and by OpenRouter for cache-capable models. Included in
+        // prompt_tokens already, so this is a breakdown, not an addition.
+        cachedInputTokens:
+          (completion.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)
+            ?.prompt_tokens_details?.cached_tokens ?? 0,
       },
       model: completion.model,
       finishReason: choice.finish_reason ?? undefined,
@@ -389,7 +427,7 @@ export class OpenAIProvider implements LLMProvider {
     onChunk?: (chunk: string) => void
   ): Promise<LLMResponse> {
     const merged = { ...this.defaultOptions, ...options };
-    const openAiMessages = toOpenAIMessages(messages);
+    const openAiMessages = toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl() });
     const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
 
     // `withTools` is an explicit param (not just closing over `useNativeTools`) so the
@@ -438,6 +476,7 @@ export class OpenAIProvider implements LLMProvider {
 
     let fullContent = "";
     let promptTokens = 0;
+    let cachedInputTokens = 0;
     let completionTokens = 0;
     let reportedUsage = false;
     let finalModel = this.model;
@@ -467,6 +506,9 @@ export class OpenAIProvider implements LLMProvider {
         if (chunk.usage) {
           promptTokens = chunk.usage.prompt_tokens ?? 0;
           completionTokens = chunk.usage.completion_tokens ?? 0;
+          cachedInputTokens =
+            (chunk.usage as { prompt_tokens_details?: { cached_tokens?: number } })
+              .prompt_tokens_details?.cached_tokens ?? 0;
           reportedUsage = promptTokens > 0 || completionTokens > 0;
         }
         finalModel = chunk.model ?? finalModel;
@@ -507,7 +549,7 @@ export class OpenAIProvider implements LLMProvider {
       content: fullContent,
       toolCalls: normalizedToolCalls,
       finishReason: finalFinishReason,
-      usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens },
+      usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens, cachedInputTokens },
       model: finalModel,
     };
   }

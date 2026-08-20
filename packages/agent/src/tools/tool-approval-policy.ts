@@ -167,6 +167,11 @@ export class AllowedShellCommands implements ToolApprovalRule {
   async check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult> {
     if (toolName !== "shell") return { approved: true };
 
+    // Managing a background process the agent already started (read its output, stop it, list
+    // them) carries no command to whitelist - the command was vetted when it was started.
+    const managementAction = String(input["action"] ?? "").toLowerCase();
+    if (["output", "stop", "list"].includes(managementAction)) return { approved: true };
+
     const command = String(input["command"] ?? "").trim();
     if (!command) return { approved: false, reason: "Empty shell command" };
 

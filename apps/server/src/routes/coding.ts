@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { appendFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "@ducki/tools";
+import { listCheckpoints, diffCheckpoint, restoreCheckpoint } from "@ducki/agent";
 
 export const codingRouter: IRouter = Router();
 
@@ -65,6 +66,22 @@ function absoluteFromProjectRelative(projectAbsRoot: string, relativePath: strin
   return abs;
 }
 
+/** Never surfaced in the project's file tree: machinery (the checkpoint store), dependencies,
+ *  and build output. Listing them recursively is also what made the tree slow to load on any
+ *  project that had ever run `npm install`. */
+const HIDDEN_PROJECT_DIRS = new Set([
+  ".ducki-checkpoints",
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  ".turbo",
+  "coverage",
+  "__pycache__",
+  ".venv",
+]);
+
 function listRecursive(root: string, relativePrefix = ""): Array<{ path: string; type: "file" | "directory"; size?: number; updatedAt?: string }> {
   const entries = readdirSync(root, { withFileTypes: true });
   const out: Array<{ path: string; type: "file" | "directory"; size?: number; updatedAt?: string }> = [];
@@ -73,6 +90,7 @@ function listRecursive(root: string, relativePrefix = ""): Array<{ path: string;
     const relPath = relativePrefix ? `${relativePrefix}/${entry.name}` : entry.name;
     const absPath = join(root, entry.name);
     if (entry.isDirectory()) {
+      if (HIDDEN_PROJECT_DIRS.has(entry.name)) continue;
       out.push({ path: relPath, type: "directory" });
       out.push(...listRecursive(absPath, relPath));
       continue;
@@ -355,6 +373,155 @@ codingRouter.delete("/projects/:project/file", (req, res) => {
   }
 });
 
+/**
+ * Every conversation belonging to a coding project.
+ *
+ * A coding project is a FOLDER, not a database row, so nothing on the server links it to its
+ * chat - the mapping lives in the browser's localStorage. The link that does survive is the
+ * naming convention every one of them is created with ("[Coding] <slug>"), so that is what is
+ * matched here, plus whatever id the caller knows about. Both together, because neither alone
+ * is sufficient: the caller only knows the conversation THIS browser created, while the name
+ * scan also picks up ones made in another browser or left behind by an earlier session.
+ */
+async function findCodingConversations(
+  db: DatabaseService,
+  slug: string,
+  knownConversationId?: number
+): Promise<Array<{ id: number; name: string }>> {
+  const expectedName = `[Coding] ${slug}`.toLowerCase();
+  const found = new Map<number, { id: number; name: string }>();
+
+  try {
+    for (const conversation of await db.listConversations()) {
+      if ((conversation.name ?? "").trim().toLowerCase() === expectedName) {
+        found.set(conversation.id, { id: conversation.id, name: conversation.name ?? "" });
+      }
+    }
+  } catch {
+    // A failed scan must not block deleting the files; the known id below still applies.
+  }
+
+  if (knownConversationId !== undefined && !found.has(knownConversationId)) {
+    try {
+      const conversation = await db.getConversation(knownConversationId);
+      // Only accept an id that is not already tied to a DIFFERENT project's folder name, so a
+      // stale localStorage entry can never take an unrelated chat down with it.
+      if (conversation) {
+        const name = (conversation.name ?? "").trim();
+        if (!name.startsWith("[Coding] ") || name.toLowerCase() === expectedName) {
+          found.set(conversation.id, { id: conversation.id, name });
+        }
+      }
+    } catch {
+      // Unknown id - nothing to delete.
+    }
+  }
+
+  return [...found.values()];
+}
+
+function parseConversationId(raw: unknown): number | undefined {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** Shows exactly what a delete would remove, so the confirmation names real numbers instead
+ *  of asking the user to trust that "everything" is the right amount of everything. */
+codingRouter.get("/projects/:project/deletion-preview", async (req, res) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+
+    const entries = listRecursive(absolute);
+    const files = entries.filter((entry) => entry.type === "file");
+    const conversations = await findCodingConversations(
+      db,
+      slug,
+      parseConversationId(req.query["conversationId"])
+    );
+
+    const conversationDetails = await Promise.all(
+      conversations.map(async (conversation) => {
+        let messageCount = 0;
+        try {
+          messageCount = (await db.getMessages(conversation.id)).length;
+        } catch {
+          // Counting is best-effort; the conversation is still listed.
+        }
+        return { ...conversation, messageCount };
+      })
+    );
+
+    res.json(createApiResponse({
+      project: slug,
+      fileCount: files.length,
+      totalBytes: files.reduce((sum, file) => sum + (file.size ?? 0), 0),
+      conversations: conversationDetails,
+    }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+/**
+ * Deletes a coding project completely: its directory (sources, checkpoint history, everything)
+ * and the chat that belongs to it.
+ *
+ * Irreversible on purpose - the checkpoint store lives inside the folder, so removing it removes
+ * the undo history too. The caller is expected to confirm first; the deletion-preview endpoint
+ * above exists so that confirmation can state what is actually at stake.
+ */
+codingRouter.delete("/projects/:project", async (req, res) => {
+  try {
+    ensureCodingRoot();
+    const db = req.app.locals["db"] as DatabaseService;
+    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+
+    // projectRoot already rejects traversal, but "" would resolve to the coding root itself and
+    // wipe every project at once - a slip that has no valid interpretation.
+    if (resolve(absolute) === resolve(CODING_ROOT)) {
+      res.status(400).json(createApiError("Refusing to delete the coding root"));
+      return;
+    }
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+
+    const conversations = await findCodingConversations(
+      db,
+      slug,
+      parseConversationId(req.query["conversationId"])
+    );
+
+    // Chats first: if removing the directory fails, the user still sees the project and can
+    // retry, which is a far better state than a deleted folder with its chat still listed.
+    const deletedConversationIds: number[] = [];
+    for (const conversation of conversations) {
+      try {
+        await db.deleteConversation(conversation.id);
+        deletedConversationIds.push(conversation.id);
+      } catch (error) {
+        console.warn(`Failed to delete conversation ${conversation.id} for coding project ${slug}:`, error);
+      }
+    }
+
+    rmSync(absolute, { recursive: true, force: true });
+
+    res.json(createApiResponse({
+      deleted: true,
+      project: slug,
+      deletedConversationIds,
+    }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
 codingRouter.post("/projects/:project/upload", (req, res) => {
   try {
     ensureCodingRoot();
@@ -384,6 +551,78 @@ codingRouter.post("/projects/:project/upload", (req, res) => {
     writeFileSync(target, buffer);
 
     res.json(createApiResponse({ uploaded: true, project: slug, path: sanitizeRelativePath(relativePath), size: buffer.length }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+// ── Checkpoints ─────────────────────────────────────────────────────────────
+// A coding run rewrites real files. Without a way to see WHAT it changed and to put it back,
+// the only recovery was the filesystem tool's single-level .bak - which the very next write to
+// the same file overwrites. These three endpoints back the review/undo UI: list the snapshots
+// taken before each attempt, read the diff between one of them and the current state, and roll
+// the project back to one (which itself snapshots first, so the undo is undoable).
+
+codingRouter.get("/projects/:project/checkpoints", async (req, res) => {
+  try {
+    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+    const checkpoints = await listCheckpoints(absolute);
+    res.json(createApiResponse({ project: slug, checkpoints }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+codingRouter.get("/projects/:project/checkpoints/:sha/diff", async (req, res) => {
+  try {
+    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+    const sha = String(req.params["sha"] ?? "");
+    if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
+      res.status(400).json(createApiError("Invalid checkpoint id"));
+      return;
+    }
+    const against = typeof req.query["against"] === "string" ? (req.query["against"] as string) : undefined;
+    if (against !== undefined && !/^[0-9a-f]{7,40}$/i.test(against)) {
+      res.status(400).json(createApiError("Invalid comparison checkpoint id"));
+      return;
+    }
+    const diff = await diffCheckpoint(absolute, sha, against ? { against } : {});
+    if (!diff) {
+      res.status(404).json(createApiError("No checkpoints exist for this project"));
+      return;
+    }
+    res.json(createApiResponse({ project: slug, ...diff }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+codingRouter.post("/projects/:project/checkpoints/:sha/restore", async (req, res) => {
+  try {
+    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+    const sha = String(req.params["sha"] ?? "");
+    if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
+      res.status(400).json(createApiError("Invalid checkpoint id"));
+      return;
+    }
+    const result = await restoreCheckpoint(absolute, sha);
+    if (!result.restored) {
+      res.status(400).json(createApiError(result.error ?? "Restore failed"));
+      return;
+    }
+    res.json(createApiResponse({ project: slug, ...result }));
   } catch (error) {
     res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
   }

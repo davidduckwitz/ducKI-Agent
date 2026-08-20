@@ -45,26 +45,60 @@ export class AnthropicAdapter extends BaseAdapter {
   }
 
   /**
-   * Convert LLMMessages to Anthropic MessageParam format
+   * Convert LLMMessages to Anthropic MessageParam format.
+   *
+   * The Messages API requires the conversation to start on a user turn and to alternate roles.
+   * Our history satisfies neither by construction - tool results are separate messages that all
+   * collapse onto `user`, and a context-window cut can begin on an assistant turn - so adjacent
+   * same-role messages are merged (their content blocks simply concatenate, which is how the API
+   * models a multi-part turn) and a leading assistant turn is dropped instead of being rejected.
    */
   protected override normalizeMessages(messages: LLMMessage[]): unknown[] {
-    return messages
+    const mapped = messages
       .filter((m) => m.role !== "system") // System is handled separately
-      .map((m) => {
-        const content = this.normalizeContent(m.content);
+      .map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: this.normalizeContent(m.content),
+      }));
 
-        if (m.role === "assistant") {
-          return {
-            role: "assistant",
-            content,
-          };
-        }
+    while (mapped.length > 0 && mapped[0]!.role === "assistant") {
+      mapped.shift();
+    }
 
-        return {
-          role: "user",
-          content,
-        };
-      });
+    const merged: Array<{ role: string; content: unknown }> = [];
+    for (const message of mapped) {
+      const previous = merged[merged.length - 1];
+      if (previous && previous.role === message.role) {
+        previous.content = [
+          ...(Array.isArray(previous.content) ? previous.content : [previous.content]),
+          ...(Array.isArray(message.content) ? message.content : [message.content]),
+        ];
+        continue;
+      }
+      merged.push({ role: message.role, content: message.content });
+    }
+
+    return merged;
+  }
+
+  /**
+   * Builds `system` as an array of blocks so a prompt-cache breakpoint can be attached to it.
+   *
+   * Anthropic caches everything up to and including the block carrying `cache_control`. The
+   * agent's static system prompt (directive, tool protocol, tool definitions, skills) is the
+   * single largest constant in a multi-iteration run; without a breakpoint every iteration
+   * re-sends and re-pays for all of it. The pinned SDK's types predate caching, so the field is
+   * added on a plain object - the request body is serialised as JSON either way.
+   */
+  private buildSystemBlocks(messages: LLMMessage[]): unknown {
+    const systemMessages = messages.filter((m) => m.role === "system" && typeof m.content === "string");
+    if (systemMessages.length === 0) return undefined;
+
+    return systemMessages.map((m) => {
+      const block: Record<string, unknown> = { type: "text", text: m.content as string };
+      if (m.cacheControl === "ephemeral") block["cache_control"] = { type: "ephemeral" };
+      return block;
+    });
   }
 
   /**
@@ -72,7 +106,7 @@ export class AnthropicAdapter extends BaseAdapter {
    */
   override async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
     const merged = this.mergeOptions(options);
-    const systemPrompt = this.extractSystemPrompt(messages);
+    const systemBlocks = this.buildSystemBlocks(messages);
     const anthropicMessages = this.normalizeMessages(messages);
 
     try {
@@ -80,11 +114,16 @@ export class AnthropicAdapter extends BaseAdapter {
         content: Array<{ type: string; text: string }>;
         model: string;
         stop_reason: string;
-        usage: { input_tokens: number; output_tokens: number };
+        usage: {
+          input_tokens: number;
+          output_tokens: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        };
       }>)({
         model: this.model,
         max_tokens: merged.maxTokens ?? 1024,
-        system: systemPrompt,
+        ...(systemBlocks ? { system: systemBlocks } : {}),
         messages: anthropicMessages,
         temperature: merged.temperature ?? 1,
         top_p: merged.topP,
@@ -98,14 +137,22 @@ export class AnthropicAdapter extends BaseAdapter {
         }
       }
 
+      // Anthropic reports cache reads/writes SEPARATELY from input_tokens, so an honest total
+      // has to add them back in - otherwise a well-cached run looks like it consumed no input.
+      const cachedInputTokens = response.usage.cache_read_input_tokens ?? 0;
+      const cacheWriteTokens = response.usage.cache_creation_input_tokens ?? 0;
+      const promptTokens = response.usage.input_tokens + cachedInputTokens + cacheWriteTokens;
+
       return {
         content,
         model: response.model,
         finishReason: response.stop_reason,
         usage: {
-          promptTokens: response.usage.input_tokens,
+          promptTokens,
           completionTokens: response.usage.output_tokens,
-          totalTokens: response.usage.input_tokens + response.usage.output_tokens,
+          totalTokens: promptTokens + response.usage.output_tokens,
+          cachedInputTokens,
+          cacheWriteTokens,
         },
       };
     } catch (error) {
