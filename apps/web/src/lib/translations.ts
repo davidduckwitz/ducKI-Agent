@@ -533,6 +533,10 @@ export const translations: Record<Language, TranslationTree> = {
       deleteFileConfirm: "Datei wirklich loeschen?",
       clearChat: "Chat leeren",
       clearChatConfirm: "Chatverlauf wirklich loeschen? Alle Nachrichten und Tool-Aufrufe dieses Chats werden entfernt.",
+      partWriteHealed: "Fehlende Datei-Teile automatisch nachgeschrieben",
+      partWriteWarning: "Datei-Schreibsequenz unvollstaendig",
+      partWriteHealError: "Self-Healing fehlgeschlagen",
+      partWriteParts: "Teile",
     },
     logsPage: {
       title: "Logs",
@@ -1313,6 +1317,10 @@ export const translations: Record<Language, TranslationTree> = {
       deleteFileConfirm: "Really delete this file?",
       clearChat: "Clear chat",
       clearChatConfirm: "Really clear this chat's history? All messages and tool calls in this chat will be removed.",
+      partWriteHealed: "Missing file parts automatically appended",
+      partWriteWarning: "Incomplete file write sequence",
+      partWriteHealError: "Self-healing failed",
+      partWriteParts: "parts",
     },
     logsPage: {
       title: "Logs",

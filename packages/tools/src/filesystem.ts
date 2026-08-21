@@ -20,6 +20,108 @@ import { stripStopMarkers } from "./content-sanitizer.js";
 
 const SHARED_BASE_PATH = SHARED_WORKSPACE_ROOT;
 
+/**
+ * In-flight multi-part write state, keyed by resolved absolute path.
+ *
+ * A model that splits a large file across several calls (each part small enough to fit in
+ * one response) can pass `totalParts` on the write and `partNumber`/`totalParts` on each
+ * append. The tool then enforces that parts arrive exactly once, in order, without gaps:
+ * a missing, duplicated or reordered part is a hard ERROR instead of a silently truncated
+ * file - and the final part is only reported complete once every part has arrived.
+ *
+ * The state lives in memory for the process lifetime; a sequence that is never finished
+ * is simply replaced by the next `write` to the same path.
+ */
+interface PartGroup {
+  totalParts: number;
+  received: number;
+  next: number;
+}
+
+const partGroups = new Map<string, PartGroup>();
+
+/**
+ * Coerces/validates the optional `partNumber`/`totalParts` args. Returns either the parsed
+ * pair or a descriptive error. Absent args (both undefined) mean "not a parted write".
+ */
+function parsePartArgs(input: Record<string, unknown>): {
+  partNumber?: number;
+  totalParts?: number;
+  error?: string;
+} {
+  const rawNum = input["partNumber"];
+  const rawTotal = input["totalParts"];
+  if (rawNum === undefined && rawTotal === undefined) return {};
+  const partNumber = rawNum === undefined ? undefined : Number(rawNum);
+  const totalParts = rawTotal === undefined ? undefined : Number(rawTotal);
+  if (rawNum !== undefined && (!Number.isInteger(partNumber) || (partNumber as number) < 1)) {
+    return { error: "partNumber must be a positive integer (1-based part index) when provided." };
+  }
+  if (rawTotal !== undefined && (!Number.isInteger(totalParts) || (totalParts as number) < 1)) {
+    return { error: "totalParts must be a positive integer (total number of parts) when provided." };
+  }
+  if (
+    partNumber !== undefined &&
+    totalParts !== undefined &&
+    (partNumber as number) > (totalParts as number)
+  ) {
+    return { error: `partNumber (${partNumber}) cannot exceed totalParts (${totalParts}).` };
+  }
+  return { partNumber, totalParts };
+}
+
+/** Result payload for a part of a parted write, with guidance for the model's next step. */
+function partResultData(
+  filePath: string,
+  partNumber: number,
+  totalParts: number,
+  received: number,
+  done: boolean
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    path: filePath,
+    part: { partNumber, totalParts, received },
+  };
+  data["note"] = done
+    ? `All ${totalParts} parts received - the file is complete.`
+    : `Part ${partNumber}/${totalParts} written (${received}/${totalParts} received). Send the next part with action:append partNumber:${partNumber + 1} totalParts:${totalParts}.`;
+  return data;
+}
+
+/**
+ * In-flight part sequences that are still missing parts - i.e. a parted write was started
+ * (write totalParts=N) but not all parts have arrived yet. Used by the coding agent's
+ * end-of-run check to warn the user that a file is incomplete instead of ending silently.
+ * An optional filter narrows the report (e.g. to one sandbox root).
+ */
+export function listIncompletePartSequences(
+  filter?: (path: string) => boolean
+): Array<{ path: string; totalParts: number; received: number; next: number }> {
+  const out: Array<{ path: string; totalParts: number; received: number; next: number }> = [];
+  for (const [path, group] of partGroups) {
+    if (group.received < group.totalParts && (!filter || filter(path))) {
+      out.push({ path, totalParts: group.totalParts, received: group.received, next: group.next });
+    }
+  }
+  return out;
+}
+
+/**
+ * Drops in-flight part sequences for paths matching the filter (or all of them when no
+ * filter is given). Called at the start of a coding run so a stale sequence from an earlier
+ * crashed/stopped run is never reported as if this run started it. Returns the count removed.
+ */
+export function clearIncompletePartSequences(filter?: (path: string) => boolean): number {
+  let removed = 0;
+  for (const path of [...partGroups.keys()]) {
+    if (!filter || filter(path)) {
+      partGroups.delete(path);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 export const FILESYSTEM_ACTIONS = [
   "read", "write", "append", "edit", "delete",
   "list", "mkdir", "exists", "stat", "move", "copy",
@@ -530,6 +632,8 @@ export const filesystemTool: ToolExecutor = {
         createDirs: { type: "boolean", default: true, description: "Create parent directories for write/append/move destination" },
         overwrite: { type: "boolean", default: true, description: "Allow overwriting existing file on write" },
         allowEmpty: { type: "boolean", default: false, description: "For write/append: permit empty content. Only set this when a 0-byte file is genuinely intended - otherwise an empty body is treated as a truncated call and refused." },
+        totalParts: { type: "number", description: "For write/append of a file split across multiple calls (each part small enough to fit in one response): the TOTAL number of parts. Pass it on the write (which is always part 1) and on every append of the sequence. The tool verifies that parts arrive exactly once, in order, without gaps, and only reports the file complete when ALL parts have arrived." },
+        partNumber: { type: "number", description: "For write/append of a file split across multiple calls: this part's 1-based index. write is always part 1; parts 2..totalParts go through action:append with partNumber. Omitting both partNumber and totalParts means a single, self-contained write/append." },
       },
       required: ["action", "path"],
     },
@@ -661,12 +765,44 @@ export const filesystemTool: ToolExecutor = {
           if (!existsSync(dir) && !createDirs) {
             return { success: false, data: null, error: `Parent directory does not exist: ${dir}` };
           }
+          // Parted write: `write` always establishes part 1 of a `totalParts` sequence (see
+          // parsePartArgs/partGroups). A write without part args is a fresh, self-contained
+          // intent and clears any stale in-flight sequence for this path.
+          const part = parsePartArgs(input);
+          if (part.error) return { success: false, data: null, error: part.error };
+          if (part.totalParts !== undefined && part.partNumber !== undefined && part.partNumber !== 1) {
+            return {
+              success: false,
+              data: null,
+              error:
+                `action:write always establishes part 1 - it cannot write part ${part.partNumber} of ${part.totalParts}. ` +
+                `Write the first part, then send the remaining parts with action:append partNumber:${part.partNumber} totalParts:${part.totalParts}.`,
+            };
+          }
+          // An intermediate part of a split file is not yet a valid whole (e.g. a JSON file
+          // is only parseable once every part has arrived) - validate only single calls and
+          // the FINAL assembled result (totalParts === 1 is complete on its own).
           const validationError = validateContent(filePath, content);
-          if (validationError) return { success: false, data: null, error: validationError };
+          if (validationError && (part.totalParts === undefined || part.totalParts === 1)) {
+            return { success: false, data: null, error: validationError };
+          }
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, bytes: content.length } };
           }
+          if (part.totalParts !== undefined) {
+            partGroups.set(filePath, { totalParts: part.totalParts, received: 1, next: 2 });
+          } else {
+            partGroups.delete(filePath);
+          }
           atomicWrite(filePath, content);
+          if (part.totalParts !== undefined && part.totalParts === 1) {
+            // A single-part "sequence" is complete the moment it is written.
+            partGroups.delete(filePath);
+            return { success: true, data: partResultData(filePath, 1, 1, 1, true) };
+          }
+          if (part.totalParts !== undefined) {
+            return { success: true, data: partResultData(filePath, 1, part.totalParts, 1, false) };
+          }
           return { success: true, data: { path: filePath, bytes: content.length } };
         }
 
@@ -694,14 +830,83 @@ export const filesystemTool: ToolExecutor = {
           if (pathKind(filePath) === "directory") {
             return { success: false, data: null, error: `Cannot append: '${filePath}' is a directory, not a file.` };
           }
+
+          // Parted write: validate against the in-flight sequence BEFORE touching the file.
+          // The final part is only acknowledged once every part has arrived - a gap, a
+          // duplicate or a reordered part is a hard error, never a silently truncated file.
+          const part = parsePartArgs(input);
+          if (part.error) return { success: false, data: null, error: part.error };
+          const group = partGroups.get(filePath);
+          const partOfSequence = part.partNumber !== undefined || part.totalParts !== undefined;
+          if (partOfSequence) {
+            if (!group) {
+              return {
+                success: false,
+                data: null,
+                error:
+                  "No part sequence is in progress for this file. Start it with action:write " +
+                  `path=${filePath.split(/[\\/]/).pop()} totalParts=N (write is part 1), then append the rest with partNumber/totalParts.`,
+              };
+            }
+            if (part.totalParts !== undefined && part.totalParts !== group.totalParts) {
+              return {
+                success: false,
+                data: null,
+                error: `totalParts mismatch: the sequence expects ${group.totalParts} parts, but this call says ${part.totalParts}.`,
+              };
+            }
+            if (part.partNumber === undefined) {
+              return {
+                success: false,
+                data: null,
+                error: `partNumber is required when a part sequence (totalParts=${group.totalParts}) is in progress. The next part is ${group.next}.`,
+              };
+            }
+            if (part.partNumber !== group.next) {
+              const error =
+                part.partNumber < group.next
+                  ? `Duplicate or out-of-order part: expected part ${group.next} of ${group.totalParts}, got part ${part.partNumber}.`
+                  : `Gap detected: expected part ${group.next} of ${group.totalParts}, got part ${part.partNumber} - the missing part(s) were never written.`;
+              return { success: false, data: null, error };
+            }
+          } else if (group) {
+            return {
+              success: false,
+              data: null,
+              error:
+                `A part sequence is in progress for this file (expected part ${group.next} of ${group.totalParts}). ` +
+                `Pass partNumber:${group.next} and totalParts:${group.totalParts} on this append, or restart the file with action:write totalParts:1.`,
+            };
+          }
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, bytes: content.length } };
           }
           const previous = existsSync(filePath) ? readFileSync(filePath, "utf8") : "";
           const combined = previous + content;
+          // Intermediate parts of a split file are not yet a valid whole - validate the
+          // assembled result only on the final part (and on plain appends).
+          const isFinalPart = group !== undefined && part.partNumber === group.totalParts;
           const validationError = validateContent(filePath, combined);
-          if (validationError) return { success: false, data: null, error: validationError };
+          if (validationError && (!group || isFinalPart)) {
+            return { success: false, data: null, error: validationError };
+          }
           atomicWrite(filePath, combined);
+          if (group) {
+            // partNumber is validated above (the sequence branch requires it and matches
+            // group.next), so it is defined here.
+            const partNumber = part.partNumber!;
+            group.received++;
+            group.next = partNumber + 1;
+            if (partNumber === group.totalParts) {
+              const done = partResultData(filePath, partNumber, group.totalParts, group.received, true);
+              partGroups.delete(filePath);
+              return { success: true, data: done };
+            }
+            return {
+              success: true,
+              data: partResultData(filePath, partNumber, group.totalParts, group.received, false),
+            };
+          }
           return { success: true, data: { path: filePath } };
         }
 
@@ -737,6 +942,9 @@ export const filesystemTool: ToolExecutor = {
               error: `Cannot edit: '${filePath}' is a directory, not a file. Use action:"list" to see its contents and edit a file inside it.`,
             };
           }
+          // Editing a file invalidates any in-flight part sequence for it - the numbering
+          // no longer describes the file's content.
+          partGroups.delete(filePath);
           const original = readFileSync(filePath, "utf8");
 
           // Keep a CRLF file consistent: when the file's dominant line ending is CRLF, convert
@@ -833,6 +1041,9 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "delete": {
+          // Deleting a file kills any in-flight part sequence for it - a later append must
+          // not silently rebuild the file from a single remaining part.
+          partGroups.delete(filePath);
           if (!existsSync(filePath)) {
             return { success: false, data: null, error: `Path not found: ${filePath}` };
           }
@@ -897,6 +1108,8 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "move": {
+          // Moving a file invalidates any in-flight part sequence for it.
+          partGroups.delete(filePath);
           const dest = input["destination"] as string | undefined;
           if (!dest) return { success: false, data: null, error: "Destination required for move" };
           const destPath = resolvePath(dest, {
@@ -927,6 +1140,8 @@ export const filesystemTool: ToolExecutor = {
           if (!existsSync(destDir) && !createDirs) {
             return { success: false, data: null, error: `Destination directory does not exist: ${destDir}` };
           }
+          // Overwriting the destination invalidates any in-flight part sequence for it.
+          partGroups.delete(destPath);
           const copyKind = pathKind(filePath);
           if (copyKind === "missing") {
             return { success: false, data: null, error: `Source file not found: ${filePath}` };

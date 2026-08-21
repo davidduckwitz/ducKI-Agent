@@ -8,7 +8,7 @@ import { getRootLogger } from "@ducki/logger";
 import { isAbortError } from "@ducki/providers";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { stopCodingRun } from "../lib/coding-run-registry.js";
-import { BitcoinPuzzleService, createScopedFilesystemTool, pluginsRoot } from "@ducki/agent";
+import { BitcoinPuzzleService, createCheckpoint, createScopedFilesystemTool, pluginsRoot } from "@ducki/agent";
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
@@ -29,6 +29,14 @@ function extractCodingProjectSlug(message: string): string | undefined {
   if (!slug || slug.toLowerCase() === "none") return undefined;
   // Single path segment only — never let the slug escape the coding root.
   return /^[A-Za-z0-9_.-]+$/.test(slug) ? slug : undefined;
+}
+
+/** The client prepends the [CODING_CONTEXT] block; the user's own text follows the first
+ *  blank line. Derive a readable checkpoint label from it (the raw prompt would start with
+ *  the machine-facing scaffolding). */
+function codingChatRunLabel(prompt: string): string {
+  const body = prompt.replace(/^\[CODING_CONTEXT\][\s\S]*?\n\n/, "").trim().replace(/\s+/g, " ");
+  return (body || prompt).slice(0, 60);
 }
 
 /** Actions the browser control panel (UI-initiated, not agent-initiated) may invoke directly. */
@@ -515,6 +523,7 @@ export function setupWebSocket(
           // tool by name; wrapTools keeps the same event/staging behaviour as the
           // other tools. Normal chats skip this entirely.
           const codingSlug = extractCodingProjectSlug(prompt);
+          let sandboxRoot: string | undefined;
           if (codingSlug) {
             // A [CODING_CONTEXT] project slug normally names a Coding Area project under
             // CODING_WORKSPACE_ROOT, but the same marker is reused (see plugin-context tagging
@@ -524,13 +533,39 @@ export function setupWebSocket(
             // only if that doesn't exist.
             const codingProjectRoot = resolve(CODING_WORKSPACE_ROOT, codingSlug);
             const pluginRoot = resolve(pluginsRoot(), codingSlug);
-            const sandboxRoot = existsSync(codingProjectRoot) ? codingProjectRoot
+            sandboxRoot = existsSync(codingProjectRoot) ? codingProjectRoot
               : existsSync(pluginRoot) ? pluginRoot
               : codingProjectRoot;
             const [scopedFs] = wrapTools([createScopedFilesystemTool(sandboxRoot)]);
             if (scopedFs) {
               runAgent.executor.registerTool(scopedFs);
               logger.info("Scoped coding filesystem tool for chat run", { codingSlug, sandboxRoot });
+            }
+          }
+
+          // The Changes tab ("Änderungen") is backed by per-run checkpoints: a shadow-git
+          // snapshot taken BEFORE the run, so the diff against it shows exactly what this
+          // turn changed. The plan-execution path (CodingAgent) already does this per
+          // attempt; the coding-area chat runs through the REGULAR agent, which never
+          // snapshotted - so the tab stayed empty for the primary way users drive the
+          // coding agent. Snapshot before every coding chat run (mirrors the CodingAgent
+          // behavior; no-op turns simply produce a checkpoint with an empty diff).
+          if (sandboxRoot) {
+            const checkpoint = await createCheckpoint(
+              sandboxRoot,
+              `Before chat run: ${codingChatRunLabel(prompt)}`
+            );
+            if (checkpoint) {
+              emitToConversation(resolvedConversationId, "chat:event", {
+                type: "decision",
+                message: "Checkpoint vor diesem Lauf erstellt.",
+                data: {
+                  checkpoint_sha: checkpoint.sha,
+                  checkpoint_label: checkpoint.label,
+                },
+                timestamp: new Date().toISOString(),
+                conversationId: resolvedConversationId,
+              });
             }
           }
 

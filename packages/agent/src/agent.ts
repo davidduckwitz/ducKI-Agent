@@ -105,6 +105,48 @@ export function callWouldPersistContent(toolName: string, input: Record<string, 
   return action === "write" || action === "append";
 }
 
+/**
+ * True when a raw tool-call arguments string is structurally INCOMPLETE - i.e. it ends inside
+ * an unterminated string literal or with brackets still open. That is the fingerprint of a
+ * response cut off mid-call: the provider stopped emitting (output budget, dropped stream)
+ * while the model was still writing the arguments. The repair layers below (jsonrepair etc.)
+ * would happily CLOSE the dangling string and hand over whatever had arrived, so a truncated
+ * `content` field would be written with success:true whenever the provider's finish_reason
+ * doesn't report the cut (common with local backends).
+ *
+ * The check is deliberately structural, not syntactic: it must NOT fire on complete-but-loose
+ * JSON (single quotes, unquoted keys, trailing commas, missing outer braces) - those are
+ * repairs, not truncation. It fires only when a quote or a bracket is genuinely left open at
+ * the end, which no complete output ever does.
+ */
+export function isTruncatedJsonTail(raw: string): boolean {
+  const text = raw.trim();
+  if (text.length === 0) return false;
+  let inString = false;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    if (inString) {
+      if (char === "\\") {
+        // Escaped char: the next character is literal, skip it. A lone trailing backslash
+        // leaves the string open (i = length), which the inString check below catches.
+        i++;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{" || char === "[") {
+      depth++;
+    } else if (char === "}" || char === "]") {
+      depth--;
+    }
+  }
+  return inString || depth > 0;
+}
+
 export function buildToolResultDedupeKey(
   toolName: string,
   input: Record<string, unknown>
@@ -173,6 +215,7 @@ Rules for the block form:
 - Everything between the header line and [/TOOL] is the literal file content - do NOT escape newlines or quotes, do NOT wrap it in JSON.
 - Always end the block with a line containing exactly [/TOOL].
 - This avoids the #1 write failure: broken JSON escaping that corrupts the file. Prefer it for every write/append.
+- FOR A FILE TOO BIG FOR ONE RESPONSE, split it into NUMBERED PARTS: put totalParts=N on the write (part 1) and partNumber/totalParts on each append (parts 2..N). The tool verifies that parts arrive exactly once, in order, without gaps and only reports the file complete when all parts arrived - a missing or duplicated part is a hard error, not a silent truncation.
 
 If you are instead given tools as a structured/native function-calling list (not writing [TOOL:...] text yourself), the block form above does not apply - there is no heredoc body in a native call. In that case you MUST put the ENTIRE file content as a plain JSON string in the tool's "content" argument, in the SAME call as "action" and "path" - never omit it, never send it in a separate message, and never just describe the file in your own text. A write/append call with no "content" argument does nothing and fails.`;
 
@@ -2306,7 +2349,23 @@ export class Agent {
     return obj;
   }
 
+  /**
+   * Parses tool-call arguments and marks the result when the RAW string is structurally
+   * truncated (see isTruncatedJsonTail). The marker (`__argsTruncated`) is consumed by the
+   * run loop's write guard, which refuses to persist a call whose arguments were cut off
+   * mid-JSON - even when the provider's finish_reason fails to report the cut. The raw
+   * string is scanned, not the repaired one: a repair that closed a dangling string is
+   * exactly the case the marker must catch.
+   */
   private parseLooseObject(text: string): Record<string, unknown> | undefined {
+    const parsed = this.parseLooseObjectRaw(text);
+    if (parsed && isTruncatedJsonTail(text)) {
+      parsed["__argsTruncated"] = true;
+    }
+    return parsed;
+  }
+
+  private parseLooseObjectRaw(text: string): Record<string, unknown> | undefined {
     const normalized = this.normalizeToolCallText(text);
     if (!normalized || normalized.trim().length === 0) return {};
 
@@ -2836,29 +2895,29 @@ export class Agent {
     const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
     const unparsed: string[] = [];
     let markerCount = 0;
-    // Header: [TOOL:name <key=value pairs>] on its own line (no ( { in the header),
-    // then a newline, lazily up to the first [/TOOL] terminator.
-    // The body may not contain another `[TOOL:` opener.
+    // Header: [TOOL:name <key=value pairs>] on its own line (no ( { in the header), then a
+    // newline. The body runs to the first boundary found by findHeredocBodyEnd - either a
+    // real [/TOOL] terminator or a leaked next call - and may itself contain `[/TOOL]`/`[TOOL:`
+    // text (a file documenting the tool syntax legitimately does), see the helper.
     //
-    // Without that guard the lazy match ran to the first `[/TOOL]` ANYWHERE below, so when a
-    // model forgot to close its write block and went straight on to its next call, that call
-    // was captured as file content:
-    //
-    //   [TOOL:filesystem action=write path=index.html]
-    //   <html>…</html>
-    //   [TOOL:todo action=update id=1 status=done]      <-- ended up inside index.html
-    //   [/TOOL]
-    //
-    // A body that trips this lookahead makes the strict match fail at that position, and the
-    // tolerant pass below picks the call up instead - it ends the body at the nested marker,
-    // which is exactly where the file content ends.
-    const blockRe = /\[TOOL:([A-Za-z_][A-Za-z0-9_\-]*)([^\]\n(){}]*)\]\r?\n((?:(?!\[TOOL:)[\s\S])*?)\r?\n?\[\/TOOL\]/g;
+    // This replaced a lazy regex that ran to the FIRST `[/TOOL]` anywhere below. Two failure
+    // modes that produced silently truncated files with success:true:
+    //   - a file whose content mentioned the terminator (e.g. docs about the block format)
+    //     was cut at that mention: everything after it was dropped;
+    //   - a body mentioning `[TOOL:` made the strict match fail at that position and the
+    //     tolerant pass below cut the body at the mention, dropping the rest of the file.
+    // The scanner below treats a marker inside the body as content unless it is a real
+    // terminator / next call.
+    const headerRe = /\[TOOL:([A-Za-z_][A-Za-z0-9_\-]*)([^\]\n(){}]*)\]\r?\n/g;
     const matchedBlocks: string[] = [];
+    let consumedUntil = -1;
     let m: RegExpExecArray | null;
-    while ((m = blockRe.exec(response)) !== null) {
+    while ((m = headerRe.exec(response)) !== null) {
+      // A header inside an already-consumed block's body (e.g. a `[TOOL:` mention in the
+      // file content) is not a real block of its own.
+      if (m.index < consumedUntil) continue;
       const toolName = m[1];
       const headerRest = m[2] ?? "";
-      const body = m[3] ?? "";
       // A header with no key=value pairs and an empty body is almost certainly not a real
       // heredoc write — skip it so we don't fabricate an empty content call.
       const headerArgs = this.parseHeredocHeader(headerRest);
@@ -2867,8 +2926,20 @@ export class Agent {
         matchedBlocks.push(m[0]);
         continue;
       }
+      const bodyStart = m.index + m[0].length;
+      const { end, terminator } = this.findHeredocBodyEnd(response, bodyStart);
+      if (!terminator) {
+        // No [/TOOL] terminator: either a leaked call that must not become content, or an
+        // unterminated block the tolerant pass below rescues. Leave it for that pass.
+        continue;
+      }
+      // The terminator's preceding line break belongs to the closing, not the file (the old
+      // regex's `\r?\n?` sat outside the captured body).
+      const body = response.slice(bodyStart, end).replace(/\r?\n$/, "");
       markerCount++;
-      matchedBlocks.push(m[0]);
+      const block = response.slice(m.index, end + "[/TOOL]".length);
+      matchedBlocks.push(block);
+      consumedUntil = end + "[/TOOL]".length;
       // __contentTrusted: the body was taken verbatim (never through a JSON string), so the
       // scoped filesystem tool can skip its leak-stripping heuristics on this content.
       const input: Record<string, unknown> = { ...headerArgs, content: body, __contentTrusted: true };
@@ -2876,7 +2947,7 @@ export class Agent {
       if (parsed) {
         calls.push(parsed);
       } else {
-        unparsed.push(m[0]);
+        unparsed.push(block);
       }
     }
     // Remove matched blocks from the text (indexOf/splice by exact substring keeps this
@@ -2897,6 +2968,91 @@ export class Agent {
       unparsed,
       remaining: hybrid.remaining,
     };
+  }
+
+  /**
+   * Finds where a heredoc write block's body ends, treating `[/TOOL]`/`[TOOL:` that appear
+   * INSIDE the file content as content rather than as terminators. A file documenting the
+   * tool format legitimately contains both markers; cutting at the first one silently
+   * truncated the document at that sentence and the write reported success.
+   *
+   * Boundary rules, applied to markers after `from` in order:
+   *   - A `[/TOOL]` is the real terminator when it is the LAST `[/TOOL]` of the response, or
+   *     when it sits on its own line and is directly followed (after whitespace) by another
+   *     tool-call marker (`[TOOL:` / `[/TOOL]`) - i.e. the model closed this block and went
+   *     on to the next one. A `[/TOOL]` that is neither last nor followed by a marker is
+   *     content (a mention in the file body), not the terminator.
+   *   - A `[TOOL:` inside the body is a leaked NEXT CALL (a boundary) only when its closing
+   *     `]` is followed by a line break, the end of the response, or another marker - the
+   *     model started a new call there. A `[TOOL:` followed by prose on the same line ("…
+   *     [TOOL:filesystem] um zu schreiben") is a mention and stays in the file.
+   *
+   * Returns the absolute end index of the body and whether that end is a real `[/TOOL]`
+   * terminator (false = a leaked-call boundary or nothing was found).
+   */
+  private findHeredocBodyEnd(response: string, from: number): { end: number; terminator: boolean } {
+    // Collect every marker after `from`, sorted by position.
+    const markers: Array<{ idx: number; isClose: boolean }> = [];
+    const openRe = /\[TOOL:/g;
+    const closeRe = /\[\/TOOL\]/g;
+    openRe.lastIndex = from;
+    closeRe.lastIndex = from;
+    let mm: RegExpExecArray | null;
+    while ((mm = openRe.exec(response)) !== null) markers.push({ idx: mm.index, isClose: false });
+    while ((mm = closeRe.exec(response)) !== null) markers.push({ idx: mm.index, isClose: true });
+    markers.sort((a, b) => a.idx - b.idx);
+    if (markers.length === 0) return { end: -1, terminator: false };
+
+    let lastClose = -1;
+    for (const mk of markers) if (mk.isClose) lastClose = mk.idx;
+
+    for (const mk of markers) {
+      if (mk.isClose) {
+        if (mk.idx === lastClose) return { end: mk.idx, terminator: true };
+        if (!this.isOwnLineMarker(response, mk.idx)) continue;
+        if (this.nextNonWs(response, mk.idx + "[/TOOL]".length).startsWith("[")) {
+          return { end: mk.idx, terminator: true };
+        }
+        // Own-line but followed by prose and a real terminator exists later: a mention.
+        continue;
+      }
+      if (this.isNextCallBoundary(response, mk.idx)) {
+        return { end: mk.idx, terminator: false };
+      }
+    }
+    return { end: -1, terminator: false };
+  }
+
+  /** True when the marker at `idx` starts on its own line (only whitespace around it). */
+  private isOwnLineMarker(text: string, idx: number): boolean {
+    const before = idx === 0 ? "" : text[idx - 1]!;
+    if (before !== "\n" && before !== "\r") return false;
+    let i = idx + "[/TOOL]".length;
+    while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+    return i >= text.length || text[i] === "\n" || text[i] === "\r";
+  }
+
+  /** Returns the next non-whitespace character after `from`, or "". */
+  private nextNonWs(text: string, from: number): string {
+    let i = from;
+    while (i < text.length && /[ \t\r\n]/.test(text[i]!)) i++;
+    return i >= text.length ? "" : text[i]!;
+  }
+
+  /**
+   * True when a `[TOOL:` marker at `idx` starts a real next call rather than being a mention
+   * inside the file body. A real call's closing `]` is followed by a line break, the end of
+   * the response, or another marker; a mention is followed by prose on the same line.
+   */
+  private isNextCallBoundary(text: string, idx: number): boolean {
+    const close = text.indexOf("]", idx);
+    if (close === -1) return false;
+    let i = close + 1;
+    while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
+    if (i >= text.length) return true; // end of response
+    if (text[i] === "\n" || text[i] === "\r") return true; // next line -> new call
+    if (text[i] === "[") return true; // another marker on the same line
+    return false; // prose on the same line -> mention, stays in the file
   }
 
   /**
@@ -2944,12 +3100,13 @@ export class Agent {
       // A header that already carries the body is a normal call - not this failure mode.
       if (extractFileContent(headerArgs) !== undefined) continue;
 
-      // Body runs to the first terminator: an explicit [/TOOL], the next call, or the end.
+      // Body runs to the first real boundary: an explicit [/TOOL] terminator, a leaked next
+      // call, or the end of the response. Same rules as the strict pass, so a body that
+      // mentions the tool syntax ([TOOL: / [/TOOL]) is not cut at the mention.
       const bodyStart = m.index + m[0].length;
-      const rest = response.slice(bodyStart);
-      const terminators = [rest.indexOf("[/TOOL]"), rest.indexOf("[TOOL:")].filter((i) => i >= 0);
-      const bodyEnd = terminators.length > 0 ? Math.min(...terminators) : rest.length;
-      const body = rest.slice(0, bodyEnd).replace(/\r?\n$/, "");
+      const { end } = this.findHeredocBodyEnd(response, bodyStart);
+      const absEnd = end === -1 ? response.length : end;
+      const body = response.slice(bodyStart, absEnd).replace(/\r?\n$/, "");
       if (body.trim().length === 0) continue;
 
       markerCount++;
@@ -2963,7 +3120,7 @@ export class Agent {
       const parsed = this.resolveToolNameAndInput(toolName, input);
       if (parsed) {
         calls.push(parsed);
-        consumed.push(response.slice(m.index, bodyStart + bodyEnd));
+        consumed.push(response.slice(m.index, absEnd));
       }
     }
 
@@ -4692,20 +4849,38 @@ export class Agent {
         // is not, and was written with success:true. The model has no way to notice, because from
         // its side the call succeeded.
         //
-        // `finish_reason: "length"` is the provider telling us exactly this happened, so a
-        // content-bearing call from such a response is refused rather than half-applied. Reads,
-        // greps and every other action still run: only the ones that would persist a truncated
-        // payload are held back.
-        if (responseWasTruncated && callWouldPersistContent(call.toolName, call.input)) {
-          const truncationError =
-            "Refusing to write from a truncated response. The model hit its output limit partway " +
-            "through this call, so the content is incomplete - writing it would leave a file that " +
-            "looks finished but is cut off. Write the file in parts instead: one write with the " +
-            "first section, then append calls for the rest, each small enough to finish inside one " +
-            "response.";
+        // Two independent signals feed this guard:
+        //   1. `responseWasTruncated` - the provider's finish_reason says the whole response was
+        //      cut ("length" / "incomplete_stream").
+        //   2. `callArgsTruncated` - the call's OWN arguments JSON is structurally incomplete
+        //      (a string or bracket left open at the end; see isTruncatedJsonTail). This catches
+        //      backends that cut mid-call but fail to report it in finish_reason, so a truncated
+        //      `content` field cannot land on disk as a plausible-looking file regardless of how
+        //      honest the provider is about the cut.
+        //
+        // Reads, greps and every other action still run: only the ones that would persist a
+        // truncated payload are held back.
+        const callArgsTruncated = call.input["__argsTruncated"] === true;
+        // The marker is internal plumbing - never let it reach a tool, a provider message or a
+        // persisted tool result.
+        delete call.input["__argsTruncated"];
+        if ((responseWasTruncated || callArgsTruncated) && callWouldPersistContent(call.toolName, call.input)) {
+          const truncationError = callArgsTruncated
+            ? "Refusing to write: the call's arguments were cut off mid-JSON, so the content is " +
+              "incomplete (the JSON string is left open - writing it would save a truncated file " +
+              "that looks finished). Re-send the call with the complete content, or write the file " +
+              "in numbered parts: action:write totalParts=N, then action:append partNumber:2..N " +
+              "totalParts:N - the tool verifies every part arrives."
+            : "Refusing to write from a truncated response. The model hit its output limit partway " +
+              "through this call, so the content is incomplete - writing it would leave a file that " +
+              "looks finished but is cut off. Write the file in numbered parts instead: one write " +
+              "with totalParts:N for the first section, then append calls with partNumber:2..N and " +
+              "totalParts:N for the rest, each small enough to finish inside one response - the tool " +
+              "verifies that every part arrives in order.";
           this.logger.warn("[TOOL-CALLS] Blocked a content write from a truncated response", {
             callId,
             toolName: call.toolName,
+            argsTruncated: callArgsTruncated,
           });
           emit("guardrail", "Abgeschnittene Antwort: Schreibvorgang verhindert", {
             toolName: call.toolName,

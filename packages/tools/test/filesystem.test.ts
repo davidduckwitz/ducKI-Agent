@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { filesystemTool } from "../src/filesystem.ts";
+import { filesystemTool, listIncompletePartSequences, clearIncompletePartSequences } from "../src/filesystem.ts";
 
 const exec = (input: Record<string, unknown>) => filesystemTool.execute(input);
 
@@ -491,6 +491,173 @@ describe("filesystem tool (PR3)", () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain("Valid actions");
       expect(result.error).toContain("glob");
+    });
+  });
+
+  // ── parted writes (partNumber/totalParts) ─────────────────────────────────
+
+  describe("parted writes (totalParts/partNumber)", () => {
+    // Scoped helper: relative paths inside the per-test temp dir.
+    const execP = (input: Record<string, unknown>) =>
+      exec({ basePath: dir, safeMode: true, ...input });
+
+    it("assembles a 3-part file and reports completion only after the last part", async () => {
+      const p = "app.js";
+      const w = await execP({ action: "write", path: p, content: "part1\n", totalParts: 3 });
+      expect(w.success).toBe(true);
+      expect((w.data as any).part).toMatchObject({ partNumber: 1, totalParts: 3, received: 1 });
+      expect(String((w.data as any).note)).toContain("partNumber:2");
+
+      const a2 = await execP({ action: "append", path: p, content: "part2\n", partNumber: 2, totalParts: 3 });
+      expect(a2.success).toBe(true);
+      expect((a2.data as any).part).toMatchObject({ partNumber: 2, totalParts: 3, received: 2 });
+
+      const a3 = await execP({ action: "append", path: p, content: "part3\n", partNumber: 3, totalParts: 3 });
+      expect(a3.success).toBe(true);
+      expect((a3.data as any).part).toMatchObject({ partNumber: 3, totalParts: 3, received: 3 });
+      expect(String((a3.data as any).note)).toContain("complete");
+      expect(readFileSync(join(dir, p), "utf8")).toBe("part1\npart2\npart3\n");
+    });
+
+    it("rejects a gap (missing part 2)", async () => {
+      const p = "gap.js";
+      await execP({ action: "write", path: p, content: "part1\n", totalParts: 3 });
+      const r = await execP({ action: "append", path: p, content: "part3\n", partNumber: 3, totalParts: 3 });
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("Gap detected");
+      expect(r.error).toContain("part 2");
+      expect(readFileSync(join(dir, p), "utf8")).toBe("part1\n"); // nothing was appended
+    });
+
+    it("rejects a duplicate part", async () => {
+      const p = "dup.js";
+      await execP({ action: "write", path: p, content: "part1\n", totalParts: 2 });
+      await execP({ action: "append", path: p, content: "part2\n", partNumber: 2, totalParts: 2 });
+      // Sequence is complete - a 3rd part (or a repeat) is out of range.
+      const r = await execP({ action: "append", path: p, content: "extra\n", partNumber: 2, totalParts: 2 });
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("No part sequence is in progress");
+    });
+
+    it("rejects out-of-order parts", async () => {
+      const p = "order.js";
+      await execP({ action: "write", path: p, content: "part1\n", totalParts: 3 });
+      const r = await execP({ action: "append", path: p, content: "part3\n", partNumber: 2, totalParts: 3 });
+      expect(r.success).toBe(true); // 2 then 3 is in order
+      const r2 = await execP({ action: "append", path: p, content: "part2\n", partNumber: 2, totalParts: 3 });
+      expect(r2.success).toBe(false);
+      expect(r2.error).toContain("Duplicate or out-of-order");
+      expect(r2.error).toContain("part 3");
+    });
+
+    it("refuses an append with part args when no sequence was started", async () => {
+      const p = "nostart.js";
+      const r = await execP({ action: "append", path: p, content: "part2\n", partNumber: 2, totalParts: 2 });
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("No part sequence is in progress");
+      expect(r.error).toContain("action:write");
+    });
+
+    it("refuses a plain append while a sequence is in progress", async () => {
+      const p = "plain.js";
+      await execP({ action: "write", path: p, content: "part1\n", totalParts: 2 });
+      const r = await execP({ action: "append", path: p, content: "whatever\n" });
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("partNumber:2");
+      expect(r.error).toContain("totalParts:2");
+    });
+
+    it("rejects totalParts mismatch", async () => {
+      const p = "mismatch.js";
+      await execP({ action: "write", path: p, content: "part1\n", totalParts: 3 });
+      const r = await execP({ action: "append", path: p, content: "x\n", partNumber: 2, totalParts: 4 });
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("totalParts mismatch");
+    });
+
+    it("rejects write with partNumber > 1", async () => {
+      const p = "wp.js";
+      const r = await execP({ action: "write", path: p, content: "x\n", partNumber: 2, totalParts: 3 });
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("always establishes part 1");
+    });
+
+    it("a plain write clears a stale sequence", async () => {
+      const p = "restart.js";
+      await execP({ action: "write", path: p, content: "part1\n", totalParts: 2 });
+      // Fresh intent: plain write replaces the file and drops the in-flight sequence.
+      await execP({ action: "write", path: p, content: "new\n" });
+      const r = await execP({ action: "append", path: p, content: "tail\n" });
+      expect(r.success).toBe(true); // plain append now works again
+      expect(readFileSync(join(dir, p), "utf8")).toBe("new\ntail\n");
+    });
+
+    it("a single totalParts:1 write completes immediately", async () => {
+      const p = "one.js";
+      const r = await execP({ action: "write", path: p, content: "solo\n", totalParts: 1 });
+      expect(r.success).toBe(true);
+      expect(String((r.data as any).note)).toContain("complete");
+      const a = await execP({ action: "append", path: p, content: "more\n" });
+      expect(a.success).toBe(true); // sequence already finished, plain append is fine
+    });
+
+    it("validates partNumber/totalParts types", async () => {
+      const p = "bad.js";
+      const r = await execP({ action: "write", path: p, content: "x\n", totalParts: 0 });
+      expect(r.success).toBe(false);
+      expect(r.error).toContain("totalParts must be a positive integer");
+      const r2 = await execP({ action: "write", path: p, content: "x\n", partNumber: -1, totalParts: 3 });
+      expect(r2.success).toBe(false);
+      expect(r2.error).toContain("partNumber must be a positive integer");
+    });
+
+    it("accepts string-number part args (heredoc header form delivers strings)", async () => {
+      const p = "str.js";
+      const w = await execP({ action: "write", path: p, content: "p1\n", totalParts: "2" as unknown as number });
+      expect(w.success).toBe(true);
+      const a = await execP({ action: "append", path: p, content: "p2\n", partNumber: "2" as unknown as number, totalParts: "2" as unknown as number });
+      expect(a.success).toBe(true);
+      expect(readFileSync(join(dir, p), "utf8")).toBe("p1\np2\n");
+    });
+
+    it("assembles a JSON file across parts - validation only on the final assembled result", async () => {
+      const p = "data.json";
+      const w = await execP({ action: "write", path: p, content: "{\n  \"items\": [", totalParts: 3 });
+      expect(w.success).toBe(true); // intermediate part is not yet valid JSON - must NOT be refused
+      const a2 = await execP({ action: "append", path: p, content: "1, 2, 3\n", partNumber: 2, totalParts: 3 });
+      expect(a2.success).toBe(true);
+      const a3 = await execP({ action: "append", path: p, content: "  ]\n}\n", partNumber: 3, totalParts: 3 });
+      expect(a3.success).toBe(true);
+      expect(JSON.parse(readFileSync(join(dir, p), "utf8"))).toEqual({ items: [1, 2, 3] });
+    });
+
+    it("lists and clears in-flight incomplete sequences (the coding agent's end-of-run check)", async () => {
+      // Earlier tests in this file leave incomplete sequences behind (that is the tool's
+      // intended persistence) - start from a clean slate so the counts below are exact.
+      clearIncompletePartSequences();
+      await execP({ action: "write", path: "a.js", content: "p1\n", totalParts: 2 });
+      await execP({ action: "write", path: "b.js", content: "p1\n", totalParts: 3 });
+      await execP({ action: "append", path: "b.js", content: "p2\n", partNumber: 2, totalParts: 3 });
+      // Completed sequences are NOT listed (finish b fully and it disappears).
+      await execP({ action: "append", path: "b.js", content: "p3\n", partNumber: 3, totalParts: 3 });
+
+      const all = listIncompletePartSequences();
+      expect(all.length).toBe(1);
+      expect(all[0]!.path).toContain("a.js");
+      expect(all[0]!.totalParts).toBe(2);
+      expect(all[0]!.received).toBe(1);
+      expect(all[0]!.next).toBe(2);
+
+      // Filter narrows the report (e.g. to one sandbox root).
+      const filtered = listIncompletePartSequences((p) => p.includes("nope"));
+      expect(filtered).toHaveLength(0);
+
+      // Clear drops matching sequences (the coding agent calls this at run start).
+      const removed = clearIncompletePartSequences((p) => p.includes("a.js"));
+      expect(removed).toBe(1);
+      expect(listIncompletePartSequences()).toHaveLength(0);
+      // Clear with no filter drops everything; clearing an empty map is a no-op.
+      expect(clearIncompletePartSequences()).toBe(0);
     });
   });
 });

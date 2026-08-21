@@ -227,3 +227,90 @@ describe("a following tool call must not leak into the file body", () => {
     expect(calls[0]!.input["content"]).toBe(HTML);
   });
 });
+
+/**
+ * A file that DOCUMENTS the tool format legitimately contains `[TOOL:` and `[/TOOL]` text.
+ * The old matcher cut the body at the first such marker - a silently truncated file that
+ * still reported success, exactly the "parts missing" symptom.
+ */
+describe("tool-syntax mentions inside file content must survive", () => {
+  it("keeps content after a [/TOOL] line inside the body (strict pass)", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=docs.md]\n" +
+      "# Block format\n" +
+      "Close a block with [/TOOL] on its own line.\n" +
+      "More documentation after the mention.\n" +
+      "[/TOOL]";
+
+    const { calls } = extract(agent, response);
+
+    expect(calls).toHaveLength(1);
+    const content = String(calls[0]!.input["content"]);
+    expect(content).toContain("Close a block with [/TOOL] on its own line.");
+    expect(content).toContain("More documentation after the mention.");
+  });
+
+  it("keeps a [TOOL: mention in running text (strict pass)", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=docs.md]\n" +
+      "# Tools\n" +
+      "Use [TOOL:filesystem] to read files, e.g. [TOOL:filesystem action=read path=x] to see one.\n" +
+      "The end.\n" +
+      "[/TOOL]";
+
+    const { calls } = extract(agent, response);
+
+    expect(calls).toHaveLength(1);
+    const content = String(calls[0]!.input["content"]);
+    expect(content).toContain("[TOOL:filesystem action=read path=x] to see one.");
+    expect(content).toContain("The end.");
+  });
+
+  it("keeps a [/TOOL] mention in a hybrid block with a real terminator later", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      '[TOOL:filesystem(action="write", path="docs.md")]\n' +
+      "Docs mention [/TOOL] here.\n" +
+      "More docs.\n" +
+      "[/TOOL]";
+
+    const { calls } = extract(agent, response);
+
+    expect(calls).toHaveLength(1);
+    const content = String(calls[0]!.input["content"]);
+    expect(content).toContain("Docs mention [/TOOL] here.");
+    expect(content).toContain("More docs.");
+  });
+
+  it("still stops the body at a leaked next call when no terminator exists", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=index.html]\n" +
+      HTML +
+      "\n[TOOL:todo action=update id=2 status=in_progress]\nappend";
+
+    const { calls } = extract(agent, response);
+
+    const write = calls.find((c) => c.input["action"] === "write");
+    expect(write!.input["content"]).toBe(HTML);
+  });
+
+  it("keeps two blocks where the first body mentions the syntax", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=a.md]\n" +
+      "About [/TOOL] syntax.\n" +
+      "[/TOOL]\n" +
+      "[TOOL:filesystem action=append path=a.md]\n" +
+      "Second part.\n" +
+      "[/TOOL]";
+
+    const { calls } = extract(agent, response);
+
+    expect(calls).toHaveLength(2);
+    expect(String(calls[0]!.input["content"])).toContain("About [/TOOL] syntax.");
+    expect(String(calls[1]!.input["content"])).toBe("Second part.");
+  });
+});

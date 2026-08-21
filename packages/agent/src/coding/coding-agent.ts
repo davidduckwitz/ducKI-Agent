@@ -1,7 +1,15 @@
 import type { LLMProvider } from "@ducki/providers";
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor } from "@ducki/shared";
-import { diagnosticsTool, filesystemTool, gitTool, shellTool, skillsTool } from "@ducki/tools";
+import {
+  diagnosticsTool,
+  filesystemTool,
+  gitTool,
+  shellTool,
+  skillsTool,
+  listIncompletePartSequences,
+  clearIncompletePartSequences,
+} from "@ducki/tools";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
@@ -491,6 +499,9 @@ export class CodingAgent {
     // The sandbox may have changed between runs (files added or removed outside the agent), and
     // a stale warm compiler would report diagnostics for a file set that no longer exists.
     resetDiagnosticsFor(this.sandboxRoot);
+    // Fresh session: a part sequence left incomplete by an earlier crashed/stopped run must
+    // not be reported as if THIS run started it (see finalizeRun's end-of-run warning).
+    clearIncompletePartSequences(this.sandboxFilter());
 
     const maxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
 
@@ -503,6 +514,55 @@ export class CodingAgent {
         ? (await this.agent.loadConversation(reuseId), reuseId)
         : await this.agent.startConversation({ name: `CodingAgent: ${goal.slice(0, 60)}` });
     opts.onConversationStarted?.(conversationId);
+
+    // End-of-run guard: if a parted write (totalParts/partNumber) was started during this run
+    // but not all parts arrived, the run must NOT end silently - the file(s) on disk are
+    // incomplete, and that is exactly the "looks finished but parts are missing" failure the
+    // part protocol exists to surface. Instead of merely warning, a bounded targeted follow-up
+    // attempt writes exactly the missing parts (see healIncompleteSequences); the warning is
+    // the fallback when healing does not finish the job. Every return path below goes through
+    // this wrapper.
+    const finalize = async (result: CodingRunResult): Promise<CodingRunResult> => {
+      const incomplete = listIncompletePartSequences(this.sandboxFilter());
+      if (incomplete.length === 0) return result;
+
+      // After an explicit Stop, auto-starting more LLM calls would be surprising - warn only.
+      const stopped = (this.agent as unknown as { stopRequested: boolean }).stopRequested === true;
+      const healDetail = stopped ? null : await this.healIncompleteSequences(incomplete, conversationId);
+
+      const stillIncomplete = listIncompletePartSequences(this.sandboxFilter());
+      if (stillIncomplete.length === 0) {
+        this.emit("decision", "Self-Healing: fehlende Datei-Teile nachgeschrieben.", {
+          part_healed: true,
+          files: incomplete,
+        });
+        return {
+          ...result,
+          summary:
+            `${result.summary}\n\n[Self-Healing: die fehlenden Datei-Teile wurden automatisch ` +
+            `nachgeschrieben.${healDetail ? ` ${healDetail}` : ""}]`,
+        };
+      }
+
+      const lines = stillIncomplete.map(
+        (g) => `- ${g.path}: ${g.received}/${g.totalParts} Teile geschrieben, Teil ${g.next} fehlt`
+      );
+      const head = stopped
+        ? "Unvollstaendige Datei-Schreibsequenz(en) - der Lauf endete, bevor alle Teile geschrieben wurden:"
+        : "Unvollstaendige Datei-Schreibsequenz(en) - auch nach dem automatischen Folge-Versuch sind die Datei(en) nicht vollstaendig:";
+      const warning =
+        head +
+        `\n` +
+        lines.join("\n") +
+        `\nDie Datei(en) sind unvollstaendig. Schreibe die fehlenden Teile ` +
+        `(action:append partNumber:${stillIncomplete[0]!.next} totalParts:${stillIncomplete[0]!.totalParts}) nach ` +
+        `oder schreibe die Datei(en) neu.${healDetail ? `\n${healDetail}` : ""}`;
+      this.emit("decision", `Warnung: ${stillIncomplete.length} unvollstaendige Datei-Schreibsequenz(en)`, {
+        part_warning: true,
+        files: stillIncomplete,
+      });
+      return { ...result, summary: `${result.summary}\n\nWARNUNG: ${warning}` };
+    };
 
     const detectedSkill = this.autoSelectCodingSkill(goal);
     let verifyCommand = opts.verifyCommand;
@@ -541,14 +601,14 @@ export class CodingAgent {
           attempt: attempt - 1,
           timeoutMs: opts.timeoutMs,
         });
-        return {
+        return finalize({
           success: false,
           verified: false,
           summary: `${lastSummary}\n\n[Stopped: time budget of ${opts.timeoutMs}ms exhausted after ${attempt - 1} attempt(s).]`,
           attempts: attempt - 1,
           conversationId,
           ...(verifyCommand ? { verifyCommand } : {}),
-        };
+        });
       }
 
       this.emit("iteration", `Coding-Versuch ${attempt}/${maxAttempts}`, {
@@ -600,14 +660,14 @@ export class CodingAgent {
             attempt,
             error: timeoutMessage,
           });
-          return {
+          return finalize({
             success: false,
             verified: false,
             summary: `${lastSummary}\n\n[Stopped: ${timeoutMessage}]`,
             attempts: attempt,
             conversationId,
             ...(verifyCommand ? { verifyCommand } : {}),
-          };
+          });
         }
         throw error;
       }
@@ -621,7 +681,7 @@ export class CodingAgent {
         // Nothing to check against - report honestly that the result is unverified
         // instead of letting "no check" masquerade as a passing check.
         this.emit("decision", "Keine Verifikation moeglich - Ergebnis ist ungeprueft.", { attempt });
-        return { success: true, verified: false, summary: lastSummary, attempts: attempt, conversationId };
+        return finalize({ success: true, verified: false, summary: lastSummary, attempts: attempt, conversationId });
       }
 
       const verifyResult = await this.agent.executor.execute("shell", {
@@ -632,14 +692,14 @@ export class CodingAgent {
       });
       if (verifyResult.success) {
         this.emit("decision", `Verifikation "${verifyCommand}" erfolgreich.`, { attempt, verifyCommand });
-        return {
+        return finalize({
           success: true,
           verified: true,
           summary: lastSummary,
           attempts: attempt,
           conversationId,
           verifyCommand,
-        };
+        });
       }
 
       const verifyError = condenseVerifyOutput(verifyResult.error ?? JSON.stringify(verifyResult.data ?? ""));
@@ -661,14 +721,14 @@ export class CodingAgent {
           attempt,
           verifyCommand,
         });
-        return {
+        return finalize({
           success: false,
           verified: false,
           summary: `${lastSummary}\n\n[Stopped: ${attempt} attempts in a row produced the exact same verification error - the edits are not changing the outcome:]\n${verifyError}`,
           attempts: attempt,
           conversationId,
           verifyCommand,
-        };
+        });
       }
 
       lastSummary = isIdenticalToPreviousFailure
@@ -676,25 +736,82 @@ export class CodingAgent {
         : `${lastSummary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`;
 
       if (attempt === maxAttempts) {
-        return {
+        return finalize({
           success: false,
           verified: false,
           summary: lastSummary,
           attempts: attempt,
           conversationId,
           verifyCommand,
-        };
+        });
       }
     }
 
-    return {
+    return finalize({
       success: false,
       verified: false,
       summary: lastSummary,
       attempts: maxAttempts,
       conversationId,
       ...(verifyCommand ? { verifyCommand } : {}),
-    };
+    });
+  }
+
+  /** Path filter for part-sequence bookkeeping: only sequences inside this run's sandbox. */
+  private sandboxFilter(): ((path: string) => boolean) | undefined {
+    if (!this.sandboxRoot) return undefined;
+    const root = this.sandboxRoot.toLowerCase();
+    return (path: string) => path.toLowerCase().startsWith(root);
+  }
+
+  /**
+   * Self-healing for incomplete part sequences: runs ONE targeted follow-up attempt on the
+   * same conversation that writes ONLY the missing parts (append with the exact
+   * partNumber/totalParts the tool reported), instead of leaving the user with a warning and
+   * a half-written file. Bounded to a single lightweight attempt - if it fails or leaves
+   * sequences incomplete, the caller falls back to the warning path. Returns a short note
+   * about the attempt (or null when it could not run at all).
+   */
+  private async healIncompleteSequences(
+    incomplete: Array<{ path: string; totalParts: number; received: number; next: number }>,
+    conversationId: number
+  ): Promise<string | null> {
+    const lines = incomplete.map(
+      (g) => `- ${g.path}: Teil ${g.received} von ${g.totalParts} geschrieben, Teil ${g.next} fehlt`
+    );
+    const prompt =
+      `Einige Datei-Schreibsequenzen aus dem vorherigen Lauf sind unvollstaendig. Schreibe NUR die fehlenden Teile nach:\n\n` +
+      lines.join("\n") +
+      `\n\nRegeln:\n` +
+      `1. Lese jede Datei kurz, um zu sehen, was bereits geschrieben wurde.\n` +
+      `2. Schreibe NUR die fehlenden Teile mit action:append partNumber:<n> totalParts:<m> in der Block-Form - <n> und <m> sind exakt die oben genannten Werte. Die laufende Sequenz prueft die Reihenfolge und lehnt Luecken oder Duplikate ab.\n` +
+      `3. Veraendere KEINE anderen Dateien, schreibe KEINE bereits geschriebenen Teile neu und wiederhole nichts.\n` +
+      `4. Wenn eine Datei schon vollstaendig ist, lasse sie unveraendert.\n` +
+      `5. Bestaetige am Ende kurz, welche Dateien du vervollstaendigt hast.`;
+
+    try {
+      // The healing run ideally continues the same conversation so the fix-up is visible in
+      // history. But it only needs the file state (it reads the file and appends the missing
+      // parts), so a missing/unpersisted conversation must not block healing - fall back to
+      // a fresh lightweight run in that case.
+      try {
+        await this.agent.loadConversation(conversationId);
+      } catch {
+        // Conversation not available - heal against file state alone.
+      }
+      // Explicit lightweight mode: skips the Agent-internal planning phase (the prompt above
+      // already states exactly what to do) and caps iterations for this bounded fix-up.
+      const healResult = await this.agent.run(prompt, { agentMode: "lightweight" });
+      const detail = healResult.response?.trim().slice(0, 300) ?? "";
+      return detail.length > 0 ? `Folge-Versuch: ${detail}` : "Folge-Versuch ausgefuehrt.";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emit("decision", "Self-Healing fehlgeschlagen - nur Warnung.", {
+        part_heal_error: true,
+        error: message.slice(0, 200),
+      });
+      return null;
+    }
   }
 
   private emit(type: "iteration" | "decision" | "phase_started" | "phase_completed" | "phase_failed", message: string, data?: Record<string, unknown>): void {

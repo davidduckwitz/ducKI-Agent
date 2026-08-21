@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitCompare, History, RotateCcw } from "lucide-react";
 import { api } from "../../lib/api";
 import { PanelEmpty } from "../ui/panel";
 import { toastManager } from "../../lib/toast";
+import { useUiStore } from "../../lib/uiStore";
 
 interface Checkpoint {
   sha: string;
@@ -48,7 +49,17 @@ export function CodingChangesPanel({
   refreshKey?: number;
 }) {
   const queryClient = useQueryClient();
+  const codingChangesSelected = useUiStore((s) => s.codingChangesSelected);
+  const setCodingChangesSelected = useUiStore((s) => s.setCodingChangesSelected);
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
+  // True while the current selection is the user's own (persisted) choice; false while it
+  // is the auto-followed newest checkpoint. Kept in a ref so the render cycle never has to
+  // reconcile the two.
+  const manualSelectionRef = useRef(false);
+  // The sha the auto-follow last picked. Lets the auto-follow detect "a newer checkpoint
+  // appeared" without re-setting the same value, and keeps the hint visible right after a
+  // manual deselection (same newest -> no re-select).
+  const lastAutoShaRef = useRef<string | null>(null);
 
   const checkpointsQuery = useQuery({
     queryKey: ["coding", "checkpoints", project, refreshKey],
@@ -60,6 +71,61 @@ export function CodingChangesPanel({
     () => checkpointsQuery.data?.checkpoints ?? [],
     [checkpointsQuery.data]
   );
+
+  // Project switch: load the persisted explicit choice (or none) and reset the auto-follow
+  // state. Declared BEFORE the auto-follow effect so a persisted choice wins on the first
+  // render instead of being immediately overridden by the newest checkpoint.
+  useEffect(() => {
+    const persisted = codingChangesSelected[project] ?? null;
+    setSelectedSha(persisted);
+    manualSelectionRef.current = persisted !== null;
+    lastAutoShaRef.current = null;
+    // project changes are the only thing that must reset the selection; the persisted map
+    // is read on switch, not watched continuously.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
+
+  // Auto-follow the newest checkpoint: when the list first loads with nothing selected, when
+  // a fresh run adds a newer checkpoint, or when an explicit (persisted) choice no longer
+  // exists (project was reset/restored). A manual selection is never overridden - the user
+  // may be reviewing an older checkpoint while a newer run finishes. After a manual
+  // deselection the hint stays visible until a NEWER checkpoint appears (lastAutoShaRef
+  // remembers what we last followed).
+  useEffect(() => {
+    const newest = checkpoints[0]?.sha;
+    if (!newest) return;
+
+    // Explicit choice that vanished from the list: drop it and fall back to auto-follow.
+    if (manualSelectionRef.current) {
+      if (selectedSha !== null && !checkpoints.some((c) => c.sha === selectedSha)) {
+        setSelectedSha(null);
+        manualSelectionRef.current = false;
+        setCodingChangesSelected(project, null);
+        lastAutoShaRef.current = null;
+      }
+      return;
+    }
+
+    const newerArrived = lastAutoShaRef.current !== newest;
+    if (selectedSha === null ? newerArrived : selectedSha !== newest && newerArrived) {
+      setSelectedSha(newest);
+      lastAutoShaRef.current = newest;
+    }
+  }, [checkpoints, selectedSha, project, setCodingChangesSelected]);
+
+  const handleSelectCheckpoint = (sha: string) => {
+    manualSelectionRef.current = true;
+    setSelectedSha(sha);
+    setCodingChangesSelected(project, sha);
+  };
+
+  const handleDeselectCheckpoint = () => {
+    // Back to following the newest: keep lastAutoShaRef at the current newest so the hint
+    // stays visible instead of instantly re-selecting it.
+    manualSelectionRef.current = false;
+    setSelectedSha(null);
+    setCodingChangesSelected(project, null);
+  };
 
   const diffQuery = useQuery({
     queryKey: ["coding", "checkpoint-diff", project, selectedSha],
@@ -113,7 +179,7 @@ export function CodingChangesPanel({
             >
               <button
                 type="button"
-                onClick={() => setSelectedSha(active ? null : checkpoint.sha)}
+                onClick={() => (active ? handleDeselectCheckpoint() : handleSelectCheckpoint(checkpoint.sha))}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
                 title="Änderungen seit diesem Checkpoint anzeigen"
               >

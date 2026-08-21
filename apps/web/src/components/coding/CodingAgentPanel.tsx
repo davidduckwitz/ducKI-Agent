@@ -4,6 +4,7 @@ import { useI18n } from "../../lib/i18n";
 import { useUiStore, type CodingAgentTab } from "../../lib/uiStore";
 import { DuckyMascot } from "../chat/DuckyMascot";
 import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
+import { PartWriteBanner } from "./PartWriteBanner";
 import { ToolSkillSelector } from "../chat/ToolSkillSelector";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import type { Plan } from "../chat/PlanExecutionPanel";
@@ -111,6 +112,21 @@ export function CodingAgentPanel({
     return out;
   }, [messages]);
   const events = useMemo(() => messages.filter((msg) => msg.role === "event"), [messages]);
+
+  // The latest part-write decision (part_warning / part_healed / part_heal_error) emitted by
+  // the CodingAgent at run end. The chat tab otherwise filters event messages out entirely,
+  // so this is surfaced as a visible banner above the conversation.
+  const partBannerMsg = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const msg = messages[index];
+      if (!msg || msg.role !== "event") continue;
+      const d = msg.eventData;
+      if (d && (d.part_warning === true || d.part_healed === true || d.part_heal_error === true)) {
+        return msg;
+      }
+    }
+    return undefined;
+  }, [messages]);
 
   // The agent's own checklist, taken from the LAST event that carried one. Each todo tool call
   // emits the full list, so the newest event is always the complete current state - no merging,
@@ -269,7 +285,8 @@ export function CodingAgentPanel({
           {isLoadingMoreMessages && (
             <div className="py-1 text-center text-[10px] text-muted-foreground">{t("chat.loadingOlder")}</div>
           )}
-          {conversation.length === 0 && !isLoading ? (
+          {partBannerMsg && <PartWriteBanner msg={partBannerMsg} t={t} />}
+          {conversation.length === 0 && !partBannerMsg && !isLoading ? (
             <PanelEmpty icon={<MessageSquare className="h-8 w-8" />} title={t("codingPage.noAgentOutput")} />
           ) : (
             conversation.map(({ msg, changedFiles }) => (

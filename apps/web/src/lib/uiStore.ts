@@ -41,6 +41,12 @@ interface UiState {
   codingAgentWidth: number;
   codingAgentTab: CodingAgentTab;
   codingSplitPreview: boolean;
+  /** Last explicitly selected checkpoint in the Changes tab ("Änderungen"), keyed by
+   *  project slug. Kept out of component state so a page reload does not lose the
+   *  checkpoint the user was reviewing. Auto-followed selections are NOT stored here -
+   *  after a reload with no explicit choice the tab should follow the newest checkpoint
+   *  again. */
+  codingChangesSelected: Record<string, string>;
 
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
@@ -60,6 +66,7 @@ interface UiState {
   setCodingAgentWidth: (width: number) => void;
   setCodingAgentTab: (tab: CodingAgentTab) => void;
   setCodingSplitPreview: (enabled: boolean) => void;
+  setCodingChangesSelected: (project: string, sha: string | null) => void;
 }
 
 export const useUiStore = create<UiState>()(
@@ -79,6 +86,7 @@ export const useUiStore = create<UiState>()(
       codingAgentWidth: 380,
       codingAgentTab: "chat",
       codingSplitPreview: false,
+      codingChangesSelected: {},
 
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
@@ -128,6 +136,13 @@ export const useUiStore = create<UiState>()(
         set({ codingAgentWidth: Math.min(Math.max(Math.round(width), CODING_AGENT_MIN_WIDTH), CODING_AGENT_MAX_WIDTH) }),
       setCodingAgentTab: (codingAgentTab) => set({ codingAgentTab }),
       setCodingSplitPreview: (codingSplitPreview) => set({ codingSplitPreview }),
+      setCodingChangesSelected: (project, sha) =>
+        set((s) => {
+          const next = { ...s.codingChangesSelected };
+          if (sha === null) delete next[project];
+          else next[project] = sha;
+          return { codingChangesSelected: next };
+        }),
     }),
     {
       name: "ducki.ui.v1",
