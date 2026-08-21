@@ -124,6 +124,7 @@ export class BitcoinPuzzleSolver {
 
             const batchSize = 100;
             for (let batch = 0; batch < batchSize && this.isRunning && !this.isPaused; batch++) {
+             try {
               let mnemonic;
 
               if (this.state.generatedCount % 5000 === 0 && this.state.generatedCount > 0) {
@@ -194,6 +195,13 @@ export class BitcoinPuzzleSolver {
                   data: { generatedCount: this.state.generatedCount, triedCombinationsCount: this.state.triedCombinationsCount, elapsedMs: Date.now() - this.state.startedAt },
                 });
               }
+             } catch (iterationError) {
+              // A single bad iteration (e.g. a rare bip32/bitcoinjs-lib edge case out of
+              // millions of mnemonics) must never take down the whole shared server process -
+              // this loop runs in-process alongside everything else via the plugin's
+              // moduleTool. Skip it and keep going instead of throwing out of setImmediate.
+              console.error(`[BitcoinPuzzleSolver] Skipping bad iteration: ${iterationError instanceof Error ? iterationError.message : String(iterationError)}`);
+             }
             }
 
             setImmediate(processNextBatch);
