@@ -22,32 +22,64 @@ export const CONTENT_STOP_MARKERS = [
   "<|eot_id|>",
 ];
 
+/** Only wrapper punctuation - what a spilled terminator leaves behind it. */
+const WRAPPER_JUNK_ONLY = /^[\s"'`,;:)\]}]*$/;
+
+/** A leaked tool CALL continues with a tool name followed by its argument opener. */
+const LEAKED_CALL_CONTINUATION = /^\s*[A-Za-z_][\w-]*\s*[({]/;
+
 /**
- * Strip leaked tool-call syntax from a would-be file content. Two conservative
- * passes so real code is never corrupted:
- *   1. Cut everything from the earliest tool-call / stop marker onward (e.g.
- *      "...</body><tool_call|>" -> "...</body>"). Markers never occur in real code.
- *   2. If (and only if) a marker was cut, also remove a trailing run of pure
- *      tool-call wrapper closers ")]" left dangling by the JSON arg wrapper
- *      (e.g. "...</body>'\">])" -> "...</body>'\">"). We touch only ) and ]
- *      (never } or code chars), so balanced code is left intact.
- * A no-op when no marker is present, so it's safe to apply unconditionally to
- * any write/append/edit content field.
+ * Whether the text following a marker means the marker is a leaked terminator rather than
+ * prose that merely mentions the syntax.
+ *
+ * Length is the wrong test (a short document mentioning `[TOOL:` looks exactly like a long one
+ * to a character budget). What separates the two is what comes AFTER: a spilled terminator is
+ * followed by nothing but wrapper punctuation, or by the rest of a tool call - never by
+ * sentences.
+ */
+function looksLikeLeakedTerminator(tail: string): boolean {
+  return WRAPPER_JUNK_ONLY.test(tail) || LEAKED_CALL_CONTINUATION.test(tail);
+}
+
+/**
+ * Strip leaked tool-call syntax from a would-be file content.
+ *
+ * The original claim behind this was "markers never occur in real code". That is false for the
+ * one kind of file this agent writes about itself: documentation. A file explaining the tool
+ * format legitimately contains `[TOOL:` and `[/TOOL]`, and cutting from the first occurrence
+ * silently truncated the document at that sentence - or, when the marker appeared near the very
+ * start, reduced the content to an empty string, which the write path then reported as the
+ * baffling "Content required for write" for a call that plainly carried content.
+ *
+ * Two guards keep the leak protection while removing that failure mode:
+ *   1. Only cut when what FOLLOWS the marker marks it as a spilled terminator - wrapper
+ *      punctuation, or the remainder of a leaked tool call - never running prose.
+ *   2. Never cut everything. If stripping would empty the content, the marker WAS the content -
+ *      that is not the leak pattern, and returning "" loses the file entirely.
+ *
+ * Then, as before: if a marker was cut, also remove the trailing run of pure wrapper closers
+ * ")]" the JSON arg wrapper left dangling. Only ) and ] are touched (never } or code chars).
  */
 export function stripStopMarkers(raw: unknown): unknown {
   if (typeof raw !== "string") return raw;
-  let s = raw;
+  const original = raw;
 
   let cutIdx = -1;
   for (const m of CONTENT_STOP_MARKERS) {
-    const i = s.indexOf(m);
-    if (i !== -1 && (cutIdx === -1 || i < cutIdx)) cutIdx = i;
+    const i = original.indexOf(m);
+    if (i === -1) continue;
+    // Guard 1: a marker followed by real prose is documentation about the syntax, not a leak.
+    if (!looksLikeLeakedTerminator(original.slice(i + m.length))) continue;
+    if (cutIdx === -1 || i < cutIdx) cutIdx = i;
   }
-  if (cutIdx === -1) return s;
+  if (cutIdx === -1) return original;
 
-  s = s.slice(0, cutIdx);
+  let s = original.slice(0, cutIdx);
   // Dangling wrapper brackets that the terminator left behind.
   s = s.replace(/["'`,\s]*[)\]][)\]"'`,\s]*$/, "");
+
+  // Guard 2: stripping must never consume the whole file.
+  if (s.trim().length === 0) return original;
   return s;
 }
 
@@ -63,5 +95,22 @@ export function stripStopMarkers(raw: unknown): unknown {
  */
 export function stripTrailingJsonArgTail(raw: unknown): unknown {
   if (typeof raw !== "string") return raw;
-  return raw.replace(/["'`]\s*\}\s*\)?\s*\]?\s*$/, "");
+
+  // Content that is already valid JSON is never a mangled arg tail - it is a JSON file, and
+  // `{"name":"x"}` ends in exactly the `"}` this pattern hunts for. Stripping it produced
+  // `{"name":"x`, which the write path then rejected as invalid JSON: a corrupted file
+  // narrowly avoided, but a write that could not succeed no matter how often it was retried.
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      JSON.parse(trimmed);
+      return raw;
+    } catch {
+      // Not valid JSON - fall through and treat the tail as the wrapper leak it looks like.
+    }
+  }
+
+  const stripped = raw.replace(/["'`]\s*\}\s*\)?\s*\]?\s*$/, "");
+  // Never let the heuristic consume the whole content.
+  return stripped.trim().length === 0 ? raw : stripped;
 }

@@ -33,6 +33,7 @@ import { withManifestCache, listSkillMdFiles } from "./skill-selector/skill-cach
 import { taskRulesGuidance, platformHintGuidance, type PlatformChannel } from "./prompt/guidance-blocks.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
 import { TokenCounter } from "./context/token-counter.js";
+import { extractFileContent } from "@ducki/tools";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
 import { createDynamicToolResolver } from "./dynamic-tools/dynamic-tool-resolver.js";
@@ -1701,8 +1702,24 @@ export class Agent {
       if (!path || String(path).trim().length === 0) {
         return { ok: false, error: "filesystem: 'path' parameter is REQUIRED and must not be empty. Provide the file or directory path you want to operate on. Example: filesystem({action:'read', path:'data/file.txt'})" };
       }
-      if ((action === "write" || action === "append") && typeof normalizedInput["content"] !== "string") {
-        return { ok: false, error: `filesystem:${action} requires string field 'content'` };
+      if (action === "write" || action === "append") {
+        // Resolve the body with the SAME rule the tool itself uses - field aliases included.
+        // These two checks used to disagree: the tool accepted nine alias names, the preflight
+        // demanded a literal string in `content`, so a write emitted as `file_text` (Anthropic's
+        // own text-editor convention) was rejected before the tool could ever have handled it.
+        // The model, told to "pass content as a string", re-sent the same call - which is how a
+        // writable file turned into ten identical failures and a killed run.
+        const resolvedContent = extractFileContent(normalizedInput, String(path));
+        if (resolvedContent === undefined) {
+          return {
+            ok: false,
+            error:
+              `filesystem:${action} needs the file body. Pass it as a plain string in 'content' ` +
+              `in this SAME call - not in a separate message, and not as a description of the file.`,
+          };
+        }
+        // Normalise onto `content` so downstream (tool, hooks, logging) sees one canonical shape.
+        normalizedInput["content"] = resolvedContent;
       }
       if (action === "edit") {
         if (typeof normalizedInput["oldString"] !== "string" || String(normalizedInput["oldString"]).trim().length === 0) {
@@ -3264,13 +3281,48 @@ export class Agent {
     let changed = false;
     const correctedInput: Record<string, unknown> = { ...toolInput };
 
+    // 1. Reconcile field NAMES against the schema before looking at values.
+    //
+    // Models mix conventions constantly - `old_string` for `oldString`, `max_results` for
+    // `maxResults`, `file_path` for `path`. Each of those is a perfectly well-formed call that
+    // fails on a spelling technicality, and renaming the key is a deterministic fix that needs
+    // no model round-trip. Matching is done on a normalised form (lowercase, punctuation
+    // stripped), so only genuine case/separator variants collapse onto a schema field.
+    const normalizeKey = (key: string): string => key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    const schemaByNormalized = new Map(Object.keys(properties).map((key) => [normalizeKey(key), key]));
+
+    /** Semantic aliases: different words for the same parameter, which normalisation cannot catch. */
+    const SEMANTIC_ALIASES: Record<string, readonly string[]> = {
+      path: ["filepath", "filename", "file", "targetpath", "target"],
+    };
+
+    for (const [inputKey, value] of Object.entries(toolInput)) {
+      if (inputKey in properties) continue;
+      const normalized = normalizeKey(inputKey);
+
+      let schemaKey = schemaByNormalized.get(normalized);
+      if (!schemaKey) {
+        schemaKey = Object.keys(SEMANTIC_ALIASES).find(
+          (candidate) => candidate in properties && SEMANTIC_ALIASES[candidate]!.includes(normalized)
+        );
+      }
+      // Never overwrite a value the model already supplied under the correct name.
+      if (!schemaKey || correctedInput[schemaKey] !== undefined) continue;
+
+      correctedInput[schemaKey] = value;
+      delete correctedInput[inputKey];
+      changed = true;
+    }
+
+    // 2. Enum values: fix a near-miss spelling of an allowed value.
     for (const [key, schema] of Object.entries(properties)) {
       const enumValues = Array.isArray(schema?.enum)
         ? schema.enum.filter((v): v is string => typeof v === "string")
         : undefined;
       if (!enumValues || enumValues.length === 0) continue;
 
-      const current = toolInput[key];
+      // Read from correctedInput: a key renamed in step 1 must still get its value checked.
+      const current = correctedInput[key];
       if (typeof current !== "string" || current.trim().length === 0) continue;
       if (enumValues.includes(current)) continue;
 
@@ -3509,7 +3561,11 @@ export class Agent {
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
       selfRepairEnabled: true,
-      selfRepairMaxAttempts: 1,
+      // Two, not one: the first attempt is usually the free mechanical fix (a renamed field,
+      // a corrected enum), which leaves no budget for the targeted LLM correction when the
+      // mechanical guess was not the right one. Self-repair is the main recovery path now, so
+      // it gets one real retry. Still bounded, and still capped at 3 by the settings parser.
+      selfRepairMaxAttempts: 2,
       enableAutoSkillSelection: this.enableAutoSkillSelection,
       autoSkillScoreThreshold: this.autoSkillScoreThreshold,
       autoSkillMarginThreshold: this.autoSkillMarginThreshold,
@@ -4372,15 +4428,45 @@ export class Agent {
           continue;
         }
 
-        const preflight = await this.preflightToolInput(call.toolName, call.input, controls);
+        let preflight = await this.preflightToolInput(call.toolName, call.input, controls);
         if (!preflight.ok) {
-          this.logger.warn("[TOOL-CALLS] Preflight validation failed", {
-            callId,
+          // Self-repair applies HERE too, not only to calls that made it to execution.
+          //
+          // A malformed call is the single most repairable kind of failure - a wrong field
+          // name, a missing argument - and it is exactly the kind preflight catches. But
+          // preflight rejections used to skip straight to "record a failure and move on",
+          // so the repair machinery below never saw the errors best suited to it: the model
+          // just got the same complaint back and repeated the same call until the run died.
+          let repairedPreflightInput = call.input as Record<string, unknown>;
+          let repairAttempt = 0;
+          while (!preflight.ok && controls.selfRepairEnabled && repairAttempt < controls.selfRepairMaxAttempts) {
+            const repair = await this.attemptSelfRepair(
+              call.toolName,
+              repairedPreflightInput,
+              preflight.error ?? "Invalid tool input",
+              this.deriveToolRecoveryHint(call.toolName, repairedPreflightInput, preflight.error ?? "")
+            );
+            repairAttempt++;
+            if (!repair) break;
+            repairedPreflightInput = repair.input;
+            preflight = await this.preflightToolInput(repair.toolName, repair.input, controls);
+          }
+
+          if (!preflight.ok) {
+            this.logger.warn("[TOOL-CALLS] Preflight validation failed", {
+              callId,
+              toolName: call.toolName,
+              error: preflight.error,
+              repairAttempts: repairAttempt,
+            });
+            resultMap.set(callId, { success: false, data: null, error: preflight.error });
+            continue;
+          }
+
+          emit("guardrail", `Tool-Aufruf automatisch korrigiert: ${call.toolName}`, {
             toolName: call.toolName,
-            error: preflight.error,
+            attempts: repairAttempt,
           });
-          resultMap.set(callId, { success: false, data: null, error: preflight.error });
-          continue;
         }
 
         // Phase 2 (was previously registered but never invoked - see HookRegistry): give
@@ -4490,7 +4576,9 @@ export class Agent {
               toolCall.toolName,
               repairedInput,
               repairedResult.error ?? "Unknown error",
-              undefined
+              // The same actionable hint the model would get - the repair model can use it
+              // just as well, and it was previously thrown away here.
+              this.deriveToolRecoveryHint(toolCall.toolName, repairedInput, repairedResult.error ?? "")
             );
             if (!repair) break;
             repairAttempts++;
@@ -5739,6 +5827,16 @@ export class Agent {
 
     let finalResponse = "";
     let consecutiveToolFailures = 0;
+    /**
+     * Why the loop ended, when it ended badly.
+     *
+     * The post-run quality passes evaluate "how good is this answer" - a question that has no
+     * meaning for an abort notice. They ran anyway: after the consecutive-failure guardrail
+     * fired, the agent still spent two full LLM round-trips (~22s each, observed) critiquing
+     * the text "Abgebrochen: 10 Versuche in Folge sind fehlgeschlagen". Pure cost, and the
+     * verdict it produced was about the stop message rather than about any work.
+     */
+    let runAbortedEarly: string | undefined;
     const repeatedToolCalls = new Map<string, number>();
     let malformedToolCallAttempts = 0;
     let unexecutedCodeFenceNudges = 0; // Bounded retries for the "showed code instead of writing it" guardrail
@@ -5764,6 +5862,7 @@ export class Agent {
     while (iterations < adjustedControls.maxIterations) {
       if (this.stopRequested) {
         emit("reasoning", "Run wurde vom Benutzer gestoppt.");
+        runAbortedEarly = "user_stopped";
         break;
       }
 
@@ -6444,6 +6543,7 @@ export class Agent {
           const stopNote = `\n\n_Abgebrochen: ${consecutiveToolFailures} Versuche in Folge sind fehlgeschlagen, ohne dass sich etwas geändert hat._${errorDetail}`;
           finalResponse = `${cleanedResponse}${stopNote}`;
           toolsJustExecuted = false;
+          runAbortedEarly = "consecutive_tool_failures";
           break;
         }
       }
@@ -6877,6 +6977,23 @@ export class Agent {
       }
     }
 
+    /**
+     * What actually happened with the tools, handed to the quality passes as fact.
+     *
+     * Reflection only ever saw the response TEXT, so it graded prose. That misses the failure
+     * mode that matters most here: an answer that reports work it did not manage to do, because
+     * the writes behind it failed. The run journal already records success per tool call - it
+     * just was never shown to the evaluator.
+     */
+    const failedActions = runJournal.filter((entry) => !entry.success);
+    const toolOutcomeContext = failedActions.length > 0
+      ? `; failedToolCalls=${failedActions.length} of ${runJournal.length} (${[
+          ...new Set(failedActions.map((entry) => entry.toolName)),
+        ].join(", ")}); IMPORTANT: if the response claims work that these failed calls were meant to perform, that is a factual error - rate it poor`
+      : runJournal.length > 0
+        ? `; allToolCallsSucceeded=${runJournal.length}`
+        : "";
+
     // Reflection & Self-Improvement Loop
     // Evaluates response quality and iteratively improves it (up to reflectionMaxRetries times)
     let reflectionQuality: string | undefined;
@@ -6890,7 +7007,16 @@ export class Agent {
       });
     }
 
-    if (!screenshotCapturedThisRun && adjustedControls.enableReflection && adjustedControls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
+    if (runAbortedEarly) {
+      emit("guardrail", "Reflexion uebersprungen (Run wurde abgebrochen)", {
+        reason: runAbortedEarly,
+        detail:
+          "Die Qualitaetspasses bewerten eine Antwort. Nach einem Abbruch gibt es keine Antwort zu " +
+          "bewerten - nur eine Abbruchmeldung, und die zu kritisieren kostet zwei LLM-Aufrufe ohne Nutzen.",
+      });
+    }
+
+    if (!runAbortedEarly && !screenshotCapturedThisRun && adjustedControls.enableReflection && adjustedControls.reflectionMaxRetries > 0 && finalResponse.trim().length > 0) {
       // Normal reflection pass: evaluate response and optionally improve it
       for (let reflectionAttempt = 1; reflectionAttempt <= adjustedControls.reflectionMaxRetries; reflectionAttempt++) {
         let reflectionResult;
@@ -6899,7 +7025,7 @@ export class Agent {
             this.reflection.evaluate(
               effectiveInput,
               this.sanitizeFinalResponse(finalResponse),
-              `attempt=${reflectionAttempt}; toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}`
+              `attempt=${reflectionAttempt}; toolsUsed=${toolsUsed.join(",")}; iterations=${iterations}${toolOutcomeContext}`
             ),
             adjustedControls.qualityPassTimeoutMs,
             "reflection"
@@ -6977,14 +7103,14 @@ export class Agent {
     let metaReflectionIssues: string[] = [];
     let metaReflectionSuggestions: string[] = [];
 
-    if (!screenshotCapturedThisRun && adjustedControls.enableReflection && adjustedControls.reflectionMetaReview && finalResponse.trim().length > 0) {
+    if (!runAbortedEarly && !screenshotCapturedThisRun && adjustedControls.enableReflection && adjustedControls.reflectionMetaReview && finalResponse.trim().length > 0) {
       let metaReflection;
       try {
         metaReflection = await this.withTimeout(
           this.reflection.evaluate(
             effectiveInput,
             this.sanitizeFinalResponse(finalResponse),
-            `type=meta-review; priorQuality=${reflectionQuality ?? "unknown"}; priorIssueCount=${reflectionIssues.length}`
+            `type=meta-review; priorQuality=${reflectionQuality ?? "unknown"}; priorIssueCount=${reflectionIssues.length}${toolOutcomeContext}`
           ),
           adjustedControls.qualityPassTimeoutMs,
           "meta-reflection"

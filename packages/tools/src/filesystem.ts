@@ -28,6 +28,67 @@ export const FILESYSTEM_ACTIONS = [
 
 export type FilesystemAction = typeof FILESYSTEM_ACTIONS[number];
 
+/**
+ * Field names a model may use for the body of a write/append.
+ *
+ * `content` is the documented one, but models reach for their own habits constantly -
+ * Anthropic's text-editor tool uses `file_text`, others emit `text`, `contents` or `body`.
+ */
+export const FILE_CONTENT_FIELDS = [
+  "content",
+  "contents",
+  "text",
+  "file_text",
+  "fileText",
+  "fileContent",
+  "file_contents",
+  "data",
+  "body",
+] as const;
+
+/**
+ * Pulls the file body out of a tool call, whatever the model called the field and whatever
+ * shape it used.
+ *
+ * This is the single source of truth for "does this write have content", deliberately exported
+ * so the agent's preflight validation can apply the SAME rule. Those two used to disagree: the
+ * tool accepted nine aliases while the preflight insisted on a literal string in `content`, so
+ * a perfectly answerable write emitted as `file_text` was rejected before the tool ever saw it -
+ * with an error message telling the model to do what it had effectively already done. The model
+ * then repeated itself until the run was killed by the consecutive-failure guardrail.
+ *
+ * Shapes beyond a plain string are coerced only where the intent is unambiguous:
+ * an array of lines is joined, a number or boolean is stringified. An object is serialised
+ * ONLY for a .json target - writing JSON into a .ts file would be a silent corruption, and a
+ * clear error is worth more there than a guess.
+ */
+export function extractFileContent(
+  input: Record<string, unknown>,
+  filePath?: string
+): string | undefined {
+  for (const field of FILE_CONTENT_FIELDS) {
+    const value = input[field];
+    if (value === undefined || value === null) continue;
+
+    if (typeof value === "string") return value;
+
+    if (Array.isArray(value)) {
+      // A list of lines is the single most common non-string shape.
+      if (value.every((entry) => typeof entry === "string")) return (value as string[]).join("\n");
+      if (filePath && /\.jsonc?$/i.test(filePath)) return JSON.stringify(value, null, 2);
+      continue;
+    }
+
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+
+    if (typeof value === "object") {
+      if (filePath && /\.jsonc?$/i.test(filePath)) return JSON.stringify(value, null, 2);
+      continue;
+    }
+  }
+  return undefined;
+}
+
 /** Lines returned by `read` when the caller gives no explicit limit. */
 const DEFAULT_READ_LINES = 2000;
 /** Longest single line `read` returns verbatim before clipping it. */
@@ -287,26 +348,14 @@ export const filesystemTool: ToolExecutor = {
     const dryRun = (input["dryRun"] as boolean | undefined) ?? false;
     const createDirs = (input["createDirs"] as boolean | undefined) ?? true;
     const overwrite = (input["overwrite"] as boolean | undefined) ?? true;
-    // Accept common aliases for the write/append content field. Models frequently
-    // emit "text" (Anthropic text-editor style uses "file_text"), "contents", etc.
-    // instead of "content"; without this a perfectly valid write fails with
-    // "Content required". Only string values are considered.
-    let content = ([
-      input["content"],
-      input["contents"],
-      input["text"],
-      input["file_text"],
-      input["fileText"],
-      input["fileContent"],
-      input["file_contents"],
-      input["data"],
-      input["body"],
-    ].find((v) => typeof v === "string")) as string | undefined;
+    // Field aliases and non-string shapes are resolved by the shared extractor, so the agent's
+    // preflight validation applies exactly the same rule (see extractFileContent).
+    let content = extractFileContent(input, String(input["path"] ?? ""));
     const recursive = (input["recursive"] as boolean | undefined) ?? false;
 
     // De-escape literal \n, \t, \r escape sequences (from JSON string parsing)
     // ONLY convert actual escape sequences, not random 'n' characters - other patterns break code
-    if (content) {
+    if (content !== undefined) {
       content = content
         .replace(/\\n/g, "\n")
         .replace(/\\t/g, "\t")
@@ -396,7 +445,10 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "write": {
-          if (!content) {
+          // `undefined`, not falsy: an empty file is a legitimate thing to write, and after the
+          // content sanitisers ran, "" must not be reported back as "you forgot the content" -
+          // that message sent the model round in circles looking for a mistake it had not made.
+          if (content === undefined) {
             return {
               success: false,
               data: null,
@@ -425,7 +477,7 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "append": {
-          if (!content) {
+          if (content === undefined) {
             return {
               success: false,
               data: null,
