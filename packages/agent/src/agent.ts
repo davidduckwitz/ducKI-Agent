@@ -152,6 +152,10 @@ When writing a file (code, HTML, JSON, any multi-line content), DO NOT embed the
 [/TOOL]
 Rules for the block form:
 - The header line holds only simple values as key=value (action, path). No JSON, no ( or { on the header line.
+- NEVER mix the two forms. A header with PARENTHESES followed by raw content on the next lines is
+  invalid: parentheses belong to the JSON form, which carries its content INSIDE the JSON. Either
+  put everything in the JSON argument, or use the block header without parentheses and close it
+  with [/TOOL].
 - Everything between the header line and [/TOOL] is the literal file content - do NOT escape newlines or quotes, do NOT wrap it in JSON.
 - Always end the block with a line containing exactly [/TOOL].
 - This avoids the #1 write failure: broken JSON escaping that corrupts the file. Prefer it for every write/append.
@@ -2810,7 +2814,97 @@ export class Agent {
         remaining = remaining.slice(0, idx) + remaining.slice(idx + block.length);
       }
     }
-    return { calls, markerCount, unparsed, remaining };
+
+    // Second, tolerant pass over whatever the strict one did not claim.
+    const hybrid = this.extractHybridHeredocCalls(remaining);
+    return {
+      calls: [...calls, ...hybrid.calls],
+      markerCount: markerCount + hybrid.markerCount,
+      unparsed,
+      remaining: hybrid.remaining,
+    };
+  }
+
+  /**
+   * Rescues the hybrid form: a bracket-syntax HEADER followed by a raw heredoc BODY.
+   *
+   *   [TOOL:filesystem(action="write", path="index.html")]
+   *   <!DOCTYPE html>
+   *   ...10 KB of HTML, no [/TOOL] terminator...
+   *
+   * Models mix the two documented shapes under load, and this particular mixture was silently
+   * fatal. The strict heredoc matcher rejects it twice over - its header class forbids `(`
+   * (deliberately, so a JSON call is never mistaken for a heredoc) and it requires a closing
+   * `[/TOOL]`. The JSON scanner then took over, parsed `action="write", path="index.html"` into
+   * the broken keys `action=` and `path=`, and left the 10 KB body lying in the response as
+   * prose. The file was created empty while the whole document sat visible in the transcript.
+   *
+   * Acceptance is deliberately narrow, so a well-formed JSON call can never be swallowed:
+   * the header must parse into an actual `write`/`append` action WITH a path and WITHOUT a
+   * body, and there must be a non-empty body under it. A JSON header (`{"action":"write"}`)
+   * yields no `key=value` pairs at all and is therefore never eligible.
+   */
+  private extractHybridHeredocCalls(response: string): {
+    calls: Array<{ toolName: string; input: Record<string, unknown> }>;
+    markerCount: number;
+    remaining: string;
+  } {
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    let markerCount = 0;
+    let remaining = response;
+
+    // Header on its own line, followed by a newline. `(` is allowed here - that is the whole
+    // point - so the body-shape checks below carry the burden of not over-matching.
+    const headerRe = /\[TOOL:([A-Za-z_][A-Za-z0-9_\-]*)([^\]\n]*)\]\r?\n/g;
+    const consumed: string[] = [];
+    let m: RegExpExecArray | null;
+
+    while ((m = headerRe.exec(response)) !== null) {
+      const toolName = m[1];
+      if (!toolName) continue;
+
+      const headerArgs = this.parseHeredocHeader(this.unwrapHeaderParens(m[2] ?? ""));
+      const action = String(headerArgs["action"] ?? "").toLowerCase();
+      if (action !== "write" && action !== "append") continue;
+      if (!headerArgs["path"]) continue;
+      // A header that already carries the body is a normal call - not this failure mode.
+      if (extractFileContent(headerArgs) !== undefined) continue;
+
+      // Body runs to the first terminator: an explicit [/TOOL], the next call, or the end.
+      const bodyStart = m.index + m[0].length;
+      const rest = response.slice(bodyStart);
+      const terminators = [rest.indexOf("[/TOOL]"), rest.indexOf("[TOOL:")].filter((i) => i >= 0);
+      const bodyEnd = terminators.length > 0 ? Math.min(...terminators) : rest.length;
+      const body = rest.slice(0, bodyEnd).replace(/\r?\n$/, "");
+      if (body.trim().length === 0) continue;
+
+      markerCount++;
+      const input: Record<string, unknown> = {
+        ...headerArgs,
+        content: body,
+        // Taken verbatim, never through a JSON string - the leak-stripping heuristics would
+        // only risk damaging it.
+        __contentTrusted: true,
+      };
+      const parsed = this.resolveToolNameAndInput(toolName, input);
+      if (parsed) {
+        calls.push(parsed);
+        consumed.push(response.slice(m.index, bodyStart + bodyEnd));
+      }
+    }
+
+    for (const block of consumed) {
+      const idx = remaining.indexOf(block);
+      if (idx >= 0) remaining = remaining.slice(0, idx) + remaining.slice(idx + block.length);
+    }
+
+    return { calls, markerCount, remaining };
+  }
+
+  /** Strips a wrapping `( ... )` from a header's argument list and drops separator commas, so
+   *  `(action="write", path="x")` parses with the same key=value reader as ` action=write path=x`. */
+  private unwrapHeaderParens(headerRest: string): string {
+    return headerRest.replace(/^\s*\(/, " ").replace(/\)\s*$/, " ").replace(/,/g, " ");
   }
 
   /**
@@ -3088,6 +3182,20 @@ export class Agent {
     if (parenNameMatch?.[1]) {
       let inner = body.slice(body.indexOf("(") + 1).trim();
       if (inner.endsWith(")")) inner = inner.slice(0, -1).trim();
+
+      // A parenthesised argument list that is NOT a JSON object is a key=value list, e.g.
+      // `filesystem(action="write", path="a.md", content="…")`. Handing that to the loose JSON
+      // reader produced keys with the `=` still attached - `action=`, `path=` - so the call
+      // carried no recognisable action, no path and no content, and the write silently did
+      // nothing. There is already a correct key=value reader; it just ran too late to be
+      // reached, because this branch "succeeded" with garbage first.
+      if (!inner.startsWith("{") && /[A-Za-z_][A-Za-z0-9_\-]*\s*=/.test(inner)) {
+        const pairArgs = this.parseHeredocHeader(this.unwrapHeaderParens(inner));
+        if (Object.keys(pairArgs).length > 0) {
+          return this.resolveToolNameAndInput(parenNameMatch[1], pairArgs);
+        }
+      }
+
       const args = this.parseLooseObject(inner || "{}");
       if (args) return this.resolveToolNameAndInput(parenNameMatch[1], args);
     }
@@ -4487,19 +4595,26 @@ export class Agent {
           // preflight rejections used to skip straight to "record a failure and move on",
           // so the repair machinery below never saw the errors best suited to it: the model
           // just got the same complaint back and repeated the same call until the run died.
-          let repairedPreflightInput = call.input as Record<string, unknown>;
+          // The ORIGINAL call is the yardstick for every repair round, never the previously
+          // repaired one. Comparing each round against its predecessor lets an empty body creep
+          // in one harmless-looking step at a time: round 1 fixes the shape, round 2 adds
+          // `content: ""`, round 3 adds `allowEmpty` - and each step looks fine next to the one
+          // before it. Against the original, a body that was never there stays never there.
+          const originalCallInput = call.input as Record<string, unknown>;
+          let repairedPreflightInput = originalCallInput;
           let repairAttempt = 0;
-          // Never let the repair model supply a FILE BODY. Self-repair fixes the shape of a
-          // call - a renamed field, a misspelled action - from the schema and the error. Asked
-          // to fix "the content is empty" it would happily write a plausible-looking file that
-          // the acting model never authored, which is worse than the truncation it is papering
-          // over. That one recovery has to go back to the model that had the real content.
-          const repairMayFabricateContent = (preflight.error ?? "").startsWith(
-            "Refusing to write an empty file"
-          );
+
+          // Re-evaluated EVERY pass, not once up front. A repair can turn some other complaint
+          // INTO the empty-content one, and a guard computed from the first error would let the
+          // loop sail straight past it - which is exactly what happened: the first error was
+          // "'action' parameter required", so the guard was false, and three rounds later a
+          // 0-byte write sailed through.
+          const mustNotRepair = (): boolean =>
+            !preflight.ok && preflight.error.startsWith("Refusing to write an empty file");
+
           while (
             !preflight.ok &&
-            !repairMayFabricateContent &&
+            !mustNotRepair() &&
             controls.selfRepairEnabled &&
             repairAttempt < controls.selfRepairMaxAttempts
           ) {
@@ -4511,8 +4626,13 @@ export class Agent {
             );
             repairAttempt++;
             if (!repair) break;
-            repairedPreflightInput = repair.input;
-            preflight = await this.preflightToolInput(repair.toolName, repair.input, controls);
+
+            // Self-repair fixes a call's shape, never its payload - see sanitizeRepairedInput.
+            const safeInput = this.sanitizeRepairedInput(call.toolName, originalCallInput, repair.input);
+            if (!safeInput) break;
+
+            repairedPreflightInput = safeInput;
+            preflight = await this.preflightToolInput(repair.toolName, safeInput, controls);
           }
 
           if (!preflight.ok) {

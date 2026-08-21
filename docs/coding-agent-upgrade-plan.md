@@ -443,3 +443,103 @@ End-to-End durch den vollständigen CodingAgent, mit genau dem abgeschnittenen A
 2. Das Modell wiederholt in der Block-Form → 46 Bytes, Inhalt vollständig.
 
 `FILE EXISTS: true · BYTES: 46 · EMPTY FILE: false · FULL CONTENT RECOVERED: true`
+
+---
+
+## 14. Nachtrag: Selbstreparatur zerstörte den Dateiinhalt
+
+**Symptom:** „write index.html — OK", die Datei ist leer, während das Reasoning des Modells das vollständige HTML-Dokument zeigt. Davor im Verlauf: `Tool-Aufruf automatisch korrigiert: filesystem, attempts: 3`.
+
+### Ursache 1: Die Fehlermeldung verriet den Ausweg
+
+`EMPTY_CONTENT_ERROR` endete mit *„If you really do want a 0-byte file, pass allowEmpty:true."* Diese Meldung wird der Selbstreparatur als Eingabe gegeben — und deren einzige Aufgabe ist, Fehler zum Verschwinden zu bringen. Sie tat das Naheliegende: setzte `allowEmpty: true`. Preflight ließ durch, das Tool schrieb eine 0-Byte-Datei und meldete Erfolg.
+
+Der Hinweis steht jetzt nur noch in der Schema-Beschreibung des Parameters, wo seine Verwendung eine bewusste Entscheidung ist statt eines Auswegs aus einer Beschwerde.
+
+### Ursache 2: Die Reparatur durfte den Dateiinhalt überhaupt anfassen
+
+Ein kleines Reparatur-Modell, das einen Aufruf mit einem 6-KB-HTML-Dokument „korrigieren" soll, reproduziert dieses Dokument nicht — es liefert etwas Kürzeres. Damit ersetzt eine Formkorrektur stillschweigend den Inhalt.
+
+`sanitizeRepairedInput()` erzwingt jetzt: Selbstreparatur darf die **Form** eines Aufrufs korrigieren, niemals die **Nutzlast**. Der Dateikörper muss byte-identisch aus der Reparatur herauskommen, wie er hineinging — Aliase werden vorher auf beiden Seiten aufgelöst, damit die nützliche Korrektur „`file_text` → `content`" weiterhin möglich bleibt. Jede andere Veränderung verwirft die Reparatur; der Fehler geht dann an das Modell zurück, das den echten Inhalt hat.
+
+Verworfen werden: gekürzter Inhalt, weggefallener Inhalt, **erfundener** Inhalt (wo vorher keiner war), und ein von der Reparatur eingeschmuggeltes `allowEmpty`.
+
+### Ursache 3: Der Schutz aus Abschnitt 13 wurde einmalig ausgewertet
+
+`repairMayFabricateContent` wurde **vor** der Schleife aus dem ersten Fehler berechnet. Eine Reparatur kann eine andere Beschwerde aber erst **in** den Leer-Inhalt-Fehler verwandeln — der Wächter sah das nie. Er wird jetzt bei jedem Durchlauf neu ausgewertet.
+
+Beide Reparaturschleifen (Preflight und Ausführung) sind gleich geschützt.
+
+### Verifikation
+
+Beide End-to-End-Fälle weiterhin grün, plus 8 neue Tests für die Reparatur-Absicherung:
+
+```
+abgeschnittener Aufruf → verweigert, danach Block-Form → 46 Bytes, vollständig
+Dokument mit [TOOL:]-Erwähnung → 231 von 231 Bytes, unversehrt
+```
+
+---
+
+## 15. Nachtrag: die eigentliche Ursache der leeren Dateien
+
+Die Abschnitte 11–14 haben je einen realen Fehler behoben, aber alle an der falschen Stelle. Eine unabhängige Analyse (frischer Agent, ohne meine Vorannahmen) hat den Inhaltsverlust im **Parser** lokalisiert und vollständig reproduziert.
+
+### Ursache A: eine Hybridform, die durch alle Raster fällt
+
+Das Modell emittiert:
+
+```
+[TOOL:filesystem(action="write", path="index.html")]
+<!DOCTYPE html>
+… 10.398 Zeichen HTML …
+```
+
+Kopfzeile in **Klammer-Syntax**, Body als **Heredoc**, **ohne `[/TOOL]`** — eine Mischung der beiden dokumentierten Formen.
+
+1. Der strikte Heredoc-Matcher (`agent.ts`, `extractHeredocCalls`) lehnt sie doppelt ab: seine Kopfzeilen-Zeichenklasse verbietet `(` (bewusst, damit JSON-Calls nicht als Heredoc gelten), **und** er verlangt zwingend `[/TOOL]`. → 0 Calls.
+2. Der JSON-Scanner übernimmt. `parseBracketBody` erkennt `name(...)` und reicht `action="write", path="index.html"` an `parseLooseObject` — das daraus die **kaputten Schlüssel** `action=` und `path=` macht. Der Call trägt damit weder Aktion noch Pfad noch Inhalt.
+3. Der 10-KB-Body bleibt als Fließtext liegen und erscheint im Verlauf als „assistant_text" — genau das „vollständige HTML im Reasoning", das im UI zu sehen war.
+
+Beleg aus der Original-Antwort in der Datenbank (Conversation 1236): `response length: 10451`, `contains [/TOOL]: false`, `heredoc extractor → 0 calls`, `extractAllToolCalls → input keys: ["action=","path="]`, `content: MISSING`.
+
+### Ursache B: meine Preflight-Reparaturschleife erzeugte daraus die 0-Byte-Datei
+
+Aus dem inhaltslosen Call wurde über drei Reparaturrunden eine erfolgreich geschriebene leere Datei:
+
+```
+extrahiert                              → REJECT  'action' parameter required
+Reparatur 1 (Form korrigiert)           → REJECT  needs the file body
+Reparatur 2 (Inhalt als leer erfunden)  → REJECT  Refusing to write an empty file
+Reparatur 3 (+ allowEmpty)              → OK      → 0 Bytes, success:true
+```
+
+Das deckt sich mit dem UI-Event `"Tool-Aufruf automatisch korrigiert: filesystem", attempts: 3`.
+
+**Und hier lag mein eigener Fehler:** Die beiden Schutzmaßnahmen aus Abschnitt 14 — Guard pro Iteration neu bewerten, `sanitizeRepairedInput()` anwenden — waren in der Preflight-Schleife **nie angekommen**. Das damalige Skript enthielt zwei Ersetzungen; die zweite scheiterte an einer Assertion, wodurch die Datei gar nicht geschrieben wurde. Ich habe danach nur die zweite nachgezogen und den Verlust der ersten nicht bemerkt. Nur der Post-Execution-Pfad war geschützt.
+
+### Behebung
+
+| Fix | Wirkung |
+|---|---|
+| Toleranter zweiter Heredoc-Durchgang (`extractHybridHeredocCalls`) | Kopfzeile mit Klammern auf eigener Zeile + Body bis `[/TOOL]`, bis zum nächsten `[TOOL:` oder bis Textende. Bewusst eng: nur bei `action` ∈ {write, append} **mit** Pfad, **ohne** bereits vorhandenen Inhalt und mit nicht-leerem Body. Eine JSON-Kopfzeile liefert keine `key=value`-Paare und ist damit nie erfasst. |
+| `parseBracketBody` erkennt `key=value`-Argumente | Ist der Klammerinhalt kein JSON, wird der bereits vorhandene, korrekte `key=value`-Leser benutzt statt `parseLooseObject`. Damit verschwinden die Schlüssel `action=` / `path=`. |
+| Preflight-Reparatur endlich abgesichert | Guard wird pro Iteration neu bewertet; `sanitizeRepairedInput()` wird angewandt — und zwar gegen den **ursprünglichen** Call, nicht gegen die jeweils vorige Reparatur, damit sich `content:""` nicht schrittweise einschleicht. |
+| Prompt-Regel | Die Hybridform wird explizit als ungültig benannt. |
+
+### Verifikation
+
+Die exakte Fehlerform durch den vollständigen CodingAgent:
+
+```
+[TOOL:filesystem(action="write", path="index.html")]  + 1225 Bytes HTML, ohne [/TOOL]
+
+FILE EXISTS: true · BYTES: 1225 von 1225 · EMPTY: false · INTACT: true
+HAS <style>: true · HAS closing </html>: true
+```
+
+11 Regressionstests in [hybrid-heredoc-parsing.test.ts](packages/agent/test/hybrid-heredoc-parsing.test.ts), davon 6 Gegenproben, dass die tolerante Erkennung keine wohlgeformten Aufrufe verschluckt.
+
+### Wichtig für den Betrieb
+
+`packages/*/package.json` zeigen mit `exports.import` auf `./dist/index.js`. `tsx watch apps/server/src/index.ts` kompiliert also **nur** `apps/server/src` — Änderungen an den Paketen wirken erst nach einem Paket-Build **und einem Server-Neustart**.
