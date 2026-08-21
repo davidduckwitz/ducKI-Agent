@@ -639,3 +639,35 @@ Abgeschnittene Antwort haette geliefert: ~27093 Zeichen
 Tatsaechlich geschrieben: 30104
 KEINE stille Kuerzung: true · Vollstaendig wiederhergestellt: true
 ```
+
+---
+
+## 18. Streaming-Fallback verhinderte große Schreibvorgänge
+
+Der Verdacht war richtig: der Fallback bei Streaming-Fehlern arbeitete gegen das Schreiben großer Dateien.
+
+### Problem 1: Ein mitten im Flug gestorbener Stream warf alles Empfangene weg
+
+`generateStream` sammelt die Deltas in `fullContent`. Starb der Stream danach, ging es in den `catch` — und dort wurde geworfen, ohne das bereits Empfangene anzusehen. Bei einer großen Datei ist das der Großteil des Dokuments.
+
+Jetzt wird eine Teilantwort zurückgegeben und als **unvollständig** markiert (`finish_reason: "incomplete_stream"`). Aufrufer behandeln das exakt wie das Erreichen der Ausgabegrenze: brauchbar zum Lesen und Weiterdenken, abgewiesen für alles, was eine halbe Nutzlast festschreiben würde (Abschnitt 17). Kein Abbruch nach Nutzer-Stopp und kein Stream, der nie aufging, fällt darunter — dort wird weiterhin geworfen.
+
+### Problem 2: Der Fallback wechselte sofort in den Modus, der bei großen Ausgaben scheitert
+
+Bei einem Streaming-Fehler ging es direkt auf `provider.generate()` — synchron. Das ist die falsche Reaktion auf eine vorübergehende Störung: der komplette Prompt wird erneut gesendet **und** die gesamte Ausgabe in einer Antwort verlangt. Genau diese Form läuft bei großem `max_tokens` in HTTP-Timeouts (die offizielle Anthropic-Empfehlung lautet, für lange Ausgaben zu streamen, eben deshalb).
+
+Aus einem Schluckauf beim Schreiben einer großen Datei wurde so gar keine Datei.
+
+Jetzt wird der **Stream einmal wiederholt**, bevor synchron gefallen wird. Kostet dasselbe wie der bisherige Sync-Versuch, behält aber den Modus, der lange Ausgaben tragen kann. Ein nicht erreichbarer Endpunkt fliegt weiterhin sofort hoch, statt in einen aussichtslosen Retry zu laufen.
+
+### Zusammenspiel mit Abschnitt 17
+
+Beide Abbruchgründe laufen jetzt durch dieselbe Prüfung `isIncompleteResponse()`:
+
+| finish_reason | Bedeutung | Folge |
+|---|---|---|
+| `length` | Modell hat sein Ausgabebudget erreicht | write/append abgewiesen, Anweisung zum Stückeln |
+| `incomplete_stream` | Verbindung starb mitten in der Ausgabe | dito |
+| `stop` / `tool_calls` / … | regulär beendet | normal |
+
+Damit gibt es keinen Weg mehr, auf dem eine unvollständige Modellausgabe still als vollständige Datei landet — unabhängig davon, ob das Budget oder die Verbindung die Ursache war.
