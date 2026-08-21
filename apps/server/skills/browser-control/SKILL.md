@@ -19,42 +19,50 @@ Use the `browser` tool whenever you need to inspect a browser page, verify UI be
 
 ## Rules
 
+- **Snapshot first**: Call `action=snapshot` after navigating to learn the interactive elements (role, accessible name, deterministic CSS selector) instead of guessing CSS selectors.
+- **Interact by name, not by selector guess**: Use `click { text: "..." }`, `click { role: "button", text: "..." }`, `type { target: "...", text: "..." }`, `select { option: "..." }`, `hover { text: "..." }`. Only fall back to raw `selector` when the element has no accessible name.
 - Prefer `action=detect` first if browser availability is uncertain.
 - Use `action=launch` to start a browser session before any navigation or interaction. Never use `open` as an action; use `launch` to start the session and `goto` to navigate to a URL.
 - Keep one session per task when possible, and reuse it instead of launching multiple browsers.
-- Use `goto`, `click`, `type`, `press`, `wait`, and `evaluate` for targeted interactions.
-- Use `list_pages` when you need to understand open tabs or page targets.
-- Use `screenshot` to capture visual state when text inspection is not enough.
-- Use `form_fill` for multi-field forms (selector -> value map).
-- Use `login` for standard username/password login flows.
+- **Verify after acting**: use `action=expect` (`text_visible`, `element_visible`, `url_contains`, `no_page_errors`, ...) and `action=get_page_errors` to confirm the page actually worked.
+- Use `frame: "<iframe-selector>"` on click/type/hover/expect when the target lives inside an iframe.
+- Use `screenshot` to capture visual state when text inspection is not enough (needs a vision-capable model; `snapshot` and `expect` work without one).
+- Use `form_fill` for multi-field forms (selector -> value map), `login` for standard username/password flows.
 - Use `cookies_get`, `cookies_set`, and `cookies_clear` to control authenticated state safely.
-- Use `pdf` when you need printable artifacts from a page.
-- Use `download` to trigger file downloads; provide `saveDir` when you need deterministic storage.
+- Use `pdf` when you need printable artifacts from a page; `download` to trigger file downloads (provide `saveDir` for deterministic storage).
 - Close sessions with `action=close` when the task is finished.
 
 ## Action Guide
 
 - `detect`: Check local browser availability and worker isolation status.
-- `launch`: Start a session. Optional: `url`, `headless`, `viewport`, `executablePath`.
+- `launch`: Start a session (reuses the shared default session; pass `newSession: true` to force a fresh browser). Optional: `url`, `headless`, `viewport`, `executablePath`, `proxyUrl`.
 - `goto`: Navigate to a URL. Optional: `waitUntil`, `timeout`.
-- `click` / `type` / `press` / `wait`: Basic interaction primitives.
+- `snapshot`: **List interactive elements** — tag, role, accessible name, state, and a deterministic CSS selector. Use this before interacting; it works without a vision model. Optional `maxNodes` (default 120).
+- `click` / `hover`: Target by CSS `selector` **or** by accessible name via `text` (+ optional `role`, `exact`). Example: `click { text: "Speichern" }`.
+- `type`: Fill a field by CSS `selector` **or** by accessible name via `target` (+ optional `role`); `text` is the content to type. Without a selector/target it types into the focused element.
+- `select`: Choose a dropdown option by `value` **or** by visible label via `option`. Example: `select { selector: "#land", option: "Österreich" }`.
+- `upload`: Attach files to an `<input type=file>` via `selector`/`target` and `filePaths` (string or array).
+- `drag_drop`: Drag `source` onto `target` (both selectors). Add `html5: true` for pages that rely on DragEvent handlers.
+- `press` / `wait`: Keyboard shortcuts and waits. `wait` accepts a `selector` (waits until visible) or a fixed `timeout`.
 - `evaluate`: Execute page-context JavaScript for state inspection.
-- `screenshot`: Capture page image to `filePath` or in-memory bytes.
-- `cookies_get`: Read cookies for current page URL or provided `url`.
-- `cookies_set`: Set one or more cookies via `cookies` array.
-- `cookies_clear`: Clear all cookies for a URL or specific names via `cookieNames`.
+- `expect`: **Assertion** — polls until the condition passes or `timeout` expires, returns `passed: true/false` (not an error). Conditions: `element_visible`, `element_hidden`, `text_visible`, `text_absent`, `url_contains`, `title_contains`, `no_page_errors`.
+- `get_page_errors`: Captured console errors, uncaught page errors, and failed network requests for the session. Use `clear: true` to reset.
+- `screenshot`: Capture page image to `filePath` or in-memory bytes. Optional `preferLive` for live-streamed sessions.
+- `switch_tab`: Activate another tab by `index` (0-based) or `urlPart`.
+- `cookies_get` / `cookies_set` / `cookies_clear`: Manage cookies for the current URL (or an explicit `url`).
 - `form_fill`: Fill many fields with `fields: { selector: value }`.
 - `login`: Use selectors and credentials (`usernameSelector`, `passwordSelector`, `submitSelector`, `username`, `password`).
 - `pdf`: Save PDF to `filePath` with optional `format`, `landscape`, `printBackground`.
 - `download`: Click download trigger (`selector`) and optionally enforce `saveDir`.
+- `stream_start` / `stream_stop`: Live frame streaming for vision-based inspection.
 - `close`: End session and release browser resources.
 
 ## Good Usage
 
-- Test a page flow from login to result.
-- Verify whether an element exists before asking the user for clarification.
+- **Test a UI flow**: navigate -> `snapshot` -> interact by name -> `expect` the result -> `get_page_errors`.
+- Verify whether an element exists before asking the user for clarification (`expect { condition: "element_visible" }`).
 - Inspect DOM state with `evaluate` when the UI is not behaving as expected.
-- Capture screenshots for visual confirmation or debugging.
+- Capture screenshots for visual confirmation or debugging (vision model required).
 - Use cookies actions to switch between authenticated and anonymous states in reproducible tests.
 - Use `form_fill` before `login` to keep selectors and inputs explicit and auditable.
 
@@ -63,36 +71,84 @@ Use the `browser` tool whenever you need to inspect a browser page, verify UI be
 - Browser actions run in an isolated worker process. If Puppeteer crashes, treat it as a tool failure and retry with `detect` then `launch`.
 - Keep `timeout` realistic for heavy pages and large downloads.
 - For `download`, verify the target directory when post-click validation is required.
+- If a text-based target is not found, run `snapshot` again — the accessible name may differ from what the user said (e.g. icon-only buttons have `aria-label`, inputs may use `placeholder`).
 
 ## Prompt Templates
 
 Use these templates to generate valid browser tool calls quickly.
 
-### Login Flow
-
-1. Check environment and launch a session.
-2. Navigate to login page if needed.
-3. Fill credentials and submit.
+### Inspect & Click by Name (preferred)
 
 ```json
 {
-	"action": "launch",
-	"url": "https://example.com/login",
-	"headless": false
+  "action": "launch",
+  "url": "https://example.com",
+  "headless": true
 }
 ```
 
 ```json
 {
-	"action": "login",
-	"sessionId": "<sessionId>",
-	"usernameSelector": "input[name='email']",
-	"passwordSelector": "input[name='password']",
-	"submitSelector": "button[type='submit']",
-	"username": "<username>",
-	"password": "<password>",
-	"waitForNavigation": true,
-	"timeoutMs": 20000
+  "action": "snapshot",
+  "sessionId": "<sessionId>"
+}
+```
+
+```json
+{
+  "action": "click",
+  "sessionId": "<sessionId>",
+  "text": "Speichern"
+}
+```
+
+```json
+{
+  "action": "expect",
+  "sessionId": "<sessionId>",
+  "condition": "text_visible",
+  "text": "Gespeichert",
+  "timeout": 8000
+}
+```
+
+### Login Flow
+
+1. Check environment and launch a session.
+2. Navigate to login page if needed.
+3. Fill credentials and submit — prefer accessible names when they exist.
+
+```json
+{
+  "action": "launch",
+  "url": "https://example.com/login",
+  "headless": false
+}
+```
+
+```json
+{
+  "action": "type",
+  "sessionId": "<sessionId>",
+  "target": "Benutzername",
+  "text": "<username>"
+}
+```
+
+```json
+{
+  "action": "type",
+  "sessionId": "<sessionId>",
+  "target": "Passwort",
+  "text": "<password>"
+}
+```
+
+```json
+{
+  "action": "click",
+  "sessionId": "<sessionId>",
+  "text": "Anmelden"
 }
 ```
 
@@ -103,11 +159,11 @@ Use these templates to generate valid browser tool calls quickly.
 
 ```json
 {
-	"action": "download",
-	"sessionId": "<sessionId>",
-	"selector": "a.download-report",
-	"saveDir": "./storage/downloads",
-	"timeoutMs": 25000
+  "action": "download",
+  "sessionId": "<sessionId>",
+  "selector": "a.download-report",
+  "saveDir": "./storage/downloads",
+  "timeoutMs": 25000
 }
 ```
 
@@ -118,12 +174,12 @@ Use these templates to generate valid browser tool calls quickly.
 
 ```json
 {
-	"action": "pdf",
-	"sessionId": "<sessionId>",
-	"filePath": "./storage/reports/report.pdf",
-	"format": "A4",
-	"printBackground": true,
-	"landscape": false
+  "action": "pdf",
+  "sessionId": "<sessionId>",
+  "filePath": "./storage/reports/report.pdf",
+  "format": "A4",
+  "printBackground": true,
+  "landscape": false
 }
 ```
 
@@ -133,14 +189,14 @@ Use `form_fill` when multiple fields must be set before submit.
 
 ```json
 {
-	"action": "form_fill",
-	"sessionId": "<sessionId>",
-	"clearFirst": true,
-	"fields": {
-		"input[name='firstName']": "Max",
-		"input[name='lastName']": "Mustermann",
-		"input[name='city']": "Fulda"
-	}
+  "action": "form_fill",
+  "sessionId": "<sessionId>",
+  "clearFirst": true,
+  "fields": {
+    "input[name='firstName']": "Max",
+    "input[name='lastName']": "Mustermann",
+    "input[name='city']": "Fulda"
+  }
 }
 ```
 
@@ -156,45 +212,61 @@ Use these patterns when a browser action fails. Prefer one recovery step at a ti
 
 ```json
 {
-	"action": "goto",
-	"sessionId": "<sessionId>",
-	"url": "<targetUrl>",
-	"waitUntil": "domcontentloaded",
-	"timeout": 30000
+  "action": "goto",
+  "sessionId": "<sessionId>",
+  "url": "<targetUrl>",
+  "waitUntil": "domcontentloaded",
+  "timeout": 30000
 }
 ```
 
-### Selector Not Found
+### Element Not Found (selector or text)
 
-1. Capture current DOM hints with `evaluate`.
-2. Retry using alternative selectors.
-3. Only then ask user for updated selector.
+1. Run `snapshot` to see the real roles/names/selectors on the page.
+2. Retry with the accessible name from the snapshot (add `role` to disambiguate, e.g. two "Löschen" buttons).
+3. Only then fall back to an explicit CSS `selector` from the snapshot output.
 
 ```json
 {
-	"action": "evaluate",
-	"sessionId": "<sessionId>",
-	"script": "() => ({ url: location.href, title: document.title, inputs: Array.from(document.querySelectorAll('input,button,a')).slice(0,25).map(el => ({tag: el.tagName, id: el.id, name: el.getAttribute('name'), cls: el.className})) })"
+  "action": "snapshot",
+  "sessionId": "<sessionId>",
+  "maxNodes": 150
 }
 ```
 
+```json
+{
+  "action": "click",
+  "sessionId": "<sessionId>",
+  "role": "button",
+  "text": "Löschen",
+  "exact": true
+}
+```
+
+### Assertion Failed (expect passed: false)
+
+1. Re-check state with `snapshot` / `get_content` — the element may have a different name, be hidden, or the page may have navigated.
+2. If the failure was a page error, read `get_page_errors` and react to the first error before retrying.
+3. Retry the interaction once, then report what was observed instead of looping.
+
 ### Login Failed or No Redirect
 
-1. Verify fields were filled (`form_fill`/`login` selectors).
+1. Verify fields were filled (`form_fill`/`login` or text-based `type`).
 2. Retry login once with higher timeout.
 3. Capture screenshot and ask for MFA/captcha guidance if still blocked.
 
 ```json
 {
-	"action": "login",
-	"sessionId": "<sessionId>",
-	"usernameSelector": "<usernameSelector>",
-	"passwordSelector": "<passwordSelector>",
-	"submitSelector": "<submitSelector>",
-	"username": "<username>",
-	"password": "<password>",
-	"waitForNavigation": true,
-	"timeoutMs": 30000
+  "action": "login",
+  "sessionId": "<sessionId>",
+  "usernameSelector": "<usernameSelector>",
+  "passwordSelector": "<passwordSelector>",
+  "submitSelector": "<submitSelector>",
+  "username": "<username>",
+  "password": "<password>",
+  "waitForNavigation": true,
+  "timeoutMs": 30000
 }
 ```
 
@@ -206,11 +278,11 @@ Use these patterns when a browser action fails. Prefer one recovery step at a ti
 
 ```json
 {
-	"action": "download",
-	"sessionId": "<sessionId>",
-	"selector": "<downloadSelector>",
-	"saveDir": "./storage/downloads",
-	"timeoutMs": 30000
+  "action": "download",
+  "sessionId": "<sessionId>",
+  "selector": "<downloadSelector>",
+  "saveDir": "./storage/downloads",
+  "timeoutMs": 30000
 }
 ```
 
@@ -222,7 +294,7 @@ Use these patterns when a browser action fails. Prefer one recovery step at a ti
 
 ```json
 {
-	"action": "detect"
+  "action": "detect"
 }
 ```
 

@@ -172,6 +172,7 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_TIMEOUT_MS",
         "AGENT_MAX_TOOL_FAILURES",
         "AGENT_MAX_REPEATED_TOOL_CALL",
+        "AGENT_STALE_READ_STREAK",
         "CODING_ENABLED",
         "PLUGIN_CREATION_ENABLED",
       ],

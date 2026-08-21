@@ -4,7 +4,12 @@
     "lib": ["ES2022", "DOM"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "composite": true
+    "composite": true,
+    // Declaration output only: emitting vite.config.js next to vite.config.ts would make
+    // Vite load the .js instead of the source (vite resolves .js before .ts) and silently
+    // drop config changes like the /socket.io proxy. The .ts is the single source of truth;
+    // Vite reads it directly. vite.config.js/.d.ts are gitignored and not tracked.
+    "emitDeclarationOnly": true
   },
   "include": ["vite.config.ts"]
 }

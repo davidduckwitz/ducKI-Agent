@@ -102,6 +102,13 @@ export interface CodingAgentOptions {
    * times without touching the quality of the actual edits. Falls back to the main provider.
    */
   explorerProvider?: LLMProvider;
+  /**
+   * Hard wall-clock budget for ONE explore call, in milliseconds. The explore sub-agent shares
+   * the run loop's stale-read loop guardrail, but a slow-but-busy exploration could otherwise
+   * block this coding run for its whole iteration budget - this caps that. Default:
+   * DUCKI_EXPLORE_TIMEOUT_MS or 3 minutes.
+   */
+  exploreTimeoutMs?: number;
 }
 
 export interface CodingRunOptions {
@@ -390,6 +397,7 @@ export class CodingAgent {
     const dxTool = options.sandboxRoot ? createScopedDiagnosticsTool(options.sandboxRoot) : diagnosticsTool;
     const exploreTool = createExploreTool(options.explorerProvider ?? provider, db, {
       ...(options.sandboxRoot ? { sandboxRoot: options.sandboxRoot } : {}),
+      timeoutMs: options.exploreTimeoutMs ?? parseInt(process.env["DUCKI_EXPLORE_TIMEOUT_MS"] ?? "180000", 10),
     });
     for (const tool of [fsTool, shTool, dxTool, gitTool, skillsTool, createTodoTool(this.todos), exploreTool, ...(options.extraTools ?? [])]) {
       this.agent.executor.registerTool(tool);
@@ -575,10 +583,34 @@ export class CodingAgent {
       // ceiling closes that gap: Agent.run() already turns timeoutMsOverride into a hard,
       // abort-backed timeout (agent.ts's armTimeout/abortController), no new mechanism needed.
       const remainingMs = deadline ? deadline - Date.now() : undefined;
-      const runResult = await this.agent.run(prompt, {
-        initialRunJournal: journal,
-        ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
-      });
+      let runResult: AgentRunResult;
+      try {
+        runResult = await this.agent.run(prompt, {
+          initialRunJournal: journal,
+          ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
+        });
+      } catch (error) {
+        // Agent.run() surfaces its progress timeout as a THROWN error (the race in run()
+        // rejects when the abort fires). Propagating that would surface as a 500/chat error to
+        // the caller; a run that stopped making progress is a normal end state, so report it
+        // as a clean CodingRunResult instead.
+        const timeoutMessage = error instanceof Error ? error.message : String(error);
+        if (/Agent timeout after/.test(timeoutMessage)) {
+          this.emit("decision", "Versuch durch Fortschritts-Timeout abgebrochen - Lauf wird gestoppt.", {
+            attempt,
+            error: timeoutMessage,
+          });
+          return {
+            success: false,
+            verified: false,
+            summary: `${lastSummary}\n\n[Stopped: ${timeoutMessage}]`,
+            attempts: attempt,
+            conversationId,
+            ...(verifyCommand ? { verifyCommand } : {}),
+          };
+        }
+        throw error;
+      }
       journal = runResult.runJournal ?? journal;
       lastSummary = runResult.response;
 

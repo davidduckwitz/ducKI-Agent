@@ -156,6 +156,167 @@ export function stripLineNumberPrefixes(text: string): string {
   return stripped.join("\n");
 }
 
+/** A matched span in ORIGINAL file coordinates. */
+interface EditSpan {
+  start: number;
+  end: number;
+}
+
+/** All literal occurrences of `needle` in `haystack`. */
+function literalSpans(haystack: string, needle: string): EditSpan[] {
+  const spans: EditSpan[] = [];
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    spans.push({ start: idx, end: idx + needle.length });
+    idx = haystack.indexOf(needle, idx + needle.length);
+  }
+  return spans;
+}
+
+/**
+ * Maps a position in the whitespace-normalized form of a file back to a position in the
+ * ORIGINAL text. `lines` is the parallel table built by tolerantSpans(): each entry holds
+ * the line's right-trimmed text and its start offset in the original. A position that lands
+ * exactly at a line's trimmed end maps to that trimmed end (NOT past the stripped trailing
+ * whitespace/`\r`), so the stripped noise survives the replacement untouched.
+ */
+function mapNormToOriginal(
+  lines: Array<{ text: string; start: number }>,
+  normPos: number
+): number {
+  let accNorm = 0;
+  for (const line of lines) {
+    if (normPos < accNorm + line.text.length) {
+      return line.start + (normPos - accNorm);
+    }
+    if (normPos === accNorm + line.text.length) {
+      return line.start + line.text.length;
+    }
+    accNorm += line.text.length + 1; // +1 for the "\n" separator
+  }
+  const last = lines[lines.length - 1]!;
+  return last.start + last.text.length;
+}
+
+/**
+ * Whitespace-tolerant edit matching (last resort, after the literal and line-number-prefix
+ * tiers failed): matches per line, ignoring `\r` (CRLF files), trailing spaces/tabs and the
+ * `<n>: ` prefixes `read` adds. The file is never blindly rewritten - the match is mapped
+ * back to original coordinates and only the matched span is replaced.
+ */
+function tolerantSpans(original: string, oldString: string): EditSpan[] {
+  const lines: Array<{ text: string; start: number }> = [];
+  let pos = 0;
+  for (const rawLine of original.split("\n")) {
+    lines.push({ text: rawLine.replace(/\r$/, "").replace(/[ \t]+$/, ""), start: pos });
+    pos += rawLine.length + 1;
+  }
+  const normalizedOriginal = lines.map((l) => l.text).join("\n");
+  const prefixStripped = stripLineNumberPrefixes(oldString);
+  const oldForNormalize = prefixStripped !== oldString ? prefixStripped : oldString;
+  const normalizedOld = oldForNormalize
+    .split("\n")
+    .map((l) => l.replace(/\r$/, "").replace(/[ \t]+$/, ""))
+    .join("\n");
+  if (normalizedOld === oldString && normalizedOriginal === original) return [];
+
+  const spans: EditSpan[] = [];
+  let idx = normalizedOriginal.indexOf(normalizedOld);
+  while (idx !== -1) {
+    spans.push({
+      start: mapNormToOriginal(lines, idx),
+      end: mapNormToOriginal(lines, idx + normalizedOld.length),
+    });
+    idx = normalizedOriginal.indexOf(normalizedOld, idx + normalizedOld.length);
+  }
+  return spans;
+}
+
+/** Levenshtein-based similarity in [0,1] for two short strings (line-level). */
+function lineSimilarity(a: string, b: string): number {
+  if (a === b) return 1;
+  if (a.length === 0 || b.length === 0) return 0;
+  const cols = b.length + 1;
+  let prev = new Array(cols).fill(0) as number[];
+  let cur = new Array(cols).fill(0) as number[];
+  for (let j = 0; j < cols; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (let j = 1; j < cols; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + cost);
+    }
+    const tmp = prev;
+    prev = cur;
+    cur = tmp;
+  }
+  return 1 - prev[cols - 1]! / Math.max(a.length, b.length);
+}
+
+/** Minimum average per-line similarity for a fuzzy edit match to be applied. */
+const FUZZY_EDIT_THRESHOLD = 0.7;
+/** How much better the best position must be than the runner-up to avoid ambiguity. */
+const FUZZY_AMBIGUITY_MARGIN = 0.05;
+
+/**
+ * Last-resort edit matching: slides the (normalized) oldString over the freshly read file
+ * line by line and, if one position matches well enough (and clearly better than any
+ * runner-up), returns the span of that block in ORIGINAL coordinates plus the text it
+ * actually matched. Used only when the literal, prefix-stripped and whitespace-tolerant
+ * tiers all failed - i.e. the model's snippet is stale or slightly off. This is the tool's
+ * own "fresh read + corrected retry": the file content is read at call time, the best
+ * matching block is located, and only that span is replaced.
+ */
+function fuzzyEditSpans(
+  original: string,
+  oldString: string
+): { spans: EditSpan[] | null; similarity: number; matchedText: string | null } {
+  const lines: Array<{ text: string; start: number }> = [];
+  let pos = 0;
+  for (const rawLine of original.split("\n")) {
+    lines.push({ text: rawLine.replace(/\r$/, "").replace(/[ \t]+$/, ""), start: pos });
+    pos += rawLine.length + 1;
+  }
+  const oldLines = oldString.split("\n").map((l) => l.replace(/\r$/, "").replace(/[ \t]+$/, ""));
+  if (oldLines.length === 0 || oldLines.length > lines.length) {
+    return { spans: null, similarity: 0, matchedText: null };
+  }
+
+  let bestStart = -1;
+  let bestScore = 0;
+  let secondScore = 0;
+  for (let start = 0; start + oldLines.length <= lines.length; start++) {
+    let sum = 0;
+    for (let k = 0; k < oldLines.length; k++) {
+      sum += lineSimilarity(oldLines[k]!, lines[start + k]!.text);
+    }
+    const score = sum / oldLines.length;
+    if (score > bestScore) {
+      secondScore = bestScore;
+      bestScore = score;
+      bestStart = start;
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  }
+  if (bestStart < 0 || bestScore < FUZZY_EDIT_THRESHOLD) {
+    return { spans: null, similarity: bestScore, matchedText: null };
+  }
+  if (bestScore - secondScore < FUZZY_AMBIGUITY_MARGIN) {
+    return { spans: null, similarity: bestScore, matchedText: null };
+  }
+
+  const first = lines[bestStart]!;
+  const last = lines[bestStart + oldLines.length - 1]!;
+  const start = first.start;
+  const end = last.start + last.text.length;
+  return {
+    spans: [{ start, end }],
+    similarity: bestScore,
+    matchedText: original.slice(start, end),
+  };
+}
+
 interface PathOptions {
   basePath?: string;
   safeMode: boolean;
@@ -577,49 +738,98 @@ export const filesystemTool: ToolExecutor = {
             };
           }
           const original = readFileSync(filePath, "utf8");
-          let occurrences = original.split(oldString).length - 1;
 
-          // Fallback, never a blind rewrite: `read` returns numbered lines, so a model that
-          // copies a snippet verbatim brings the "12: " prefixes with it. Only try the
-          // stripped form once the literal text has already failed to match.
-          if (occurrences === 0) {
+          // Keep a CRLF file consistent: when the file's dominant line ending is CRLF, convert
+          // the inserted text so we don't mix EOL styles mid-file.
+          const crlfCount = (original.match(/\r\n/g) ?? []).length;
+          const lfOnlyCount = (original.match(/\n/g) ?? []).length - crlfCount;
+          if (crlfCount > lfOnlyCount && newString.includes("\n")) {
+            newString = newString.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+          }
+
+          // Matching tiers, each only tried after the previous one found nothing:
+          //   1. literal           - the fast, exact path
+          //   2. prefix-stripped   - `read` returns numbered lines; a model copying a snippet
+          //      verbatim brings the "12: " prefixes with it. All-or-nothing (see helper).
+          //   3. whitespace-tolerant - ignores `\r` (CRLF files), trailing spaces/tabs and the
+          //      line-number prefixes, matched per line and mapped back to original
+          //      coordinates. Never a blind rewrite - only the matched span is replaced.
+          //   4. fuzzy             - the model's snippet is stale or slightly off (nothing above
+          //      matched, so the file clearly changed since its read): slide the oldString over
+          //      the freshly read file and, if one block matches well enough and unambiguously,
+          //      correct the oldString automatically. Disabled for replaceAll (too ambiguous).
+          let spans = literalSpans(original, oldString);
+          let matchedMode: "literal" | "stripped-prefixes" | "normalized-whitespace" | "fuzzy" = "literal";
+          if (spans.length === 0) {
             const destripped = stripLineNumberPrefixes(oldString);
             if (destripped !== oldString) {
-              const strippedOccurrences = original.split(destripped).length - 1;
-              if (strippedOccurrences > 0) {
-                oldString = destripped;
-                occurrences = strippedOccurrences;
-              }
+              spans = literalSpans(original, destripped);
+              if (spans.length > 0) matchedMode = "stripped-prefixes";
+            }
+          }
+          if (spans.length === 0) {
+            spans = tolerantSpans(original, oldString);
+            if (spans.length > 0) matchedMode = "normalized-whitespace";
+          }
+          let fuzzyResult: { spans: EditSpan[] | null; similarity: number; matchedText: string | null } | undefined;
+          if (spans.length === 0 && !replaceAll) {
+            fuzzyResult = fuzzyEditSpans(original, oldString);
+            if (fuzzyResult.spans) {
+              spans = fuzzyResult.spans;
+              matchedMode = "fuzzy";
             }
           }
 
-          if (occurrences === 0) {
+          if (spans.length === 0) {
+            const similarityHint =
+              fuzzyResult !== undefined && fuzzyResult.similarity > 0.3
+                ? ` The closest line-block matched the current file content at only ${(fuzzyResult.similarity * 100).toFixed(0)}% - the snippet has drifted too far from what is in the file now.`
+                : "";
             return {
               success: false,
               data: null,
               error:
-                `oldString not found in file: ${filePath}. The text must match the file EXACTLY, ` +
-                `including indentation, and WITHOUT the "<n>: " line-number prefixes that the read action adds. ` +
-                `Re-read the relevant lines and copy the content after the colon.`,
+                `oldString not found in file: ${filePath} (${original.split("\n").length} lines). ` +
+                `The text must match the file EXACTLY: re-read the relevant lines with action:"read" and copy ` +
+                `them verbatim - WITHOUT the "<n>: " line-number prefixes and WITHOUT the "[lines ...]" footer. ` +
+                `If the file changed since your last read (an earlier edit or another tool modified it), the old ` +
+                `text no longer exists - base the edit on a FRESH read. The tool tolerates line endings and ` +
+                `trailing spaces, but not missing or changed indentation, different words, or stale content.` +
+                similarityHint,
             };
           }
-          if (occurrences > 1 && !replaceAll) {
+          if (spans.length > 1 && !replaceAll) {
             return {
               success: false,
               data: null,
-              error: `oldString is not unique (${occurrences} matches) in ${filePath}. Provide more surrounding context or set replaceAll:true.`,
+              error: `oldString is not unique (${spans.length} matches) in ${filePath}. Provide more surrounding context or set replaceAll:true.`,
             };
           }
-          const updated = replaceAll
-            ? original.split(oldString).join(newString)
-            : original.replace(oldString, newString);
+
+          // Apply right-to-left so earlier offsets stay valid after each replacement.
+          let updated = original;
+          if (replaceAll) {
+            for (let i = spans.length - 1; i >= 0; i--) {
+              const { start, end } = spans[i]!;
+              updated = updated.slice(0, start) + newString + updated.slice(end);
+            }
+          } else {
+            const { start, end } = spans[0]!;
+            updated = updated.slice(0, start) + newString + updated.slice(end);
+          }
           const validationError = validateContent(filePath, updated);
           if (validationError) return { success: false, data: null, error: validationError };
+          // A fuzzy match corrected the model's stale oldString - report what was actually
+          // matched so the model can learn from the drift.
+          const fuzzyExtra =
+            matchedMode === "fuzzy" && fuzzyResult?.spans && fuzzyResult.matchedText !== null
+              ? { similarity: fuzzyResult.similarity, matchedText: fuzzyResult.matchedText }
+              : {};
           if (dryRun) {
-            return { success: true, data: { dryRun: true, action, path: filePath, occurrences } };
+            return { success: true, data: { dryRun: true, action, path: filePath, occurrences: spans.length, matchedMode, ...fuzzyExtra } };
           }
           atomicWrite(filePath, updated);
-          return { success: true, data: { path: filePath, occurrences } };
+          return { success: true, data: { path: filePath, occurrences: spans.length, matchedMode, ...fuzzyExtra } };
         }
 
         case "delete": {

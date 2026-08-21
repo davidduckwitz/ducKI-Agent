@@ -1,18 +1,57 @@
+# Dependencies & build output
 node_modules/
 dist/
-.env
-*.db
+build/
+out/
 *.tsbuildinfo
+.turbo/
+.vite/
+# Vite config is source-only (apps/web/vite.config.ts). A compiled .js next to it would
+# shadow the .ts (Vite resolves .js first) and silently drop config changes like the
+# /socket.io proxy; the build no longer emits it (tsconfig.node.json).
+vite.config.js
+vite.config.d.ts
+# Vite temp bundles created when a TS config is loaded
+vite.config.*.timestamp-*.mjs
+.cache/
+coverage/
+
+# Runtime data (plugin databases, lock/state files - not source)
+*.db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+apps/server/plugins/*/data/
 storage/
 *.log
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / backup / OS cruft
+*.bak
+*.tmp
+*.swp
+*.swo
 .DS_Store
-coverage/
+Thumbs.db
+.idea/
+
+# Packaged binaries / installers (never belong in source control)
+*.exe
+*.zip
+*.msi
+*.dmg
+
 apps/server/shared-workspace/llm-wiki/
 apps/server/shared-workspace/chat-uploads/
 apps/server/shared-workspace/btc-puzzle/
 apps/server/shared-workspace/coding/
 apps/server/shared-workspace/bitcoin-puzzle-attempts/
-
+apps/server/dist/
 # Tauri
 target/
 apps/tauri-desktop/target/
@@ -22,4 +61,3 @@ apps/tauri-server/target/
 apps/tauri-server/src-tauri/target/
 apps/tauri-server/dist/
 Cargo.lock
-server.exe

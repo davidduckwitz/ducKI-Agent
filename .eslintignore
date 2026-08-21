@@ -1,0 +1,3 @@
+# Separate git worktrees of other sessions have their own (partly invalid) configs;
+# linting them breaks `eslint .` entirely - skip the whole .claude directory.
+.claude/

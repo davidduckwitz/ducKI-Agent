@@ -51,6 +51,11 @@ export interface AgentRunResult {
    *  attempts) carry it forward into the next run() call instead of losing it when each
    *  attempt's runLoop starts a fresh one. Undefined when the run journal is disabled. */
   runJournal?: RunJournalEntry[];
+  /** Why the run ended early, when it did: "user_stopped", "consecutive_tool_failures" or
+   *  "stale_read_loop". Lets a caller (e.g. the explore tool) distinguish a normal answer
+   *  from an abort notice instead of pattern-matching the response text. Undefined for a
+   *  run that ended on its own. */
+  abortedReason?: string;
 }
 
 export interface AgentRunContextCaps {
@@ -377,6 +382,14 @@ export interface AgentRuntimeControls {
   reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;
   maxRepeatedToolCall: number;
+  /**
+   * Consecutive iterations re-issuing the EXACT SAME read-only call set (no mutation in
+   * between) before the run aborts as a non-converging loop. Catches a model stuck
+   * re-reading the same files - something maxRepeatedToolCall (byte-identical single calls)
+   * and maxConsecutiveToolFailures (all-failed iterations) structurally cannot.
+   * Settings key: AGENT_STALE_READ_STREAK
+   */
+  staleReadLoopThreshold: number;
 
   // Self-Repair
   selfRepairEnabled: boolean;

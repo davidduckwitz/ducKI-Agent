@@ -13,6 +13,8 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
   const qc = useQueryClient();
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  // Live preview: simulate a plan size and show which budget/timeout a run would get.
+  const [previewSteps, setPreviewSteps] = useState(4);
 
   const settingKeys = [
     "CODING_AGENT_MAX_ITERATIONS",
@@ -62,7 +64,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
   const getDescription = (key: string): string => {
     const descriptions: Record<string, string> = {
       CODING_AGENT_MAX_ITERATIONS:
-        "Maximale Iterationen für den Chat Coding Agent (Standard für alle Plan-Umsetzungen). Bestimmt, wie viele Gedankenschritte der Agent pro Versuch durchlaufen kann.",
+        "Maximale Iterationen für den Chat Coding Agent (Standard für alle Plan-Umsetzungen). Bestimmt, wie viele Gedankenschritte der Agent pro Versuch durchlaufen kann. Vorrang: Diese Einstellungen (einfach/mittel/komplex nach Schrittzahl) gelten für die Chat-Plan-Umsetzung ('Umsetzen') und überstimmen dort AGENT_MAX_ITERATIONS und AGENT_CODING_MAX_ITERATIONS. Coding-Area-Chat und CodingWorkspace-Plan nutzen weiterhin AGENT_CODING_MAX_ITERATIONS.",
       CODING_AGENT_MAX_ITERATIONS_SIMPLE:
         "Maximale Iterationen für einfache Pläne (1-3 Schritte) im Coding-Bereich. Höhere Werte ermöglichen mehr Fehlerbehandlung.",
       CODING_AGENT_MAX_ITERATIONS_MEDIUM:
@@ -87,6 +89,53 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_TIMEOUT_MS: "Timeout (ms)",
     };
     return labels[key] ?? key;
+  };
+
+  /** A value counts as configured when the user typed it (unsaved) or it was saved in the DB. */
+  const configuredValue = (key: string): string | undefined => {
+    const v = edits[key] ?? settingsMap.get(key);
+    return v !== undefined && v !== null && String(v).trim() !== "" ? String(v) : undefined;
+  };
+
+  const parsePositiveInt = (v: string | undefined, fallback: number): number => {
+    if (v === undefined) return fallback;
+    const n = Number.parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+
+  /**
+   * Mirrors the server's resolveCodingIterations(): the tier's own setting wins, then the flat
+   * "Max Iterationen (Chat)" (CODING_AGENT_MAX_ITERATIONS), then the tier default (20/50/100).
+   */
+  const effectiveIterationsFor = (steps: number): number => {
+    if (!Number.isFinite(steps) || steps < 1) return 0;
+    const flat = configuredValue("CODING_AGENT_MAX_ITERATIONS");
+    if (steps <= 3) {
+      return parsePositiveInt(configuredValue("CODING_AGENT_MAX_ITERATIONS_SIMPLE"), parsePositiveInt(flat, 20));
+    }
+    if (steps <= 7) {
+      return parsePositiveInt(configuredValue("CODING_AGENT_MAX_ITERATIONS_MEDIUM"), parsePositiveInt(flat, 50));
+    }
+    return parsePositiveInt(configuredValue("CODING_AGENT_MAX_ITERATIONS_COMPLEX"), parsePositiveInt(flat, 100));
+  };
+
+  const tierLabelFor = (steps: number): string => {
+    if (steps <= 3) return "Einfach (1–3 Schritte)";
+    if (steps <= 7) return "Mittel (4–7 Schritte)";
+    return "Komplex (8+ Schritte)";
+  };
+
+  const effectiveTimeoutMs = (): number =>
+    parsePositiveInt(configuredValue("CODING_AGENT_TIMEOUT_MS"), 300000);
+
+  const effectiveAttempts = (): number =>
+    parsePositiveInt(configuredValue("CODING_AGENT_MAX_ATTEMPTS"), 3);
+
+  const formatMs = (ms: number): string => {
+    if (ms < 60000) return `${Math.round(ms / 1000)} s`;
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.round((ms % 60000) / 1000);
+    return seconds > 0 ? `${minutes} Min ${seconds} s` : `${minutes} Min`;
   };
 
   return (
@@ -197,9 +246,65 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
                 <li>Max Attempts sollte 1-5 sein. Höher = sehr lange Ausführungen</li>
                 <li>Timeout in Millisekunden: 300000 = 5 Min, 600000 = 10 Min</li>
                 <li>Änderungen gelten nur für neue Plan-Ausführungen</li>
+                <li>
+                  Vorrangregel Iterationsbudget: Chat-Plan „Umsetzen" = diese Tiers
+                  (einfach/mittel/komplex); Coding-Area-Chat &amp; CodingWorkspace-Plan =
+                  „Coding: Max Iterations" (AGENT_CODING_MAX_ITERATIONS); normaler Chat =
+                  „Max Iterations (Full Mode)" (AGENT_MAX_ITERATIONS). Spezifischeres gewinnt.
+                </li>
               </ul>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Live Preview */}
+      <div className="rounded-lg border border-border bg-card/50 p-4">
+        <div className="flex items-center gap-2">
+          <h4 className="text-sm font-medium">Live-Vorschau: Budget eines Laufs</h4>
+          <div className="group relative cursor-help">
+            <HelpCircle className="h-4 w-4 text-muted-foreground" />
+            <div className="absolute bottom-full right-0 hidden group-hover:block rounded bg-black/80 text-white text-xs p-2 mb-2 whitespace-nowrap z-10">
+              Simuliert die Schrittzahl eines Plans und zeigt, welches Iterationsbudget und
+              Zeitlimit ein Lauf über die Chat-Plan-Umsetzung („Umsetzen") bekommen würde.
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 space-y-3">
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min="1"
+              max="20"
+              value={previewSteps}
+              onChange={(e) => setPreviewSteps(Number(e.target.value))}
+              className="flex-1"
+            />
+            <span className="w-16 text-right text-sm font-medium tabular-nums">
+              {previewSteps} Schritt{previewSteps === 1 ? "" : "e"}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div className="rounded bg-blue-500/10 p-2">
+              <p className="text-xs text-muted-foreground">Tier (Schrittzahl)</p>
+              <p className="font-medium">{tierLabelFor(previewSteps)}</p>
+            </div>
+            <div className="rounded bg-blue-500/10 p-2">
+              <p className="text-xs text-muted-foreground">Iterationsbudget</p>
+              <p className="font-medium">{effectiveIterationsFor(previewSteps)} Iterationen</p>
+            </div>
+            <div className="rounded bg-blue-500/10 p-2">
+              <p className="text-xs text-muted-foreground">Zeitlimit (Timeout)</p>
+              <p className="font-medium">{formatMs(effectiveTimeoutMs())}</p>
+            </div>
+            <div className="rounded bg-blue-500/10 p-2">
+              <p className="text-xs text-muted-foreground">Max Versuche</p>
+              <p className="font-medium">{effectiveAttempts()}</p>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Die Vorschau aktualisiert sich live mit Ihren Eingaben — auch bevor Sie sie speichern.
+          </p>
         </div>
       </div>
 

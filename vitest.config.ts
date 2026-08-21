@@ -17,6 +17,19 @@ export default defineConfig({
      * failures across repeated runs versus 1-in-3 with threads.
      */
     pool: "forks",
+    /**
+     * Keep the vitest defaults and additionally skip .claude/worktrees: those are
+     * separate git worktrees of other sessions with their own code states, whose
+     * tests would otherwise pollute (and fail) the main suite.
+     */
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/cypress/**",
+      "**/.{idea,git,cache,output,temp}/**",
+      "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build,eslint,prettier}.config.*",
+      "**/.claude/worktrees/**",
+    ],
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],

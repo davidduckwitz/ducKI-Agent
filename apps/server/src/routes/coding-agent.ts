@@ -27,9 +27,10 @@ function parseIntSetting(value: string | undefined | null, defaultValue: number)
 
 /**
  * Resolves the per-attempt iteration budget from the persisted /settings > Agenten values, making the
- * settings page the single source of truth. The tier is chosen by plan step count (mirrors the old
- * frontend heuristic of 20/50/100), falling back to the flat CODING_AGENT_MAX_ITERATIONS, then to any
- * client-supplied value, then to the documented default.
+ * settings page the single source of truth. The tier is chosen by plan step count and falls back to the
+ * same defaults the settings UI displays (20/50/100, see CodingAgentSettings.tsx) when nothing was saved
+ * yet - the tiered defaults must never collapse onto the flat CODING_AGENT_MAX_ITERATIONS value, so that
+ * one stays "unset" (0) unless the user explicitly configured it.
  */
 async function resolveCodingIterations(
   db: DatabaseService,
@@ -38,12 +39,12 @@ async function resolveCodingIterations(
 ): Promise<number> {
   const flat = parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS"), 0);
   if (typeof stepCount === "number" && Number.isFinite(stepCount)) {
-    if (stepCount <= 3) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_SIMPLE"), flat || 15);
-    if (stepCount <= 7) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_MEDIUM"), flat || 30);
-    return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_COMPLEX"), flat || 60);
+    if (stepCount <= 3) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_SIMPLE"), flat || 20);
+    if (stepCount <= 7) return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_MEDIUM"), flat || 50);
+    return parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ITERATIONS_COMPLEX"), flat || 100);
   }
   if (flat > 0) return flat;
-  return clientOverride && clientOverride > 0 ? clientOverride : 40;
+  return clientOverride && clientOverride > 0 ? clientOverride : 100;
 }
 
 codingAgentRouter.use(async (req, res, next) => {
@@ -94,7 +95,10 @@ codingAgentRouter.post("/run", async (req, res, next) => {
     // maxIterations is only a last-resort fallback for older clients.
     const maxIterationsPerAttempt = await resolveCodingIterations(db, body.stepCount, body.maxIterations);
     const maxAttempts = parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ATTEMPTS"), body.maxAttempts ?? 3);
-    const timeoutMs = parseIntSetting(await db.getSetting("CODING_AGENT_TIMEOUT_MS"), 0);
+    // Default 5 minutes (300000ms) - the same value the settings UI displays as the standard.
+    // Previously the fallback was 0 (= no wall-clock limit at all), so a run that never
+    // converged could loop for hours unless the user had explicitly saved the setting.
+    const timeoutMs = parseIntSetting(await db.getSetting("CODING_AGENT_TIMEOUT_MS"), 300000);
 
     // A run started from an existing chat continues IN that chat instead of opening a second
     // session for it. Validated here rather than trusted: a bogus id would otherwise surface

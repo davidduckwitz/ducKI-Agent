@@ -187,6 +187,139 @@ describe("filesystem tool (PR3)", () => {
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/not found/i);
     });
+
+    it("strips '<n>: ' line-number prefixes from a model-copied oldString", async () => {
+      writeFileSync(join(dir, "numbered.txt"), "foo\nbar\nbaz");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "numbered.txt"),
+        oldString: "2: bar",
+        newString: "qux",
+        safeMode: false,
+      });
+      expect(result.success).toBe(true);
+      expect((result.data as any).matchedMode).toBe("stripped-prefixes");
+      expect(readFileSync(join(dir, "numbered.txt"), "utf8")).toBe("foo\nqux\nbaz");
+    });
+
+    it("tolerates CRLF files when the model sends LF-only oldString (and keeps the file CRLF)", async () => {
+      writeFileSync(join(dir, "crlf.txt"), "foo\r\nbar\r\nbaz");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "crlf.txt"),
+        oldString: "foo\nbar",
+        newString: "foo\nqux",
+        safeMode: false,
+      });
+      expect(result.success).toBe(true);
+      expect((result.data as any).matchedMode).toBe("normalized-whitespace");
+      expect(readFileSync(join(dir, "crlf.txt"), "utf8")).toBe("foo\r\nqux\r\nbaz");
+    });
+
+    it("tolerates trailing whitespace differences in oldString", async () => {
+      writeFileSync(join(dir, "trail.txt"), "foo  \nbar");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "trail.txt"),
+        oldString: "foo\nbar",
+        newString: "foo\nqux",
+        safeMode: false,
+      });
+      expect(result.success).toBe(true);
+      expect(readFileSync(join(dir, "trail.txt"), "utf8")).toBe("foo\nqux");
+    });
+
+    it("supports replaceAll through the whitespace-tolerant tier", async () => {
+      writeFileSync(join(dir, "trail-multi.txt"), "a  \nb\na  \nb");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "trail-multi.txt"),
+        oldString: "a\nb",
+        newString: "X",
+        replaceAll: true,
+        safeMode: false,
+      });
+      expect(result.success).toBe(true);
+      expect(readFileSync(join(dir, "trail-multi.txt"), "utf8")).toBe("X\nX");
+    });
+
+    it("never matches through the tolerant tier when the text genuinely differs", async () => {
+      writeFileSync(join(dir, "genuine.txt"), "hello world");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "genuine.txt"),
+        oldString: "hello\nworld",
+        newString: "x",
+        safeMode: false,
+      });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/oldString not found/);
+      expect(result.error).toContain("FRESH read");
+    });
+
+    it("self-heals a stale oldString via fuzzy matching (fresh read + corrected retry)", async () => {
+      // The file changed since the model's read: "bar" became "baz". The literal, prefix
+      // and whitespace tiers all fail; the fuzzy tier finds the block and corrects the edit.
+      writeFileSync(join(dir, "stale.txt"), "foo\nbaz\nqux");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "stale.txt"),
+        oldString: "foo\nbar\nqux",
+        newString: "replaced",
+        safeMode: false,
+      });
+      expect(result.success).toBe(true);
+      expect((result.data as any).matchedMode).toBe("fuzzy");
+      expect((result.data as any).similarity).toBeGreaterThanOrEqual(0.7);
+      expect((result.data as any).matchedText).toBe("foo\nbaz\nqux");
+      expect(readFileSync(join(dir, "stale.txt"), "utf8")).toBe("replaced");
+    });
+
+    it("fuzzy-heals indentation drift (model omitted leading whitespace)", async () => {
+      writeFileSync(join(dir, "indent.txt"), "    <p>hello</p>\n    <p>world</p>");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "indent.txt"),
+        oldString: "<p>hello</p>\n<p>world</p>",
+        newString: "<p>ersetzt</p>",
+        safeMode: false,
+      });
+      expect(result.success).toBe(true);
+      expect((result.data as any).matchedMode).toBe("fuzzy");
+      expect(readFileSync(join(dir, "indent.txt"), "utf8")).toBe("<p>ersetzt</p>");
+    });
+
+    it("rejects a stale oldString whose drift is too large for a safe fuzzy match", async () => {
+      // "baz" -> "zzz": average similarity drops far below the threshold, so the tool must
+      // NOT guess - it returns the not-found error (with the similarity hint).
+      writeFileSync(join(dir, "toofar.txt"), "foo\nzzz\nqux");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "toofar.txt"),
+        oldString: "foo\nbar\nqux",
+        newString: "replaced",
+        safeMode: false,
+      });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/oldString not found/);
+      expect(result.error).toMatch(/closest line-block matched/);
+      expect(readFileSync(join(dir, "toofar.txt"), "utf8")).toBe("foo\nzzz\nqux"); // untouched
+    });
+
+    it("never applies fuzzy matching when replaceAll is set (too ambiguous)", async () => {
+      writeFileSync(join(dir, "fuzzy-replaceall.txt"), "foo\nbaz");
+      const result = await exec({
+        action: "edit",
+        path: join(dir, "fuzzy-replaceall.txt"),
+        oldString: "bar",
+        newString: "x",
+        replaceAll: true,
+        safeMode: false,
+      });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/oldString not found/);
+      expect(readFileSync(join(dir, "fuzzy-replaceall.txt"), "utf8")).toBe("foo\nbaz");
+    });
   });
 
   // ── ranged read ───────────────────────────────────────────────────────────

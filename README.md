@@ -345,6 +345,8 @@ Important agent controls:
 - `AGENT_TIMEOUT_MS`
 - `AGENT_MAX_TOOL_FAILURES`
 - `AGENT_MAX_REPEATED_TOOL_CALL`
+- `AGENT_STALE_READ_STREAK` (consecutive iterations repeating the same read-only calls before the run aborts as a non-converging loop; default 4)
+- `DUCKI_EXPLORE_TIMEOUT_MS` (hard wall-clock budget for one `explore` sub-agent call, in ms; default 180000 = 3 min)
 - `AGENT_AUTO_MEMORY`
 - `AGENT_AUTO_SKILL_SELECTION`
 - `AGENT_SKILL_BEHAVIOR` (`automatic` or `active`)

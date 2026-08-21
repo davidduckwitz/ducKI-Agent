@@ -36,7 +36,18 @@ type BrowserAction =
   // Live preview: CDP screencast pushes frames from the worker to the main process as they
   // render, instead of the caller polling `screenshot` repeatedly. See browserFrameEvents.
   | "stream_start"
-  | "stream_stop";
+  | "stream_stop"
+  // Interaction & testing upgrades: accessibility-style element snapshot + text/role-based
+  // targeting (so the model doesn't have to guess CSS selectors), page-error capture and
+  // expect-style assertions, plus hover/drag&drop/select/upload/tab-switching.
+  | "snapshot"
+  | "get_page_errors"
+  | "expect"
+  | "hover"
+  | "drag_drop"
+  | "select"
+  | "upload"
+  | "switch_tab";
 
 interface BrowserSession {
   browser: import("puppeteer-core").Browser;
@@ -48,6 +59,11 @@ interface BrowserSession {
    *  mode (e.g. the user just changed BROWSER_HEADLESS_MODE in Settings) can detect the
    *  mismatch and relaunch instead of silently reusing a session in the wrong mode. */
   headless: boolean;
+  /** Console errors + uncaught page errors captured since the session started (or since
+   *  the last get_page_errors with clear=true). See attachPageListeners(). */
+  pageErrors: Array<{ type: string; text: string; url: string; timestamp: string }>;
+  /** Failed network requests captured since the session started. See attachPageListeners(). */
+  networkErrors: Array<{ url: string; method: string; error: string; timestamp: string }>;
 }
 
 interface BrowserWorkerRequest {
@@ -416,8 +432,19 @@ async function createSession(options: {
     page,
     launchedAt: new Date().toISOString(),
     headless: options.headless ?? true,
+    pageErrors: [],
+    networkErrors: [],
   };
   sessions.set(sessionId, session);
+
+  // Error capture for action=get_page_errors / expect(no_page_errors): console errors,
+  // uncaught page errors and failed requests are recorded per session (bounded buffers).
+  // Attached to the initial page and to every tab the browser opens afterwards.
+  attachPageListeners(session, page);
+  browser.on("targetcreated", async (target) => {
+    const newPage = await target.page().catch(() => null);
+    if (newPage) attachPageListeners(session, newPage);
+  });
 
   // Without this, an external crash/close of the browser process fires an unhandled
   // "disconnected"/"error" event on the Puppeteer EventEmitter, which crashes the whole
@@ -526,17 +553,269 @@ async function ensureSession(input: Record<string, unknown>): Promise<{ sessionI
   throw new Error(`Browser session '${requestedSessionId}' not found (no fallback sessions available)`);
 }
 
+// ---------------------------------------------------------------------------
+// Interaction & testing helpers
+// ---------------------------------------------------------------------------
+
+/** Pages we already wired error-capture listeners onto (WeakSet so GC can drop pages). */
+const wiredPages = new WeakSet<object>();
+
+/**
+ * Captures console errors, uncaught page errors and failed network requests into the
+ * session (bounded buffers, readable via action=get_page_errors). Attached to the initial
+ * page, to every tab the browser opens afterwards, and to pages switched to via switch_tab.
+ */
+function attachPageListeners(session: BrowserSession, page: import("puppeteer-core").Page): void {
+  if (wiredPages.has(page)) return;
+  wiredPages.add(page);
+  const push = <T,>(arr: T[], item: T) => {
+    arr.push(item);
+    if (arr.length > 200) arr.splice(0, arr.length - 200);
+  };
+  page.on("console", (msg) => {
+    if (msg.type() === "error") {
+      push(session.pageErrors, {
+        type: msg.type(),
+        text: msg.text().slice(0, 300),
+        url: (msg.location()?.url ?? page.url()).slice(0, 300),
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+  page.on("pageerror", (err) => {
+    push(session.pageErrors, {
+      type: "pageerror",
+      text: String(err instanceof Error ? err.message : err).slice(0, 300),
+      url: page.url().slice(0, 300),
+      timestamp: new Date().toISOString(),
+    });
+  });
+  page.on("requestfailed", (req) => {
+    push(session.networkErrors, {
+      url: req.url().slice(0, 400),
+      method: req.method(),
+      error: (req.failure()?.errorText ?? "failed").slice(0, 200),
+      timestamp: new Date().toISOString(),
+    });
+  });
+}
+
+/**
+ * Runs inside the page (browser context). Collects visible interactive elements with an
+ * accessible-ish name and a deterministic CSS selector. With `match` set, returns the
+ * selector of the first element whose role/name matches, or null. Fully self-contained:
+ * no outer-scope references, so it can be passed straight to page.evaluate.
+ */
+function collectInteractiveElements(opts: {
+  maxNodes: number;
+  match?: { text?: string; role?: string; exact?: boolean };
+}): unknown {
+  const buildSelector = (el: Element): string => {
+    if (el.id) return `#${CSS.escape(el.id)}`;
+    const testId = el.getAttribute("data-testid");
+    if (testId) return `[data-testid="${CSS.escape(testId)}"]`;
+    const parts: string[] = [];
+    let current: Element | null = el;
+    // Walk up the tree collecting a deterministic path (html > body > main > button:nth-of-type(2)).
+    while (current && current.nodeType === 1 && current !== document.documentElement && current.parentElement) {
+      const parentEl: Element = current.parentElement;
+      let part = current.tagName.toLowerCase();
+      // Same-tag sibling index via an indexed loop (a closure over the loop variable trips
+      // TS's circular-inference detection in this function).
+      let sameTagCount = 0;
+      let sameTagIndex = 0;
+      for (let i = 0; i < parentEl.children.length; i += 1) {
+        const child = parentEl.children[i] as Element;
+        if (child.tagName === current.tagName) {
+          sameTagCount += 1;
+          if (child === current) sameTagIndex = sameTagCount;
+        }
+      }
+      if (sameTagCount > 1) part += `:nth-of-type(${sameTagIndex})`;
+      parts.unshift(part);
+      current = parentEl;
+    }
+    parts.unshift("html");
+    return parts.join(" > ");
+  };
+  const isVisible = (el: Element): boolean => {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return false;
+    if (r.bottom < 0 || r.top > window.innerHeight) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+    return true;
+  };
+  const implicitRole = (el: Element): string => {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "a" || tag === "area") return "link";
+    if (tag === "button" || tag === "summary") return "button";
+    if (tag === "select") return "combobox";
+    if (tag === "textarea") return "textbox";
+    if (tag === "input") {
+      const t = (el as HTMLInputElement).type;
+      if (t === "checkbox") return "checkbox";
+      if (t === "radio") return "radio";
+      if (t === "submit" || t === "button" || t === "reset") return "button";
+      return "textbox";
+    }
+    return "";
+  };
+  const nameOf = (el: Element): string => {
+    const aria = el.getAttribute("aria-label");
+    if (aria) return aria;
+    const labelledBy = el.getAttribute("aria-labelledby");
+    if (labelledBy) {
+      const ref = document.getElementById(labelledBy);
+      if (ref) return (ref.textContent || "").replace(/\s+/g, " ").trim();
+    }
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const label = el.labels?.[0]?.textContent;
+      if (label) return label.replace(/\s+/g, " ").trim();
+      if (el.placeholder) return el.placeholder;
+    }
+    if (el instanceof HTMLSelectElement) {
+      const label = el.labels?.[0]?.textContent;
+      if (label) return label.replace(/\s+/g, " ").trim();
+    }
+    if (el instanceof HTMLButtonElement || el instanceof HTMLAnchorElement || el.tagName.toLowerCase() === "summary") {
+      const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+      if (t) return t.slice(0, 120);
+    }
+    const alt = (el as HTMLImageElement).alt;
+    if (alt) return alt;
+    const title = el.getAttribute("title");
+    if (title) return title;
+    const input = el as HTMLInputElement;
+    if (el instanceof HTMLInputElement && input.value && (input.type === "button" || input.type === "submit")) {
+      return input.value.slice(0, 120);
+    }
+    return "";
+  };
+  const normalize = (s: string): string => s.replace(/\s+/g, " ").trim();
+  const match = opts.match
+    ? { text: normalize(opts.match.text ?? ""), role: (opts.match.role ?? "").toLowerCase(), exact: opts.match.exact === true }
+    : null;
+  const els = Array.from(
+    document.querySelectorAll(
+      "a[href], button, input, select, textarea, summary, [role], [tabindex], [contenteditable], [onclick]"
+    )
+  );
+  const out: Array<Record<string, unknown>> = [];
+  for (const el of els) {
+    if (!isVisible(el)) continue;
+    const role = (el.getAttribute("role") || implicitRole(el)).toLowerCase();
+    const name = nameOf(el);
+    if (!name && !role) continue;
+    if (match) {
+      const nameMatches = match.text ? (match.exact ? normalize(name) === match.text : normalize(name).includes(match.text)) : true;
+      const roleMatches = match.role ? role === match.role : true;
+      if (nameMatches && roleMatches) return buildSelector(el);
+      continue;
+    }
+    const record: Record<string, unknown> = { tag: el.tagName.toLowerCase(), role: role || "unknown" };
+    if (name) record.name = name.slice(0, 120);
+    record.selector = buildSelector(el);
+    if (el instanceof HTMLInputElement) {
+      if (el.value && (el.type === "button" || el.type === "submit")) record.value = el.value.slice(0, 60);
+      if (el.disabled) record.disabled = true;
+      if (el.checked !== undefined) record.checked = el.checked;
+      if (el.type === "checkbox" || el.type === "radio") record.inputType = el.type;
+    } else if (el instanceof HTMLSelectElement) {
+      if (el.disabled) record.disabled = true;
+    }
+    if (el instanceof HTMLAnchorElement && el.href) record.href = el.href.slice(0, 200);
+    if (el.getAttribute("aria-expanded")) record.expanded = el.getAttribute("aria-expanded");
+    if (el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true") record.disabled = true;
+    out.push(record);
+    if (out.length >= opts.maxNodes) break;
+  }
+  return match ? null : out;
+}
+
+/**
+ * Resolves a target for click/type/hover/etc.: a CSS `selector` wins, otherwise the element
+ * is found by accessible name (`text` for click/hover, `target` for type/select/upload)
+ * optionally constrained by `role`. Returns the resolved selector (a deterministic CSS
+ * path generated in-page) so every action can use the same waitForSelector+click flow.
+ */
+async function resolveSelector(
+  ctx: import("puppeteer-core").Page | import("puppeteer-core").Frame,
+  input: Record<string, unknown>,
+  opts: { nameKey?: "text" | "target" } = {}
+): Promise<string> {
+  const selector = String(input["selector"] ?? "").trim();
+  if (selector) return selector;
+  // `type`/`select`/`upload` carry the CONTENT in `text`, so their target name lives in
+  // `target` (nameKey="target"); click/hover/expect use `text` as the target name.
+  const nameKey = opts.nameKey ?? "text";
+  const name = String(input[nameKey] ?? input["target"] ?? "").trim();
+  const role = String(input["role"] ?? "").trim();
+  const exact = input["exact"] === true || input["exact"] === "true";
+  if (!name && !role) {
+    throw new Error("selector is required (or pass text/target + optional role to find the element by its accessible name)");
+  }
+  const found = await ctx.evaluate(collectInteractiveElements, {
+    maxNodes: 300,
+    match: { text: name, role: role || undefined, exact },
+  });
+  if (!found) {
+    throw new Error(`Element not found ${role ? `(role "${role}")` : ""} ${name ? `with name "${name}"` : ""} - use action=snapshot to see what's on the page`);
+  }
+  return String(found);
+}
+
+/**
+ * Optional `frame` param: a CSS selector for an <iframe>. When given, actions run inside
+ * that frame instead of the top-level document (same-origin frames; cross-origin iframes
+ * are reported as an error with a hint, because Puppeteer can't reach their DOM).
+ */
+async function targetContext(
+  session: BrowserSession,
+  input: Record<string, unknown>
+): Promise<{ ctx: import("puppeteer-core").Page | import("puppeteer-core").Frame; label: string }> {
+  const frameSelector = String(input["frame"] ?? "").trim();
+  if (!frameSelector) return { ctx: session.page, label: "page" };
+  const handle = await session.page.$(frameSelector);
+  if (!handle) throw new Error(`iframe "${frameSelector}" not found on the page`);
+  const frame = await handle.contentFrame();
+  if (!frame) {
+    throw new Error(`iframe "${frameSelector}" has no accessible content frame (cross-origin or not yet loaded)`);
+  }
+  return { ctx: frame, label: frameSelector };
+}
+
 export const browserTool: ToolExecutor = {
   name: "browser",
-  description: "Detect browser availability and control browser sessions using Puppeteer",
+  description:
+    "Detect browser availability and control browser sessions using Puppeteer. HOW TO USE: " +
+    "launch (optionally with url) or goto, then snapshot to list interactive elements " +
+    "(role/name/selector - prefer this over guessing CSS selectors), then interact " +
+    "text-based: click {text}, type {target, text}, select {option}, hover {text}; verify " +
+    "with expect (text_visible, no_page_errors, ...) and get_page_errors. Example: " +
+    "click {text:'Speichern'} then expect {condition:'text_visible', text:'Gespeichert'}.",
   definition: {
     name: "browser",
-    description: "Browser automation and detection via Puppeteer",
+    description:
+      "Browser automation and detection via Puppeteer. snapshot lists interactive elements " +
+      "(role/name/selector); click/hover by text, type by target, select by option label; " +
+      "verify with expect; check get_page_errors. Example: snapshot -> click {text:'Speichern'} " +
+      "-> expect {condition:'text_visible', text:'Gespeichert'} -> get_page_errors.",
     parameters: {
       type: "object",
       properties: {
         action: {
           type: "string",
+          description:
+            "Which browser operation to run. Session: detect, launch, list_sessions, " +
+            "list_pages, close. Navigation: goto, screenshot_url. Reading: screenshot " +
+            "(vision), get_content, snapshot, evaluate, verify_page. Interaction: click/hover " +
+            "(selector OR text+role), type (selector OR target; text=content), press, wait, " +
+            "form_fill, login, select (value/option label), upload (filePaths), drag_drop, " +
+            "switch_tab. Testing: expect (element_visible, element_hidden, text_visible, " +
+            "text_absent, url_contains, title_contains, no_page_errors), get_page_errors. " +
+            "Cookies: cookies_get/set/clear. Extras: pdf, download, stream_start/stop. Use " +
+            "snapshot for real element names instead of guessing CSS selectors.",
           enum: [
             "detect",
             "launch",
@@ -562,13 +841,28 @@ export const browserTool: ToolExecutor = {
             "verify_page",
             "stream_start",
             "stream_stop",
+            "snapshot",
+            "get_page_errors",
+            "expect",
+            "hover",
+            "drag_drop",
+            "select",
+            "upload",
+            "switch_tab",
           ],
         },
         sessionId: { type: "string", description: "Browser session id" },
         newSession: { type: "boolean", description: "For action=launch: force a brand-new browser instead of reusing the shared default session", default: false },
         url: { type: "string", description: "URL to open or navigate to" },
-        selector: { type: "string", description: "CSS selector for click/type/wait" },
-        text: { type: "string", description: "Text to type" },
+        selector: { type: "string", description: "CSS selector for click/type/wait/hover/select/upload. Example: '#submit-btn' or 'main button:nth-of-type(2)'" },
+        // Text-based targeting: click/hover accept `text` (accessible name), type/select/
+        // upload accept `target` (because `text` is the content to type). `role` narrows the
+        // match (button, link, textbox, combobox, checkbox, ...). See action=snapshot.
+        text: { type: "string", description: "Text to type (type) OR the accessible name of the element to target (click/hover/expect text_visible). Example: text: 'Speichern'" },
+        target: { type: "string", description: "Accessible name of the element to target for type/select/upload (alternative to selector). Example: target: 'Benutzername'" },
+        role: { type: "string", description: "ARIA role to narrow text/target-based lookup, e.g. button, link, textbox, combobox, checkbox. Example: role: 'button', text: 'Anmelden'" },
+        exact: { type: "boolean", description: "Match the accessible name exactly (default: substring match)" },
+        frame: { type: "string", description: "Optional CSS selector of an <iframe> to run the action inside (same-origin frames only)" },
         key: { type: "string", description: "Keyboard key or shortcut" },
         timeout: { type: "number", description: "Timeout in ms", default: 10000 },
         waitUntil: { type: "string", enum: ["load", "domcontentloaded", "networkidle0", "networkidle2"] },
@@ -602,6 +896,24 @@ export const browserTool: ToolExecutor = {
         preferLive: { type: "boolean", description: "For action=screenshot: if this session is live-streaming (see stream_start) and has a frame from the last 1.5s, return it instantly instead of capturing a fresh full-page screenshot. Faster, but viewport-only (not full scroll height).", default: false },
         maxWidth: { type: "number", description: "For action=stream_start: max frame width in px", default: 960 },
         maxHeight: { type: "number", description: "For action=stream_start: max frame height in px", default: 720 },
+        // snapshot
+        maxNodes: { type: "number", description: "For action=snapshot: max interactive elements to return", default: 120 },
+        // get_page_errors
+        clear: { type: "boolean", description: "For action=get_page_errors: clear the captured errors after reading", default: false },
+        // expect
+        condition: { type: "string", enum: ["element_visible", "element_hidden", "text_visible", "text_absent", "url_contains", "title_contains", "no_page_errors"], description: "Assertion to check (polls until it passes or the timeout expires). Examples: expect {condition:'text_visible', text:'Gespeichert'}; expect {condition:'no_page_errors'}" },
+        urlPart: { type: "string", description: "For action=expect condition=url_contains: substring expected in the page URL" },
+        // drag_drop
+        source: { type: "string", description: "For action=drag_drop: CSS selector of the draggable element" },
+        sourceText: { type: "string", description: "For action=drag_drop: accessible name of the draggable element (alternative to source)" },
+        sourceRole: { type: "string", description: "For action=drag_drop: role narrowing sourceText lookup" },
+        html5: { type: "boolean", description: "For action=drag_drop: dispatch HTML5 DragEvents instead of mouse-based dragging", default: false },
+        // select / upload
+        value: { type: "string", description: "For action=select: option value to choose" },
+        option: { type: "string", description: "For action=select: visible label of the option to choose (alternative to value)" },
+        filePaths: { type: "array", items: { type: "string" }, description: "For action=upload: file path(s) to upload (or a comma-separated string)" },
+        // switch_tab
+        index: { type: "number", description: "For action=switch_tab: 0-based tab index to switch to" },
       },
       required: ["action"],
     },
@@ -642,7 +954,11 @@ export const browserTool: ToolExecutor = {
   },
 };
 
-async function executeInWorker(input: Record<string, unknown>): Promise<ToolResult> {
+/**
+ * Worker-side dispatch. Exported so tests can exercise the full action logic in-process
+ * (vitest can't fork() the TS source module the way the production worker does).
+ */
+export async function executeInWorker(input: Record<string, unknown>): Promise<ToolResult> {
   const action = String(input["action"] ?? "").trim().toLowerCase() as BrowserAction;
   try {
     switch (action) {
@@ -724,32 +1040,254 @@ async function executeInWorker(input: Record<string, unknown>): Promise<ToolResu
       }
       case "click": {
         const { sessionId, session } = await ensureSession(input);
-        const selector = String(input["selector"] ?? "").trim();
-        if (!selector) return fail("selector is required");
+        const { ctx } = await targetContext(session, input);
+        const selector = await resolveSelector(ctx, input);
         const timeout = Number(input["timeout"] ?? 10000);
-        await session.page.waitForSelector(selector, { timeout, visible: true });
-        await session.page.click(selector);
+        await ctx.waitForSelector(selector, { timeout, visible: true });
+        await ctx.click(selector);
         return ok({ sessionId, clicked: selector, url: session.page.url() });
       }
       case "type": {
         const { sessionId, session } = await ensureSession(input);
-        const selector = String(input["selector"] ?? "").trim();
+        const { ctx } = await targetContext(session, input);
         const text = String(input["text"] ?? "");
         const timeout = Number(input["timeout"] ?? 10000);
-        if (!selector) {
+        // type uses `target`/`role` for text-based targeting because `text` is the content
+        // to type (mirroring the existing no-selector flow: type into the focused element).
+        const selectorRaw = String(input["selector"] ?? "").trim();
+        const targetName = String(input["target"] ?? "").trim();
+        const role = String(input["role"] ?? "").trim();
+        if (!selectorRaw && !targetName && !role) {
           // No selector given: type into the currently-focused element. Models routinely
           // call `type` with just `text` right after a click/focus (mirroring Puppeteer's
           // page.keyboard.type semantics). Falling back here - instead of failing with
           // "selector is required" - makes that natural flow work. `text` is still required
           // because typing nothing is always a mistake.
-          if (!text) return fail("type requires 'text' (optionally with 'selector')");
+          if (!text) return fail("type requires 'text' (optionally with 'selector' or 'target')");
           await session.page.keyboard.type(text);
           return ok({ sessionId, typed: text.length, selector: null, viaFocusedElement: true });
         }
-        await session.page.waitForSelector(selector, { visible: true, timeout });
-        await session.page.click(selector);
-        await session.page.type(selector, text);
+        const selector = await resolveSelector(ctx, input, { nameKey: "target" });
+        await ctx.waitForSelector(selector, { visible: true, timeout });
+        await ctx.click(selector);
+        await ctx.type(selector, text);
         return ok({ sessionId, typed: text.length, selector });
+      }
+      case "hover": {
+        const { sessionId, session } = await ensureSession(input);
+        const { ctx } = await targetContext(session, input);
+        const selector = await resolveSelector(ctx, input);
+        const timeout = Number(input["timeout"] ?? 10000);
+        await ctx.waitForSelector(selector, { timeout, visible: true });
+        await ctx.hover(selector);
+        return ok({ sessionId, hovered: selector, url: session.page.url() });
+      }
+      case "snapshot": {
+        const { sessionId, session } = await ensureSession(input);
+        const maxNodes = Math.max(1, Math.min(200, Number(input["maxNodes"] ?? 120) || 120));
+        const elements = (await session.page.evaluate(collectInteractiveElements, { maxNodes })) as Array<Record<string, unknown>>;
+        return ok({
+          sessionId,
+          url: session.page.url(),
+          title: await session.page.title().catch(() => ""),
+          count: elements.length,
+          // Use the elements directly (no stringification) - ToolResult passes objects through.
+          elements,
+        });
+      }
+      case "get_page_errors": {
+        const { sessionId, session } = await ensureSession(input);
+        const clear = input["clear"] === true || input["clear"] === "true";
+        const pageErrors = session.pageErrors.slice();
+        const networkErrors = session.networkErrors.slice();
+        if (clear) {
+          session.pageErrors = [];
+          session.networkErrors = [];
+        }
+        return ok({
+          sessionId,
+          pageErrors,
+          networkErrors,
+          pageErrorCount: pageErrors.length,
+          networkErrorCount: networkErrors.length,
+          url: session.page.url(),
+        });
+      }
+      case "expect": {
+        const { sessionId, session } = await ensureSession(input);
+        const { ctx } = await targetContext(session, input);
+        const condition = String(input["condition"] ?? "").trim();
+        const timeout = Math.max(200, Number(input["timeout"] ?? 5000) || 5000);
+        const deadline = Date.now() + timeout;
+        const url = session.page.url();
+        const text = String(input["text"] ?? "").trim();
+        const urlPart = String(input["urlPart"] ?? "").trim();
+        const check = async (): Promise<{ pass: boolean; info?: string }> => {
+          switch (condition) {
+            case "element_visible": {
+              try {
+                const sel = await resolveSelector(ctx, input);
+                await ctx.waitForSelector(sel, { timeout: 400, visible: true });
+                return { pass: true };
+              } catch {
+                return { pass: false, info: `element not visible (selector/text/role: ${String(input["selector"] ?? input["text"] ?? input["target"] ?? "")})` };
+              }
+            }
+            case "element_hidden": {
+              // Not found by name at all counts as hidden/absent (e.g. a loading spinner that
+              // should be gone, or an element that must not exist).
+              let sel: string;
+              try {
+                sel = await resolveSelector(ctx, input);
+              } catch {
+                return { pass: true };
+              }
+              try {
+                await ctx.waitForSelector(sel, { timeout: 400, hidden: true });
+                return { pass: true };
+              } catch {
+                return { pass: false, info: `element still visible (selector/text/role: ${String(input["selector"] ?? input["text"] ?? input["target"] ?? "")})` };
+              }
+            }
+            case "text_visible":
+            case "text_absent": {
+              if (!text) return { pass: false, info: "text is required for text_visible/text_absent" };
+              const body = (await ctx.evaluate(() => document.body?.innerText ?? "")) as string;
+              const found = body.includes(text);
+              const pass = condition === "text_visible" ? found : !found;
+              return { pass, info: pass ? undefined : `text "${text.slice(0, 80)}" ${condition === "text_visible" ? "not found" : "still present"} on page` };
+            }
+            case "url_contains": {
+              const part = urlPart || text;
+              if (!part) return { pass: false, info: "urlPart (or text) is required for url_contains" };
+              return { pass: session.page.url().includes(part) };
+            }
+            case "title_contains": {
+              if (!text) return { pass: false, info: "text is required for title_contains" };
+              const title = await session.page.title().catch(() => "");
+              return { pass: title.includes(text) };
+            }
+            case "no_page_errors": {
+              const errs = [...session.pageErrors, ...session.networkErrors];
+              return errs.length === 0
+                ? { pass: true }
+                : { pass: false, info: `${errs.length} page/network error(s) captured; first: ${(errs[0] as { text?: string; error?: string }).text ?? (errs[0] as { error?: string }).error ?? JSON.stringify(errs[0]).slice(0, 120)}` };
+            }
+            default:
+              return { pass: false, info: `unknown condition "${condition}" (valid: element_visible, element_hidden, text_visible, text_absent, url_contains, title_contains, no_page_errors)` };
+          }
+        };
+        let lastInfo = "";
+        while (Date.now() < deadline) {
+          const r = await check();
+          if (r.pass) return ok({ sessionId, condition, passed: true, timeout, url });
+          lastInfo = r.info ?? "";
+          if (condition === "no_page_errors" || condition === "text_absent") break; // negative checks don't improve by waiting
+          await new Promise((res) => setTimeout(res, 200));
+        }
+        return ok({ sessionId, condition, passed: false, reason: lastInfo || `condition "${condition}" not met within ${timeout}ms`, timeout, url });
+      }
+      case "drag_drop": {
+        const { sessionId, session } = await ensureSession(input);
+        const { ctx } = await targetContext(session, input);
+        const source = await resolveSelector(ctx, {
+          selector: input["source"],
+          text: input["sourceText"],
+          role: input["sourceRole"],
+          exact: input["exact"],
+        });
+        const target = String(input["target"] ?? "").trim();
+        if (!target) return fail("drag_drop: target (CSS selector of the drop zone) is required");
+        if (input["html5"] === true || input["html5"] === "true") {
+          await ctx.evaluate(
+            ({ src, dst }) => {
+              const s = document.querySelector(src) as HTMLElement | null;
+              const t = document.querySelector(dst) as HTMLElement | null;
+              if (!s || !t) throw new Error("drag_drop: source or target not found");
+              const dt = new DataTransfer();
+              s.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+              t.dispatchEvent(new DragEvent("dragover", { bubbles: true, dataTransfer: dt }));
+              t.dispatchEvent(new DragEvent("drop", { bubbles: true, dataTransfer: dt }));
+              s.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: dt }));
+            },
+            { src: source, dst: target }
+          );
+          return ok({ sessionId, dragged: source, droppedOn: target, mode: "html5" });
+        }
+        // Mouse-based drag (HTML5 dnd handlers that listen on dragstart often need html5:true).
+        const srcEl = await ctx.$(source);
+        const dstEl = await ctx.$(target);
+        if (!srcEl || !dstEl) return fail("drag_drop: source or target not found");
+        const sb = await srcEl.boundingBox();
+        const db = await dstEl.boundingBox();
+        if (!sb || !db) return fail("drag_drop: source/target has no bounding box (hidden?)");
+        await session.page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
+        await session.page.mouse.down();
+        await session.page.mouse.move(db.x + db.width / 2, db.y + db.height / 2, { steps: 12 });
+        await session.page.mouse.up();
+        return ok({ sessionId, dragged: source, droppedOn: target, mode: "mouse" });
+      }
+      case "select": {
+        const { sessionId, session } = await ensureSession(input);
+        const { ctx } = await targetContext(session, input);
+        const selector = await resolveSelector(ctx, input, { nameKey: "target" });
+        const timeout = Number(input["timeout"] ?? 10000);
+        await ctx.waitForSelector(selector, { timeout, visible: true });
+        const value = input["value"] !== undefined && input["value"] !== null && String(input["value"]).trim() !== "" ? String(input["value"]) : undefined;
+        const option = String(input["option"] ?? "").trim();
+        let selected: string[];
+        if (option) {
+          // Select by the option's visible label instead of its value attribute.
+          const val = (await ctx.evaluate(
+            ({ sel, label }) => {
+              const el = document.querySelector(sel) as HTMLSelectElement | null;
+              if (!el) return null;
+              const opt = Array.from(el.options).find((o) => (o.textContent || "").trim() === label || (o.textContent || "").trim().includes(label));
+              return opt ? opt.value : null;
+            },
+            { sel: selector, label: option }
+          )) as string | null;
+          if (val === null) return fail(`select: option "${option}" not found in ${selector} (use action=snapshot to list options)`);
+          selected = await ctx.select(selector, val);
+        } else if (value !== undefined) {
+          selected = await ctx.select(selector, value);
+        } else {
+          return fail("select: 'value' or 'option' (visible label) is required");
+        }
+        return ok({ sessionId, selector, selected, url: session.page.url() });
+      }
+      case "upload": {
+        const { sessionId, session } = await ensureSession(input);
+        const { ctx } = await targetContext(session, input);
+        const selector = await resolveSelector(ctx, input, { nameKey: "target" });
+        const paths = Array.isArray(input["filePaths"])
+          ? input["filePaths"].map(String).filter(Boolean)
+          : String(input["filePaths"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+        if (paths.length === 0) return fail("upload: filePaths (string or array) is required");
+        await ctx.waitForSelector(selector, { timeout: Number(input["timeout"] ?? 10000), visible: true });
+        const el = await ctx.$(selector);
+        if (!el) return fail(`upload: element not found: ${selector}`);
+        await (el as import("puppeteer-core").ElementHandle<HTMLInputElement>).uploadFile(...paths);
+        return ok({ sessionId, selector, files: paths });
+      }
+      case "switch_tab": {
+        const { sessionId, session } = await ensureSession(input);
+        const pages = await session.browser.pages();
+        let target: import("puppeteer-core").Page | undefined;
+        const index = Number(input["index"]);
+        if (Number.isInteger(index) && index >= 0 && index < pages.length) target = pages[index]!;
+        const urlPart = String(input["urlPart"] ?? "").trim();
+        if (!target && urlPart) target = pages.find((p) => p.url().includes(urlPart));
+        if (!target) {
+          const open = (await Promise.all(
+            pages.map(async (p) => `${p.url()}${await p.title().catch(() => "") ? ` (${await p.title().catch(() => "")})` : ""}`)
+          )).join(", ");
+          return fail(`switch_tab: no tab matches index ${String(input["index"] ?? "")} or urlPart "${urlPart}". Open tabs: ${open}`);
+        }
+        await target.bringToFront();
+        session.page = target;
+        attachPageListeners(session, target);
+        return ok({ sessionId, index: pages.indexOf(target), url: target.url(), title: await target.title().catch(() => "") });
       }
       case "press": {
         const { sessionId, session } = await ensureSession(input);

@@ -32,6 +32,7 @@ function buildControls(enabledOptionalTools: string[]): AgentRuntimeControls {
     reasonerUseToolMinConfidence: 0.65,
     maxConsecutiveToolFailures: 3,
     maxRepeatedToolCall: 3,
+    staleReadLoopThreshold: 4,
     selfRepairEnabled: false,
     selfRepairMaxAttempts: 0,
     enableAutoSkillSelection: false,

@@ -1,5 +1,5 @@
 /** @type {import("eslint").Linter.Config} */
-export default {
+module.exports = {
   root: true,
   parser: "@typescript-eslint/parser",
   plugins: ["@typescript-eslint"],
@@ -10,7 +10,7 @@ export default {
   ],
   parserOptions: {
     project: true,
-    tsconfigRootDir: import.meta.dirname
+    tsconfigRootDir: __dirname
   },
   rules: {
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
@@ -18,5 +18,5 @@ export default {
     "@typescript-eslint/explicit-function-return-type": "off",
     "@typescript-eslint/consistent-type-imports": "error"
   },
-  ignorePatterns: ["dist/", "node_modules/", "*.js", "*.cjs"]
+  ignorePatterns: ["dist/", "node_modules/", "*.js", "*.cjs", ".claude/"]
 };

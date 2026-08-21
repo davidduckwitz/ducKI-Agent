@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createExploreTool } from "../src/coding/explore-tool";
 import { Agent } from "../src/agent";
 import { TokenCounter } from "../src/context/token-counter";
@@ -74,6 +77,86 @@ describe("explore sub-agent isolation", () => {
       const result = await fs.execute({ action, path: "a.ts", content: "x" });
       expect(result.success, `${action} must be refused`).toBe(false);
       expect(result.error).toContain("read-only");
+    }
+  });
+});
+
+/** Provider whose generate() never settles - simulates a hung local model endpoint. */
+function neverResolvingProvider() {
+  return {
+    model: "test-model",
+    generate: () => new Promise(() => {}),
+    generateStream: () => new Promise(() => {}),
+    supportsStreaming: () => false,
+  } as any;
+}
+
+/** Provider handing back a scripted sequence of responses, one per generate call. */
+function scriptedProvider(contents: string[]) {
+  let index = 0;
+  return {
+    model: "test-model",
+    generate: async () => {
+      const content = contents[Math.min(index, contents.length - 1)] ?? "done";
+      index++;
+      return { content, model: "test-model", usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+    },
+    generateStream: async () => ({
+      content: "done",
+      model: "test-model",
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+    }),
+    supportsStreaming: () => false,
+  } as any;
+}
+
+describe("explore sub-agent hang protection", () => {
+  it("aborts an exploration whose LLM call never settles, bounded by the timeout", async () => {
+    const tool = createExploreTool(neverResolvingProvider(), stubDb(), { timeoutMs: 50 });
+    const start = Date.now();
+    const result = await tool.execute({ question: "where is the router?" });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("timed out after");
+    expect(result.error).toContain("grep/glob");
+    expect(Date.now() - start).toBeLessThan(5000);
+  });
+
+  it("reports a loop (repeated identical reads) as a failure instead of an answer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "explore-loop-"));
+    try {
+      writeFileSync(join(dir, "a.txt"), "hello");
+      const reads = Array(8).fill('[TOOL:filesystem({"action":"read","path":"a.txt"})]');
+      const tool = createExploreTool(scriptedProvider([...reads, "done"]), stubDb(), {
+        sandboxRoot: dir,
+        timeoutMs: 30000,
+      });
+
+      const result = await tool.execute({ question: "what is in a.txt?" });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/without progress|loop detected/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still returns a normal answer for a productive one-shot exploration", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "explore-ok-"));
+    try {
+      writeFileSync(join(dir, "a.txt"), "hello");
+      const tool = createExploreTool(
+        scriptedProvider(['[TOOL:filesystem({"action":"read","path":"a.txt"})]', "found it in a.txt:1"]),
+        stubDb(),
+        { sandboxRoot: dir, timeoutMs: 30000 }
+      );
+
+      const result = await tool.execute({ question: "what is in a.txt?" });
+
+      expect(result.success).toBe(true);
+      expect((result.data as any)?.answer).toContain("found it");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -104,7 +104,7 @@ export function populateSkillBundles(
     { index: 1, slugs: ["coding-system", "test-driven-development", "shared-workspace-api-first", "json-tool-format"] },
     { index: 2, slugs: ["cronjobs", "shared-workspace-ops", "tool-orchestration", "mcp-integration"] },
     { index: 3, slugs: ["history-search", "json-tool-format", "llm-wiki"] },
-    { index: 4, slugs: ["cronjobs", "workflow-orchestrator", "tool-orchestration", "discord"] },
+    { index: 4, slugs: ["cronjobs", "workflow-orchestrator", "tool-orchestration"] },
     { index: 5, slugs: ["code-review", "test-driven-development", "security-skill"] },
     { index: 6, slugs: ["llm-wiki", "plan", "auto-plan"] },
   ];

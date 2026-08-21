@@ -56,6 +56,7 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     reasonerUseToolMinConfidence: parseFloat(process.env["AGENT_REASONER_MIN_CONFIDENCE"] ?? "0.7"),
     maxConsecutiveToolFailures: parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3"),
     maxRepeatedToolCall: parseInt(process.env["AGENT_MAX_REPEATED_TOOL_CALL"] ?? "3"),
+    staleReadLoopThreshold: parseInt(process.env["AGENT_STALE_READ_STREAK"] ?? "4"),
 
     selfRepairEnabled: (process.env["AGENT_SELF_REPAIR_ENABLED"] ?? "true").toLowerCase() !== "false",
     selfRepairMaxAttempts: parseInt(process.env["AGENT_SELF_REPAIR_MAX_ATTEMPTS"] ?? "3"),

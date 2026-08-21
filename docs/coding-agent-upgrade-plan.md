@@ -114,6 +114,8 @@ Was fehlt:
 
 `maxIterations: 100` pro Attempt × `maxAttempts: 4` = bis zu 400 LLM-Calls für ein Ziel. Zum Vergleich: die meisten SOTA-Agenten liegen bei 20–50 pro Turn mit Compaction dazwischen. Ohne Read-Dedupe und Caching ist ein einziger entgleister Run sehr teuer.
 
+Aktueller Stand (nach Abschnitt 21): Tiers **20/50/100** pro Attempt (einfach/mittel/komplex), `maxAttempts` **3**, Timeout-Default **5 Minuten**. Die Tiers werden jetzt tatsächlich angewendet (vorher überschrieb sie die gemeinsame Coding-Schwelle) — und die Nicht-Konvergenz-Guardrails (Abschnitt 20) begrenzen entgleiste Läufe zusätzlich.
+
 ### 3.4 Verify läuft am Ende statt kontinuierlich
 
 Ein voller `tsc --noEmit` über ein Monorepo dauert 10–60 s und läuft bis zu 4× pro Run. Ein LSP-Diagnostic auf **eine** Datei nach dem Edit dauert Millisekunden und fängt 80 % derselben Fehler.
@@ -171,7 +173,7 @@ Alle Maßnahmen aus Phase A, B und C sind implementiert.
 | A3 | `read` mit Zeilennummern, 2000-Zeilen-Default, Zeilenbreiten-Cap, `raw:true`-Opt-out | `packages/tools/src/filesystem.ts` |
 | A4 | Read-before-Edit greift auch bei `write` auf existierende Dateien, Pfade normalisiert, Reset pro Run | `coding-agent.ts` |
 | A5 | Direktive: grep vor read, parallele Reads, keine Re-Reads, outline für große Dateien | `CODING_DIRECTIVE` |
-| A6 | Iterationsbudget 100 → 40 (Tiers 15/30/60) | `coding-agent.ts`, `routes/coding-agent.ts` |
+| A6 | Iterationsbudget 100 → Tiers 20/50/100, die jetzt tatsächlich greifen; Timeout-Default 5 Min | `coding-agent.ts`, `routes/coding-agent.ts`, `agent.ts` |
 | B1 | Prompt-Caching: stabiler System-Prefix + `cache_control`, volatile Hints als letzte Nachricht | `agent.ts`, `adapters/anthropic-adapter.ts`, `claude-provider.ts`, `openai-provider.ts` |
 | B2 | Read-Dedupe superseded Ergebnisse im Kontextfenster | `agent.ts` (`buildToolResultDedupeKey`) |
 | B3 | Kontextbudget aus dem Modellfenster statt fixer Zeichenzahl | `agent.ts` (`TokenCounter`) |
@@ -687,3 +689,89 @@ Damit gibt es keinen Weg mehr, auf dem eine unvollständige Modellausgabe still 
 **Hinweis:** `plans` ist eine tote Deklaration — Pläne werden als Markdown im Workspace abgelegt (`PLAN_MODE_MARKDOWN_PATH`), nichts schreibt je in diese Tabelle. Der Aufräumschritt bleibt trotzdem drin, damit ein späteres Anlegen der Tabelle das Löschen nicht erneut blockiert.
 
 **Abdeckung:** `packages/database/test/delete-conversation.test.ts` — 4 Tests, darunter der gemeldete Fall (Conversation mit ausgeführtem Plan) und der Nachweis, dass ein Cronjob das Löschen überlebt.
+
+---
+
+## 20. Nicht-Konvergenz: `abortedReason` + Explore-Sub-Agent absichern
+
+**Symptom:** Ein Coding-Lauf „hängt" und wiederholt dieselben Aufrufe, wenn ein schwaches lokales Modell stecken bleibt. Zwei Lücken dabei: (a) die Run-Loop beendete einen solchen Lauf zwar irgendwann über die Guardrails, aber Aufrufer konnten das **Abbruch-Ergebnis** nicht von einer normalen Antwort unterscheiden, ohne die Antworttexte zu matchen; (b) der `explore`-Sub-Agent teilt zwar die Run-Loop, konnte den Haupt-Coding-Lauf aber bis zu seinem kompletten Iterationsbudget (12 Iterationen) blockieren — sein eigener Progress-Timeout feuert nur bei **Inaktivität** (re-arms bei jedem Event), nicht bei einem beschäftigten Loop.
+
+### Änderung 1: `AgentRunResult.abortedReason`
+
+Die Run-Loop meldet jetzt **warum** sie früh endete, als strukturiertes Feld statt als Text-Pattern-Matching:
+
+| Wert | Bedeutung |
+|---|---|
+| `user_stopped` | Nutzer hat gestoppt (Stop-Button) |
+| `consecutive_tool_failures` | Guardrail: zu viele Iterationen in Folge, in denen jeder Tool-Call fehlschlug |
+| `stale_read_loop` | Guardrail: N Iterationen in Folge mit exakt denselben Read-only-Calls ohne Mutation (AGENT_STALE_READ_STREAK, Standard 4, in den Settings konfigurierbar) |
+
+`undefined` = Lauf endete regulär. Das Feld ist optional — bestehende Aufrufer sind unberührt. Umsetzung: `packages/agent/src/config/interfaces_types.ts`, Return der `runLoop()` in `agent.ts`.
+
+### Änderung 2: Explore-Sub-Agent bekommt ein hartes Zeitlimit
+
+`packages/agent/src/coding/explore-tool.ts` raced den Sub-Agent-Lauf gegen eine Wall-Clock-Deadline:
+
+- Default **3 Minuten**, konfigurierbar über `DUCKI_EXPLORE_TIMEOUT_MS` bzw. `CodingAgentOptions.exploreTimeoutMs` (weitergegeben an `createExploreTool`).
+- Gewinnt die Deadline, wird `subAgent.stop()` aufgerufen → der in-flight LLM-Call wird per Abort-Signal abgebrochen, die Schleife wickelt sich ab statt zu leaken (`void runPromise.catch(() => {})` verhindert Unhandled-Rejections).
+- Das Tool liefert ein sauberes Fehlerergebnis („Exploration timed out … Search yourself with filesystem grep/glob instead"), damit der Haupt-Agent die Suche selbst macht.
+
+### Änderung 3: Loop-Erkennung im Explorer wird sichtbar
+
+Der Sub-Agent nutzt dieselbe Run-Loop wie der Haupt-Agent — das Stale-Read-Guardrail greift dort also bereits. Neu ist, dass das Explore-Tool `result.abortedReason === "stale_read_loop"` erkennt und daraus einen **Fehler** macht: eine Abbruch-Notiz als „Antwort" an den Haupt-Agenten durchzureichen wäre wertlos — er soll selbst grep/glob fahren.
+
+### Warum kein Verhaltensbruch
+
+- `abortedReason` ist optional und rein additiv.
+- Das Zeitlimit betrifft nur Explore-Aufrufe; normale Runs und der produktive Ein-Zug-Explore bleiben unverändert (Exploration über verschiedene Dateien bzw. mit Mutationen dazwischen setzt den Streak zurück).
+- Die Schwelle `AGENT_STALE_READ_STREAK` (Settings-Seite, Agenten-Tab → Basis & Limits) gilt für Haupt- und Explore-Lauf gleichermaßen.
+
+### Verifikation
+
+- `packages/agent/test/explore-tool-isolation.test.ts` (3 neue Tests): hängender LLM-Call → Abbruch per Timeout (< 5 s), Endlosschleife aus identischen Reads → Fehler „without progress / loop detected", produktiver Ein-Zug-Explore → weiterhin normale Antwort.
+- `packages/agent/test/stale-read-loop.test.ts` (4 Tests): Abbruch nach N identischen Read-Iterationen, keine Fehlauslösung bei Exploration über verschiedene Dateien bzw. Edit→Verify-Flows, DB-Setting `AGENT_STALE_READ_STREAK` wird aus der Settings-Seite gelesen.
+- Komplette Agent-Suite grün (413 Tests), Typecheck von `@ducki/agent`, `apps/server`, `apps/web` fehlerfrei.
+
+---
+
+## 21. Iterationsbudget: Einstellungen wirken jetzt konsistent über alle Coding-Pfade
+
+**Symptom:** Die „Coding Agent"-Einstellungen (`CODING_AGENT_MAX_ITERATIONS_*`, Tiers) hatten keinen Effekt. Der Coding-Block in der Run-Loop (`agent.ts`) überschrieb das Budget jeder Coding-Ausführung mit der gemeinsamen Schwelle `AGENT_CODING_MAX_ITERATIONS`:
+
+```ts
+adjustedControls.maxIterations = adjustedControls.codingMaxIterations;
+```
+
+Damit war das pro Attempt übergebene Tier (z. B. 20 für einfache Pläne) toter Code — ein einfacher Plan lief mit 60 statt 20 Iterationen. Derselbe Blindflug traf den `explore`-Sub-Agenten: sein „bewusst kleines" 12-Iterationen-Budget wurde still auf 60 angehoben.
+
+### Was die drei Pfade jetzt anwenden
+
+| Pfad | Konstruktion | Iterationsbudget pro Attempt |
+|---|---|---|
+| Chat-Plan „Umsetzen" (`/api/coding-agent/run`) | CodingAgent mit explizitem Tier aus der Settings-Seite | **Tier 20/50/100** (CODING_AGENT_MAX_ITERATIONS_*) |
+| Coding-Area-Chat (`[CODING_CONTEXT]`, regulärer Agent) | regulärer Agent, kein eigenes Budget | **AGENT_CODING_MAX_ITERATIONS** (Default 60) |
+| CodingWorkspace-Plan (`/api/plans/:id/execute`) | CodingAgent ohne explizites Budget | **AGENT_CODING_MAX_ITERATIONS** (Default 60) |
+| `explore`-Sub-Agent | Explorer mit eigenem Budget | **12** (wieder wirksam) |
+
+### Behebung
+
+Der Coding-Block unterscheidet jetzt zwischen „dedizierter Agent mit eigenem Budget" und „geteilter Chat-Agent ohne eigenes Budget":
+
+```ts
+adjustedControls.maxIterations =
+  this.disableQualityPasses && this.hasExplicitMaxIterations
+    ? this.maxIterations
+    : adjustedControls.codingMaxIterations;
+```
+
+`hasExplicitMaxIterations` wird im Konstruktor gesetzt, wenn der Aufrufer `options.maxIterations` explizit übergibt. Das Flag ist nötig, weil `buildAgentFactory` den regulären Agenten bei gespeicherter `AGENT_MAX_ITERATIONS`-Setting ebenfalls mit `maxIterations` baut — ohne das Flag würde der Coding-Area-Chat fälschlich die allgemeine Setting statt `AGENT_CODING_MAX_ITERATIONS` verwenden.
+
+### Warum kein Verhaltensbruch
+
+- **Pfad 2 und 3** bleiben unverändert (kein explizites Budget → gemeinsame Schwelle).
+- **Pfad 1** bekommt jetzt exakt das Budget, das die Settings-Seite anzeigt und beschreibt — einfache Pläne 20 statt 60, komplexe 100 statt 60. Die Nicht-Konvergenz-Guardrails (Abschnitt 20) begrenzen entgleiste Läufe unabhängig davon.
+- **Explorer** läuft wieder mit 12 Iterationen (wie dokumentiert), nicht 60 — kürzere Blockade des Haupt-Coding-Laufs und weniger Kosten in der teuersten Phase.
+
+### Verifikation
+
+`packages/agent/test/coding-iteration-budget.test.ts` (2 Tests): ein dedizierter Agent mit explizitem Budget (6) läuft exakt 6 Iterationen statt der gemeinsamen Schwelle; der reguläre `[CODING_CONTEXT]`-Chat-Agent ohne eigenes Budget läuft weiterhin bis zur gemeinsamen Schwelle (60). Komplette Agent-Suite grün (415 Tests), Typecheck von `@ducki/agent`, `apps/server`, `apps/web` fehlerfrei.

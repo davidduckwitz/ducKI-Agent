@@ -331,6 +331,12 @@ Use visual information to make better decisions about browser interactions and U
 
 ${TOOL_CALL_FORMAT_BLOCK}`;
 
+/**
+ * Skill roots whose merged-pool summary (core + enabled plugin skills) has already been
+ * logged. The Agent constructor runs on every chat/task (createAgent), so without this
+ * the startup info line would spam the log per run instead of once per process.
+ */
+const loggedSkillPoolRoots = new Set<string>();
 
 export class Agent {
   readonly name: string;
@@ -342,6 +348,9 @@ export class Agent {
   private enablePlanning: boolean;
   private enableAutoMemory: boolean;
   private disableQualityPasses: boolean;
+  /** True when the caller passed an explicit per-run maxIterations to the constructor (see
+   *  the constructor for why this is tracked separately from the value itself). */
+  private hasExplicitMaxIterations: boolean;
 
   private conversation: ConversationManager;
   private memory: MemorySystem;
@@ -373,6 +382,15 @@ export class Agent {
   private conversationCompressor: ConversationCompressor;
   private readonly maxConsecutiveToolFailures = parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3");
   private readonly maxRepeatedToolCall = parseInt(process.env["AGENT_MAX_REPEATED_TOOL_CALL"] ?? "3");
+  /**
+   * Consecutive iterations that re-issue the EXACT SAME read-only call set (identical
+   * signatures, no mutation in between) before the run is aborted as a non-converging loop.
+   * This is the gap neither maxRepeatedToolCall (byte-identical single calls, blocks only the
+   * 4th) nor maxConsecutiveToolFailures (all-failed iterations only) covers: a model stuck
+   * re-reading the same files succeeds every time and burns its whole iteration budget.
+   * Env: AGENT_STALE_READ_STREAK.
+   */
+  private readonly staleReadLoopThreshold = Math.max(2, parseInt(process.env["AGENT_STALE_READ_STREAK"] ?? "4"));
   private readonly enableAutoSkillSelection =
     (process.env["AGENT_AUTO_SKILL_SELECTION"] ?? "true").toLowerCase() !== "false";
   private readonly autoSkillScoreThreshold = parseFloat(process.env["AGENT_AUTO_SKILL_THRESHOLD"] ?? "0.78");
@@ -420,6 +438,13 @@ export class Agent {
     this.name = options.name ?? "DucKI";
     this.systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     this.maxIterations = options.maxIterations ?? parseInt(process.env["AGENT_MAX_ITERATIONS"] ?? "50");
+    // True only when the CALLER picked a per-run iteration budget (a CodingAgent from the
+    // /settings tiers, the 12-iteration Explorer, a plugin's coding run). The buildAgentFactory
+    // regular agent ALSO passes maxIterations (from the saved AGENT_MAX_ITERATIONS setting), so
+    // this flag - not `maxIterations !== undefined` - is what lets the coding block below tell
+    // "a dedicated agent with its own budget" apart from "the shared chat agent that happens to
+    // have the general cap set".
+    this.hasExplicitMaxIterations = options.maxIterations !== undefined;
     this.timeoutMs = options.timeoutMs ?? parseInt(process.env["AGENT_TIMEOUT_MS"] ?? "600000");
     this.enableReflection = options.enableReflection ?? (process.env["AGENT_ENABLE_REFLECTION"] ?? "true").toLowerCase() !== "false";
     this.enablePlanning = options.enablePlanning ?? true;
@@ -565,6 +590,27 @@ export class Agent {
     this.thinkBlockParser = new ThinkBlockParser();
     this.toolGraph = new ToolExecutionGraph();
     this.conversationCompressor = new ConversationCompressor(provider);
+
+    // Log the merged skill pool size (core + enabled plugin skills) once per process, so
+    // runtime verification of plugin-skill availability (e.g. discord) works from the log
+    // without a probe script.
+    if (!loggedSkillPoolRoots.has(this.skillsRoot)) {
+      loggedSkillPoolRoots.add(this.skillsRoot);
+      try {
+        const pool = this.loadSkillManifests();
+        const coreSkills = pool.filter((s) => s.path.startsWith(this.skillsRoot)).length;
+        this.logger.info("Skill pool initialized", {
+          skillsRoot: this.skillsRoot,
+          totalSkills: pool.length,
+          coreSkills,
+          pluginSkills: pool.length - coreSkills,
+        });
+      } catch (error) {
+        this.logger.warn("Could not log skill pool summary", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   async startConversation(options: { name?: string; projectId?: number } = {}): Promise<number> {
@@ -3746,6 +3792,7 @@ export class Agent {
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
+      staleReadLoopThreshold: this.staleReadLoopThreshold,
       selfRepairEnabled: true,
       // Two, not one: the first attempt is usually the free mechanical fix (a renamed field,
       // a corrected enum), which leaves no budget for the targeted LLM correction when the
@@ -3861,6 +3908,7 @@ export class Agent {
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
+        staleReadLoopThreshold: this.parseNumberSetting(get("AGENT_STALE_READ_STREAK"), defaults.staleReadLoopThreshold, 2, 20),
         selfRepairEnabled: this.parseBooleanSetting(get("AGENT_SELF_REPAIR"), defaults.selfRepairEnabled),
         maxOutputTokens: this.parseNumberSetting(get("AGENT_MAX_OUTPUT_TOKENS"), defaults.maxOutputTokens, 512, 128000),
         selfRepairMaxAttempts: this.parseNumberSetting(get("AGENT_SELF_REPAIR_MAX_ATTEMPTS"), defaults.selfRepairMaxAttempts, 0, 3),
@@ -4404,7 +4452,15 @@ export class Agent {
     nativeToolCalls?: ToolCall[],
     /** True when the model hit its output cap - see the write guard below. */
     responseWasTruncated = false
-  ): Promise<{ resultMap: Map<string, ToolResult>; cleanedResponse: string; browserToolsCount: number; journalEntries: RunJournalEntry[] }> {
+  ): Promise<{
+    resultMap: Map<string, ToolResult>;
+    cleanedResponse: string;
+    browserToolsCount: number;
+    journalEntries: RunJournalEntry[];
+    /** The model's issued (deduplicated) tool calls this iteration - used by the run loop's
+     *  non-convergence detection to recognise a repeated read-only call set. */
+    executedCalls: Array<{ toolName: string; input: Record<string, unknown> }>;
+  }> {
     this.logger.info("[TOOL-CALLS] Starting extraction and execution", {
       responseLength: response.length,
       hasToolMarkers: /\[TOOL:/.test(response),
@@ -4507,7 +4563,7 @@ export class Agent {
         .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
         .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove other <|...> markers
         .trim();
-      return { resultMap, cleanedResponse, browserToolsCount: 0, journalEntries };
+      return { resultMap, cleanedResponse, browserToolsCount: 0, journalEntries, executedCalls: [] };
     }
 
     // Emit initial tool-call detection event
@@ -5059,7 +5115,13 @@ export class Agent {
     // Count browser tools for iteration control
     const browserToolsCount = toolCalls.filter(c => this.isBrowserTool(c.toolName)).length;
 
-    return { resultMap, cleanedResponse, browserToolsCount, journalEntries };
+    return {
+      resultMap,
+      cleanedResponse,
+      browserToolsCount,
+      journalEntries,
+      executedCalls: toolCalls.map((c) => ({ toolName: c.toolName, input: c.input })),
+    };
   }
 
   /**
@@ -5564,8 +5626,17 @@ export class Agent {
       }
       adjustedControls.enableVerify = adjustedControls.codingEnableVerify;
       // Coding is multi-step; use the configurable coding iteration budget instead
-      // of the general mode caps (5-10) that cut large tasks short.
-      adjustedControls.maxIterations = adjustedControls.codingMaxIterations;
+      // of the general mode caps (5-10) that cut large tasks short. A DEDICATED agent
+      // constructed with an explicit per-run budget keeps that budget: the CodingAgent's
+      // CODING_AGENT_MAX_ITERATIONS_* tiers (settings page) and the Explorer's 12-iteration
+      // cap are both more specific than the shared AGENT_CODING_MAX_ITERATIONS, and forcing
+      // the shared cap over them silently ignored what the user configured. The regular
+      // coding-area chat agent (no explicit budget; AGENT_MAX_ITERATIONS may still be set
+      // via buildAgentFactory) keeps codingMaxIterations.
+      adjustedControls.maxIterations =
+        this.disableQualityPasses && this.hasExplicitMaxIterations
+          ? this.maxIterations
+          : adjustedControls.codingMaxIterations;
     }
 
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
@@ -6088,6 +6159,17 @@ export class Agent {
 
     let finalResponse = "";
     let consecutiveToolFailures = 0;
+    // Non-convergence detection: consecutive iterations re-issuing the SAME read-only call set
+    // (identical signatures, no mutation in between) are a loop, not work. Declared here so the
+    // streak survives iterations; reset by any mutation or a changed read set.
+    let staleReadStreak = 0;
+    let previousReadCallSignatures: string[] | undefined;
+    // Repeated-identical-error detection: consecutive iterations whose FAILING calls produce
+    // the exact same error text are the "model keeps retrying the same broken thing, slightly
+    // varied" loop (e.g. the same edit failing with "oldString not found"). The existing
+    // guardrails miss it structurally - see the guardrail block for details.
+    let repeatedErrorStreak = 0;
+    let previousFailureSignature: string | undefined;
     /**
      * Why the loop ended, when it ended badly.
      *
@@ -6761,7 +6843,7 @@ export class Agent {
       });
 
       // Now extract and execute tools (which will add results after the assistant message)
-      const { resultMap: toolResultsMap, cleanedResponse, browserToolsCount, journalEntries } = await this.executeToolCallsFromResponse(
+      const { resultMap: toolResultsMap, cleanedResponse, browserToolsCount, journalEntries, executedCalls } = await this.executeToolCallsFromResponse(
         response,
         adjustedControls,
         options,
@@ -6834,6 +6916,81 @@ export class Agent {
           finalResponse = `${cleanedResponse}${stopNote}`;
           toolsJustExecuted = false;
           runAbortedEarly = "consecutive_tool_failures";
+          break;
+        }
+
+        // Repeated-identical-error guardrail: consecutive iterations whose FAILING calls produce
+        // the exact same error text are the "model keeps retrying the same broken thing, slightly
+        // varied" loop (e.g. the same edit failing again and again with "oldString not found").
+        // The other guardrails miss it: maxRepeatedToolCall only blocks byte-identical calls,
+        // consecutiveToolFailures only counts iterations where EVERY call failed (a successful
+        // read in between resets it), and ToolErrorTracker is keyed on the input signature.
+        const failingErrors = Array.from(toolResultsMap.values())
+          .filter((r) => !r.success && r.error)
+          .map((r) => String(r.error).replace(/\s+/g, " ").trim())
+          .sort();
+        const failureSignature = failingErrors.length > 0 ? JSON.stringify(failingErrors) : undefined;
+        if (failureSignature !== undefined) {
+          repeatedErrorStreak = failureSignature === previousFailureSignature ? repeatedErrorStreak + 1 : 1;
+          previousFailureSignature = failureSignature;
+        } else {
+          repeatedErrorStreak = 0;
+          previousFailureSignature = undefined;
+        }
+
+        if (repeatedErrorStreak >= adjustedControls.maxConsecutiveToolFailures) {
+          this.logger.warn("[RUNLOOP] Stopping: same tool errors repeating across iterations", {
+            repeatedErrorStreak,
+            threshold: adjustedControls.maxConsecutiveToolFailures,
+            failureSignature: previousFailureSignature?.slice(0, 300),
+          });
+          emit("guardrail", `Abgebrochen: ${repeatedErrorStreak}x in Folge derselbe Tool-Fehler - das Modell wiederholt denselben fehlgeschlagenen Ansatz`, {
+            repeatedErrorStreak,
+            threshold: adjustedControls.maxConsecutiveToolFailures,
+          });
+          const stopNote = `\n\n_Abgebrochen: ${repeatedErrorStreak} Iterationen in Folge mit identischem Tool-Fehler. Das Modell versucht weiterhin dasselbe, das nachweislich nicht funktioniert - Stopp, damit das Iterationsbudget nicht verbrannt wird._`;
+          finalResponse = `${cleanedResponse}${stopNote}`;
+          toolsJustExecuted = false;
+          runAbortedEarly = "repeated_error_loop";
+          break;
+        }
+
+        // Non-convergence guardrail: consecutive iterations re-issuing the EXACT SAME read-only
+        // call set (identical signatures, no mutation in between) are a loop, not work. This is
+        // the gap neither maxRepeatedToolCall (only byte-identical single calls, blocks only the
+        // 4th) nor maxConsecutiveToolFailures (only all-failed iterations) covers: a model stuck
+        // re-reading the same files succeeds every time and burns its whole iteration budget.
+        // A mutation (write/edit/shell/send) or a changed read set resets the streak, so legit
+        // explore -> edit -> verify flows never trip it.
+        const mutatingCall = executedCalls.some((c) => !isReadOnlyToolCall(c.toolName, c.input));
+        if (!mutatingCall && executedCalls.length > 0) {
+          const signatures = executedCalls
+            .map((c) => this.buildToolCallSignature(c.toolName, c.input))
+            .sort();
+          const sameSetAsBefore =
+            previousReadCallSignatures !== undefined &&
+            JSON.stringify(signatures) === JSON.stringify(previousReadCallSignatures);
+          previousReadCallSignatures = signatures;
+          staleReadStreak = sameSetAsBefore ? staleReadStreak + 1 : 0;
+        } else {
+          previousReadCallSignatures = undefined;
+          staleReadStreak = 0;
+        }
+
+        if (staleReadStreak >= adjustedControls.staleReadLoopThreshold) {
+          this.logger.warn("[RUNLOOP] Stopping: repeated identical read-only calls without progress", {
+            staleReadStreak,
+            threshold: adjustedControls.staleReadLoopThreshold,
+            signatures: previousReadCallSignatures?.slice(0, 5),
+          });
+          emit("guardrail", `Abgebrochen: ${staleReadStreak}x hintereinander identische Lese-Aufrufe ohne Fortschritt`, {
+            staleReadStreak,
+            threshold: adjustedControls.staleReadLoopThreshold,
+          });
+          const stopNote = `\n\n_Abgebrochen: ${staleReadStreak} Iterationen in Folge haben nur identische Lese-Vorgänge wiederholt, ohne dass sich etwas geändert hat. Das Modell steckt in einer Schleife fest - kein Fortschritt erkennbar._`;
+          finalResponse = `${cleanedResponse}${stopNote}`;
+          toolsJustExecuted = false;
+          runAbortedEarly = "stale_read_loop";
           break;
         }
       }
@@ -7666,6 +7823,7 @@ export class Agent {
       ...(sameAsLastDisplayRow ? { displayMessageId: lastDisplayMessageId } : {}),
       ...(checklistActive ? { checklistRunId } : {}),
       ...(runJournalEnabled ? { runJournal } : {}),
+      ...(runAbortedEarly ? { abortedReason: runAbortedEarly } : {}),
     };
   }
 

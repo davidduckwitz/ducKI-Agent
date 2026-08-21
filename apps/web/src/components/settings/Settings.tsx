@@ -392,7 +392,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
   {
     key: "AGENT_MAX_ITERATIONS",
     label: "Max Iterations (Full Mode)",
-    description: "Maximale Agent-Schleifen pro Anfrage im Full-Mode. Light-/Chatbot-Mode nutzen eigene, niedrigere Obergrenzen (siehe unten).",
+    description: "Maximale Agent-Schleifen pro Anfrage im Full-Mode. Light-/Chatbot-Mode nutzen eigene, niedrigere Obergrenzen (siehe unten). Gilt NICHT fuer Coding-Laeufe: die haben eigene Budgets und ueberstimmen diese Setting (Coding-Area-Chat & Plan-Umsetzung -> AGENT_CODING_MAX_ITERATIONS; Chat-Plan-Umsetzung 'Umsetzen' -> CODING_AGENT_MAX_ITERATIONS_-Tiers).",
     type: "number",
     section: "Agent",
     defaultValue: "50",
@@ -448,7 +448,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
   {
     key: "AGENT_CODING_MAX_ITERATIONS",
     label: "Coding: Max Iterations",
-    description: "Iterations-Budget fuer Coding-Laeufe (Coding-Area-Chat & Plan-Ausfuehrung). Coding ist mehrstufig (schreiben -> pruefen -> fixen); der normale Modus-Cap (5-10) reicht fuer grosse Tasks nicht. Betrifft NUR Coding, nicht den normalen Chat.",
+    description: "Iterations-Budget fuer Coding-Laeufe (Coding-Area-Chat & CodingWorkspace-Plan-Ausfuehrung). Coding ist mehrstufig (schreiben -> pruefen -> fixen); der normale Modus-Cap (5-10) reicht fuer grosse Tasks nicht. Betrifft NUR Coding, nicht den normalen Chat. Vorrang: Diese Setting ueberstimmt AGENT_MAX_ITERATIONS fuer Coding-Area-Chat und CodingWorkspace-Plan-Umsetzung; die Chat-Plan-Umsetzung ('Umsetzen') nutzt stattdessen die CODING_AGENT_MAX_ITERATIONS_-Tiers (einfach/mittel/komplex).",
     type: "number",
     section: "Agent",
     defaultValue: "60",
@@ -540,6 +540,14 @@ const PREDEFINED_FIELDS: SettingField[] = [
     type: "number",
     section: "Agent",
     defaultValue: "3",
+  },
+  {
+    key: "AGENT_STALE_READ_STREAK",
+    label: "Max identische Lese-Iterationen",
+    description: "Wie viele Iterationen in Folge exakt dieselben Lese-Aufrufe (ohne Aenderung dazwischen) erlaubt sind, bevor der Lauf als Endlosschleife abgebrochen wird. Schuetzt vor einem Modell, das dieselbe Datei immer wieder liest. Erhoehen, wenn lange Erkundungsphasen faelschlich abgebrochen werden. Default 4.",
+    type: "number",
+    section: "Agent",
+    defaultValue: "4",
   },
   {
     key: "AGENT_SELF_REPAIR",

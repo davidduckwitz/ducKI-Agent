@@ -59,6 +59,15 @@ export interface ExploreToolOptions {
   sandboxRoot?: string;
   /** Iteration budget for one exploration. Kept small on purpose - see the tool description. */
   maxIterations?: number;
+  /**
+   * Hard wall-clock budget for ONE exploration, in milliseconds. The sub-agent's own
+   * progress timeout only fires on INACTIVITY (it re-arms on every event), so a stuck-but-
+   * busy explorer could otherwise hold the main coding run hostage for its whole iteration
+   * budget. Racing the run against this deadline - and aborting the sub-agent when it wins -
+   * bounds how long an explore call can block the caller. Default: DUCKI_EXPLORE_TIMEOUT_MS
+   * or 3 minutes.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -135,11 +144,39 @@ export function createExploreTool(
         if (!EXPLORER_TOOLS.has(tool.name)) subAgent.executor.unregisterTool(tool.name);
       }
 
+      // No startConversation(): without a conversation id the ConversationManager keeps
+      // everything in memory and writes nothing to the database, which is exactly what a
+      // throwaway context should do.
+      const runPromise = subAgent.run(question);
+      // Mark the promise handled even after the timeout below has already won the race, so a
+      // late rejection (the aborted sub-agent unwinding) never surfaces as unhandled.
+      void runPromise.catch(() => {});
+
+      const timeoutMs = options.timeoutMs ?? 180_000;
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`Exploration timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      });
+
       try {
-        // No startConversation(): without a conversation id the ConversationManager keeps
-        // everything in memory and writes nothing to the database, which is exactly what a
-        // throwaway context should do.
-        const result = await subAgent.run(question);
+        const result = await Promise.race([runPromise, deadline]);
+        // The sub-agent shares the run loop's non-convergence guardrail, so a model stuck
+        // re-reading the same files aborts itself (abortedReason "stale_read_loop") instead of
+        // burning all 12 iterations. That abort produced no answer worth returning - surface it
+        // as a failure so the MAIN agent knows the search did not happen and greps itself.
+        if (result.abortedReason) {
+          return {
+            success: false,
+            data: null,
+            error:
+              result.abortedReason === "stale_read_loop"
+                ? `Exploration was stopped: it repeated identical read-only calls without progress (loop detected). Search yourself with filesystem grep/glob instead.`
+                : `Exploration was stopped early (${result.abortedReason}). Search yourself with filesystem grep/glob instead.`,
+          };
+        }
         return {
           success: true,
           data: {
@@ -149,11 +186,24 @@ export function createExploreTool(
           },
         };
       } catch (error) {
+        // The deadline won the race: abort the sub-agent's in-flight LLM call so its run loop
+        // unwinds instead of leaking, then tell the main agent to do the search itself.
+        subAgent.stop();
+        const message = error instanceof Error ? error.message : String(error);
+        if (/timed out after/.test(message)) {
+          return {
+            success: false,
+            data: null,
+            error: `${message}. Search yourself with filesystem grep/glob instead.`,
+          };
+        }
         return {
           success: false,
           data: null,
-          error: `Exploration failed: ${error instanceof Error ? error.message : String(error)}. Search yourself with filesystem grep/glob instead.`,
+          error: `Exploration failed: ${message}. Search yourself with filesystem grep/glob instead.`,
         };
+      } finally {
+        clearTimeout(timeoutHandle);
       }
     },
   };
