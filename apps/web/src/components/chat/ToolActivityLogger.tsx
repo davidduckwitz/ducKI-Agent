@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ChevronDown, ChevronUp, X, Zap } from "lucide-react";
 import type { ToolCallRecord } from "../../lib/store";
 import { cn } from "../../lib/utils";
@@ -8,12 +8,34 @@ interface ToolActivityLoggerProps {
   onRemoveCall: (id: string) => void;
 }
 
+/** How long the popup lingers after the last tool call has settled. */
+const AUTO_HIDE_DELAY = 5000;
+
 export function ToolActivityLogger({ toolCalls, onRemoveCall }: ToolActivityLoggerProps) {
   const [isOpen, setIsOpen] = useState(true);
   const [isVisible, setIsVisible] = useState(true);
 
   // Get last 2 tool calls
-  const recentCalls = toolCalls.slice(-2).reverse();
+  const recentCalls = useMemo(() => toolCalls.slice(-2).reverse(), [toolCalls]);
+  const newestCallId = toolCalls.length > 0 ? toolCalls[toolCalls.length - 1]?.id : undefined;
+  const hasRunningCall = recentCalls.some((call) => call.status === "executing");
+
+  // A new tool call brings the popup back, including after it was closed by hand.
+  useEffect(() => {
+    if (newestCallId) {
+      setIsVisible(true);
+    }
+  }, [newestCallId]);
+
+  // Once nothing is running any more, the panel has said all it has to say. Leaving it pinned
+  // over the chat for the rest of the session is what made the UI feel cluttered and slow.
+  useEffect(() => {
+    if (!isVisible || hasRunningCall || recentCalls.length === 0) {
+      return;
+    }
+    const timer = setTimeout(() => setIsVisible(false), AUTO_HIDE_DELAY);
+    return () => clearTimeout(timer);
+  }, [isVisible, hasRunningCall, recentCalls.length, newestCallId]);
 
   if (!isVisible || recentCalls.length === 0) {
     return null;

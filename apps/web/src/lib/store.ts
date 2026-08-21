@@ -153,6 +153,31 @@ export interface ToolCallRecord {
   conversationId?: number; // Link to chat conversation - allows per-chat filtering
 }
 
+/** Upper bound on the retained tool-call history. Only the last two are ever displayed. */
+const MAX_TOOL_CALL_HISTORY = 50;
+
+/**
+ * Keeps the tool-call list bounded.
+ *
+ * Nothing pruned this array except clearing the chat, so a long agent run grew it without
+ * limit - and every new call re-rendered the whole list. Still-executing records are never
+ * dropped, because their `tool_result` event has to find them again; only settled ones are
+ * discarded, oldest first.
+ */
+function capToolCalls(calls: ToolCallRecord[]): ToolCallRecord[] {
+  if (calls.length <= MAX_TOOL_CALL_HISTORY) {
+    return calls;
+  }
+  let toDrop = calls.length - MAX_TOOL_CALL_HISTORY;
+  return calls.filter((call) => {
+    if (toDrop <= 0 || call.status === "executing") {
+      return true;
+    }
+    toDrop--;
+    return false;
+  });
+}
+
 interface AppState {
   // Agent
   agentStatus: "idle" | "running" | "paused" | "error" | "stopped";
@@ -471,7 +496,7 @@ export const useAppStore = create<AppState>((set, get) => ({
               input: event.data.input as Record<string, unknown>,
               conversationId: s.conversationId, // Link to current chat
             };
-            updatedToolCalls = [...s.toolCalls, newToolCall];
+            updatedToolCalls = capToolCalls([...s.toolCalls, newToolCall]);
           }
         } else if (event.type === "tool_result" && event.data) {
           // Resolve exactly ONE record. The agent stamps the same callId on the tool_call and
@@ -942,7 +967,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Tool Management
   addToolCall: (toolCall) =>
     set((s) => ({
-      toolCalls: [...s.toolCalls, toolCall],
+      toolCalls: capToolCalls([...s.toolCalls, toolCall]),
     })),
   updateToolCall: (id, updates) =>
     set((s) => ({

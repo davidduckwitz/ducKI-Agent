@@ -12,6 +12,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
       theme={resolvedMode}
       className="toaster group"
       toastOptions={{
+        // Matches DEFAULT_TOAST_DURATION in lib/toast.ts so both toast systems behave alike.
+        duration: 5000,
         classNames: {
           toast:
             "group toast group-[.toaster]:bg-card group-[.toaster]:text-card-foreground group-[.toaster]:border-border group-[.toaster]:shadow-lg",

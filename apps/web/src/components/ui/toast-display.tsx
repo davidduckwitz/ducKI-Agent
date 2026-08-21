@@ -6,15 +6,22 @@ export function ToastDisplay() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   useEffect(() => {
-    const unsubscribe = toastManager.subscribe((toast) => {
+    const unsubscribeShow = toastManager.subscribe((toast) => {
       setToasts((prev) => [...prev, toast]);
     });
+    // The manager owns the lifetime; this is what makes a toast actually leave the screen.
+    const unsubscribeDismiss = toastManager.subscribeDismiss((id) => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    });
 
-    return unsubscribe;
+    return () => {
+      unsubscribeShow();
+      unsubscribeDismiss();
+    };
   }, []);
 
+  // remove() broadcasts the dismissal, which is what drops it from `toasts` above.
   const removeToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
     toastManager.remove(id);
   };
 
