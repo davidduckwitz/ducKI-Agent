@@ -2,7 +2,7 @@ import { jsonrepair } from "jsonrepair";
 import type { LLMProvider } from "@ducki/providers";
 import { isProviderConnectionError, isAbortError } from "@ducki/providers";
 import type { LLMMessage, ToolResult, LLMContent, ToolCall } from "@ducki/shared";
-import { tokenizeText } from "@ducki/shared";
+import { tokenizeText, isIncompleteResponse } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
@@ -6445,7 +6445,35 @@ export class Agent {
               this.logger.error(`LLM provider unreachable: ${e.message}`);
               throw e;
             }
-            this.logger.warn(`Streaming failed for LLM response: ${String(e)}. Falling back to synchronous generation.`);
+            // Retry the STREAM once before giving up on it.
+            //
+            // The synchronous fallback is the wrong tool for a transient stream failure: it
+            // re-sends the whole prompt and then asks for the entire output in one response,
+            // which is exactly the shape that runs into HTTP timeouts at a large maxTokens -
+            // so a hiccup while writing a big file turned into no file at all. A second stream
+            // attempt costs the same as the sync retry and keeps the mode that can carry a
+            // long output.
+            this.logger.warn(`Streaming failed for LLM response: ${String(e)}. Retrying the stream once.`);
+            try {
+              const retried = await this.provider.generateStream(messages, mainGenOptions);
+              currentResponseTokens = {
+                input: retried.usage.promptTokens,
+                output: retried.usage.completionTokens,
+                total: retried.usage.totalTokens,
+                estimated: retried.usage.estimated === true,
+              };
+              currentNativeToolCalls = retried.toolCalls;
+              currentFinishReason = retried.finishReason;
+              return retried.content;
+            } catch (retryError) {
+              if (isProviderConnectionError(retryError)) {
+                this.logger.error(`LLM provider unreachable: ${retryError.message}`);
+                throw retryError;
+              }
+              this.logger.warn(
+                `Stream retry failed too: ${String(retryError)}. Falling back to synchronous generation.`
+              );
+            }
             const syncResult = await this.provider.generate(messages, mainGenOptions);
             currentResponseTokens = {
               input: syncResult.usage.promptTokens,
@@ -6741,7 +6769,7 @@ export class Agent {
         iterations,
         repeatedToolCalls,
         currentNativeToolCalls,
-        currentFinishReason === "length"
+        isIncompleteResponse(currentFinishReason)
       );
 
       if (runJournalEnabled && journalEntries.length > 0) {

@@ -6,6 +6,7 @@ import type {
   ChatCompletionMessageToolCall,
 } from "openai/resources/chat/completions.js";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent, ToolDefinition, ToolCall } from "@ducki/shared";
+import { INCOMPLETE_STREAM_FINISH_REASON } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "./base.js";
 import { ProviderConnectionError, looksLikeConnectionFailure, isAbortError } from "./errors.js";
 import { estimateUsage } from "./token-estimate.js";
@@ -515,12 +516,31 @@ export class OpenAIProvider implements LLMProvider {
         finalFinishReason = choice0?.finish_reason ?? finalFinishReason;
       }
     } catch (error) {
-      // The stream can also die mid-flight; classify that the same way as a failure to
-      // open it, so callers see one error kind for "endpoint gone" either way.
-      if (looksLikeConnectionFailure(error)) {
-        throw new ProviderConnectionError(this.name, this.endpoint, error);
+      // An abort is the user pressing Stop - never salvage, never reclassify.
+      if (isAbortError(error)) throw error;
+
+      // A stream that dies AFTER delivering content is a different situation from one that
+      // never opened. Throwing here discarded everything received - for a large file that is
+      // most of the document - and sent the caller into a full synchronous re-run, which is
+      // the very mode that struggles with a big max_tokens.
+      //
+      // So the partial response is handed back, flagged as incomplete. Callers treat that
+      // exactly like hitting the output cap: usable for reading and reasoning, refused for
+      // anything that would persist a half-written payload. Nothing is silently completed.
+      if (fullContent.length > 0 || toolCallAccum.length > 0) {
+        logger.warn("Stream ended prematurely; returning the partial response as incomplete", {
+          provider: this.name,
+          receivedChars: fullContent.length,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        finalFinishReason = INCOMPLETE_STREAM_FINISH_REASON;
+      } else {
+        // Nothing arrived at all - classify as a failure to reach the endpoint, as before.
+        if (looksLikeConnectionFailure(error)) {
+          throw new ProviderConnectionError(this.name, this.endpoint, error);
+        }
+        throw error;
       }
-      throw error;
     }
 
     const toolCalls: ToolCall[] | undefined = toolCallAccum.length > 0

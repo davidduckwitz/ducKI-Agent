@@ -190,3 +190,25 @@ describe("toOpenAIMessages cache breakpoints", () => {
     expect(out[0]).toEqual({ role: "system", content: "volatile" });
   });
 });
+
+/**
+ * A stream that dies mid-flight must not throw away what it already delivered.
+ *
+ * Discarding it sent the caller into a full synchronous re-run - the very mode that struggles
+ * with a large max_tokens - so a hiccup while writing a big file produced no file at all. The
+ * partial response now comes back flagged incomplete: usable for reading, refused for writing.
+ */
+const { isIncompleteResponse, INCOMPLETE_STREAM_FINISH_REASON } = await import("@ducki/shared");
+
+describe("incomplete response classification", () => {
+  it("treats both the output cap and a broken stream as incomplete", () => {
+    expect(isIncompleteResponse("length")).toBe(true);
+    expect(isIncompleteResponse(INCOMPLETE_STREAM_FINISH_REASON)).toBe(true);
+  });
+
+  it("treats a normal finish as complete", () => {
+    for (const reason of ["stop", "end_turn", "tool_use", "tool_calls", undefined]) {
+      expect(isIncompleteResponse(reason), String(reason)).toBe(false);
+    }
+  });
+});

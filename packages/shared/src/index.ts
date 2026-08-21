@@ -75,6 +75,20 @@ export interface LLMResponse {
   finishReason?: string;
 }
 
+/**
+ * finish_reason for a stream that died after delivering part of its output.
+ *
+ * Not a provider value - the providers synthesise it so a caller can tell "the model stopped
+ * here on purpose" from "the connection dropped mid-sentence". Both mean the payload is
+ * incomplete, which is what callers act on.
+ */
+export const INCOMPLETE_STREAM_FINISH_REASON = "incomplete_stream";
+
+/** True when a response is known to be cut short - by the output cap or by a broken stream. */
+export function isIncompleteResponse(finishReason: string | undefined): boolean {
+  return finishReason === "length" || finishReason === INCOMPLETE_STREAM_FINISH_REASON;
+}
+
 export interface GenerateOptions {
   temperature?: number;
   topP?: number;
