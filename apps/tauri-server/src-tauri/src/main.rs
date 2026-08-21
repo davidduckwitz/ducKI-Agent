@@ -75,7 +75,21 @@ fn seed_builtin_plugins(app: &AppHandle, app_data_dir: &std::path::Path) -> std:
         }
         let dest = plugins_dir.join(entry.file_name());
         if dest.exists() {
-            continue; // don't overwrite an existing (possibly user-customized) plugin
+            // Existing install (possibly user-customized): never clobber the plugin
+            // itself, but additively merge the packaging-added runtime deps
+            // (node_modules, e.g. "ws" for discord-connector) so plugins keep loading
+            // after app updates. Only copies when the dest has NO node_modules at all -
+            // a user's own node_modules is left untouched.
+            let bundled_nm = entry.path().join("node_modules");
+            let dest_nm = dest.join("node_modules");
+            if bundled_nm.is_dir() && !dest_nm.is_dir() {
+                if let Err(e) = copy_dir_recursive(&bundled_nm, &dest_nm) {
+                    eprintln!("[TAURI] Failed to merge runtime deps into plugin {:?}: {}", entry.file_name(), e);
+                } else {
+                    println!("[TAURI] Merged runtime deps into existing plugin: {}", entry.file_name().to_string_lossy());
+                }
+            }
+            continue;
         }
         if let Err(e) = copy_dir_recursive(&entry.path(), &dest) {
             eprintln!("[TAURI] Failed to seed plugin {:?}: {}", entry.file_name(), e);

@@ -191,14 +191,58 @@ log(`✓ Copied ${workspacePkgs.size} workspace package(s) into node_modules/@du
 const pluginsSrc = path.join(__dirname, '../server/plugins');
 const pluginsDest = path.join(serverDistDest, 'plugins-builtin');
 fs.rmSync(pluginsDest, { recursive: true, force: true });
+
+// A plugin's JS may import bare external packages (e.g. discord-connector does
+// `import WebSocket from "ws"`). In the monorepo those resolve via pnpm; in the packaged
+// app the plugin is seeded to app-data where neither the pnpm store nor the bundled
+// server node_modules are reachable (the server runs with cwd=app-data). Bundle each such
+// package INTO the plugin folder (plugins-builtin/<plugin>/node_modules/<name>) so it
+// resolves from the plugin itself.
+const serverRequire = createRequire(path.join(__dirname, '../server/package.json'));
+function bareExternalImports(dir) {
+  const found = new Set();
+  function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      if (e.name === 'node_modules') continue;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        walk(p);
+      } else if (/\.(js|mjs|cjs|ts)$/.test(e.name)) {
+        const src = fs.readFileSync(p, 'utf8');
+        for (const m of src.matchAll(/(?:from\s+|require\s*\(\s*)["']([^"']+)["']/g)) {
+          const spec = m[1];
+          // Only real bare package names ("ws", "@scope/pkg") - rejects relative
+          // paths, "node:" builtins and template-literal fragments ("${x}", " + ").
+          if (/^(?:@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/.test(spec)) found.add(spec);
+        }
+      }
+    }
+  }
+  walk(dir);
+  return [...found];
+}
+
 if (fs.existsSync(pluginsSrc)) {
   let pluginCount = 0;
+  let depBundled = 0;
   for (const entry of fs.readdirSync(pluginsSrc, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue; // skips .secret-key, .state.json (both plain files)
-    copyRecursive(path.join(pluginsSrc, entry.name), path.join(pluginsDest, entry.name));
+    const pluginDest = path.join(pluginsDest, entry.name);
+    copyRecursive(path.join(pluginsSrc, entry.name), pluginDest);
     pluginCount += 1;
+    for (const spec of bareExternalImports(path.join(pluginsSrc, entry.name))) {
+      try {
+        const pkgJsonPath = serverRequire.resolve(`${spec}/package.json`);
+        const pkgDir = path.dirname(pkgJsonPath);
+        copyRecursive(pkgDir, path.join(pluginDest, 'node_modules', spec));
+        depBundled += 1;
+        log(`  ↳ bundled runtime dep "${spec}" into plugin ${entry.name}`);
+      } catch {
+        log(`⚠ Could not resolve runtime dep "${spec}" for plugin ${entry.name} - it will fail to load in the packaged app`);
+      }
+    }
   }
-  log(`✓ Bundled ${pluginCount} built-in plugin(s) into resources/server-dist/plugins-builtin`);
+  log(`✓ Bundled ${pluginCount} built-in plugin(s) (+${depBundled} runtime dep(s)) into resources/server-dist/plugins-builtin`);
 } else {
   log('⚠ apps/server/plugins not found - packaged app will start with zero plugins');
 }

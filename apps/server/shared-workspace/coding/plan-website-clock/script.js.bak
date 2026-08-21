@@ -1,32 +1,27 @@
-function updateClock() {
+(function() {
+  const clockDisplay = document.getElementById('clock');
+  const dateDisplay = document.getElementById('date');
+
+  function tick() {
     const now = new Date();
     
-    // Formatiere Uhrzeit
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
+    // Uhrzeit formatiere
+
+    const h = String(now.getHours()).padStart(2, '0');
+    const m = String(now.getMinutes()).padStart(2, '0');
+    const s = String(now.getSeconds()).padStart(2, '0');
+    clockDisplay.textContent = `${h}:${m}:${s}`;
     
-    const timeString = `${hours}:${minutes}:${seconds}`;
-    
-    // Formatiere Datum
-    const options = {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        timeZone: 'Europe/Berlin'
-    };
-    
-    const dateString = now.toLocaleDateString('de-DE', options);
-    
-    // Update DOM
-    const clockElement = document.getElementById('clock');
-    const dateElement = document.getElementById('date');
-    
-    if (clockElement) {
-        clockElement.textContent = timeString;
-    }
-    
-    if (dateElement) {
-        dateElement.textContent = dateString;
-    }n}nn// Initial updatenupdateClock();nn// Update every secondnsetInterval(updateClock, 1000);
+    // Datum formatieren (Deutsch)
+    const formatter = new Intl.DateTimeFormat('de-DE', {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric'
+    });
+    dateDisplay.textContent = formatter.format(now);
+  }
+  
+  tick();
+  setInterval(tick, 1000);
+})();

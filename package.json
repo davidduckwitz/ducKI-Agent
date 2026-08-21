@@ -24,7 +24,9 @@
     "tauri:server:dev": "pnpm --filter @ducki/tauri-server run dev",
     "tauri:server:build": "pnpm --filter @ducki/tauri-server run dist",
     "tauri:all:dev": "concurrently \"pnpm dev\" \"pnpm tauri:server:dev\" \"wait-on http://localhost:5173 && pnpm tauri:dev\"",
-    "tauri:dev:no-server": "concurrently \"pnpm build:web\" \"pnpm tauri:server:dev\" \"wait-on http://localhost:3001 http://localhost:3002 && pnpm tauri:dev\""
+    "tauri:dev:no-server": "concurrently \"pnpm build:web\" \"pnpm tauri:server:dev\" \"wait-on http://localhost:3001 http://localhost:3002 && pnpm tauri:dev\"",
+    "tauri:ui:dev": "concurrently \"pnpm dev\" \"wait-on http://localhost:5173 http://localhost:3001 && pnpm --filter @ducki/tauri-ui run dev\"",
+    "tauri:ui:build": "pnpm build:web && pnpm --filter @ducki/tauri-ui run dist"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

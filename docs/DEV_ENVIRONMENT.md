@@ -200,6 +200,41 @@ Skills existieren in **zwei getrennten Welten** — niemals duplizieren:
 - Core-Änderungen am `SkillRegistry`-Singleton (z. B. `/api/skills`) brauchen einen **Server-Neustart**; der Agent-Pool liest pro Lauf vom Disk (mtime-Cache) und reagiert ohne Neustart.
 - Laufzeit-Verifikation des gemergten Pools (1:1-Spiegel von `listPluginSkillDirs` + Merge-Regel, aus `apps/server`-cwd): ein kleines Node-Skript, das Core-Slugs aus `../../skills` + Plugin-Slugs aus `plugins/*/skills/*` vereinigt (Plugin nur, wenn kein Core-Clash) — `discord` muss im Ergebnis enthalten sein, Quelle `plugins/discord-connector/skills/discord`.
 
+## Tauri-Apps: drei Rollen, ein Build-Muster
+
+Alle drei Apps sind **Tauri 2**-Projekte unter `apps/tauri-*` und bauen unabhängig als
+**standalone Windows-Exe** (NSIS-Installer). Gemeinsames Muster: `src-tauri/tauri.conf.json`
+(`frontendDist` embeddet die gebaute Web-App), `src-tauri/Cargo.toml`, `build.rs`,
+`capabilities/default.json`, Icons in `src-tauri/icons/`. `target/` und `dist/` sind gitignored.
+
+| App | Rolle | Backend | 
+| --- | --- | --- |
+| `tauri-server` | Headless Agent (Tray, Autostart, unsichtbares Fenster) | **bündelt** Server-Dist + Node-Sidecar (`externalBin`/`resources/server-dist`), startet ihn per `sidecar("node")` auf Port 3001-3010 |
+| `tauri-desktop` | Server **und** UI in einem Prozess | wie `tauri-server`, plus eingebettete Web-UI |
+| `tauri-ui` | **Nur UI** — verbindet sich mit einem laufenden Agent | **kein** Sidecar; eingebettete Web-App spricht das Backend absolut an |
+
+**Builds** (jeweils im App-Ordner, oder Root-Skripte `tauri:ui:build` / `tauri:server:build`):
+
+```bash
+pnpm build:web            # Web-UI einmal bauen (apps/web/dist)
+pnpm -w build:server      # nur für tauri-server/tauri-desktop
+cd apps/tauri-<app> && pnpm dist   # node build.js (Prep) + tauri build
+```
+
+**Dev**: `tauri dev` zeigt die laufende Web-App (`devUrl: http://localhost:5173`) im
+Tauri-Fenster. Das Web-UI erkennt den Tauri-Runtime selbst (`isDesktopApp()` in
+`apps/web/src/lib/backendUrl.ts`) und nutzt dann **absolute** Backend-URLs
+(`http://localhost:3001/api`, socket.io → `http://localhost:3001`) — kein Proxy nötig.
+Serverseitig ist CORS offen (`origin: "*"`, bei `credentials: true` reflektiert, plus
+`Access-Control-Allow-Private-Network`), damit die embedded WebView cross-origin erreicht.
+
+**Verteilte Rollen**: `tauri-server`/`tauri-desktop` binden ihren Agent auf den ersten freien
+Port ab 3001; `tauri-ui` (und jede embedded Web-App) zielen standardmäßig auf **:3001**
+(Settings → Backend in der UI kann Port/Remote konfigurieren, gespeichert in `localStorage`
+unter `backend-config`). Läuft ein anderer Agent bereits auf :3001, weicht `tauri-server`/
+`tauri-desktop` auf 3002+ aus — deren eingebettete UI zeigt dann auf den falschen Port
+(bekannte Grenze; im Normalbetrieb installiert man genau einen Agent).
+
 ## Troubleshooting-Tabelle
 
 | Symptom | Ursache | Fix |

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Send, Search, MessageSquare, Settings2, Mic, Image as ImageIcon, Smile, Copy, Upload, Plug, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
 import { api } from "../../lib/api";
+import { getApiBaseUrl } from "../../lib/backendUrl";
 import { useI18n } from "../../lib/i18n";
 
 /**
@@ -69,7 +70,12 @@ function ConnectorsPanel() {
                 {plugin.settingsPage ? (
                   <button
                     type="button"
-                    onClick={() => window.open(`/api/plugins/${plugin.name}/ui/settings`, "_blank", "width=520,height=760")}
+                    // Absolute URL via getApiBaseUrl(): in the browser the dev proxy forwards
+                    // /api/... anyway, but in the Tauri desktop apps a relative "/api/..."
+                    // resolves against the app origin (tauri://localhost) and 404s. The
+                    // absolute URL reaches the backend (localhost:3001 or configured remote)
+                    // and opens in the system browser.
+                    onClick={() => window.open(`${getApiBaseUrl()}/plugins/${plugin.name}/ui/settings`, "_blank", "width=520,height=760")}
                     className="inline-flex items-center gap-1 rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-medium text-slate-950 hover:bg-cyan-400"
                   >
                     <ExternalLink className="w-3 h-3" /> Konfigurieren
