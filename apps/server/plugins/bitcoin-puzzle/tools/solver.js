@@ -1,10 +1,19 @@
 /**
- * Bitcoin puzzle solver core (ported near-verbatim from packages/agent/src/crypto/bitcoin-puzzle-solver.ts,
- * the previous core-app implementation). Brute-forces random/ordered 12-word BIP39 mnemonics,
- * derives a P2PKH address (BIP44 m/44'/0'/0'/0/0) and compares against a target address.
- * Self-throttles with setImmediate every 100 iterations to yield the event loop - this already
- * ran synchronously in the main process before (no worker_threads/child_process), so moving it
- * into a moduleTool changes nothing about its CPU behavior.
+ * Bitcoin puzzle solver core (ported from packages/agent/src/crypto/bitcoin-puzzle-solver.ts,
+ * the previous core-app implementation, then extended with two extra search modes). Derives a
+ * P2PKH address (BIP44 m/44'/0'/0'/0/0) from a 12-word BIP39 mnemonic and compares it against a
+ * target address. Self-throttles with setImmediate every 100 iterations to yield the event loop.
+ *
+ * Three modes:
+ * - "random": the original behavior, a fresh random mnemonic every attempt.
+ * - "sequential": walks every possible 128-bit entropy value in strict numeric order via
+ *   bip39.entropyToMnemonic (which computes the correct checksum word for each one) - a
+ *   mathematically proper systematic search, resumable via a persisted counter. Replaces the
+ *   old "every 5000th attempt, cycle through the wordlist" hack, which produced mnemonics with
+ *   no valid checksum and wasn't genuinely exhaustive.
+ * - "partial": the user supplies a phrase with 1-2 unknown words (__ or ?) and the solver
+ *   exhaustively walks every substitution for just those positions - a finite, much smaller
+ *   space than "search everything". Reports "exhausted" if it runs out without a match.
  */
 
 import * as bip39 from "bip39";
@@ -16,6 +25,14 @@ const bip32 = BIP32Factory(tinysecp);
 
 /** Upper bound for the buffer of not-yet-persisted attempts (memory-leak guard). */
 const MAX_PENDING_ATTEMPTS = 50_000;
+
+/** In-place big-endian increment of a 16-byte buffer (128-bit counter), wrapping at 2^128. */
+function incrementBuffer16(buf) {
+  for (let i = buf.length - 1; i >= 0; i--) {
+    if (buf[i] !== 0xff) { buf[i]++; return; }
+    buf[i] = 0;
+  }
+}
 
 export class BitcoinPuzzleSolver {
   constructor(wordList, config) {
@@ -32,6 +49,18 @@ export class BitcoinPuzzleSolver {
     this.eventListeners = [];
     this.onProgressCallback = undefined;
     this.phraseExistsCallback = undefined;
+    /** Throttle: only log the 1st, 2nd, 4th, 8th, ... bad iteration, never a per-error flood. */
+    this.badIterationCount = 0;
+
+    this.mode = config.mode || "random";
+    this.template = config.template;
+    // "sequential": a 16-byte big-endian counter, entropyToMnemonic'd each step.
+    this.sequentialCounter = config.sequentialCounterHex
+      ? Buffer.from(config.sequentialCounterHex, "hex")
+      : Buffer.alloc(16);
+    // "partial": the full (usually large) set of concrete mnemonics for the blanks, walked by index.
+    this.combinations = config.combinations || [];
+    this.combinationIndex = config.combinationIndex || 0;
 
     this.state = {
       targetAddress: config.targetAddress,
@@ -41,7 +70,7 @@ export class BitcoinPuzzleSolver {
       lastCheckAt: Date.now(),
       status: "idle",
       triedCombinationsCount: 0,
-      currentCombinationMode: "random",
+      currentCombinationMode: this.mode,
     };
   }
 
@@ -63,8 +92,9 @@ export class BitcoinPuzzleSolver {
     if (savedState.currentCombinationMode !== undefined) this.state.currentCombinationMode = savedState.currentCombinationMode;
     if (savedState.startedAt !== undefined) this.state.startedAt = savedState.startedAt;
     if (savedState.lastCheckAt !== undefined) this.state.lastCheckAt = savedState.lastCheckAt;
-    // A puzzle saved while paused must come back paused - otherwise the UI shows "idle" and
-    // the resume path thinks it's a fresh solver.
+    // A puzzle saved while paused/running must come back paused - otherwise the UI shows "idle"
+    // and the resume path thinks it's a fresh solver. Terminal states (completed/error/exhausted)
+    // pass through unchanged.
     if (savedState.status !== undefined) this.state.status = savedState.status === "running" ? "paused" : savedState.status;
     if (savedState.foundAddress) this.state.foundAddress = savedState.foundAddress;
     if (savedState.foundMnemonic) {
@@ -73,6 +103,20 @@ export class BitcoinPuzzleSolver {
     }
     if (savedState.errorMessage !== undefined) this.state.errorMessage = savedState.errorMessage;
     this.runStartCount = this.state.generatedCount;
+  }
+
+  /** Progress info specific to the finite "partial" mode - null for the other (unbounded) modes. */
+  getCombinationProgress() {
+    if (this.mode !== "partial") return null;
+    return { index: this.combinationIndex, total: this.combinations.length };
+  }
+
+  getSequentialCounterHex() {
+    return this.sequentialCounter.toString("hex");
+  }
+
+  getCombinationIndex() {
+    return this.combinationIndex;
   }
 
   async start(onProgress) {
@@ -127,17 +171,21 @@ export class BitcoinPuzzleSolver {
              try {
               let mnemonic;
 
-              if (this.state.generatedCount % 5000 === 0 && this.state.generatedCount > 0) {
-                this.state.currentCombinationMode = "ordered";
-                mnemonic = this.generateOrderedMnemonic();
-                // The ordered phrase is deterministic; if it's a duplicate and we just
-                // `continue`, it comes back next iteration unchanged (infinite loop).
-                if (this.triedCombinations.has(mnemonic)) {
-                  this.state.currentCombinationMode = "random";
-                  mnemonic = bip39.generateMnemonic(128, undefined, this.wordList);
+              if (this.mode === "sequential") {
+                mnemonic = bip39.entropyToMnemonic(this.sequentialCounter, this.wordList);
+                incrementBuffer16(this.sequentialCounter);
+              } else if (this.mode === "partial") {
+                if (this.combinationIndex >= this.combinations.length) {
+                  this.state.status = "exhausted";
+                  this.isRunning = false;
+                  this.emit({ type: "stopped", timestamp: Date.now(), data: { reason: "exhausted", attempts: this.state.generatedCount } });
+                  this.onProgressCallback?.(this.state);
+                  finish(this.state);
+                  return;
                 }
+                mnemonic = this.combinations[this.combinationIndex];
+                this.combinationIndex++;
               } else {
-                this.state.currentCombinationMode = "random";
                 mnemonic = bip39.generateMnemonic(128, undefined, this.wordList);
               }
 
@@ -166,7 +214,7 @@ export class BitcoinPuzzleSolver {
                 this.emit({
                   type: "attempt",
                   timestamp: Date.now(),
-                  data: { attemptNumber: this.state.generatedCount, mode: this.state.currentCombinationMode, triedCombinationsCount: this.state.triedCombinationsCount },
+                  data: { attemptNumber: this.state.generatedCount, mode: this.mode, triedCombinationsCount: this.state.triedCombinationsCount },
                 });
               }
 
@@ -200,7 +248,12 @@ export class BitcoinPuzzleSolver {
               // millions of mnemonics) must never take down the whole shared server process -
               // this loop runs in-process alongside everything else via the plugin's
               // moduleTool. Skip it and keep going instead of throwing out of setImmediate.
-              console.error(`[BitcoinPuzzleSolver] Skipping bad iteration: ${iterationError instanceof Error ? iterationError.message : String(iterationError)}`);
+              // Logged with exponential backoff (1st, 2nd, 4th, 8th, ...) so a systematic
+              // failure can't flood the terminal.
+              this.badIterationCount++;
+              if ((this.badIterationCount & (this.badIterationCount - 1)) === 0) {
+                console.error(`[BitcoinPuzzleSolver] Skipping bad iteration (#${this.badIterationCount}): ${iterationError instanceof Error ? iterationError.message : String(iterationError)}`);
+              }
              }
             }
 
@@ -221,18 +274,6 @@ export class BitcoinPuzzleSolver {
       this.emit({ type: "error", timestamp: Date.now(), data: { error: this.state.errorMessage } });
       return this.state;
     }
-  }
-
-  generateOrderedMnemonic() {
-    const wordCount = 12;
-    const words = [];
-    if (this.wordList.length === 0) return bip39.generateMnemonic(128, undefined, this.wordList);
-    for (let i = 0; i < wordCount; i++) {
-      const index = (this.triedCombinations.size + i) % this.wordList.length;
-      const word = this.wordList[index];
-      if (word) words.push(word);
-    }
-    return words.length === wordCount ? words.join(" ") : bip39.generateMnemonic(128, undefined, this.wordList);
   }
 
   pause() {
@@ -271,7 +312,7 @@ export class BitcoinPuzzleSolver {
   stop() {
     this.isRunning = false;
     this.isPaused = false;
-    if (this.state.status !== "completed" && this.state.status !== "error") this.state.status = "idle";
+    if (this.state.status !== "completed" && this.state.status !== "error" && this.state.status !== "exhausted") this.state.status = "idle";
   }
 
   getState() {

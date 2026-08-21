@@ -14,6 +14,11 @@
  *
  * The old core route (apps/server/src/routes/bitcoin-puzzle.ts) is unmounted once this plugin is
  * verified working, so only one engine ever touches these files at a time.
+ *
+ * Three search modes (see solver.js for the actual generation logic): "random" (default),
+ * "sequential" (systematic 128-bit entropy walk, resumable via a persisted counter), and
+ * "partial" (exhaustively try every substitution for 1-2 unknown words in a known phrase -
+ * a finite space, can run out and report "exhausted").
  */
 
 import {
@@ -38,26 +43,33 @@ import { BitcoinPuzzleSolver } from "./solver.js";
 export const definition = {
   name: "bitcoin_puzzle",
   description:
-    "Bitcoin-Puzzle-Solver: erzeugt zufällige BIP39-Mnemonics, leitet eine P2PKH-Adresse ab und vergleicht sie mit einer Zieladresse. " +
-    "action=create (targetAddress, name?, infoUrl?)/list/get (puzzleId)/pause/resume/stop/delete/update (puzzleId, name?, infoUrl?). " +
+    "Bitcoin-Puzzle-Solver: leitet aus 12-Wort-BIP39-Mnemonics eine P2PKH-Adresse ab und vergleicht sie mit einer Zieladresse. Drei Suchmodi (mode bei create): " +
+    "'random' (Standard, zufällige Mnemonics), 'sequential' (systematischer, lückenloser Durchlauf durch den gesamten 128-Bit-Entropieraum, resumable), " +
+    "'partial' (nur bekannte Wörter + 1-2 Lücken (__/?) im template werden erschöpfend durchprobiert - endlicher, viel kleinerer Suchraum). " +
+    "action=create (targetAddress, name?, infoUrl?, mode?, template? für partial)/list/get (puzzleId)/pause/resume/stop/delete/update (puzzleId, name?, infoUrl?). " +
     "action=mark_phrase (puzzleId, phrase, address?) markiert eine Phrase als bereits versucht (unterstützt __/? als Platzhalter, max. 2, generiert alle Kombinationen). " +
     "action=search (puzzleId, query)/search_all (query)/check_phrase (phrase) durchsuchen die Versuchsprotokolle. " +
+    "action=list_attempts (puzzleId, offset?, limit?) blättert roh durch die CSV-Versuchsdatei (Ansicht, kein Suchbegriff nötig). " +
     "action=mark_found (puzzleId, mnemonic) prüft eine vollständige Mnemonic gegen die Zieladresse und markiert das Puzzle bei Treffer als gelöst.",
   parameters: {
     type: "object",
     properties: {
       action: {
         type: "string",
-        enum: ["create", "list", "get", "pause", "resume", "stop", "delete", "update", "mark_phrase", "search", "search_all", "check_phrase", "mark_found"],
+        enum: ["create", "list", "get", "pause", "resume", "stop", "delete", "update", "mark_phrase", "search", "search_all", "check_phrase", "mark_found", "list_attempts"],
       },
       puzzleId: { type: "string", description: "Ziel-Puzzle (alle außer create/list/search_all/check_phrase)" },
       targetAddress: { type: "string", description: "Bitcoin-Zieladresse (create)" },
       name: { type: "string", description: "Anzeigename (create/update)" },
       infoUrl: { type: "string", description: "Optionale Info-URL zum Puzzle (create/update)" },
+      mode: { type: "string", enum: ["random", "sequential", "partial"], description: "Suchmodus (create, Standard random)" },
+      template: { type: "string", description: "Phrase mit 1-2 Lücken (__ oder ?) für mode=partial, z. B. 'abandon ability __ actual admit adult advance afraid again age agent about'" },
       phrase: { type: "string", description: "Phrase, ggf. mit __ oder ? als Platzhalter für fehlende Wörter (mark_phrase)" },
       mnemonic: { type: "string", description: "Vollständige 12-Wort-Mnemonic (mark_found)" },
       address: { type: "string", description: "Zugehörige Adresse, falls bekannt (mark_phrase)" },
       query: { type: "string", description: "Suchbegriff (search/search_all/check_phrase)" },
+      offset: { type: "number", description: "Anzahl zu überspringender Zeilen (list_attempts, Standard 0)" },
+      limit: { type: "number", description: "Anzahl Zeilen (list_attempts, Standard 100, max. 500)" },
     },
     required: ["action"],
   },
@@ -133,7 +145,7 @@ function ensureInit(ctx) {
   try {
     const content = readFileSync(wordlistPath, "utf-8");
     wordList = content.split("\n").filter((w) => w.trim().length > 0);
-    ctx.logger?.info?.(`Loaded ${wordList.length} BIP39 words from ${wordlistPath}`);
+    ctx.logger?.debug?.(`Loaded ${wordList.length} BIP39 words from ${wordlistPath}`);
   } catch (error) {
     ctx.logger?.warn?.("Failed to load BIP39 word list", { wordlistPath, error: error instanceof Error ? error.message : String(error) });
     wordList = [];
@@ -144,7 +156,7 @@ function ensureInit(ctx) {
   try {
     const stateFiles = readdirSync(attemptsDir).filter((f) => f.endsWith("-state.json"));
     for (const file of stateFiles) restorePuzzleFromDisk(file.replace("-state.json", ""), ctx);
-    ctx.logger?.info?.(`Restored ${activePuzzles.size} puzzle state(s) from ${attemptsDir}`);
+    ctx.logger?.debug?.(`Restored ${activePuzzles.size} puzzle state(s) from ${attemptsDir}`);
   } catch (error) {
     ctx.logger?.warn?.("Failed to restore puzzle states", { error: error instanceof Error ? error.message : String(error) });
   }
@@ -201,7 +213,7 @@ function ensurePersistedIndex(puzzleId, ctx) {
       const count = await streamAttempts(puzzleId, (attempt) => { set.add(attempt.mnemonic); });
       const puzzle = activePuzzles.get(puzzleId);
       if (puzzle) puzzle.solver.raiseTriedCombinationsCount(set.size);
-      ctx.logger?.info?.(`Indexed ${set.size} persisted attempts for ${puzzleId} (${count} rows read)`);
+      ctx.logger?.debug?.(`Indexed ${set.size} persisted attempts for ${puzzleId} (${count} rows read)`);
     } catch (err) {
       ctx.logger?.warn?.("error building persisted index", { puzzleId, error: String(err) });
     }
@@ -276,6 +288,10 @@ async function savePuzzleProgress(puzzleId, state, ctx) {
     triedCombinationsCount: state.triedCombinationsCount,
     generatedCount: state.generatedCount,
     currentCombinationMode: state.currentCombinationMode,
+    mode: puzzle.solver.mode,
+    template: puzzle.solver.template || null,
+    sequentialCounterHex: puzzle.solver.mode === "sequential" ? puzzle.solver.getSequentialCounterHex() : null,
+    combinationIndex: puzzle.solver.mode === "partial" ? puzzle.solver.getCombinationIndex() : null,
     foundAddress: state.foundAddress || null,
     foundMnemonic: state.foundMnemonic || null,
     errorMessage: state.errorMessage || null,
@@ -299,7 +315,18 @@ function restorePuzzleFromDisk(puzzleId, ctx) {
 
   try {
     const saved = JSON.parse(readFileSync(file, "utf-8"));
-    const solver = new BitcoinPuzzleSolver(wordList, { targetAddress: saved.targetAddress, batchSize: 100 });
+    const mode = saved.mode || "random";
+    // "partial" mode's combinations array is never persisted (can be up to 1M entries) - cheap
+    // to regenerate deterministically from the saved template instead.
+    const combinations = mode === "partial" && saved.template ? generatePartialMnemonicCombinations(saved.template, wordList) : undefined;
+    const solver = new BitcoinPuzzleSolver(wordList, {
+      targetAddress: saved.targetAddress,
+      mode,
+      template: saved.template || undefined,
+      combinations,
+      combinationIndex: saved.combinationIndex || 0,
+      sequentialCounterHex: saved.sequentialCounterHex || undefined,
+    });
     solver.restoreState({
       triedCombinationsCount: saved.triedCombinationsCount,
       generatedCount: saved.generatedCount,
@@ -336,6 +363,9 @@ function getPuzzleInfo(puzzleId, ctx) {
     targetAddress: puzzle.metadata.targetAddress,
     infoUrl: puzzle.metadata.infoUrl,
     createdAt: puzzle.metadata.createdAt,
+    mode: puzzle.solver.mode,
+    template: puzzle.solver.template || null,
+    combinationProgress: puzzle.solver.getCombinationProgress(),
     state,
     isRunning: state.status === "running" && puzzle.solver.isLoopAlive(),
     elapsedSeconds: puzzle.solver.getRunElapsedSeconds(),
@@ -353,6 +383,7 @@ function getAllPuzzlesInfo(ctx) {
       status: state.status, generatedCount: state.generatedCount, triedCombinationsCount: state.triedCombinationsCount,
       found: !!state.foundMnemonic, isRunning: state.status === "running" && puzzle.solver.isLoopAlive(),
       addressesPerSecond: puzzle.solver.getRatePerSecond(),
+      mode: puzzle.solver.mode, combinationProgress: puzzle.solver.getCombinationProgress(),
     });
   }
   // Any saved-but-not-yet-restored puzzles (shouldn't normally happen since ensureInit restores
@@ -366,6 +397,7 @@ function getAllPuzzlesInfo(ctx) {
         id: saved.id, name: saved.name, targetAddress: saved.targetAddress, status: saved.status,
         generatedCount: saved.generatedCount, triedCombinationsCount: saved.triedCombinationsCount,
         found: !!saved.foundMnemonic, isRunning: false, addressesPerSecond: 0,
+        mode: saved.mode || "random", combinationProgress: null,
       });
     }
   } catch { /* attemptsDir listing is best-effort */ }
@@ -385,8 +417,18 @@ export async function execute(input, ctx) {
       return { id: puzzleId, alreadyRunning: true, ...getPuzzleInfo(puzzleId, ctx) };
     }
 
+    const mode = input.mode || "random";
+    let combinations;
+    if (mode === "partial") {
+      if (!input.template) return { error: "template ist erforderlich für mode=partial" };
+      combinations = generatePartialMnemonicCombinations(input.template, wordList);
+      if (combinations.length === 0) {
+        return { error: "Konnte keine Kombinationen aus template generieren (max. 2 Lücken, max. 1 Mio. Kombinationen)" };
+      }
+    }
+
     const metadata = { id: puzzleId, name: input.name || `Puzzle ${new Date().toLocaleString()}`, targetAddress: input.targetAddress, infoUrl: input.infoUrl, createdAt: Date.now() };
-    const solver = new BitcoinPuzzleSolver(wordList, { targetAddress: input.targetAddress });
+    const solver = new BitcoinPuzzleSolver(wordList, { targetAddress: input.targetAddress, mode, template: input.template, combinations });
     solver.setPhraseExistsCallback((phrase) => getPersistedMnemonics(puzzleId, ctx).has(phrase));
 
     const promise = solver.start((state) => { savePuzzleProgress(puzzleId, state, ctx).catch(() => {}); })
@@ -564,6 +606,24 @@ export async function execute(input, ctx) {
       }
     }
     return { count: results.length, results };
+  }
+
+  if (input.action === "list_attempts") {
+    if (!input.puzzleId) return { error: "puzzleId ist erforderlich" };
+    const offset = Math.max(0, Number(input.offset) || 0);
+    const limit = Math.min(500, Math.max(1, Number(input.limit) || 100));
+    const rows = [];
+    let seen = 0;
+    // No index into the file - deep offsets stream from the start each call, so paging is
+    // "load more" (offset only grows), not free random access. Fine for a viewer, not a DB.
+    await streamAttempts(input.puzzleId, (a) => {
+      seen++;
+      if (seen <= offset) return false;
+      rows.push(a);
+      return rows.length >= limit;
+    });
+    const knownTotal = persistedMnemonics.get(input.puzzleId)?.size;
+    return { offset, limit, count: rows.length, rows, total: knownTotal ?? null, hasMore: rows.length === limit };
   }
 
   if (input.action === "check_phrase") {
