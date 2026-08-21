@@ -268,11 +268,62 @@ export class DatabaseService {
       .all();
   }
 
+  /**
+   * Deletes a conversation and everything that references it.
+   *
+   * SIX tables carry a foreign key to `conversations.id`; this used to clear three of them, so
+   * a conversation that had ever executed a plan could not be deleted at all - the run left
+   * `session_checklist` rows behind (its FK is NOT NULL) and SQLite refused the delete with
+   * SQLITE_CONSTRAINT_FOREIGNKEY. Deleting a coding project therefore removed its files but
+   * always left the chat behind.
+   *
+   * The six split into two groups, and the distinction matters:
+   *   - Rows that are per-conversation state and meaningless without it (messages, memories,
+   *     tool executions, checklist steps) are deleted.
+   *   - Rows that outlive the conversation and merely point at it (a saved plan, a cron job)
+   *     keep existing with the link cleared. Deleting a user's scheduled job because the chat
+   *     it was set up in went away would be a considerably worse bug than the one this fixes.
+   */
   async deleteConversation(id: number): Promise<void> {
+    // Rows that are per-conversation state: they go with it.
     await this.db.delete(schema.messages).where(eq(schema.messages.conversationId, id)).run();
     await this.db.delete(schema.memories).where(eq(schema.memories.conversationId, id)).run();
     await this.db.delete(schema.toolExecutions).where(eq(schema.toolExecutions.conversationId, id)).run();
+    await this.forEachExistingTable("session_checklist", () =>
+      this.db.delete(schema.sessionChecklist).where(eq(schema.sessionChecklist.conversationId, id)).run()
+    );
+
+    // Rows that outlive it: keep the row, drop the link.
+    await this.forEachExistingTable("plans", () =>
+      this.db.update(schema.plans).set({ conversationId: null }).where(eq(schema.plans.conversationId, id)).run()
+    );
+    await this.forEachExistingTable("cron_jobs", () =>
+      this.db.update(schema.cronJobs).set({ conversationId: null }).where(eq(schema.cronJobs.conversationId, id)).run()
+    );
+
     await this.db.delete(schema.conversations).where(eq(schema.conversations.id, id)).run();
+  }
+
+  /**
+   * Runs a dependent-row cleanup, tolerating a table this database does not actually have.
+   *
+   * The schema declares more tables than `initialize()` creates - `plans` is declared and
+   * referenced but exists in no live database, checked against the running one. A hard
+   * dependency on it would turn "some conversations cannot be deleted" into "no conversation
+   * can be deleted", which is how a fix becomes a worse bug. Only a missing table is swallowed;
+   * every other failure (a genuine constraint violation, a locked database) still propagates.
+   */
+  private async forEachExistingTable(tableName: string, run: () => Promise<unknown>): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no such table/i.test(message)) {
+        this.logger.debug("Skipping cleanup for a table this database does not have", { tableName });
+        return;
+      }
+      throw error;
+    }
   }
 
   async deleteMessages(conversationId: number): Promise<void> {

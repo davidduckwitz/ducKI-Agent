@@ -671,3 +671,19 @@ Beide Abbruchgründe laufen jetzt durch dieselbe Prüfung `isIncompleteResponse(
 | `stop` / `tool_calls` / … | regulär beendet | normal |
 
 Damit gibt es keinen Weg mehr, auf dem eine unvollständige Modellausgabe still als vollständige Datei landet — unabhängig davon, ob das Budget oder die Verbindung die Ursache war.
+
+## 19. Löschen eines Coding-Projekts scheiterte an einem Foreign Key
+
+**Symptom:** `Failed to delete conversation … LibsqlError: SQLITE_CONSTRAINT_FOREIGNKEY` in `deleteConversation`. Die Dateien des Projekts wurden gelöscht, der Chat blieb immer zurück.
+
+**Ursache:** Sechs Tabellen tragen einen Foreign Key auf `conversations.id`, `deleteConversation` räumte drei davon ab. Der Blocker war `session_checklist` — dessen FK ist `NOT NULL`, SQLite verweigert das Löschen also hart. Betroffen war damit jede Conversation, in der jemals ein Plan ausgeführt wurde, und das ist bei einem Coding-Projekt immer der Fall.
+
+**Fix** (`packages/database/src/index.ts`):
+- Pro-Conversation-Zustand wird mitgelöscht: `messages`, `memories`, `tool_executions`, `session_checklist`.
+- Zeilen, die die Conversation überdauern, bleiben bestehen und verlieren nur die Verknüpfung: `plans`, `cron_jobs` werden auf `conversation_id = NULL` gesetzt. Einen Cronjob des Nutzers zu löschen, weil der Chat verschwindet, wäre der deutlich schlimmere Bug.
+
+**Fallstrick, den der Test aufgedeckt hat:** Das Schema deklariert mehr Tabellen als `initialize()` anlegt — `plans`, `bitcoin_puzzles`, `crypto_price_alerts`, `crypto_balance_alerts` existieren in keiner Datenbank. Ein hartes `UPDATE plans` hätte aus "manche Conversations lassen sich nicht löschen" ein "keine Conversation lässt sich löschen" gemacht. Deshalb läuft jeder abhängige Aufräumschritt über `forEachExistingTable()`, das ausschließlich `no such table` schluckt; jeder andere Fehler wird weitergereicht.
+
+**Hinweis:** `plans` ist eine tote Deklaration — Pläne werden als Markdown im Workspace abgelegt (`PLAN_MODE_MARKDOWN_PATH`), nichts schreibt je in diese Tabelle. Der Aufräumschritt bleibt trotzdem drin, damit ein späteres Anlegen der Tabelle das Löschen nicht erneut blockiert.
+
+**Abdeckung:** `packages/database/test/delete-conversation.test.ts` — 4 Tests, darunter der gemeldete Fall (Conversation mit ausgeführtem Plan) und der Nachweis, dass ein Cronjob das Löschen überlebt.
