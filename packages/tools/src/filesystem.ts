@@ -107,7 +107,12 @@ export const EMPTY_CONTENT_ERROR =
   "than that an empty file was wanted. Re-send the write with the FULL content - prefer the block " +
   "form, which needs no escaping and survives long content: " +
   "[TOOL:filesystem action=write path=<path>]\\n<content>\\n[/TOOL] - or split a very large file " +
-  "into one write plus several append calls. If you really do want a 0-byte file, pass allowEmpty:true.";
+  "into one write plus several append calls.";
+// Deliberately NOT mentioning the allowEmpty escape hatch here. This text is fed to the
+// self-repair pass, whose job is to make errors go away - told about a flag that silences this
+// one, it set it, and a truncated write became a successfully-written 0-byte file. The flag is
+// documented in the tool's schema instead, where using it is a deliberate choice rather than a
+// way out of a complaint.
 
 /** True when the caller explicitly asked for an empty file rather than losing content to truncation. */
 export function isIntentionalEmptyWrite(input: Record<string, unknown>): boolean {

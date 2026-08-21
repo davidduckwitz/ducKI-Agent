@@ -143,3 +143,101 @@ describe("mechanical repair of field names", () => {
     expect(repair(agent, { action: "read", path: "a.txt" })).toBeUndefined();
   });
 });
+
+/**
+ * Self-repair may fix the SHAPE of a call, never its payload.
+ *
+ * Both of these were observed as silent data loss: the repair pass "corrected" a write and the
+ * user's file came out empty, while the model's own reasoning still showed the full document.
+ */
+describe("self-repair must not destroy the file body", () => {
+  const sanitize = (
+    agent: ReturnType<typeof makeAgent>,
+    original: Record<string, unknown>,
+    repaired: Record<string, unknown>
+  ) => (agent as any).sanitizeRepairedInput("filesystem", original, repaired) as
+    | Record<string, unknown>
+    | undefined;
+
+  const DOC = "<!DOCTYPE html>\n<html lang=\"de\">\n<head></head>\n<body>Inhalt</body>\n</html>";
+
+  it("discards a repair that shortened the content", () => {
+    const agent = makeAgent();
+    const result = sanitize(
+      agent,
+      { action: "write", path: "index.html", content: DOC },
+      { action: "write", path: "index.html", content: "<!DOCTYPE html>" }
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("discards a repair that dropped the content entirely", () => {
+    const agent = makeAgent();
+    const result = sanitize(
+      agent,
+      { action: "write", path: "index.html", content: DOC },
+      { action: "write", path: "index.html" }
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("discards a repair that invented content where there was none", () => {
+    const agent = makeAgent();
+    const result = sanitize(
+      agent,
+      { action: "write", path: "index.html" },
+      { action: "write", path: "index.html", content: "<h1>Erfunden</h1>" }
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("strips allowEmpty that the repair pass introduced", () => {
+    // The empty-content error used to name this flag as the way out; the repair model read the
+    // error and set it, turning a truncated write into a successful 0-byte file.
+    const agent = makeAgent();
+    const result = sanitize(
+      agent,
+      { action: "write", path: "index.html", content: "" },
+      { action: "write", path: "index.html", content: "", allowEmpty: true }
+    );
+    expect(result).toBeDefined();
+    expect(result).not.toHaveProperty("allowEmpty");
+  });
+
+  it("keeps allowEmpty when the acting model asked for it itself", () => {
+    const agent = makeAgent();
+    const result = sanitize(
+      agent,
+      { action: "write", path: "a.txt", content: "", allowEmpty: true },
+      { action: "write", path: "a.txt", content: "", allowEmpty: true }
+    );
+    expect(result?.["allowEmpty"]).toBe(true);
+  });
+
+  it("allows the useful repair of moving the body onto the canonical field", () => {
+    const agent = makeAgent();
+    const result = sanitize(
+      agent,
+      { action: "write", path: "index.html", file_text: DOC },
+      { action: "write", path: "index.html", content: DOC }
+    );
+    expect(result?.["content"]).toBe(DOC);
+  });
+
+  it("allows a repair that only fixes the path", () => {
+    const agent = makeAgent();
+    const result = sanitize(
+      agent,
+      { action: "write", path: "/abs/index.html", content: DOC },
+      { action: "write", path: "index.html", content: DOC }
+    );
+    expect(result?.["path"]).toBe("index.html");
+    expect(result?.["content"]).toBe(DOC);
+  });
+
+  it("leaves non-filesystem tools alone", () => {
+    const agent = makeAgent();
+    const repaired = { command: "npm test" };
+    expect((agent as any).sanitizeRepairedInput("shell", { command: "npm tset" }, repaired)).toBe(repaired);
+  });
+});

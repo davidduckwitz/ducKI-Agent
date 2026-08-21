@@ -3430,6 +3430,49 @@ export class Agent {
    * deterministic schema-based fixes, then (if none apply) by asking the LLM for a
    * targeted correction. Returns undefined if no repair could be derived.
    */
+  /**
+   * Self-repair may fix the SHAPE of a call. It must never touch the payload.
+   *
+   * Two ways it silently destroyed a file, both observed:
+   *   - It set `allowEmpty: true`. The empty-content error explains that flag as the way to
+   *     write a 0-byte file on purpose, and the repair model reads that error - so it did the
+   *     one thing that makes the complaint go away, turning "this write was truncated" into
+   *     "wrote an empty file, successfully".
+   *   - It re-emitted the call with a shortened or missing `content`. A small repair model
+   *     asked to fix a call carrying a 6KB HTML document will not reproduce that document; it
+   *     produces something shorter, and the user's file is quietly replaced by it.
+   *
+   * So: the file body must come out of a repair byte-identical to how it went in. Aliases are
+   * resolved on both sides first, which still permits the useful repair of moving a body from
+   * `file_text` to `content`. Anything else discards the repair - the acting model, which
+   * actually has the content, then gets the error and can re-send it.
+   */
+  private sanitizeRepairedInput(
+    toolName: string,
+    original: Record<string, unknown>,
+    repaired: Record<string, unknown>
+  ): Record<string, unknown> | undefined {
+    if (toolName !== "filesystem") return repaired;
+
+    const next = { ...repaired };
+    if (original["allowEmpty"] !== true) delete next["allowEmpty"];
+
+    const action = String(next["action"] ?? original["action"] ?? "").toLowerCase();
+    if (action !== "write" && action !== "append") return next;
+
+    const originalContent = extractFileContent(original, String(original["path"] ?? ""));
+    const repairedContent = extractFileContent(next, String(next["path"] ?? ""));
+    if (originalContent !== repairedContent) {
+      this.logger.warn("[SELF-REPAIR] Discarded a repair that altered the file body", {
+        toolName,
+        originalLength: originalContent?.length ?? null,
+        repairedLength: repairedContent?.length ?? null,
+      });
+      return undefined;
+    }
+    return next;
+  }
+
   private async attemptSelfRepair(
     toolName: string,
     toolInput: Record<string, unknown>,
@@ -4601,6 +4644,11 @@ export class Agent {
               this.deriveToolRecoveryHint(toolCall.toolName, repairedInput, repairedResult.error ?? "")
             );
             if (!repair) break;
+            // Same protection as the preflight loop: a repair may fix the call's shape, never
+            // its payload. See sanitizeRepairedInput.
+            const safeRepairInput = this.sanitizeRepairedInput(toolCall.toolName, repairedInput, repair.input);
+            if (!safeRepairInput) break;
+            repair.input = safeRepairInput;
             repairAttempts++;
             this.logger.info("[SELF-REPAIR] Retrying tool call with corrected input", {
               toolName: toolCall.toolName,
