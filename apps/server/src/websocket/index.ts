@@ -8,7 +8,13 @@ import { getRootLogger } from "@ducki/logger";
 import { isAbortError } from "@ducki/providers";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { stopCodingRun } from "../lib/coding-run-registry.js";
-import { BitcoinPuzzleService, createCheckpoint, createScopedFilesystemTool, pluginsRoot } from "@ducki/agent";
+import {
+  BitcoinPuzzleService,
+  createCheckpoint,
+  createScopedFilesystemTool,
+  discardNoopCheckpoint,
+  pluginsRoot,
+} from "@ducki/agent";
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
@@ -548,31 +554,43 @@ export function setupWebSocket(
           // turn changed. The plan-execution path (CodingAgent) already does this per
           // attempt; the coding-area chat runs through the REGULAR agent, which never
           // snapshotted - so the tab stayed empty for the primary way users drive the
-          // coding agent. Snapshot before every coding chat run (mirrors the CodingAgent
-          // behavior; no-op turns simply produce a checkpoint with an empty diff).
-          if (sandboxRoot) {
-            const checkpoint = await createCheckpoint(
-              sandboxRoot,
-              `Before chat run: ${codingChatRunLabel(prompt)}`
-            );
+          // coding agent. Snapshot before every coding chat run. A turn that changed nothing
+          // (question, explanation) has its empty checkpoint discarded again afterwards, so
+          // the Changes tab only ever lists runs that actually touched files.
+          const checkpoint = sandboxRoot
+            ? await createCheckpoint(sandboxRoot, `Before chat run: ${codingChatRunLabel(prompt)}`)
+            : undefined;
+
+          try {
+            registerActiveAgent(socket.id, runAgent);
+            runAgents.push(runAgent);
+            await runAgent.loadConversation(resolvedConversationId);
+            return await runAgent.run(prompt, runOptions);
+          } finally {
+            // No-op cleanup runs on every exit path (success, failure, user Stop). The
+            // "Checkpoint erstellt" decision event is emitted only when the snapshot
+            // survives - a discarded one never existed from the user's point of view.
             if (checkpoint) {
-              emitToConversation(resolvedConversationId, "chat:event", {
-                type: "decision",
-                message: "Checkpoint vor diesem Lauf erstellt.",
-                data: {
-                  checkpoint_sha: checkpoint.sha,
-                  checkpoint_label: checkpoint.label,
-                },
-                timestamp: new Date().toISOString(),
-                conversationId: resolvedConversationId,
-              });
+              const discarded = await discardNoopCheckpoint(sandboxRoot!, checkpoint.sha);
+              if (!discarded) {
+                emitToConversation(resolvedConversationId, "chat:event", {
+                  type: "decision",
+                  message: "Checkpoint vor diesem Lauf erstellt.",
+                  data: {
+                    checkpoint_sha: checkpoint.sha,
+                    checkpoint_label: checkpoint.label,
+                  },
+                  timestamp: new Date().toISOString(),
+                  conversationId: resolvedConversationId,
+                });
+              } else {
+                logger.info("Discarded no-op chat-run checkpoint", {
+                  project: codingSlug,
+                  sha: checkpoint.sha.slice(0, 8),
+                });
+              }
             }
           }
-
-          registerActiveAgent(socket.id, runAgent);
-          runAgents.push(runAgent);
-          await runAgent.loadConversation(resolvedConversationId);
-          return runAgent.run(prompt, runOptions);
         };
 
         const checkpointRows = await db.getMessagesPage({

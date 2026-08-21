@@ -495,6 +495,18 @@ class BitcoinPuzzleSolver {
   }
 
   /**
+   * Korrigiere den Versuchs-Zähler nach oben, ohne das Duplikat-Set anzufassen.
+   *
+   * Nutzt der Service nach einem Hintergrund-Index-Build: alte State-Files enthalten
+   * oft einen veralteten niedrigen Zähler (vor dem drainPendingAttempts-Fix wurde nur
+   * das 50er-Fenster gespeichert). Die CSV ist die Wahrheit - ihr gestreamter Index
+   * kennt die echte Zahl, und der Zähler darf nicht niedriger stehen als die Datei.
+   */
+  raiseTriedCombinationsCount(count: number): void {
+    this.state.triedCombinationsCount = Math.max(this.state.triedCombinationsCount, count);
+  }
+
+  /**
    * Registriere Callback um externe Phrase-Datenbank zu prüfen
    */
   setPhraseExistsCallback(callback: (phrase: string) => boolean): void {

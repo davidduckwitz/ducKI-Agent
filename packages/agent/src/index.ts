@@ -133,6 +133,7 @@ export {
   listCheckpoints,
   diffCheckpoint,
   restoreCheckpoint,
+  discardNoopCheckpoint,
 } from "./coding/checkpoints.js";
 export type { Checkpoint, CheckpointDiff } from "./coding/checkpoints.js";
 export { TodoList, createTodoTool } from "./coding/todo-tool.js";

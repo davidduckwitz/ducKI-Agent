@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { ChevronRight, FileCode2, FileImage, FileJson, FileText, FolderClosed, FolderOpen } from "lucide-react";
+import { ChevronRight, FileCode2, FileImage, FileJson, FileText, FileType, FolderClosed, FolderOpen } from "lucide-react";
 import { useUiStore } from "../../lib/uiStore";
 
 export interface CodingFileItem {
@@ -62,7 +62,7 @@ export function buildTree(files: CodingFileItem[]): TreeNode[] {
   return root.children;
 }
 
-function FileIcon({ name }: { name: string }) {
+export function FileIcon({ name }: { name: string }) {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
   if (["ts", "tsx", "js", "jsx", "py", "css", "html", "htm", "sh"].includes(ext))
     return <FileCode2 className="h-3.5 w-3.5 shrink-0 text-primary" />;
@@ -70,6 +70,8 @@ function FileIcon({ name }: { name: string }) {
     return <FileJson className="h-3.5 w-3.5 shrink-0 text-amber-500" />;
   if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext))
     return <FileImage className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
+  if (["md", "markdown"].includes(ext))
+    return <FileType className="h-3.5 w-3.5 shrink-0 text-sky-500" />;
   return <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
 }
 

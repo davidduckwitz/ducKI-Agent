@@ -12,6 +12,11 @@ export const codingRouter: IRouter = Router();
 const SHARED_ROOT = SHARED_WORKSPACE_ROOT;
 export const CODING_ROOT = CODING_WORKSPACE_ROOT;
 
+/** /read liefert den kompletten Inhalt im JSON-Body - eine hunderte-MB-Datei würde hier
+ *  den Speicher sprengen (Base64 für Binärdateien vervielfacht das noch). Der Coding-Agent
+ *  liest Projektdateien über die Sandbox-Tools, nicht über diese UI-Route. */
+const MAX_INLINE_READ_BYTES = 10 * 1024 * 1024;
+
 const TEXT_EXTENSIONS = new Set([
   ".txt", ".md", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".yml", ".yaml", ".xml", ".csv", ".html", ".css",
 ]);
@@ -185,6 +190,13 @@ codingRouter.get("/projects/:project/read", (req, res) => {
     }
 
     const ext = extname(target).toLowerCase();
+    const size = statSync(target).size;
+    if (size > MAX_INLINE_READ_BYTES) {
+      res
+        .status(413)
+        .json(createApiError(`Datei zu groß für Inline-Anzeige (${Math.round(size / 1024 / 1024)} MB > 10 MB).`));
+      return;
+    }
     const buffer = readFileSync(target);
     const isText = TEXT_EXTENSIONS.has(ext);
     res.json(createApiResponse({

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, rmSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, rmSync, readdirSync, statSync, createReadStream } from "node:fs";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -322,7 +322,12 @@ async function servePluginPage(
   // Plugin pages are edited in place and served straight from disk; never let the browser/iframe
   // hold a stale copy (that would hide fresh UI like new buttons after a plugin update).
   res.setHeader("Cache-Control", "no-store, must-revalidate");
-  res.send(readFileSync(target));
+  // Stream statt komplettem readFileSync: UI-Dateien können groß sein (Bundles, Assets).
+  createReadStream(target).on("error", (err) => {
+    console.error(`Error streaming plugin UI file: ${err}`);
+    if (!res.headersSent) res.status(500).end();
+    else res.end();
+  }).pipe(res);
 }
 
 function isPageKind(value: string): value is "settings" | "frontend" | "widget" | "overlay" {

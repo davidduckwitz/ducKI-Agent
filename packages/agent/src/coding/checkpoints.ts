@@ -29,9 +29,12 @@ export interface Checkpoint {
   createdAt: string;
 }
 
+/** Git change type per file, as reported by `git diff --name-status`. */
+export type DiffFileStatus = "A" | "M" | "D" | "R" | "C" | "T" | "U" | "X";
+
 export interface CheckpointDiff {
   sha: string;
-  files: Array<{ path: string; added: number; removed: number }>;
+  files: Array<{ path: string; added: number; removed: number; status: DiffFileStatus }>;
   patch: string;
   truncated: boolean;
 }
@@ -130,7 +133,27 @@ export async function diffCheckpoint(
     const maxPatchChars = options.maxPatchChars ?? 200_000;
     const range = options.against ? [sha, options.against] : [sha];
 
+    // Stage everything first: a commit-vs-worktree `git diff <sha>` silently skips brand-new
+    // files the run created (untracked files are invisible to it). Staging makes them regular
+    // "A" entries with a real patch. This only mutates the shadow repo's index - the project's
+    // own git state stays untouched, and discardNoopCheckpoint resets the index before its own
+    // status check, so a no-op detection is never fooled by a stale staging state.
+    await git(root, ["add", "-A"]);
+
     const numstat = await git(root, ["diff", "--numstat", ...range]);
+    // Per-file change type, so a reviewer can tell a brand-new file (A) from a deleted
+    // one (D) at a glance instead of inferring it from the +/- counters.
+    const nameStatus = await git(root, ["diff", "--name-status", ...range]);
+    const statusByPath = new Map<string, DiffFileStatus>();
+    for (const line of nameStatus.split("\n")) {
+      if (!line.trim()) continue;
+      // Format: "<XY>\t<path>"; renames/copies add a second path column
+      // ("<XY>\t<old>\t<new>") - the diff path is always the LAST column.
+      const parts = line.split("\t");
+      const code = parts[0];
+      const path = parts[parts.length - 1];
+      if (code && path) statusByPath.set(path, code[0] as DiffFileStatus);
+    }
     const files = numstat
       .split("\n")
       .filter((line) => line.trim() !== "")
@@ -141,6 +164,7 @@ export async function diffCheckpoint(
           // A binary file reports "-" rather than a count.
           added: Number(added) || 0,
           removed: Number(removed) || 0,
+          status: statusByPath.get(path ?? "") ?? "M",
         };
       })
       .filter((entry) => entry.path !== "");
@@ -179,5 +203,50 @@ export async function restoreCheckpoint(
     return result;
   } catch (error) {
     return { restored: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Removes a checkpoint commit from the shadow history when the working tree has NOT changed
+ * since it was taken - i.e. the run it protected was a no-op (asked a question, read files,
+ * but wrote nothing). Without this, every chat turn leaves an empty checkpoint behind and the
+ * Changes tab drowns in noise entries.
+ *
+ * The working tree is NEVER modified: HEAD just moves back to the checkpoint's parent (soft
+ * reset), so the commit disappears from listCheckpoints() while the files stay exactly as the
+ * run left them. A first-ever checkpoint has no parent - there the HEAD ref is dropped, which
+ * leaves the shadow repo ready for the next checkpoint to become the root commit again.
+ * Returns true when the checkpoint was actually removed.
+ */
+export async function discardNoopCheckpoint(root: string, sha: string): Promise<boolean> {
+  try {
+    if (!(await ensureCheckpointRepo(root))) return false;
+    // The checkpoint itself is committed with a clean status, so ANY dirty entry means the
+    // run touched files - modified, deleted or newly created (git status --porcelain also
+    // surfaces untracked files, which `git diff <sha>` alone would miss).
+    // Neutralise any index mutation diffCheckpoint may have done: the no-op check must reflect
+    // the true working tree, not a staged state.
+    await git(root, ["reset", "-q"]);
+    const status = (await git(root, ["status", "--porcelain"])).trim();
+    if (status.length > 0) return false;
+    // Only ever remove the checkpoint we just created - never something the user restored
+    // into or an entry another run owns.
+    const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+    if (head !== sha) return false;
+    let parent: string | undefined;
+    try {
+      parent = (await git(root, ["rev-parse", `${sha}^`])).trim();
+    } catch {
+      parent = undefined; // root commit
+    }
+    if (parent && /^[0-9a-f]{40}$/i.test(parent)) {
+      await git(root, ["reset", "--soft", parent]);
+    } else {
+      await git(root, ["update-ref", "-d", "HEAD"]);
+    }
+    return true;
+  } catch {
+    // Safety net, never a gate: if anything fails, the checkpoint simply stays.
+    return false;
   }
 }

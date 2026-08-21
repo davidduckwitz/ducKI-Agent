@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import { BitcoinPuzzleService } from "@ducki/agent";
+import { createReadStream, existsSync, statSync } from "node:fs";
 
 export const bitcoinPuzzleRouter: IRouter = Router();
 
@@ -288,7 +289,7 @@ bitcoinPuzzleRouter.post("/:puzzleId/mark-phrase", (req, res) => {
  * Suche nach Phrase oder Adresse in ALLEN Puzzles
  * MUSS vor /:puzzleId/search definiert sein damit Express es nicht als puzzleId="search" interpretiert!
  */
-bitcoinPuzzleRouter.post("/search/all", (req, res) => {
+bitcoinPuzzleRouter.post("/search/all", async (req, res) => {
   try {
     const { query } = req.body;
 
@@ -297,7 +298,7 @@ bitcoinPuzzleRouter.post("/search/all", (req, res) => {
       return;
     }
 
-    const results = service.searchAllPuzzleAttempts(query);
+    const results = await service.searchAllPuzzleAttempts(query);
 
     res.json(
       createApiResponse({
@@ -316,7 +317,7 @@ bitcoinPuzzleRouter.post("/search/all", (req, res) => {
  * POST /api/bitcoin-puzzle/:puzzleId/search
  * Suche nach Phrase oder Adresse im einzelnen Puzzle
  */
-bitcoinPuzzleRouter.post("/:puzzleId/search", (req, res) => {
+bitcoinPuzzleRouter.post("/:puzzleId/search", async (req, res) => {
   try {
     const { query } = req.body;
 
@@ -325,7 +326,7 @@ bitcoinPuzzleRouter.post("/:puzzleId/search", (req, res) => {
       return;
     }
 
-    const matches = service.searchPuzzleAttempts(req.params.puzzleId, query);
+    const matches = await service.searchPuzzleAttempts(req.params.puzzleId, query);
 
     res.json(
       createApiResponse({
@@ -416,23 +417,70 @@ bitcoinPuzzleRouter.post("/:puzzleId/found", (req, res) => {
  */
 bitcoinPuzzleRouter.get("/:puzzleId/attempts.csv", (req, res) => {
   try {
-    const fs = require("fs");
     const csvPath = service.getAttemptsFilePath(req.params.puzzleId);
 
     // Prüfe ob Datei existiert
-    if (!fs.existsSync(csvPath)) {
+    if (!existsSync(csvPath)) {
       res.status(404).json(createApiError("Attempts file not found"));
       return;
     }
 
-    // Lese CSV Datei
-    const csvContent = fs.readFileSync(csvPath, "utf-8");
+    const size = statSync(csvPath).size;
 
-    // Sende CSV mit korrekten Headers
+    // Stream die CSV statt sie komplett zu lesen: die Attempts-Datei kann hunderte MB
+    // groß sein - readFileSync würde dort an ERR_STRING_TOO_LONG (>512 MB) scheitern.
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${req.params.puzzleId}-attempts.csv"`);
-    res.setHeader("Content-Length", Buffer.byteLength(csvContent, "utf-8"));
-    res.send(csvContent);
+
+    // Range-Support: Clients (Vorschau, Download-Wiederaufnahme) können nur einen Teil
+    // anfordern. Ohne diese Behandlung würde ein `bytes=0-99`-Request den GESAMTEN
+    // 815-MB-Stream servieren - mit createReadStream({ start, end }) liest der Server nur
+    // das angeforderte Fenster und belastet sich nicht mit der restlichen Datei.
+    const rangeHeader = typeof req.headers["range"] === "string" ? req.headers["range"] : undefined;
+    const rangeMatch = rangeHeader?.match(/^bytes=(\d*)-(\d*)$/);
+    if (rangeMatch && (rangeMatch[1] || rangeMatch[2])) {
+      let start: number;
+      let end: number;
+      if (rangeMatch[1] === "") {
+        // Suffix-Range: bytes=-N  ->  die letzten N Bytes
+        const suffix = Number.parseInt(rangeMatch[2] ?? "0", 10);
+        start = Math.max(0, size - suffix);
+        end = size - 1;
+      } else {
+        start = Number.parseInt(rangeMatch[1] ?? "0", 10);
+        end = !rangeMatch[2] ? size - 1 : Math.min(Number.parseInt(rangeMatch[2], 10), size - 1);
+      }
+      if (start >= size || start > end) {
+        res.status(416).setHeader("Content-Range", `bytes */${size}`).json(createApiError("Range not satisfiable"));
+        return;
+      }
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+      res.setHeader("Content-Length", end - start + 1);
+      const rangeStream = createReadStream(csvPath, { start, end });
+      rangeStream.on("error", (error) => {
+        console.error(`Error streaming CSV range: ${error}`);
+        if (!res.headersSent) {
+          res.status(500).json(createApiError(error instanceof Error ? error.message : String(error)));
+        } else {
+          res.end();
+        }
+      });
+      rangeStream.pipe(res);
+      return;
+    }
+
+    res.setHeader("Content-Length", size);
+    const stream = createReadStream(csvPath);
+    stream.on("error", (error) => {
+      console.error(`Error streaming CSV: ${error}`);
+      if (!res.headersSent) {
+        res.status(500).json(createApiError(error instanceof Error ? error.message : String(error)));
+      } else {
+        res.end();
+      }
+    });
+    stream.pipe(res);
   } catch (error) {
     console.error(`Error serving CSV: ${error}`);
     res.status(500).json(createApiError(error instanceof Error ? error.message : String(error)));

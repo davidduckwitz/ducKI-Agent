@@ -1,4 +1,18 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, appendFileSync, unlinkSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  appendFileSync,
+  unlinkSync,
+  createReadStream,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+} from "node:fs";
+import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { BitcoinPuzzleSolver, type SolverState, type SolverConfig, type AttemptRecord } from "./bitcoin-puzzle-solver.js";
@@ -131,8 +145,17 @@ export class BitcoinPuzzleService {
    * Pro Puzzle die bereits in der CSV stehenden Mnemonics.
    * Ersetzt das frühere Neu-Einlesen+Parsen der kompletten CSV bei JEDEM Speichern und
    * bei jeder Duplikatprüfung - das war bei 20k+ Zeilen der eigentliche Bremsklotz.
+   *
+   * WICHTIG: Der Index wird NIE beim Start gefüllt. Er entsteht lazy im Hintergrund
+   * (gestreamt, zeilenweise) und ist anfangs leer - der Agent-Start darf nicht auf eine
+   * multi-hundert-MB- CSV warten oder an ihr scheitern (readFileSync wirft bei >512 MB
+   * ERR_STRING_TOO_LONG). Der Solver-Hot-Path sieht den Set ggf. kurz unvollständig
+   * (Duplikate werden dann erneut versucht, bis der Hintergrund-Index aufholt) - das ist
+   * ein Performance-, kein Korrektheitsproblem.
    */
   private persistedMnemonics = new Map<string, Set<string>>();
+  /** Laufende Hintergrund-Index-Builds pro Puzzle (ein Build pro Puzzle, kein Doppelstart). */
+  private persistedIndexBuilds = new Map<string, Promise<void>>();
 
   private constructor() {
     this.loadWordList();
@@ -241,15 +264,17 @@ export class BitcoinPuzzleService {
         errorMessage: saved.errorMessage || undefined,
       });
 
-      // Duplikat-Set aus der KOMPLETTEN CSV vorbefüllen, nicht nur aus den letzten 50 -
-      // sonst würde der Solver alles vor dem letzten Fenster erneut durchprobieren.
-      const allAttempts = this.getAllAttemptsFromCsv(puzzleId);
-      if (allAttempts.length > 0) {
-        solver.setTriedCombinations(allAttempts);
-        solver.setRecentAttempts(allAttempts.slice(-50));
-        // Gleich als Persistenz-Index übernehmen, statt die Datei später nochmal zu lesen.
-        this.persistedMnemonics.set(puzzleId, new Set(allAttempts.map((a) => a.mnemonic)));
-      }
+      // KEINE komplette CSV mehr beim Restore/Start lesen: eine multi-hundert-MB-Datei
+      // blockiert den Agent-Start oder crasht ihn (readFileSync > 512 MB String-Limit).
+      // - Anzeige-Fenster: nur ein gebundener Tail-Read der letzten Bytes (schnell, egal
+      //   wie groß die Datei ist).
+      // - Duplikat-Schutz: der Mnemonic-Index entsteht lazy im Hintergrund (gestreamt).
+      //   Bis er fertig ist, prüft phraseExistsInPuzzle gegen den (noch leeren) Set -
+      //   Duplikate werden dann temporär erneut versucht und der Index holt auf.
+      solver.setRecentAttempts(this.tailRecentAttempts(puzzleId, 50));
+      this.ensurePersistedIndex(puzzleId).catch((err) => {
+        console.error(`[BitcoinPuzzleService] Background index build failed for ${puzzleId}:`, err);
+      });
 
       // O(1)-Duplikatprüfung gegen den persistierten Bestand dieses Puzzles.
       solver.setPhraseExistsCallback((phrase) => this.phraseExistsInPuzzle(puzzleId, phrase));
@@ -365,7 +390,7 @@ export class BitcoinPuzzleService {
 
     // Prüfe ob die Zieladresse bereits in einem anderen Puzzle existiert
     console.log(`[BitcoinPuzzleService] Searching for target address in existing CSVs...`);
-    const foundMnemonic = this.searchAddressInAllCSVs(config.targetAddress);
+    const foundMnemonic = await this.searchAddressInAllCSVs(config.targetAddress);
     if (foundMnemonic) {
       console.log(
         `[BitcoinPuzzleService] ✓ Found target address in existing CSV! Mnemonic: ${foundMnemonic.substring(0, 40)}...`
@@ -545,38 +570,25 @@ export class BitcoinPuzzleService {
   }
 
   /**
-   * Suche eine Adresse in allen Puzzle CSVs
+   * Suche eine Adresse in allen Puzzle CSVs (gestreamt, früher Fund bricht ab - kein
+   * readFileSync, damit auch die 815-MB-Datei durchsuchbar ist).
    */
-  private searchAddressInAllCSVs(targetAddress: string): string | null {
+  private async searchAddressInAllCSVs(targetAddress: string): Promise<string | null> {
     try {
-      const csvFiles = readdirSync(this.attemptsCsvDir)
-        .filter((f) => f.endsWith("-attempts.csv"));
+      const csvFiles = readdirSync(this.attemptsCsvDir).filter((f) => f.endsWith("-attempts.csv"));
 
       for (const csvFile of csvFiles) {
-        const filePath = resolve(this.attemptsCsvDir, csvFile);
-        const content = readFileSync(filePath, "utf-8");
-        const lines = content.split("\n").filter((l) => l.trim().length > 0);
-
-        // Skip header
-        for (let i = 1; i < lines.length; i++) {
-          const line = lines[i];
-          if (!line) continue;
-          try {
-            const match = line.match(/^"([^"]*(?:""[^"]*)*)","([^"]*(?:""[^"]*)*)"/);
-            if (match && match[1] && match[2]) {
-              const mnemonic = match[1].replace(/""/g, '"');
-              const address = match[2].replace(/""/g, '"');
-
-              if (address === targetAddress) {
-                console.log(`[BitcoinPuzzleService] Found target address in ${csvFile}: ${address}`);
-                return mnemonic;
-              }
-            }
-          } catch (e) {
-            // Skip malformed lines
-            continue;
+        const puzzleId = csvFile.replace("-attempts.csv", "");
+        let found: string | null = null;
+        await this.streamAttempts(puzzleId, (attempt) => {
+          if (attempt.address === targetAddress) {
+            console.log(`[BitcoinPuzzleService] Found target address in ${csvFile}: ${targetAddress}`);
+            found = attempt.mnemonic;
+            return true; // Stream abbrechen
           }
-        }
+          return false;
+        });
+        if (found) return found;
       }
 
       return null;
@@ -849,16 +861,124 @@ export class BitcoinPuzzleService {
   }
 
   /**
-   * Index der bereits persistierten Mnemonics eines Puzzles (lazy, einmal pro Prozess).
+   * Index der bereits persistierten Mnemonics eines Puzzles.
+   *
+   * Hot-Path-tauglich (O(1)-Set-Lookup, synchron, liest NIE synchron die Datei):
+   * existiert der Index, wird er zurückgegeben; existiert er nicht, wird sofort ein leerer
+   * Set platziert und der Build im Hintergrund gestartet (einmalig pro Puzzle). Der
+   * Aufrufer sieht den Set also immer - ggf. kurz unvollständig, bis der Build aufholt.
    */
   private getPersistedMnemonics(puzzleId: string): Set<string> {
     let set = this.persistedMnemonics.get(puzzleId);
     if (!set) {
-      set = new Set(this.getAllAttemptsFromCsv(puzzleId).map((a) => a.mnemonic));
+      set = new Set();
       this.persistedMnemonics.set(puzzleId, set);
-      console.log(`[BitcoinPuzzleService] Indexed ${set.size} persisted attempts for ${puzzleId}`);
+      this.ensurePersistedIndex(puzzleId).catch((err) => {
+        console.error(`[BitcoinPuzzleService] Background index build failed for ${puzzleId}:`, err);
+      });
     }
     return set;
+  }
+
+  /**
+   * Baut den Mnemonic-Index eines Puzzles im Hintergrund auf (gestreamt, zeilenweise).
+   * Einmalig pro Puzzle; weitere Aufrufe hängen sich an den laufenden Build an.
+   * Fehler werden geloggt, nie geworfen - der Index bleibt dann einfach unvollständig,
+   * was nur die Duplikat-Erkennung schwächt, aber nichts blockiert oder crasht.
+   */
+  private ensurePersistedIndex(puzzleId: string): Promise<void> {
+    const existing = this.persistedIndexBuilds.get(puzzleId);
+    if (existing) return existing;
+    const build = (async () => {
+      const set = this.persistedMnemonics.get(puzzleId) ?? new Set<string>();
+      this.persistedMnemonics.set(puzzleId, set);
+      try {
+        const count = await this.streamAttempts(puzzleId, (attempt) => {
+          set.add(attempt.mnemonic);
+        });
+        // Veralteten State-Zähler nach oben korrigieren (alte State-Files speicherten nur
+        // das 50er-Fenster). Früher machte das setTriedCombinations(allAttempts) beim
+        // Restore - hier passiert es gestreamt, ohne die Datei synchron zu lesen.
+        const puzzle = this.activePuzzles.get(puzzleId);
+        if (puzzle) puzzle.solver.raiseTriedCombinationsCount(set.size);
+        console.log(`[BitcoinPuzzleService] Indexed ${set.size} persisted attempts for ${puzzleId} (background, ${count} rows read)`);
+      } catch (err) {
+        console.error(`[BitcoinPuzzleService] Error building persisted index for ${puzzleId}:`, err);
+      }
+    })();
+    this.persistedIndexBuilds.set(puzzleId, build);
+    return build;
+  }
+
+  /**
+   * Streamt eine Attempts-CSV zeilenweise (kein readFileSync -> kein V8-String-Limit,
+   * beliebig große Dateien). onAttempt wird pro gültiger Datenzeile aufgerufen und kann
+   * mit `true` abbrechen (früher Fund). Gibt die Anzahl gelesener Datenzeilen zurück.
+   */
+  private async streamAttempts(
+    puzzleId: string,
+    onAttempt: (attempt: AttemptRecord) => boolean | void
+  ): Promise<number> {
+    const csvPath = this.getAttemptsFilePath(puzzleId);
+    if (!existsSync(csvPath)) return 0;
+
+    const stream = createReadStream(csvPath, { encoding: "utf8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+    let count = 0;
+    let firstLine = true;
+
+    try {
+      for await (const line of rl) {
+        if (firstLine) {
+          firstLine = false; // Header "mnemonic,address" überspringen
+          continue;
+        }
+        if (!line.trim()) continue;
+        const parsed = parseCSVLine(line);
+        if (!parsed) continue;
+        count++;
+        if (onAttempt({ mnemonic: parsed[0], address: parsed[1] }) === true) break;
+      }
+    } finally {
+      rl.close();
+      stream.destroy();
+    }
+    return count;
+  }
+
+  /**
+   * Liest die LETZTEN ~128 KB einer Attempts-CSV und gibt die letzten `count` gültigen
+   * Einträge zurück (Anzeige-Fenster). Gebundener Sync-Read: egal wie groß die Datei ist,
+   * es werden nur die letzten Bytes gelesen - sicher für die 815-MB-Datei.
+   */
+  private tailRecentAttempts(puzzleId: string, count: number): AttemptRecord[] {
+    try {
+      const csvPath = this.getAttemptsFilePath(puzzleId);
+      if (!existsSync(csvPath)) return [];
+      const size = statSync(csvPath).size;
+      if (size <= 0) return [];
+
+      const TAIL_BYTES = 128 * 1024;
+      const start = Math.max(0, size - TAIL_BYTES);
+      const fd = openSync(csvPath, "r");
+      try {
+        const buffer = Buffer.alloc(size - start);
+        readSync(fd, buffer, 0, buffer.length, start);
+        const lines = buffer.toString("utf8").split("\n").filter((l) => l.trim());
+        // Erste Zeile könnte mitten in einer Datenzeile anfangen -> ab zweiter anfangen.
+        const results: AttemptRecord[] = [];
+        for (const line of lines.slice(1)) {
+          const parsed = parseCSVLine(line);
+          if (parsed) results.push({ mnemonic: parsed[0], address: parsed[1] });
+        }
+        return results.slice(-count);
+      } finally {
+        closeSync(fd);
+      }
+    } catch (err) {
+      console.error(`[BitcoinPuzzleService] Error tail-reading attempts for ${puzzleId}:`, err);
+      return [];
+    }
   }
 
   /**
@@ -1038,32 +1158,24 @@ export class BitcoinPuzzleService {
   }
 
   /**
-   * Suche nach einer Phrase oder Adresse in EINER Puzzle-CSV
+   * Suche nach einer Phrase oder Adresse in EINER Puzzle-CSV (gestreamt).
+   * Ergebnis-Cap: eine breite Suche in einer 7-Mio-Zeilen-CSV darf die Antwort nicht auf
+   * hunderte MB aufblähen - die Trefferliste ist ein UI-Fenster, keine Datenbank-Query.
    */
-  searchPuzzleAttempts(puzzleId: string, query: string): AttemptRecord[] {
+  async searchPuzzleAttempts(puzzleId: string, query: string): Promise<AttemptRecord[]> {
+    const MAX_RESULTS = 1000;
     try {
-      const csvPath = this.getAttemptsFilePath(puzzleId);
-      if (!existsSync(csvPath)) {
-        return [];
-      }
-
-      const csvContent = readFileSync(csvPath, "utf-8");
-      const lines = csvContent.split("\n").filter((l) => l.trim());
-
       const lowerQuery = query.toLowerCase();
       const results: AttemptRecord[] = [];
-
-      for (const line of lines.slice(1)) {
-        // Skip header
-        const parsed = parseCSVLine(line);
-        if (parsed) {
-          const [m, a] = parsed;
-          if (m.toLowerCase().includes(lowerQuery) || a.toLowerCase().includes(lowerQuery)) {
-            results.push({ mnemonic: m, address: a });
-          }
+      await this.streamAttempts(puzzleId, (attempt) => {
+        if (
+          attempt.mnemonic.toLowerCase().includes(lowerQuery) ||
+          attempt.address.toLowerCase().includes(lowerQuery)
+        ) {
+          results.push(attempt);
         }
-      }
-
+        return results.length >= MAX_RESULTS; // genug Treffer -> Stream abbrechen
+      });
       return results;
     } catch (err) {
       console.error(`[BitcoinPuzzleService] Error searching puzzle attempts:`, err);
@@ -1072,14 +1184,14 @@ export class BitcoinPuzzleService {
   }
 
   /**
-   * Suche nach einer Phrase oder Adresse in ALLEN Puzzle-CSVs
+   * Suche nach einer Phrase oder Adresse in ALLEN Puzzle-CSVs (gestreamt).
    */
-  searchAllPuzzleAttempts(query: string): Array<{
+  async searchAllPuzzleAttempts(query: string): Promise<Array<{
     puzzleId: string;
     puzzleName: string;
     targetAddress: string;
     matches: AttemptRecord[];
-  }> {
+  }>> {
     try {
       const results: Array<{
         puzzleId: string;
@@ -1090,7 +1202,7 @@ export class BitcoinPuzzleService {
 
       // Suche in aktiven Puzzles
       for (const puzzle of this.activePuzzles.values()) {
-        const matches = this.searchPuzzleAttempts(puzzle.metadata.id, query);
+        const matches = await this.searchPuzzleAttempts(puzzle.metadata.id, query);
         if (matches.length > 0) {
           results.push({
             puzzleId: puzzle.metadata.id,
@@ -1116,7 +1228,7 @@ export class BitcoinPuzzleService {
             const stateJson = readFileSync(stateFile, "utf-8");
             const saved = JSON.parse(stateJson);
 
-            const matches = this.searchPuzzleAttempts(puzzleId, query);
+            const matches = await this.searchPuzzleAttempts(puzzleId, query);
             if (matches.length > 0) {
               results.push({
                 puzzleId: saved.id,
@@ -1180,43 +1292,6 @@ export class BitcoinPuzzleService {
     } catch (error) {
       console.error("[BitcoinPuzzleService] Error checking phrase existence:", error);
       return { exists: false };
-    }
-  }
-
-  /**
-   * Lade ALLE Versuche von der CSV-Datei (für triedCombinations Restore)
-   */
-  private getAllAttemptsFromCsv(puzzleId: string): AttemptRecord[] {
-    try {
-      const csvPath = this.getAttemptsFilePath(puzzleId);
-      if (!existsSync(csvPath)) {
-        return [];
-      }
-
-      const csvContent = readFileSync(csvPath, "utf-8");
-      const lines = csvContent.split("\n").filter((l) => l.trim());
-
-      if (lines.length <= 1) {
-        // Nur Header, keine Daten
-        return [];
-      }
-
-      const results: AttemptRecord[] = [];
-      for (const line of lines.slice(1)) {
-        // Skip header
-        const parsed = parseCSVLine(line);
-        if (parsed) {
-          results.push({
-            mnemonic: parsed[0],
-            address: parsed[1],
-          });
-        }
-      }
-
-      return results;
-    } catch (err) {
-      console.error(`[BitcoinPuzzleService] Error reading all attempts from CSV:`, err);
-      return [];
     }
   }
 

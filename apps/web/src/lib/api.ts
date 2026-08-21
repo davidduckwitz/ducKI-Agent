@@ -449,7 +449,7 @@ export const api = {
       request<{
         project: string;
         sha: string;
-        files: Array<{ path: string; added: number; removed: number }>;
+        files: Array<{ path: string; added: number; removed: number; status: string }>;
         patch: string;
         truncated: boolean;
       }>(`/coding/projects/${encodeURIComponent(project)}/checkpoints/${encodeURIComponent(sha)}/diff`),

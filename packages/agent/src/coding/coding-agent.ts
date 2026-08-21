@@ -21,7 +21,7 @@ import { createScopedShellTool } from "./scoped-shell-tool.js";
 import { createScopedDiagnosticsTool, resetDiagnosticsFor } from "./scoped-diagnostics-tool.js";
 import { withAutoDiagnostics } from "./auto-diagnostics.js";
 import { TodoList, createTodoTool } from "./todo-tool.js";
-import { createCheckpoint } from "./checkpoints.js";
+import { createCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
 import { createExploreTool } from "./explore-tool.js";
 
 const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
@@ -620,17 +620,16 @@ export class CodingAgent {
       // Snapshot BEFORE the attempt touches anything, so every attempt is individually
       // reviewable and individually undoable. Taken per attempt rather than per edit: an
       // attempt is the unit the agent itself reasons in, and a checkpoint per file write
-      // would bury the one the user actually wants under dozens of noise entries.
-      if (this.sandboxRoot) {
-        const checkpoint = await createCheckpoint(this.sandboxRoot, `Before attempt ${attempt}: ${goal.slice(0, 80)}`);
-        if (checkpoint) {
-          this.emit("decision", `Checkpoint vor Versuch ${attempt} erstellt.`, {
-            checkpoint_sha: checkpoint.sha,
-            checkpoint_label: checkpoint.label,
-            attempt,
-          });
-        }
-      }
+      // would bury the one the user actually wants under dozens of noise entries. An
+      // attempt that changed nothing (the model only read/explored) has its empty
+      // checkpoint discarded again when the attempt finishes, so the Changes tab lists
+      // only attempts that actually touched files. The "Checkpoint erstellt" decision
+      // event fires in the finally below - only for snapshots that survive.
+      const checkpoint = this.sandboxRoot
+        ? await createCheckpoint(this.sandboxRoot, `Before attempt ${attempt}: ${goal.slice(0, 80)}`)
+        : undefined;
+
+      try {
 
       const prompt =
         attempt === 1
@@ -744,6 +743,22 @@ export class CodingAgent {
           conversationId,
           verifyCommand,
         });
+      }
+      } finally {
+        // No-op cleanup runs on EVERY exit path of the attempt (success, verify fail,
+        // timeout, max attempts, non-convergence): if the working tree is unchanged since
+        // the checkpoint, the attempt never wrote anything - drop the empty snapshot. The
+        // decision event is only emitted when the snapshot survives.
+        if (checkpoint) {
+          const discarded = await discardNoopCheckpoint(this.sandboxRoot!, checkpoint.sha);
+          if (!discarded) {
+            this.emit("decision", `Checkpoint vor Versuch ${attempt} erstellt.`, {
+              checkpoint_sha: checkpoint.sha,
+              checkpoint_label: checkpoint.label,
+              attempt,
+            });
+          }
+        }
       }
     }
 

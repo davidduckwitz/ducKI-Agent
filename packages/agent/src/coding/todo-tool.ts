@@ -37,13 +37,29 @@ export class TodoList {
     return this.items.map((item) => ({ ...item }));
   }
 
+  /**
+   * A small model often calls write more than once per run (to add a step, to reorder, or
+   * because it forgot it already wrote a plan) even though the tool description says "once".
+   * Reassigning fresh ids on every call would silently invalidate any id the model memorized
+   * from the previous write's response or from the checklist replayed into a follow-up prompt
+   * (see buildFollowUpPrompt), producing "No step with id N" on the very next update call. So an
+   * entry whose title matches an existing item keeps that item's id (and its status/note unless
+   * the new entry overrides them); only genuinely new titles get a fresh id.
+   */
   replace(titles: Array<{ title: string; status?: string; note?: string }>): TodoItem[] {
+    const previous = [...this.items];
     this.items = titles
       .filter((entry) => entry.title?.trim())
       .map((entry) => {
-        const status = VALID_STATUSES.has(String(entry.status)) ? (entry.status as TodoStatus) : "pending";
-        const item: TodoItem = { id: this.nextId++, title: entry.title.trim(), status };
-        if (entry.note) item.note = entry.note;
+        const trimmedTitle = entry.title.trim();
+        const existingIndex = previous.findIndex((candidate) => candidate.title === trimmedTitle);
+        const existing = existingIndex >= 0 ? previous.splice(existingIndex, 1)[0] : undefined;
+        const status = VALID_STATUSES.has(String(entry.status))
+          ? (entry.status as TodoStatus)
+          : (existing?.status ?? "pending");
+        const item: TodoItem = { id: existing?.id ?? this.nextId++, title: trimmedTitle, status };
+        const note = entry.note ?? existing?.note;
+        if (note) item.note = note;
         return item;
       });
     this.onChange?.(this.snapshot());

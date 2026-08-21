@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitCompare, History, RotateCcw } from "lucide-react";
+import { ChevronRight, ExternalLink, GitCompare, History, RotateCcw } from "lucide-react";
 import { api } from "../../lib/api";
 import { PanelEmpty } from "../ui/panel";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../../lib/toast";
 import { useUiStore } from "../../lib/uiStore";
+import { FileIcon } from "./CodingFileTree";
 
 interface Checkpoint {
   sha: string;
@@ -28,6 +30,22 @@ function formatTime(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
 }
+
+/** Maps a git change type to the coarse bucket the Changes tab filters by. */
+type FileStatusKind = "added" | "modified" | "deleted" | "other";
+function statusKind(status?: string): FileStatusKind {
+  if (status === "A" || status === "C") return "added";
+  if (status === "D") return "deleted";
+  if (status === "M" || status === "R" || status === "T") return "modified";
+  return "other"; // U (unmerged), X (unknown), undefined
+}
+
+const STATUS_FILTERS: Array<{ key: "all" | FileStatusKind; label: string }> = [
+  { key: "all", label: "Alle" },
+  { key: "added", label: "Neu" },
+  { key: "modified", label: "Geändert" },
+  { key: "deleted", label: "Gelöscht" },
+];
 
 /**
  * Review surface for what a coding run actually did.
@@ -71,6 +89,27 @@ export function CodingChangesPanel({
     () => checkpointsQuery.data?.checkpoints ?? [],
     [checkpointsQuery.data]
   );
+
+  // File-list filters: by change type (all/new/modified/deleted) and optionally hiding
+  // entries without countable line changes (e.g. a pure file-mode change or a binary add).
+  const [fileFilter, setFileFilter] = useState<(typeof STATUS_FILTERS)[number]["key"]>("all");
+  const [onlyContentChanges, setOnlyContentChanges] = useState(false);
+
+  // Per-file diff previews: which file rows currently show their own (collapsible) patch.
+  const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    // A different checkpoint means a different patch - collapse everything again.
+    setExpandedDiffs(new Set());
+  }, [selectedSha]);
+
+  const toggleFileDiff = (path: string) => {
+    setExpandedDiffs((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
 
   // Project switch: load the persisted explicit choice (or none) and reset the auto-follow
   // state. Declared BEFORE the auto-follow effect so a persisted choice wins on the first
@@ -132,6 +171,43 @@ export function CodingChangesPanel({
     queryFn: () => api.coding.checkpointDiff(project, selectedSha!),
     enabled: Boolean(project && selectedSha),
   });
+
+  // Counts per status bucket + the rows actually rendered after filtering. Memoized on the
+  // react-query data reference (stable between refetches), not on the freshly-built arrays.
+  const diffFiles = diffQuery.data?.files;
+  const fileCounts = useMemo(() => {
+    const counts: Record<"all" | FileStatusKind, number> = {
+      all: diffFiles?.length ?? 0,
+      added: 0,
+      modified: 0,
+      deleted: 0,
+      other: 0,
+    };
+    for (const file of diffFiles ?? []) counts[statusKind(file.status)]++;
+    return counts;
+  }, [diffFiles]);
+
+  const visibleFiles = useMemo(() => {
+    let list = diffFiles ?? [];
+    if (onlyContentChanges) list = list.filter((f) => f.added > 0 || f.removed > 0);
+    if (fileFilter !== "all") list = list.filter((f) => statusKind(f.status) === fileFilter);
+    // Most-changed files first - that is what "readable at a glance" means for a review:
+    // the rows that matter most sit at the top.
+    return [...list].sort((a, b) => b.added + b.removed - (a.added + a.removed));
+  }, [diffFiles, fileFilter, onlyContentChanges]);
+
+  // Split the unified diff into per-file segments (`diff --git a/x b/x` headers). The rows
+  // render their segment when expanded instead of dumping the whole patch below the list.
+  const patchSegments = useMemo(() => {
+    const segments = new Map<string, string>();
+    if (!diffQuery.data) return segments;
+    for (const part of diffQuery.data.patch.split(/(?=^diff --git )/m)) {
+      const match = part.match(/^diff --git a\/(.+?) b\//m);
+      const path = match?.[1];
+      if (path) segments.set(path, part);
+    }
+    return segments;
+  }, [diffQuery.data]);
 
   const restore = useMutation({
     mutationFn: (sha: string) => api.coding.restoreCheckpoint(project, sha),
@@ -232,28 +308,112 @@ export function CodingChangesPanel({
               </div>
             ) : (
               <>
-                <div className="flex flex-wrap gap-1">
-                  {diff.files.map((file) => (
-                    <button
-                      key={file.path}
-                      type="button"
-                      onClick={() => onOpenFile?.(file.path)}
-                      className="chip hover:border-primary/50 hover:text-primary"
-                      title={`${file.path} im Editor öffnen`}
-                    >
-                      <span className="truncate">{file.path}</span>
-                      <span className="shrink-0 text-emerald-500">+{file.added}</span>
-                      <span className="shrink-0 text-red-500">-{file.removed}</span>
-                    </button>
-                  ))}
-                </div>
-                <pre className="overflow-x-auto rounded-md bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
-                  {diff.patch.split("\n").map((line, index) => (
-                    <div key={index} className={diffLineClass(line)}>
-                      {line || " "}
+                <div className="space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-2 px-1 pb-0.5">
+                    <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {fileFilter !== "all" || (onlyContentChanges && visibleFiles.length < diff.files.length)
+                        ? `${visibleFiles.length} von ${diff.files.length} ${diff.files.length === 1 ? "Datei" : "Dateien"}`
+                        : `${diff.files.length} ${diff.files.length === 1 ? "Datei" : "Dateien"}`}
                     </div>
-                  ))}
-                </pre>
+                    <div className="flex overflow-hidden rounded-md border border-border text-[10px]">
+                      {STATUS_FILTERS.map(({ key, label }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setFileFilter(key)}
+                          className={`px-1.5 py-0.5 transition ${
+                            fileFilter === key
+                              ? "bg-primary text-primary-foreground"
+                              : "text-muted-foreground hover:bg-accent"
+                          }`}
+                        >
+                          {label} {fileCounts[key]}
+                        </button>
+                      ))}
+                    </div>
+                    <label
+                      className="flex cursor-pointer select-none items-center gap-1.5 text-[10px] text-muted-foreground"
+                      title="Nur Dateien mit zählbaren Zeilenänderungen anzeigen – blendet Einträge ohne +/- aus (z. B. reine Datei-Modusänderungen oder Binärdateien)"
+                    >
+                      <Switch
+                        checked={onlyContentChanges}
+                        onCheckedChange={setOnlyContentChanges}
+                        aria-label="Nur Dateien mit inhaltlichen Änderungen anzeigen"
+                      />
+                      Nur inhaltliche Änderungen
+                    </label>
+                  </div>
+                  {visibleFiles.length === 0 && (
+                    <div className="px-1 pb-1 text-[11px] text-muted-foreground">
+                      Keine Dateien in dieser Ansicht.
+                    </div>
+                  )}
+                  {visibleFiles.map((file) => {
+                      const expanded = expandedDiffs.has(file.path);
+                      const segment = patchSegments.get(file.path);
+                      return (
+                        <div
+                          key={file.path}
+                          className={`rounded-md border text-[11px] ${
+                            expanded
+                              ? "border-primary/25 bg-accent/20"
+                              : "border-transparent hover:border-primary/30 hover:bg-accent/40"
+                          }`}
+                        >
+                          <div className="flex items-center gap-1.5 px-1.5 py-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleFileDiff(file.path)}
+                              disabled={!segment}
+                              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                              title={
+                                segment
+                                  ? "Diff-Vorschau dieser Datei ein-/ausblenden"
+                                  : "Keine Diff-Vorschau verfügbar"
+                              }
+                            >
+                              <ChevronRight
+                                className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${
+                                  expanded ? "rotate-90" : ""
+                                }`}
+                              />
+                              <FileIcon name={file.path} />
+                              <span className="min-w-0 flex-1 truncate font-mono">{file.path}</span>
+                              {statusKind(file.status) === "added" && (
+                                <span className="shrink-0 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-semibold uppercase text-emerald-500">
+                                  Neu
+                                </span>
+                              )}
+                              {statusKind(file.status) === "deleted" && (
+                                <span className="shrink-0 rounded bg-red-500/15 px-1 py-px text-[9px] font-semibold uppercase text-red-500">
+                                  Gelöscht
+                                </span>
+                              )}
+                              <span className="shrink-0 text-emerald-500">+{file.added}</span>
+                              <span className="shrink-0 text-red-500">-{file.removed}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onOpenFile?.(file.path)}
+                              title={`${file.path} im Editor öffnen`}
+                              className="shrink-0 rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                            </button>
+                          </div>
+                          {expanded && segment && (
+                            <pre className="mb-1.5 ml-6 mr-1.5 overflow-x-auto rounded-md bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
+                              {segment.split("\n").map((line, index) => (
+                                <div key={index} className={diffLineClass(line)}>
+                                  {line || " "}
+                                </div>
+                              ))}
+                            </pre>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
                 {diff.truncated && (
                   <div className="text-[10px] text-muted-foreground">
                     Diff gekürzt – die vollständigen Änderungen stehen in den Dateien selbst.
