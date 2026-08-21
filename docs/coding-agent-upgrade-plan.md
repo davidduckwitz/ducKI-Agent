@@ -323,3 +323,123 @@ Die Ableitung liegt jetzt in [lib/planChecklist.ts](apps/web/src/lib/planCheckli
 Die Anzeige unterscheidet jetzt `done`, `failed`, `unverified` und `skipped` statt nur „Haken oder nicht", und die Kopfzeile zeigt `x/y` **nur**, wenn es tatsächlich eine Checkliste gibt. Ohne Plan-Ausführung existiert kein Schritt-Status — dann wird keiner erfunden.
 
 15 Regressionstests in [planChecklist.test.ts](apps/web/src/lib/planChecklist.test.ts), darunter die beiden konkreten Altfehler: „hakt während des Laufs ab, nicht erst danach" und „setzt Tool-Aktivität nicht mit erledigten Schritten gleich".
+
+---
+
+## 11. Nachtrag: `filesystem:write requires string field 'content'`
+
+**Symptom:** Dateien werden manchmal nicht geschrieben. Der Run bricht mit zehn identischen Fehlschlägen ab; Selbstreparatur greift nicht.
+
+### Ursache 1 — zwei Schichten mit verschiedenen Regeln
+
+Das Filesystem-Tool akzeptierte **neun** Feldnamen für den Dateiinhalt (`content`, `contents`, `text`, `file_text`, `fileText`, `fileContent`, `file_contents`, `data`, `body`) — Modelle greifen ständig zu ihrer eigenen Gewohnheit, Anthropics Text-Editor-Tool etwa nutzt `file_text`.
+
+Die Preflight-Prüfung im Agenten verlangte dagegen einen literalen String in `content`:
+
+```ts
+if ((action === "write" || action === "append") && typeof normalizedInput["content"] !== "string")
+```
+
+Ein vollkommen gültiger Write mit `file_text` wurde damit **abgelehnt, bevor das Tool ihn je gesehen hat** — mit einer Meldung, die das Modell aufforderte, genau das zu tun, was es bereits getan hatte. Also wiederholte es den Aufruf, zehnmal, bis der Guardrail den Run beendete.
+
+Behoben durch einen gemeinsamen Extraktor `extractFileContent()` in [filesystem.ts](packages/tools/src/filesystem.ts), den **beide** Schichten benutzen. Er löst Feldnamen auf und normalisiert eindeutige Nicht-String-Formen: eine Zeilen-Liste wird verbunden, Zahl/Boolean stringifiziert. Ein Objekt wird **nur** für ein `.json`-Ziel serialisiert — JSON in eine `.ts`-Datei zu schreiben wäre stille Korruption, da ist ein klarer Fehler mehr wert.
+
+### Ursache 2 — Selbstreparatur sah diese Fehler nie
+
+Die Reparaturschleife lief ausschließlich für Aufrufe, die bis zur Ausführung kamen. Eine Preflight-Ablehnung ging direkt zu „Fehler protokollieren und weiter" — ausgerechnet die Fehlerklasse, die am besten reparierbar ist (falscher Feldname, fehlendes Argument), erreichte die Reparatur also nie.
+
+- Preflight-Fehler laufen jetzt durch `attemptSelfRepair`, inklusive erneuter Preflight-Prüfung der korrigierten Eingabe.
+- `deriveMechanicalRepair` kann jetzt **Feldnamen** abgleichen, nicht nur Enum-Tippfehler: normalisierter Vergleich gegen das Schema (`old_string` → `oldString`, `max_results` → `maxResults`) plus semantische Aliase für `path` (`file_path`, `filename`). Deterministisch, ohne Modell-Aufruf.
+- `selfRepairMaxAttempts` von 1 auf 2: der erste Versuch ist meist die kostenlose mechanische Korrektur, was ohne Erhöhung kein Budget für die gezielte LLM-Reparatur ließ.
+- Die Ausführungs-Reparatur bekommt jetzt denselben Recovery-Hinweis mitgegeben, der vorher verworfen wurde.
+
+### Ursache 3 — Reflexion lief zur falschen Zeit und ohne Fakten
+
+Nach dem Guardrail-Abbruch liefen weiterhin zwei Qualitätspasses (je ~22 s beobachtet) und bewerteten die *Abbruchmeldung*. Die Passes bewerten „wie gut ist diese Antwort" — nach einem Abbruch gibt es keine Antwort zu bewerten. Sie werden jetzt übersprungen, mit sichtbarer Begründung (`runAbortedEarly`), sowohl bei Guardrail-Abbruch als auch bei Nutzer-Stopp.
+
+Und wenn sie laufen, bekommen sie jetzt die Tatsachen: aus dem Run-Journal (`{ toolName, success }`) wird eine Zusammenfassung der fehlgeschlagenen Tool-Aufrufe mitgegeben, samt Hinweis, dass eine Antwort, die Arbeit behauptet welche diese Aufrufe leisten sollten, ein Sachfehler ist. Vorher sah die Reflexion nur den Text und konnte „ich habe die Datei geschrieben" nach einem fehlgeschlagenen Write nicht als falsch erkennen.
+
+### Verifikation
+
+End-to-End durch den vollständigen CodingAgent: ein `[TOOL:filesystem({"action":"write","path":"docs/data-model.md","file_text":"# Datenmodell"})]` — die exakte Form aus dem Fehlerbericht — schreibt die Datei jetzt (`FILE WRITTEN: true`). Dazu 23 Regressionstests in [file-content-extraction.test.ts](packages/tools/test/file-content-extraction.test.ts) und [write-preflight-repair.test.ts](packages/agent/test/write-preflight-repair.test.ts).
+
+---
+
+## 12. Nachtrag: `Content required for write` trotz vorhandenem Inhalt
+
+Der Fehler aus Abschnitt 11 war nur die halbe Miete. Nach dessen Behebung meldete nicht mehr der Preflight, sondern das **Tool selbst**: `Content required for write` — beim Schreiben von `DAS_ANALYSIS.md`.
+
+Dass die Meldung aus dem Tool kam, war der entscheidende Hinweis: der Inhalt war beim Preflight noch ein String und wurde **danach** leer.
+
+### Ursache: der Stop-Marker-Sanitizer verstümmelt Dokumentation
+
+`stripStopMarkers()` schneidet alles ab dem **ersten** Vorkommen eines Tool-Markers weg — `[TOOL:`, `[/TOOL]`, `<|im_end|>` und andere. Die Begründung im Code lautete: *"Markers never occur in real code."*
+
+Das ist falsch für genau die Dateiart, die dieser Agent über sich selbst schreibt: **Dokumentation**. Ein Dokument, das das Block-Format erklärt, enthält `[TOOL:` und `[/TOOL]` völlig legitim. Die Folge:
+
+- Marker mitten im Text → das Dokument wird **stillschweigend** an dieser Stelle abgeschnitten (schlimmer als ein Fehler, weil unsichtbar).
+- Marker nahe am Anfang → der Inhalt wird zu `""` → das Tool prüfte `if (!content)`, und ein leerer String ist falsy → `Content required for write` für einen Aufruf, der nachweislich Inhalt trug.
+
+Gemessen: `"# Doku\n\nBenutze [TOOL:filesystem] um zu schreiben.\n"` → 51 Zeichen wurden zu 16.
+
+### Zweiter Fund im selben Durchgang: JSON wurde zerstört
+
+`stripTrailingJsonArgTail()` entfernt ein abschließendes `"}` — genau das Zeichenpaar, mit dem **jede** JSON-Datei endet. Gemessen: `{"name": "x"}` → `{"name": "x`. Der anschließende `validateContent`-Check verweigerte den Schreibvorgang dann als ungültiges JSON — ein Write, der durch keine Wiederholung je gelingen konnte.
+
+### Behebung
+
+| Änderung | Wirkung |
+|---|---|
+| Marker wird nur geschnitten, wenn das, was **folgt**, ihn als geleakten Terminator ausweist | Wrapper-Zeichen oder der Rest eines Tool-Calls (`name(`) → schneiden. Fließtext dahinter → stehen lassen. Die Länge ist das falsche Kriterium; ein kurzes Dokument sieht für ein Zeichenbudget aus wie ein langes. |
+| Das Schneiden darf den Inhalt nie vollständig aufzehren | War der Marker der ganze Inhalt, ist das nicht das Leck-Muster — `""` zurückzugeben verliert die Datei. |
+| `stripTrailingJsonArgTail` lässt gültiges JSON unangetastet | Parst der Inhalt als JSON, ist das Ende kein verunglückter Argument-Schwanz, sondern die Datei. |
+| `if (!content)` → `if (content === undefined)` für write und append | Eine leere Datei ist legitim, und nach dem Sanitizing darf `""` nicht als „du hast den Inhalt vergessen" zurückgemeldet werden. |
+
+### Verifikation
+
+End-to-End durch den vollständigen CodingAgent: ein Analyse-Dokument, das das Block-Format erklärt (inklusive `[TOOL:...]` und `[/TOOL]`), wird jetzt **byte-identisch** geschrieben — 231 von 231 Zeichen, Marker-Erwähnung und Schlusssatz erhalten. Vorher wäre es an der ersten Marker-Erwähnung abgeschnitten worden.
+
+12 Regressionstests in [content-sanitizer.test.ts](packages/tools/test/content-sanitizer.test.ts) decken beide Richtungen ab: geleakte Terminatoren werden weiterhin entfernt, echte Inhalte bleiben unangetastet.
+
+---
+
+## 13. Nachtrag: leere Dateien — und warum Abschnitt 12 nur halb richtig war
+
+**Symptom:** Der Write-Tool-Call schreibt leere Dateien.
+
+### Das war eine Regression aus Abschnitt 12
+
+Dort wurde `if (!content)` zu `if (content === undefined)` geändert, mit der Begründung, eine leere Datei sei legitim. Damit wurde ein leerer String nicht mehr gemeldet, sondern **geschrieben**. Die Meldung `Content required for write` und die leeren Dateien sind also dasselbe Problem — die Änderung hat den lauten Fehlschlag in stillen Datenverlust verwandelt, was schlechter ist.
+
+### Die eigentliche Ursache: `jsonrepair` + abgeschnittene Aufrufe
+
+Gemessen an den realen Abbruchformen eines Write-Aufrufs:
+
+| Abgeschnitten bei | Ergebnis nach `jsonrepair` |
+|---|---|
+| `..."content":` | `content: null` |
+| `..."content":"` | **`content: ""`** |
+| `..."content":"# Titel\n\nEin halber` | `content: len=19` (Teilinhalt) |
+| vor dem `content`-Schlüssel | `content` fehlt |
+
+Der zweite Fall ist der entscheidende: Das Modell erreicht sein Output-Budget genau nach dem öffnenden Anführungszeichen, die JSON-Reparatur schließt den hängenden String — und übrig bleibt ein leerer Inhalt, der wie eine gültige Absicht aussieht.
+
+Eine 0-Byte-Datei zu schreiben und **Erfolg** zu melden ist dabei der schlechtestmögliche Ausgang: Das Modell hält die Datei für geschrieben, der Nutzer findet sie leer, und nichts beschwert sich.
+
+### Behebung
+
+| Änderung | Wirkung |
+|---|---|
+| Leerer Inhalt wird verweigert, mit eigener Diagnose (`EMPTY_CONTENT_ERROR`) | Die Meldung nennt die wahrscheinliche Ursache (abgeschnittener Aufruf) und den Ausweg: Block-Form ohne Escaping, oder Aufteilen in write + append. |
+| Geprüft im **Preflight**, nicht erst im Tool | Der Fehlschlag ist sichtbar, bevor irgendetwas geschrieben wird. |
+| `allowEmpty: true` im Schema | Eine wirklich beabsichtigte 0-Byte-Datei bleibt möglich — sie kann nur nicht mehr aus Versehen entstehen. |
+| Selbstreparatur ist für genau diesen Fehler gesperrt | Sie repariert die **Form** eines Aufrufs aus Schema und Fehlermeldung. Bei „der Inhalt ist leer" würde sie eine plausibel aussehende Datei erfinden, die das handelnde Modell nie geschrieben hat — schlimmer als die Verstümmelung, die sie überdecken soll. Diese eine Wiederherstellung muss zurück an das Modell, das den echten Inhalt hatte. |
+
+### Verifikation
+
+End-to-End durch den vollständigen CodingAgent, mit genau dem abgeschnittenen Aufruf aus der Tabelle:
+
+1. `[TOOL:filesystem({"action":"write","path":"BERICHT.md","content":"` → **verweigert**, keine Datei angelegt.
+2. Das Modell wiederholt in der Block-Form → 46 Bytes, Inhalt vollständig.
+
+`FILE EXISTS: true · BYTES: 46 · EMPTY FILE: false · FULL CONTENT RECOVERED: true`

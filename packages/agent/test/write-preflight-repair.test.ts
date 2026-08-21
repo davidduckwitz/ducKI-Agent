@@ -55,10 +55,27 @@ describe("write preflight accepts what the tool accepts", () => {
     expect(result.input?.["content"]).toBe("eins\nzwei");
   });
 
-  it("accepts an empty file body", async () => {
+  it("refuses an empty body, because it is almost always a truncated call", async () => {
+    // Caught in preflight rather than at the tool so the failure is visible before anything is
+    // written. Writing it would produce a 0-byte file and report success - see EMPTY_CONTENT_ERROR.
     const agent = makeAgent();
     const result = await preflight(agent, { action: "write", path: "empty.txt", content: "" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("Refusing to write an empty file");
+  });
+
+  it("accepts an empty body when it is explicitly intended", async () => {
+    const agent = makeAgent();
+    const result = await preflight(agent, {
+      action: "write",
+      path: "placeholder.txt",
+      content: "",
+      allowEmpty: true,
+    });
+
     expect(result.ok).toBe(true);
+    expect(result.input?.["content"]).toBe("");
   });
 
   it("applies the same rule to append", async () => {

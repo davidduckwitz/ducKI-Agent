@@ -21,7 +21,7 @@ export {
   interpolate,
 } from "./data-source-tool.js";
 export type { DataSourceToolConfig, DataSourceRequestStep, DataSourceParamSpec } from "./data-source-tool.js";
-export { FILESYSTEM_ACTIONS, FILE_CONTENT_FIELDS, extractFileContent, stripLineNumberPrefixes } from "./filesystem.js";
+export { FILESYSTEM_ACTIONS, FILE_CONTENT_FIELDS, extractFileContent, stripLineNumberPrefixes, EMPTY_CONTENT_ERROR, isIntentionalEmptyWrite } from "./filesystem.js";
 export type { FilesystemAction } from "./filesystem.js";
 export { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "./workspace-root.js";
 export { stopAllBackgroundProcesses } from "./shell.js";

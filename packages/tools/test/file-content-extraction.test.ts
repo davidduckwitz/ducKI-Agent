@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -109,5 +109,78 @@ describe("filesystem write with aliased content", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Content required");
+  });
+});
+
+/**
+ * The empty-write trap.
+ *
+ * A write cut off mid-content leaves `{"action":"write","path":"a.md","content":"` and the JSON
+ * repair pass closes the dangling string into `content: ""`. Writing that produces a 0-byte file
+ * and reports SUCCESS - the model believes the file exists, the user finds it empty, and nothing
+ * complains. Refusing it loudly is the only safe answer.
+ */
+describe("empty write protection", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "ducki-empty-write-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses an empty write and explains the likely cause", async () => {
+    const result = await filesystemTool.execute({
+      action: "write",
+      path: "truncated.md",
+      content: "",
+      basePath: dir,
+      safeMode: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Refusing to write an empty file");
+    expect(result.error).toContain("cut off");
+    expect(existsSync(join(dir, "truncated.md"))).toBe(false);
+  });
+
+  it("refuses an empty append", async () => {
+    const result = await filesystemTool.execute({
+      action: "append",
+      path: "a.md",
+      content: "",
+      basePath: dir,
+      safeMode: true,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Refusing to write an empty file");
+  });
+
+  it("writes an empty file when that is explicitly what was asked for", async () => {
+    const result = await filesystemTool.execute({
+      action: "write",
+      path: "placeholder.txt",
+      content: "",
+      allowEmpty: true,
+      basePath: dir,
+      safeMode: true,
+    });
+
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(dir, "placeholder.txt"), "utf8")).toBe("");
+  });
+
+  it("does not confuse whitespace-only content with empty", async () => {
+    const result = await filesystemTool.execute({
+      action: "write",
+      path: "spaces.txt",
+      content: "\n\n",
+      basePath: dir,
+      safeMode: true,
+    });
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(dir, "spaces.txt"), "utf8")).toBe("\n\n");
   });
 });

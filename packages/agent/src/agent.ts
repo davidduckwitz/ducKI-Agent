@@ -33,7 +33,7 @@ import { withManifestCache, listSkillMdFiles } from "./skill-selector/skill-cach
 import { taskRulesGuidance, platformHintGuidance, type PlatformChannel } from "./prompt/guidance-blocks.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
 import { TokenCounter } from "./context/token-counter.js";
-import { extractFileContent } from "@ducki/tools";
+import { extractFileContent, EMPTY_CONTENT_ERROR, isIntentionalEmptyWrite } from "@ducki/tools";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
 import { createDynamicToolResolver } from "./dynamic-tools/dynamic-tool-resolver.js";
@@ -1717,6 +1717,13 @@ export class Agent {
               `filesystem:${action} needs the file body. Pass it as a plain string in 'content' ` +
               `in this SAME call - not in a separate message, and not as a description of the file.`,
           };
+        }
+        // An empty body is refused HERE rather than at the tool, so the self-repair pass gets a
+        // chance to re-issue the write with the full content. Its overwhelmingly common cause is
+        // a call cut off mid-content, which the JSON repair pass closes into `content: ""` - see
+        // EMPTY_CONTENT_ERROR. Writing it would silently produce a 0-byte file and report success.
+        if (resolvedContent === "" && !isIntentionalEmptyWrite(normalizedInput)) {
+          return { ok: false, error: EMPTY_CONTENT_ERROR };
         }
         // Normalise onto `content` so downstream (tool, hooks, logging) sees one canonical shape.
         normalizedInput["content"] = resolvedContent;
@@ -4439,7 +4446,20 @@ export class Agent {
           // just got the same complaint back and repeated the same call until the run died.
           let repairedPreflightInput = call.input as Record<string, unknown>;
           let repairAttempt = 0;
-          while (!preflight.ok && controls.selfRepairEnabled && repairAttempt < controls.selfRepairMaxAttempts) {
+          // Never let the repair model supply a FILE BODY. Self-repair fixes the shape of a
+          // call - a renamed field, a misspelled action - from the schema and the error. Asked
+          // to fix "the content is empty" it would happily write a plausible-looking file that
+          // the acting model never authored, which is worse than the truncation it is papering
+          // over. That one recovery has to go back to the model that had the real content.
+          const repairMayFabricateContent = (preflight.error ?? "").startsWith(
+            "Refusing to write an empty file"
+          );
+          while (
+            !preflight.ok &&
+            !repairMayFabricateContent &&
+            controls.selfRepairEnabled &&
+            repairAttempt < controls.selfRepairMaxAttempts
+          ) {
             const repair = await this.attemptSelfRepair(
               call.toolName,
               repairedPreflightInput,

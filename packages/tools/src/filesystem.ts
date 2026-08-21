@@ -89,6 +89,31 @@ export function extractFileContent(
   return undefined;
 }
 
+/**
+ * An empty file body is almost never what the model meant.
+ *
+ * The dominant producer is a TRUNCATED call: the model runs out of output budget partway
+ * through a large file, leaving `{"action":"write","path":"a.md","content":"` - and the JSON
+ * repair pass that rescues such fragments closes the dangling string, yielding `content: ""`.
+ * Writing that produces a 0-byte file and reports success, which is the worst possible outcome:
+ * the model believes the file exists, the user sees an empty one, and nothing complains.
+ *
+ * So an empty write must be explicit. `allowEmpty: true` still creates a genuinely empty file
+ * (a placeholder, a touched marker file) - it just cannot happen by accident.
+ */
+export const EMPTY_CONTENT_ERROR =
+  "Refusing to write an empty file. The 'content' field arrived empty, which almost always means " +
+  "the tool call was cut off partway through the file (the model ran out of output budget) rather " +
+  "than that an empty file was wanted. Re-send the write with the FULL content - prefer the block " +
+  "form, which needs no escaping and survives long content: " +
+  "[TOOL:filesystem action=write path=<path>]\\n<content>\\n[/TOOL] - or split a very large file " +
+  "into one write plus several append calls. If you really do want a 0-byte file, pass allowEmpty:true.";
+
+/** True when the caller explicitly asked for an empty file rather than losing content to truncation. */
+export function isIntentionalEmptyWrite(input: Record<string, unknown>): boolean {
+  return input["allowEmpty"] === true;
+}
+
 /** Lines returned by `read` when the caller gives no explicit limit. */
 const DEFAULT_READ_LINES = 2000;
 /** Longest single line `read` returns verbatim before clipping it. */
@@ -338,6 +363,7 @@ export const filesystemTool: ToolExecutor = {
         dryRun: { type: "boolean", default: false, description: "Validate and report action without changing files" },
         createDirs: { type: "boolean", default: true, description: "Create parent directories for write/append/move destination" },
         overwrite: { type: "boolean", default: true, description: "Allow overwriting existing file on write" },
+        allowEmpty: { type: "boolean", default: false, description: "For write/append: permit empty content. Only set this when a 0-byte file is genuinely intended - otherwise an empty body is treated as a truncated call and refused." },
       },
       required: ["action", "path"],
     },
@@ -445,9 +471,11 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "write": {
-          // `undefined`, not falsy: an empty file is a legitimate thing to write, and after the
-          // content sanitisers ran, "" must not be reported back as "you forgot the content" -
-          // that message sent the model round in circles looking for a mistake it had not made.
+          // Empty is refused separately from missing, with its own diagnosis - see
+          // EMPTY_CONTENT_ERROR for why a 0-byte write is almost always a truncated call.
+          if (content === "" && !isIntentionalEmptyWrite(input)) {
+            return { success: false, data: null, error: EMPTY_CONTENT_ERROR };
+          }
           if (content === undefined) {
             return {
               success: false,
@@ -477,6 +505,10 @@ export const filesystemTool: ToolExecutor = {
         }
 
         case "append": {
+          // Appending nothing is a no-op that would still report success - same trap.
+          if (content === "" && !isIntentionalEmptyWrite(input)) {
+            return { success: false, data: null, error: EMPTY_CONTENT_ERROR };
+          }
           if (content === undefined) {
             return {
               success: false,
