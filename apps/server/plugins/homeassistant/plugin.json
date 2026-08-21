@@ -1,0 +1,22 @@
+{
+  "name": "homeassistant",
+  "version": "1.0.0",
+  "description": "Home Assistant Integration: Geräte auflisten, Zustände abfragen und über Dienste steuern (an/aus, Rollos, Thermostate, Medienplayer, ...). Eigene Dashboard-Seite zum Anzeigen und Steuern, Zustands-Cache in plugin-eigener SQLite-Datenbank.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🏠",
+  "category": "automation",
+  "trust": "node",
+  "storage": { "sqlite": true },
+  "provides": {
+    "moduleTools": ["tools/homeassistant.js"],
+    "skills": ["skills/homeassistant-usage"],
+    "frontendPage": "app/index.html",
+    "settingsPage": "settings/index.html",
+    "settings": [
+      { "key": "base_url", "type": "string", "required": true, "description": "Home Assistant Basis-URL, z. B. http://homeassistant.local:8123 (ohne abschließenden Slash)" },
+      { "key": "access_token", "type": "secret", "required": true, "description": "Long-Lived Access Token aus dem Home-Assistant-Benutzerprofil (Profil → Sicherheit → Langlebige Zugriffstoken)" }
+    ]
+  },
+  "enabled": true
+}

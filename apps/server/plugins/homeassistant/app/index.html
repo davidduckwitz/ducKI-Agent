@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Assistant</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #0b0b0f;
+    --surface: #141419;
+    --surface-2: #1b1b22;
+    --surface-3: #22222b;
+    --border: #292932;
+    --border-strong: #383842;
+    --text: #f4f4f5;
+    --text-secondary: #d4d4d8;
+    --muted: #a1a1aa;
+    --primary: #f97316;
+    --primary-hover: #fb923c;
+    --primary-soft: rgba(249, 115, 22, .16);
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --info: #3b82f6;
+    --shadow: 0 15px 50px rgba(0, 0, 0, .35);
+    --shadow-large: 0 30px 100px rgba(0, 0, 0, .55);
+    --radius: 16px;
+  }
+
+  * { box-sizing: border-box; }
+  html { min-height: 100%; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+
+  .app { width: 100%; max-width: 1500px; margin: 0 auto; padding: 20px 24px 40px; }
+
+  /* TOPBAR */
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 13px; }
+  .brand-icon {
+    width: 46px; height: 46px; display: flex; align-items: center; justify-content: center;
+    border-radius: 14px; color: #fff; font-size: 21px;
+    background: linear-gradient(135deg, #f97316, #fb923c);
+    box-shadow: 0 8px 25px rgba(249, 115, 22, .35); flex-shrink: 0;
+  }
+  .brand-text h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.03em; }
+  .brand-text p { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+
+  .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .search-box {
+    display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 12px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px; min-width: 200px;
+  }
+  .search-box input { background: transparent; border: 0; outline: 0; color: var(--text); width: 100%; }
+  .search-box input::placeholder { color: var(--muted); }
+
+  .icon-button, .secondary-button, .primary-button {
+    min-height: 40px; border-radius: 10px; padding: 0 13px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); transition: .18s ease;
+  }
+  .icon-button { width: 42px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .icon-button:hover, .secondary-button:hover { background: var(--surface-2); border-color: var(--border-strong); }
+  .primary-button { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 600; }
+  .primary-button:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; background: var(--surface-3); color: var(--muted); font-weight: 700; }
+  .badge.stale { background: rgba(245, 158, 11, .16); color: var(--warning); }
+  .badge.ok { background: rgba(34, 197, 94, .16); color: var(--success); }
+
+  /* LAYOUT */
+  .dashboard { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
+
+  .sidebar {
+    padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); position: sticky; top: 20px;
+  }
+  .sidebar-title { margin: 0 0 8px; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .sidebar-button {
+    width: 100%; min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 10px; margin: 2px 0; border: 1px solid transparent; border-radius: 9px;
+    background: transparent; color: var(--text); text-align: left; transition: .18s ease;
+  }
+  .sidebar-button:hover { background: var(--surface-2); }
+  .sidebar-button.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+  .sidebar-button .count { font-size: 11px; color: var(--muted); font-weight: 600; }
+  .sidebar-button.active .count { color: var(--primary); }
+
+  /* EMPTY / ERROR STATE */
+  .empty-state {
+    padding: 60px 20px; text-align: center; background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); color: var(--muted);
+  }
+  .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+  .empty-state a { color: var(--primary); text-decoration: none; font-weight: 600; }
+
+  /* GRID */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px;
+  }
+  .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .card-icon {
+    width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center;
+    background: var(--surface-2); font-size: 16px; flex-shrink: 0;
+  }
+  .card-icon.on { background: var(--primary-soft); }
+  .card-title { flex: 1; min-width: 0; }
+  .card-title .name { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-title .eid { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .card-state { font-size: 12px; color: var(--text-secondary); }
+  .card-state b { color: var(--text); font-size: 16px; }
+
+  .card-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; }
+
+  /* SWITCH */
+  .switch { position: relative; width: 40px; height: 22px; flex: 0 0 40px; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .slider { position: absolute; inset: 0; border-radius: 999px; background: #52525b; transition: .2s ease; cursor: pointer; }
+  .slider::before { content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px; border-radius: 50%; background: #fff; transition: .2s ease; }
+  .switch input:checked + .slider { background: var(--primary); }
+  .switch input:checked + .slider::before { transform: translateX(18px); }
+  .switch input:disabled + .slider { opacity: .5; cursor: default; }
+
+  .mini-buttons { display: flex; gap: 6px; }
+  .mini-button {
+    min-height: 32px; padding: 0 10px; font-size: 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text);
+  }
+  .mini-button:hover { background: var(--surface-3); }
+
+  .toast-container { position: fixed; right: 20px; bottom: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+  .toast {
+    min-width: 220px; max-width: 360px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); color: var(--text); box-shadow: var(--shadow-large); font-size: 12px;
+  }
+
+  @media (max-width: 760px) {
+    .dashboard { grid-template-columns: 1fr; }
+    .sidebar { position: static; display: flex; flex-wrap: wrap; gap: 6px; }
+    .sidebar-title { display: none; }
+    .sidebar-button { width: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">🏠</div>
+      <div class="brand-text">
+        <h1>Home Assistant</h1>
+        <p>Geräte anzeigen und steuern</p>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <span id="statusBadge" class="badge">lädt …</span>
+      <div class="search-box">
+        <span>🔎</span>
+        <input type="text" id="search" placeholder="Gerät suchen …" />
+      </div>
+      <button type="button" class="icon-button" id="refreshButton" title="Aktualisieren" aria-label="Aktualisieren">↻</button>
+      <a href="/api/plugins/homeassistant/ui/settings" target="_blank" rel="noopener">
+        <button type="button" class="secondary-button">⚙️ Einstellungen</button>
+      </a>
+    </div>
+  </header>
+
+  <main class="dashboard">
+    <aside class="sidebar">
+      <h3 class="sidebar-title">Domänen</h3>
+      <div id="domainList"></div>
+    </aside>
+
+    <section id="content"></section>
+  </main>
+
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", async function () {
+
+  const DOMAIN_META = {
+    light:        { icon: "💡", label: "Lichter" },
+    switch:       { icon: "🔌", label: "Schalter" },
+    sensor:       { icon: "📈", label: "Sensoren" },
+    binary_sensor:{ icon: "🔘", label: "Binärsensoren" },
+    climate:      { icon: "🌡️", label: "Klima" },
+    cover:        { icon: "🪟", label: "Rollos" },
+    lock:         { icon: "🔒", label: "Schlösser" },
+    media_player: { icon: "🎵", label: "Medienplayer" },
+    fan:          { icon: "🌀", label: "Lüfter" },
+    vacuum:       { icon: "🧹", label: "Staubsauger" },
+    camera:       { icon: "📷", label: "Kameras" },
+    person:       { icon: "🧑", label: "Personen" },
+    automation:   { icon: "⚙️", label: "Automationen" },
+    scene:        { icon: "🎬", label: "Szenen" },
+    script:       { icon: "📜", label: "Skripte" },
+    weather:      { icon: "⛅", label: "Wetter" },
+  };
+  const TOGGLE_DOMAINS = new Set(["light", "switch", "fan", "lock", "input_boolean"]);
+  const ON_STATES = new Set(["on", "open", "unlocked", "playing", "home"]);
+
+  const statusBadge = document.getElementById("statusBadge");
+  const domainList = document.getElementById("domainList");
+  const content = document.getElementById("content");
+  const searchInput = document.getElementById("search");
+  const refreshButton = document.getElementById("refreshButton");
+  const toastContainer = document.getElementById("toastContainer");
+
+  const INVOKE_URL = "/api/plugins/homeassistant/invoke";
+
+  async function invoke(input) {
+    const res = await fetch(INVOKE_URL, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "homeassistant", input })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+    const payload = (json.data && json.data.result) || json.result || {};
+    return payload;
+  }
+
+  function showToast(message) {
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    setTimeout(function () {
+      toast.style.opacity = "0";
+      setTimeout(function () { toast.remove(); }, 200);
+    }, 2500);
+  }
+
+  let entities = [];
+  let currentDomain = "all";
+  let refreshTimer = null;
+
+  function domainMeta(domain) {
+    return DOMAIN_META[domain] || { icon: "🧩", label: domain };
+  }
+
+  function isOn(entity) {
+    return ON_STATES.has(String(entity.state).toLowerCase());
+  }
+
+  function formatState(entity) {
+    if (entity.unit) return entity.state + " " + entity.unit;
+    return entity.state;
+  }
+
+  function renderSidebar() {
+    const counts = {};
+    entities.forEach(function (e) { counts[e.domain] = (counts[e.domain] || 0) + 1; });
+    const domains = Object.keys(counts).sort();
+
+    let html = "";
+    html += '<button type="button" class="sidebar-button' + (currentDomain === "all" ? " active" : "") + '" data-domain="all">' +
+      '<span>🏠 Alle</span><span class="count">' + entities.length + "</span></button>";
+
+    domains.forEach(function (d) {
+      const meta = domainMeta(d);
+      html += '<button type="button" class="sidebar-button' + (currentDomain === d ? " active" : "") + '" data-domain="' + d + '">' +
+        "<span>" + meta.icon + " " + meta.label + '</span><span class="count">' + counts[d] + "</span></button>";
+    });
+
+    domainList.innerHTML = html;
+    domainList.querySelectorAll("[data-domain]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        currentDomain = btn.dataset.domain;
+        renderContent();
+        renderSidebar();
+      });
+    });
+  }
+
+  function cardForEntity(entity) {
+    const meta = domainMeta(entity.domain);
+    const on = isOn(entity);
+
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const head = document.createElement("div");
+    head.className = "card-head";
+    head.innerHTML =
+      '<div class="card-icon' + (on ? " on" : "") + '">' + meta.icon + "</div>" +
+      '<div class="card-title">' +
+        '<div class="name" title="' + entity.friendly_name + '">' + entity.friendly_name + "</div>" +
+        '<div class="eid">' + entity.entity_id + "</div>" +
+      "</div>";
+    card.appendChild(head);
+
+    const state = document.createElement("div");
+    state.className = "card-state";
+    state.innerHTML = "Zustand: <b>" + formatState(entity) + "</b>";
+    card.appendChild(state);
+
+    const controls = document.createElement("div");
+    controls.className = "card-controls";
+
+    if (TOGGLE_DOMAINS.has(entity.domain)) {
+      const label = document.createElement("label");
+      label.className = "switch";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = on;
+      checkbox.addEventListener("change", async function () {
+        checkbox.disabled = true;
+        try {
+          const action = checkbox.checked ? "turn_on" : "turn_off";
+          const res = await invoke({ action, entity_id: entity.entity_id });
+          if (res.error) throw new Error(res.error);
+          showToast(entity.friendly_name + (checkbox.checked ? " eingeschaltet." : " ausgeschaltet."));
+          await loadEntities({ silent: true });
+        } catch (error) {
+          checkbox.checked = !checkbox.checked;
+          showToast("Fehlgeschlagen: " + error.message);
+        } finally {
+          checkbox.disabled = false;
+        }
+      });
+      const slider = document.createElement("span");
+      slider.className = "slider";
+      label.appendChild(checkbox);
+      label.appendChild(slider);
+      controls.appendChild(label);
+    } else if (entity.domain === "cover") {
+      const buttons = document.createElement("div");
+      buttons.className = "mini-buttons";
+      [["open_cover", "▲"], ["stop_cover", "■"], ["close_cover", "▼"]].forEach(function (pair) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "mini-button";
+        btn.textContent = pair[1];
+        btn.addEventListener("click", async function () {
+          try {
+            const res = await invoke({ action: "call_service", domain: "cover", service: pair[0], entity_id: entity.entity_id });
+            if (res.error) throw new Error(res.error);
+            await loadEntities({ silent: true });
+          } catch (error) {
+            showToast("Fehlgeschlagen: " + error.message);
+          }
+        });
+        buttons.appendChild(btn);
+      });
+      controls.appendChild(buttons);
+    }
+
+    if (controls.children.length) card.appendChild(controls);
+    return card;
+  }
+
+  function renderContent() {
+    const needle = searchInput.value.trim().toLowerCase();
+    const list = entities
+      .filter(function (e) { return currentDomain === "all" || e.domain === currentDomain; })
+      .filter(function (e) {
+        return !needle ||
+          e.entity_id.toLowerCase().includes(needle) ||
+          String(e.friendly_name || "").toLowerCase().includes(needle);
+      });
+
+    content.innerHTML = "";
+
+    if (!list.length) {
+      content.innerHTML = '<div class="empty-state"><div class="icon">🔍</div>Keine Geräte gefunden.</div>';
+      return;
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "grid";
+    list.forEach(function (e) { grid.appendChild(cardForEntity(e)); });
+    content.appendChild(grid);
+  }
+
+  function renderNotConfigured(message) {
+    content.innerHTML =
+      '<div class="empty-state"><div class="icon">🏠</div>' +
+      "<p>" + (message || "Home Assistant ist noch nicht konfiguriert.") + "</p>" +
+      '<a href="/api/plugins/homeassistant/ui/settings" target="_blank" rel="noopener">Zu den Einstellungen →</a></div>';
+    domainList.innerHTML = "";
+  }
+
+  async function loadEntities(opts) {
+    const silent = opts && opts.silent;
+    if (!silent) statusBadge.textContent = "lädt …";
+    try {
+      const res = await invoke({ action: "list_states" });
+      if (res.error && (!res.entities || !res.entities.length)) {
+        renderNotConfigured(res.error);
+        statusBadge.textContent = "nicht konfiguriert";
+        statusBadge.className = "badge stale";
+        return;
+      }
+      entities = res.entities || [];
+      renderSidebar();
+      renderContent();
+      if (res.stale) {
+        statusBadge.textContent = "veraltet (offline)";
+        statusBadge.className = "badge stale";
+      } else {
+        statusBadge.textContent = entities.length + " Geräte · aktuell";
+        statusBadge.className = "badge ok";
+      }
+    } catch (error) {
+      if (!silent) showToast("Laden fehlgeschlagen: " + error.message);
+      statusBadge.textContent = "Fehler";
+      statusBadge.className = "badge stale";
+    }
+  }
+
+  refreshButton.addEventListener("click", function () { loadEntities({}); });
+  searchInput.addEventListener("input", function () { renderContent(); });
+
+  await loadEntities({});
+  refreshTimer = setInterval(function () { loadEntities({ silent: true }); }, 20000);
+
+});
+</script>
+
+</body>
+</html>
