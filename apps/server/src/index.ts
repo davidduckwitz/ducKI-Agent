@@ -74,7 +74,6 @@ import { wikiRouter } from "./routes/wiki.js";
 import { createCryptoPaymentRouter } from "./routes/crypto-payment.js";
 import { createToolStagingRouter } from "./routes/tool-staging.js";
 import { screenshotRouter } from "./routes/screenshots.js";
-import { bitcoinPuzzleRouter } from "./routes/bitcoin-puzzle.js";
 import { createProviderModelsRouter } from "./routes/provider-models.js";
 import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
 import { createTasksMcpTool } from "./tasks/mcp-tasks-server.js";
@@ -447,7 +446,10 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/sync", syncRouter);
 	app.use("/api/provider-models", createProviderModelsRouter(database));
 	app.use("/api/crypto", createCryptoPaymentRouter(database));
-	app.use("/api/bitcoin-puzzle", bitcoinPuzzleRouter);
+	// Bitcoin puzzle solver moved to apps/server/plugins/bitcoin-puzzle (own moduleTool +
+	// frontend page at /api/plugins/bitcoin-puzzle/*) - the old route is decommissioned, not
+	// deleted, so packages/agent/src/crypto and apps/server/src/routes/bitcoin-puzzle.ts stay
+	// available for reference/revert.
 	setupCredentialRoutes(database);
 	app.use("/api/credentials", credentialRouter);
 	app.use("/api/logs", logsRouter);

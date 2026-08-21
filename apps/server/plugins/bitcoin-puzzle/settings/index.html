@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Bitcoin-Puzzle — Einstellungen</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 1.25rem; line-height: 1.5; }
+  h1 { font-size: 1.1rem; margin: 0 0 0.25rem; }
+  p.hint { margin: 0 0 1rem; opacity: 0.75; font-size: 0.85rem; }
+  label { display: block; margin: 0.9rem 0 0.3rem; font-weight: 600; font-size: 0.85rem; }
+  input { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #8884; border-radius: 6px; background: transparent; color: inherit; font: inherit; }
+  .row { display: flex; gap: 0.5rem; margin-top: 1.25rem; }
+  button { padding: 0.5rem 0.9rem; border: 0; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .primary { background: #f7931a; color: #fff; }
+  #status { margin-top: 0.75rem; font-size: 0.85rem; min-height: 1.2em; }
+  .ok { color: #16a34a; } .err { color: #dc2626; }
+  .warn { margin-top: 1rem; padding: 0.75rem; border-radius: 8px; background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.35); font-size: 0.8rem; }
+</style>
+</head>
+<body>
+  <h1>🧩 Bitcoin-Puzzle — Einstellungen</h1>
+  <p class="hint">Standardmäßig leer lassen — dann wird exakt derselbe Speicherort wie vor der Migration aus dem Core genutzt, sodass bestehende Puzzles unverändert weiterlaufen.</p>
+
+  <label for="attempts_dir">Attempts-Verzeichnis (State + CSV je Puzzle)</label>
+  <input id="attempts_dir" type="text" placeholder="Standard: shared-workspace/bitcoin-puzzle-attempts" />
+
+  <label for="wordlist_path">BIP39-Wortlisten-Pfad</label>
+  <input id="wordlist_path" type="text" placeholder="Standard: shared-workspace/btc-puzzle/english.txt" />
+
+  <div class="row">
+    <button class="primary" id="save">Speichern</button>
+  </div>
+  <div id="status"></div>
+
+  <div class="warn">⚠️ Diese Einstellungen wirken erst nach einem Neustart des Servers (der Solver initialisiert Wortliste und Verzeichnis nur einmal beim ersten Tool-Aufruf).</div>
+
+<script>
+  const NAME = "bitcoin-puzzle";
+  const BASE = "/api/plugins/" + NAME;
+  const $ = (id) => document.getElementById(id);
+  const status = (msg, ok) => { const s = $("status"); s.textContent = msg || ""; s.className = ok ? "ok" : "err"; };
+
+  async function load() {
+    try {
+      const res = await fetch(BASE + "/settings");
+      const json = await res.json();
+      const v = (json.data && json.data.values) || json.values || {};
+      if (v.attempts_dir) $("attempts_dir").value = v.attempts_dir;
+      if (v.wordlist_path) $("wordlist_path").value = v.wordlist_path;
+    } catch (e) { status("Konnte Einstellungen nicht laden: " + e.message, false); }
+  }
+
+  async function save() {
+    const values = { attempts_dir: $("attempts_dir").value.trim(), wordlist_path: $("wordlist_path").value.trim() };
+    try {
+      const res = await fetch(BASE + "/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+      status("Gespeichert. Server neu starten, damit es wirkt.", true);
+    } catch (e) { status("Speichern fehlgeschlagen: " + e.message, false); }
+  }
+
+  $("save").onclick = save;
+  load();
+</script>
+</body>
+</html>

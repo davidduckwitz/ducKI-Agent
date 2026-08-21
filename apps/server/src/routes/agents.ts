@@ -1,18 +1,15 @@
 import { Router, type IRouter } from "express";
 import { createApiResponse } from "@ducki/shared";
 import { agentRegistry } from "../lib/agent-registry.js";
-import { BitcoinPuzzleService } from "@ducki/agent";
 
 export const agentsRouter: IRouter = Router();
 
+// The bitcoin-puzzle feature moved to a plugin (apps/server/plugins/bitcoin-puzzle) with its
+// own polling frontend - GET /api/plugins/bitcoin-puzzle/invoke {action:"list"} replaces the
+// puzzle info this route used to fold in from the now-decommissioned core singleton.
 agentsRouter.get("/live", (req, res) => {
   const snapshot = agentRegistry.snapshot();
   const snapshotAt = new Date().toISOString();
-
-  // Bitcoin Puzzle Info
-  const bitcoinPuzzleService = BitcoinPuzzleService.getInstance();
-  const runningPuzzlesCount = bitcoinPuzzleService.getRunningPuzzlesCount();
-  const allPuzzles = bitcoinPuzzleService.getAllPuzzlesInfo();
 
   const sourceMap = {
     chat_http: snapshot.agents.filter((entry) => entry.source === "chat_http").length,
@@ -26,7 +23,7 @@ agentsRouter.get("/live", (req, res) => {
     tasks: snapshot.agents.filter((entry) => entry.source === "task_run").length,
     workflows: snapshot.agents.filter((entry) => entry.source === "workflow_run").length,
     gateway: snapshot.agents.filter((entry) => entry.source === "gateway_inbound").length,
-    bitcoinPuzzles: runningPuzzlesCount,
+    bitcoinPuzzles: 0,
   };
 
   // Generic connector registry status (Discord and any other installed connector plugin).
@@ -52,10 +49,6 @@ agentsRouter.get("/live", (req, res) => {
       discord: discordStatus,
     },
     connectorStatuses,
-    bitcoinPuzzles: {
-      running: runningPuzzlesCount,
-      total: allPuzzles.length,
-      puzzles: allPuzzles,
-    },
+    bitcoinPuzzles: { running: 0, total: 0, puzzles: [] },
   }));
 });

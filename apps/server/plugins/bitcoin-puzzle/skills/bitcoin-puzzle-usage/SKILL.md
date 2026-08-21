@@ -1,0 +1,44 @@
+---
+name: bitcoin-puzzle-usage
+description: How to create, monitor, and control Bitcoin puzzle brute-force solvers with the bitcoin_puzzle tool. Use when the user asks about a "bitcoin puzzle", wants to search for the mnemonic behind a target address, or wants to check/pause/resume/mark progress on one.
+---
+
+# Bitcoin puzzle solver
+
+The `bitcoin_puzzle` tool brute-forces random 12-word BIP39 mnemonics, derives a P2PKH Bitcoin address (BIP44 `m/44'/0'/0'/0/0`), and compares it against a target address. State and every tried mnemonic/address pair are stored in flat files (JSON state + append-only CSV per puzzle) — NOT this plugin's own database — so puzzle progress survives restarts and can grow to hundreds of MB without bloating anything else.
+
+Create (or resume, if it already exists — the id is deterministic from the address) and list:
+```
+[TOOL:bitcoin_puzzle({"action": "create", "targetAddress": "1cryptoGeCRiTzVgxBQcKFFjSVydN1GW7", "name": "0.005 BTC Level 5"})]
+[TOOL:bitcoin_puzzle({"action": "list"})]
+[TOOL:bitcoin_puzzle({"action": "get", "puzzleId": "puzzle-e48ef0db37fb"})]
+```
+
+Control:
+```
+[TOOL:bitcoin_puzzle({"action": "pause", "puzzleId": "puzzle-e48ef0db37fb"})]
+[TOOL:bitcoin_puzzle({"action": "resume", "puzzleId": "puzzle-e48ef0db37fb"})]
+[TOOL:bitcoin_puzzle({"action": "stop", "puzzleId": "puzzle-e48ef0db37fb"})]
+[TOOL:bitcoin_puzzle({"action": "delete", "puzzleId": "puzzle-e48ef0db37fb"})]
+```
+
+Mark a phrase as already tried (skips it during brute force) — supports `__` or `?` as placeholders for up to 2 missing words, expanding to every combination:
+```
+[TOOL:bitcoin_puzzle({"action": "mark_phrase", "puzzleId": "puzzle-e48ef0db37fb", "phrase": "abandon ability __ actual admit adult advance afraid again age agent"})]
+```
+
+Check whether you already know the winning mnemonic for a puzzle — this derives the real address server-side and only marks the puzzle solved if it actually matches (never trust a claimed address):
+```
+[TOOL:bitcoin_puzzle({"action": "mark_found", "puzzleId": "puzzle-e48ef0db37fb", "mnemonic": "..."})]
+```
+
+Search (streamed, capped at 1000 results — a search is a UI window, not a full export):
+```
+[TOOL:bitcoin_puzzle({"action": "search", "puzzleId": "puzzle-e48ef0db37fb", "query": "abandon"})]
+[TOOL:bitcoin_puzzle({"action": "search_all", "query": "1cryptoGeCRiTzVgxBQcKFFjSVydN1GW7"})]
+[TOOL:bitcoin_puzzle({"action": "check_phrase", "phrase": "..."})]
+```
+
+- Solving is a synchronous, self-throttled loop in the SAME server process (no worker threads) — it already ran this way before the migration, so nothing changed CPU-wise. It genuinely uses one CPU core while a puzzle is running.
+- There is no automatic wallet import on a find (the old core feature's auto-import to the main app database was already dead code — `setDatabase()` was never called). Tell the user to manually import a found mnemonic into their wallet if `mark_found`/a `found` state reports a match.
+- `attempts_dir`/`wordlist_path` in this plugin's settings default to the exact paths the old core feature used, so puzzles created before this migration keep working unmodified.

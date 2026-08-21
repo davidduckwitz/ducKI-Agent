@@ -9,7 +9,6 @@ import { isAbortError } from "@ducki/providers";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { stopCodingRun } from "../lib/coding-run-registry.js";
 import {
-  BitcoinPuzzleService,
   createCheckpoint,
   createScopedFilesystemTool,
   discardNoopCheckpoint,
@@ -85,15 +84,13 @@ const processedChatMessageKeys = new Map<string, number>();
 const CHAT_MESSAGE_DEDUP_TTL_MS = 2 * 60 * 1000;
 
 /**
- * The sidebar needs the running-puzzle count alongside the agent metrics; it used to get
- * it from /agents/live, which is the poll this push replaces.
+ * The bitcoin-puzzle feature moved to a plugin (apps/server/plugins/bitcoin-puzzle) with its
+ * own polling frontend page - there is no push hook from plugin moduleTools into the core
+ * socket.io stream, so the sidebar count regresses to a static 0 rather than a live number.
+ * Kept as a function (not removed) so the two call sites below don't need reshaping.
  */
 function runningPuzzleCount(): number {
-  try {
-    return BitcoinPuzzleService.getInstance().getRunningPuzzlesCount();
-  } catch {
-    return 0;
-  }
+  return 0;
 }
 
 /** Snapshot every freshly handshaken client receives, so it does not have to poll for it. */

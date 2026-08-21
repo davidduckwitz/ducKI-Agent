@@ -1,29 +1,16 @@
-import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { PortfolioOverview } from "../../components/crypto/PortfolioOverview";
 import { AddressesList } from "../../components/crypto/AddressesList";
 import { TransactionsList } from "../../components/crypto/TransactionsList";
 import { CryptoSettingsPanel } from "../../components/crypto/CryptoSettingsPanel";
-import { BitcoinPuzzleManager } from "../../components/crypto/BitcoinPuzzleManager";
 import { useAddresses } from "../../hooks/useCrypto";
 import { Wallet, History, Settings, BarChart3, Target } from "lucide-react";
 
 export function CryptoPaymentPage() {
-  const [searchParams] = useSearchParams();
   const { data: addresses } = useAddresses();
   const [selectedAddressId, setSelectedAddressId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState("portfolio");
-  const [selectedPuzzleId, setSelectedPuzzleId] = useState<string | null>(null);
-
-  // Lese Query-Parameter beim Mount
-  useEffect(() => {
-    const puzzleId = searchParams.get("puzzle");
-    if (puzzleId) {
-      setActiveTab("puzzle");
-      setSelectedPuzzleId(puzzleId);
-    }
-  }, [searchParams]);
 
   // Select first address by default
   const displayAddressId = selectedAddressId || addresses?.[0]?.id;
@@ -84,9 +71,22 @@ export function CryptoPaymentPage() {
           )}
         </TabsContent>
 
-        {/* Bitcoin Puzzle Solver Tab */}
+        {/* Bitcoin Puzzle Solver moved to its own plugin */}
         <TabsContent value="puzzle" className="space-y-4">
-          <BitcoinPuzzleManager initialSelectedPuzzleId={selectedPuzzleId} />
+          <div className="rounded-lg border bg-card p-8 text-center space-y-3">
+            <Target className="h-8 w-8 mx-auto text-muted-foreground" />
+            <p className="text-muted-foreground">
+              Der Bitcoin-Puzzle-Solver ist jetzt ein eigenständiges Plugin mit eigenem Dashboard.
+            </p>
+            <a
+              href="/api/plugins/bitcoin-puzzle/ui/frontend"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block text-sm font-medium text-primary underline underline-offset-4"
+            >
+              Zum Bitcoin-Puzzle-Plugin öffnen →
+            </a>
+          </div>
         </TabsContent>
 
         {/* Settings Tab */}

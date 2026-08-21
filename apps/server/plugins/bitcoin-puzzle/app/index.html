@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bitcoin Puzzle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0b0f; --surface: #141419; --surface-2: #1b1b22; --surface-3: #22222b;
+    --border: #292932; --border-strong: #383842; --text: #f4f4f5; --text-secondary: #d4d4d8; --muted: #a1a1aa;
+    --primary: #f7931a; --primary-hover: #ffab3d; --primary-soft: rgba(247, 147, 26, .16);
+    --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+    --shadow: 0 15px 50px rgba(0, 0, 0, .35); --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  .app { width: 100%; max-width: 1000px; margin: 0 auto; padding: 20px 24px 40px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 13px; }
+  .brand-icon { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 14px; color: #fff; font-size: 21px; background: linear-gradient(135deg, #f7931a, #ffab3d); box-shadow: 0 8px 25px rgba(247, 147, 26, .35); flex-shrink: 0; }
+  .brand-text h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.03em; }
+  .brand-text p { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+  .primary-button { min-height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--primary); background: var(--primary); color: #2b1400; font-weight: 700; }
+  .primary-button:hover { background: var(--primary-hover); }
+  .secondary-button { min-height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 12px; font-weight: 600; }
+  .secondary-button:hover { background: var(--surface-3); }
+  .danger-button { min-height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid rgba(239,68,68,.35); background: rgba(239,68,68,.1); color: var(--danger); font-size: 12px; font-weight: 600; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px; }
+  .form-group { margin-bottom: 12px; }
+  .form-group label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .form-control { display: block; width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); color: var(--text); }
+
+  .puzzle-card { display: flex; flex-direction: column; gap: 10px; }
+  .puzzle-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .puzzle-title { font-weight: 700; font-size: 15px; }
+  .puzzle-address { font-size: 11px; color: var(--muted); font-family: "SFMono-Regular", Consolas, monospace; word-break: break-all; }
+  .status-badge { font-size: 10px; padding: 3px 9px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+  .status-running { background: rgba(34,197,94,.16); color: var(--success); }
+  .status-paused { background: rgba(245,158,11,.16); color: var(--warning); }
+  .status-idle { background: var(--surface-3); color: var(--muted); }
+  .status-completed { background: rgba(34,197,94,.24); color: var(--success); }
+  .status-error { background: rgba(239,68,68,.16); color: var(--danger); }
+
+  .progress-bar { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: var(--primary); border-radius: 999px; transition: width .3s ease; }
+  .stats-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+  .stats-row b { color: var(--text); }
+
+  .puzzle-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .found-banner { padding: 12px; border-radius: 10px; background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.35); font-size: 12px; }
+  .found-banner .mnemonic { font-family: "SFMono-Regular", Consolas, monospace; word-break: break-word; margin-top: 4px; font-weight: 700; }
+
+  .detail-panel { margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border); display: none; }
+  .detail-panel.open { display: block; }
+  .attempts-list { max-height: 200px; overflow-y: auto; font-size: 11px; font-family: "SFMono-Regular", Consolas, monospace; background: var(--surface-2); border-radius: 8px; padding: 8px; }
+  .attempts-list div { padding: 2px 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .inline-form { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .inline-form input { flex: 1; min-width: 160px; min-height: 34px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 12px; }
+
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); }
+  .toast-container { position: fixed; right: 20px; bottom: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
+  .toast { min-width: 220px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">🧩</div>
+      <div class="brand-text"><h1>Bitcoin Puzzle</h1><p>Mnemonic-Brute-Force gegen eine Zieladresse</p></div>
+    </div>
+    <a href="/api/plugins/bitcoin-puzzle/ui/settings" target="_blank" rel="noopener"><button type="button" class="secondary-button">⚙️ Einstellungen</button></a>
+  </header>
+
+  <section class="card">
+    <h2 style="margin:0 0 12px;font-size:15px">Neues Puzzle</h2>
+    <div class="form-group"><label>Zieladresse</label><input type="text" class="form-control" id="newAddress" placeholder="1..." /></div>
+    <div class="form-group"><label>Name (optional)</label><input type="text" class="form-control" id="newName" placeholder="z. B. 0.005 BTC Level 5" /></div>
+    <div class="form-group"><label>Info-URL (optional)</label><input type="text" class="form-control" id="newInfoUrl" placeholder="https://..." /></div>
+    <button type="button" class="primary-button" id="createBtn">+ Puzzle erstellen</button>
+  </section>
+
+  <div id="puzzleList"></div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", async function () {
+  const toastContainer = document.getElementById("toastContainer");
+  function showToast(message) {
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    setTimeout(function () { toast.remove(); }, 3500);
+  }
+
+  async function invoke(input) {
+    const res = await fetch("/api/plugins/bitcoin-puzzle/invoke", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "bitcoin_puzzle", input })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  const STATUS_LABEL = { running: "Läuft", paused: "Pausiert", idle: "Inaktiv", completed: "Gelöst", error: "Fehler" };
+  const openDetails = new Set();
+
+  function progressPercent(p) {
+    // No fixed denominator (search space is astronomically large) - show a small,
+    // saturating bar just so "something is happening" is visible, not a real percentage.
+    return Math.min(100, Math.log10(Math.max(1, p.generatedCount)) * 10);
+  }
+
+  function puzzleCard(p) {
+    const card = document.createElement("div");
+    card.className = "card puzzle-card";
+    const isOpen = openDetails.has(p.id);
+
+    card.innerHTML =
+      '<div class="puzzle-head">' +
+        '<div><div class="puzzle-title">' + p.name + '</div><div class="puzzle-address">' + p.targetAddress + '</div></div>' +
+        '<span class="status-badge status-' + p.status + '">' + (STATUS_LABEL[p.status] || p.status) + '</span>' +
+      '</div>' +
+      (p.found ? '<div class="found-banner">🎉 Gelöst! Mnemonic wird beim Öffnen der Details angezeigt.</div>' : '') +
+      '<div class="progress-bar"><div class="progress-bar-fill" style="width:' + progressPercent(p) + '%"></div></div>' +
+      '<div class="stats-row">' +
+        '<span>Generiert: <b>' + p.generatedCount.toLocaleString("de-DE") + '</b></span>' +
+        '<span>Versucht: <b>' + p.triedCombinationsCount.toLocaleString("de-DE") + '</b></span>' +
+        (p.isRunning ? '<span><b>' + p.addressesPerSecond + '</b>/Sek</span>' : '') +
+      '</div>' +
+      '<div class="puzzle-actions">' +
+        (p.status === "running" ? '<button type="button" class="secondary-button" data-pause="' + p.id + '">⏸ Pause</button>' : '') +
+        (p.status === "paused" || p.status === "idle" ? '<button type="button" class="secondary-button" data-resume="' + p.id + '">▶ Weiter</button>' : '') +
+        (p.status === "running" || p.status === "paused" ? '<button type="button" class="secondary-button" data-stop="' + p.id + '">■ Stop</button>' : '') +
+        '<button type="button" class="secondary-button" data-details="' + p.id + '">' + (isOpen ? "Details ausblenden" : "Details") + '</button>' +
+        '<button type="button" class="danger-button" data-delete="' + p.id + '">Löschen</button>' +
+      '</div>' +
+      '<div class="detail-panel' + (isOpen ? " open" : "") + '" id="detail-' + p.id + '"></div>';
+
+    card.querySelector("[data-pause]")?.addEventListener("click", async () => { await invoke({ action: "pause", puzzleId: p.id }); loadPuzzles(); });
+    card.querySelector("[data-resume]")?.addEventListener("click", async () => { await invoke({ action: "resume", puzzleId: p.id }); loadPuzzles(); });
+    card.querySelector("[data-stop]")?.addEventListener("click", async () => { await invoke({ action: "stop", puzzleId: p.id }); loadPuzzles(); });
+    card.querySelector("[data-delete]")?.addEventListener("click", async () => {
+      if (!confirm("Puzzle \"" + p.name + "\" wirklich löschen? Das entfernt auch die gesamte Versuchshistorie unwiderruflich.")) return;
+      await invoke({ action: "delete", puzzleId: p.id });
+      openDetails.delete(p.id);
+      loadPuzzles();
+    });
+    card.querySelector("[data-details]")?.addEventListener("click", async () => {
+      if (openDetails.has(p.id)) { openDetails.delete(p.id); } else { openDetails.add(p.id); await renderDetail(p.id); }
+      loadPuzzles();
+    });
+
+    return card;
+  }
+
+  async function renderDetail(puzzleId) {
+    const detail = document.getElementById("detail-" + puzzleId);
+    if (!detail) return;
+    const info = await invoke({ action: "get", puzzleId });
+
+    const foundHtml = info.state.foundMnemonic
+      ? '<div class="found-banner">🎉 <b>Mnemonic:</b><div class="mnemonic">' + info.state.foundMnemonic + '</div></div>'
+      : "";
+
+    const recentHtml = (info.recentAttempts || []).slice(-15).reverse().map((a) =>
+      "<div>" + a.mnemonic.split(" ").slice(0, 4).join(" ") + "... → " + a.address + "</div>"
+    ).join("") || '<div style="color:var(--muted)">Noch keine Versuche.</div>';
+
+    detail.innerHTML =
+      foundHtml +
+      '<div style="font-size:11px;color:var(--muted);margin:8px 0 4px">Letzte Versuche</div>' +
+      '<div class="attempts-list">' + recentHtml + '</div>' +
+      '<div class="inline-form">' +
+        '<input type="text" placeholder="Phrase markieren (__ als Platzhalter)" class="mark-phrase-input" />' +
+        '<button type="button" class="secondary-button mark-phrase-btn">Markieren</button>' +
+      '</div>' +
+      '<div class="inline-form">' +
+        '<input type="text" placeholder="Suche (Mnemonic-Teil oder Adresse)" class="search-input" />' +
+        '<button type="button" class="secondary-button search-btn">Suchen</button>' +
+      '</div>' +
+      '<div class="search-results" style="margin-top:8px"></div>';
+
+    detail.querySelector(".mark-phrase-btn").addEventListener("click", async () => {
+      const phrase = detail.querySelector(".mark-phrase-input").value.trim();
+      if (!phrase) return;
+      const res = await invoke({ action: "mark_phrase", puzzleId, phrase });
+      showToast(res.generatedCount + " Phrase(n) markiert.");
+      renderDetail(puzzleId);
+    });
+
+    detail.querySelector(".search-btn").addEventListener("click", async () => {
+      const query = detail.querySelector(".search-input").value.trim();
+      if (!query) return;
+      const res = await invoke({ action: "search", puzzleId, query });
+      const results = detail.querySelector(".search-results");
+      results.innerHTML = '<div class="attempts-list">' +
+        (res.matches.length ? res.matches.slice(0, 50).map((a) => "<div>" + a.mnemonic + " → " + a.address + "</div>").join("") : '<div style="color:var(--muted)">Keine Treffer.</div>') +
+        "</div>";
+    });
+  }
+
+  let pollTimer = null;
+
+  async function loadPuzzles() {
+    try {
+      const res = await invoke({ action: "list" });
+      const container = document.getElementById("puzzleList");
+      const scrollY = window.scrollY;
+      container.innerHTML = "";
+      if (!res.puzzles.length) {
+        container.innerHTML = '<div class="card empty">Noch keine Puzzles. Erstelle oben eines.</div>';
+      } else {
+        res.puzzles.forEach((p) => container.appendChild(puzzleCard(p)));
+        for (const id of openDetails) await renderDetail(id);
+      }
+      window.scrollTo(0, scrollY);
+    } catch (error) {
+      showToast("Laden fehlgeschlagen: " + error.message);
+    }
+  }
+
+  document.getElementById("createBtn").addEventListener("click", async () => {
+    const targetAddress = document.getElementById("newAddress").value.trim();
+    if (!targetAddress) return showToast("Bitte eine Zieladresse eingeben.");
+    try {
+      await invoke({
+        action: "create", targetAddress,
+        name: document.getElementById("newName").value.trim() || undefined,
+        infoUrl: document.getElementById("newInfoUrl").value.trim() || undefined,
+      });
+      document.getElementById("newAddress").value = "";
+      document.getElementById("newName").value = "";
+      document.getElementById("newInfoUrl").value = "";
+      showToast("Puzzle erstellt.");
+      loadPuzzles();
+    } catch (error) {
+      showToast("Fehlgeschlagen: " + error.message);
+    }
+  });
+
+  await loadPuzzles();
+  pollTimer = setInterval(loadPuzzles, 3000);
+});
+</script>
+</body>
+</html>
