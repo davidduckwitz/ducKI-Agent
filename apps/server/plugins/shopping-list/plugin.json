@@ -1,0 +1,17 @@
+{
+  "name": "shopping-list",
+  "version": "1.0.0",
+  "description": "Einkaufsliste mit Vorratsverwaltung: Artikel abhaken, Vorrat mit Mindestbestand pflegen, bei Unterschreitung automatisch zur Einkaufsliste hinzufügen. Eigene Frontend-Seite, plugin-eigene SQLite-Datenbank. (Kassenbon-OCR ist noch nicht implementiert - Artikel werden manuell oder per Tool erfasst.)",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🛒",
+  "category": "workspace",
+  "trust": "node",
+  "storage": { "sqlite": true },
+  "provides": {
+    "moduleTools": ["tools/shopping-list.js"],
+    "skills": ["skills/shopping-list-usage"],
+    "frontendPage": "app/index.html"
+  },
+  "enabled": true
+}

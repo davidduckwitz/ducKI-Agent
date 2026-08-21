@@ -1,0 +1,17 @@
+{
+  "name": "meal-planner",
+  "version": "1.0.0",
+  "description": "Wochenplan mit Rezeptdatenbank. Rezepte mit Zutatenliste anlegen, Tagen zuweisen und daraus eine aggregierte Einkaufsliste generieren (der Agent überträgt sie dann in das shopping-list-Plugin). Eigene Frontend-Seite, plugin-eigene SQLite-Datenbank.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🍳",
+  "category": "workspace",
+  "trust": "node",
+  "storage": { "sqlite": true },
+  "provides": {
+    "moduleTools": ["tools/meal-planner.js"],
+    "skills": ["skills/meal-planner-usage"],
+    "frontendPage": "app/index.html"
+  },
+  "enabled": true
+}

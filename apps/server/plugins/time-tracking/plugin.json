@@ -1,0 +1,17 @@
+{
+  "name": "time-tracking",
+  "version": "1.0.0",
+  "description": "Projekte und Arbeitszeiten erfassen (Timer oder manuell), Wochenberichte mit Stunden und Betrag pro Projekt. Der Wochenbericht lässt sich direkt als Rechnungspositionen in das invoicing-Plugin übernehmen. Eigene Frontend-Seite, plugin-eigene SQLite-Datenbank.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "⏱️",
+  "category": "workspace",
+  "trust": "node",
+  "storage": { "sqlite": true },
+  "provides": {
+    "moduleTools": ["tools/time-tracking.js"],
+    "skills": ["skills/time-tracking-usage"],
+    "frontendPage": "app/index.html"
+  },
+  "enabled": true
+}

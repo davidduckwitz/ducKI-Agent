@@ -1,0 +1,21 @@
+{
+  "name": "task-sync",
+  "version": "1.0.0",
+  "description": "Echte Task-Verwaltung mit Deadlines, Priorität und Projekten (ergänzt das notes-Plugin, das keine Fälligkeiten kennt). Optionale Zwei-Wege-Synchronisation mit Todoist (REST-API-Token). Linear/Trello sind noch nicht angebunden. Eigene Frontend-Seite, plugin-eigene SQLite-Datenbank.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "✅",
+  "category": "workspace",
+  "trust": "node",
+  "storage": { "sqlite": true },
+  "provides": {
+    "moduleTools": ["tools/task-sync.js"],
+    "skills": ["skills/task-sync-usage"],
+    "frontendPage": "app/index.html",
+    "settingsPage": "settings/index.html",
+    "settings": [
+      { "key": "todoist_api_token", "type": "secret", "description": "Todoist API-Token (Einstellungen → Integrationen → Entwickler in Todoist). Optional - ohne Token funktioniert die lokale Task-Verwaltung ohne Sync." }
+    ]
+  },
+  "enabled": true
+}

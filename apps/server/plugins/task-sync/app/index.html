@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tasks</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0b0f; --surface: #141419; --surface-2: #1b1b22; --surface-3: #22222b;
+    --border: #292932; --border-strong: #383842; --text: #f4f4f5; --text-secondary: #d4d4d8; --muted: #a1a1aa;
+    --primary: #f43f5e; --primary-hover: #fb7185; --primary-soft: rgba(244, 63, 94, .16);
+    --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+    --shadow: 0 15px 50px rgba(0, 0, 0, .35); --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  .app { width: 100%; max-width: 900px; margin: 0 auto; padding: 20px 24px 40px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 13px; }
+  .brand-icon { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 14px; color: #fff; font-size: 21px; background: linear-gradient(135deg, #f43f5e, #fb7185); box-shadow: 0 8px 25px rgba(244, 63, 94, .35); flex-shrink: 0; }
+  .brand-text h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.03em; }
+  .brand-text p { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+  .top-actions { display: flex; gap: 8px; }
+  .secondary-button { min-height: 38px; padding: 0 13px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  .secondary-button:hover { background: var(--surface-2); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; }
+  .add-row { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .add-row input, .add-row select { min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+  .add-row input.title { flex: 1; min-width: 160px; }
+  .add-row input.due { flex: 0 0 150px; }
+  .primary-button { min-height: 40px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--primary); background: var(--primary); color: #2b0a10; font-weight: 700; }
+  .primary-button:hover { background: var(--primary-hover); }
+
+  .filters { display: flex; gap: 6px; margin-bottom: 14px; }
+  .filter-btn { min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 600; }
+  .filter-btn.active { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
+
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+  .row.done { opacity: .5; }
+  .row.done .row-title { text-decoration: line-through; }
+  .row.overdue { border-color: rgba(239, 68, 68, .4); }
+  .row-check { width: 20px; height: 20px; border-radius: 6px; border: 2px solid var(--border-strong); flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: transparent; }
+  .row-check.on { background: var(--success); border-color: var(--success); color: #06210f; font-weight: 800; }
+  .row-body { flex: 1; min-width: 0; }
+  .row-title { font-weight: 600; font-size: 14px; }
+  .row-meta { font-size: 11px; color: var(--muted); margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; font-weight: 700; }
+  .badge.low { background: rgba(59,130,246,.16); color: #60a5fa; }
+  .badge.medium { background: rgba(245,158,11,.16); color: var(--warning); }
+  .badge.high { background: rgba(239,68,68,.16); color: var(--danger); }
+  .badge.overdue { background: rgba(239,68,68,.16); color: var(--danger); }
+  .row-del { border: 0; background: transparent; color: var(--muted); font-size: 16px; padding: 4px; }
+  .row-del:hover { color: var(--danger); }
+  .empty { padding: 40px 20px; text-align: center; color: var(--muted); }
+
+  .toast-container { position: fixed; right: 20px; bottom: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
+  .toast { min-width: 220px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">✅</div>
+      <div class="brand-text"><h1>Tasks</h1><p>Mit Deadlines &amp; Priorität</p></div>
+    </div>
+    <div class="top-actions">
+      <button type="button" class="secondary-button" id="syncBtn">🔄 Todoist-Sync</button>
+      <a href="/api/plugins/task-sync/ui/settings" target="_blank" rel="noopener"><button type="button" class="secondary-button">⚙️ Einstellungen</button></a>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="add-row">
+      <input type="text" id="taskTitle" class="title" placeholder="Neuer Task ..." />
+      <input type="date" id="taskDue" class="due" />
+      <select id="taskPriority"><option value="low">Niedrig</option><option value="medium" selected>Mittel</option><option value="high">Hoch</option></select>
+      <button type="button" class="primary-button" id="addTaskBtn">+ Hinzufügen</button>
+    </div>
+
+    <div class="filters">
+      <button type="button" class="filter-btn active" data-filter="open">Offen</button>
+      <button type="button" class="filter-btn" data-filter="overdue">Überfällig</button>
+      <button type="button" class="filter-btn" data-filter="done">Erledigt</button>
+      <button type="button" class="filter-btn" data-filter="all">Alle</button>
+    </div>
+
+    <div class="list" id="taskList"></div>
+  </section>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", async function () {
+  const toastContainer = document.getElementById("toastContainer");
+  function showToast(message) {
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.textContent = message;
+    toastContainer.appendChild(toast);
+    setTimeout(function () { toast.remove(); }, 3000);
+  }
+
+  async function invoke(input) {
+    const res = await fetch("/api/plugins/task-sync/invoke", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "task_sync", input })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  let currentFilter = "open";
+  const today = new Date().toISOString().slice(0, 10);
+
+  async function loadTasks() {
+    const input = { action: "list_tasks" };
+    if (currentFilter === "open") input.status = "open";
+    else if (currentFilter === "done") input.status = "done";
+    else if (currentFilter === "overdue") { input.status = "open"; input.overdue_only = true; }
+    const res = await invoke(input);
+    const list = document.getElementById("taskList");
+    list.innerHTML = "";
+    if (!res.tasks.length) {
+      list.innerHTML = '<div class="empty">Nichts zu tun. 🎉</div>';
+      return;
+    }
+    res.tasks.forEach(function (t) {
+      const overdue = t.status === "open" && t.due_date && t.due_date < today;
+      const row = document.createElement("div");
+      row.className = "row" + (t.status === "done" ? " done" : "") + (overdue ? " overdue" : "");
+      const meta = [];
+      if (t.due_date) meta.push((overdue ? '<span class="badge overdue">' : "<span>") + "📅 " + t.due_date + "</span>");
+      meta.push('<span class="badge ' + t.priority + '">' + ({ low: "Niedrig", medium: "Mittel", high: "Hoch" })[t.priority] + "</span>");
+      if (t.project) meta.push("<span>" + t.project + "</span>");
+      if (t.external_id) meta.push("<span>🔗 Todoist</span>");
+      row.innerHTML =
+        '<button type="button" class="row-check' + (t.status === "done" ? " on" : "") + '">' + (t.status === "done" ? "✓" : "") + "</button>" +
+        '<div class="row-body"><div class="row-title">' + t.title + '</div><div class="row-meta">' + meta.join("") + "</div></div>" +
+        '<button type="button" class="row-del">✕</button>';
+      if (t.status === "open") {
+        row.querySelector(".row-check").addEventListener("click", async function () {
+          await invoke({ action: "complete_task", id: t.id });
+          loadTasks();
+        });
+      }
+      row.querySelector(".row-del").addEventListener("click", async function () {
+        await invoke({ action: "delete_task", id: t.id });
+        loadTasks();
+      });
+      list.appendChild(row);
+    });
+  }
+
+  document.querySelectorAll(".filter-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".filter-btn").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      currentFilter = btn.dataset.filter;
+      loadTasks();
+    });
+  });
+
+  document.getElementById("addTaskBtn").addEventListener("click", async function () {
+    const title = document.getElementById("taskTitle").value.trim();
+    if (!title) return showToast("Bitte einen Titel eingeben.");
+    const due_date = document.getElementById("taskDue").value || undefined;
+    const priority = document.getElementById("taskPriority").value;
+    await invoke({ action: "add_task", title, due_date, priority });
+    document.getElementById("taskTitle").value = "";
+    document.getElementById("taskDue").value = "";
+    loadTasks();
+  });
+
+  document.getElementById("syncBtn").addEventListener("click", async function () {
+    try {
+      const res = await invoke({ action: "sync_todoist", direction: "both" });
+      showToast(res.pulled + " geholt, " + res.pushed + " gesendet.");
+      loadTasks();
+    } catch (error) {
+      showToast("Sync fehlgeschlagen: " + error.message);
+    }
+  });
+
+  await loadTasks();
+});
+</script>
+</body>
+</html>
