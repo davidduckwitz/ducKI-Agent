@@ -87,3 +87,24 @@ describe("stripTrailingJsonArgTail", () => {
     expect(stripTrailingJsonArgTail('"}')).toBe('"}');
   });
 });
+
+describe("stripStopMarkers - block-form call leaks", () => {
+  it("cuts a leaked block-form call (name key=value)", () => {
+    // Observed inside a generated index.html: the model forgot [/TOOL] and went on to its
+    // next call. The JSON-shape check alone did not recognise this - there is no '(' here.
+    const leaked = "<html></html>\n[TOOL:todo action=update id=2 status=in_progress]";
+    // The file's own trailing newline is kept - only the leaked call goes.
+    expect(stripStopMarkers(leaked)).toBe("<html></html>\n");
+  });
+
+  it("cuts several leaked calls crammed onto one line", () => {
+    const leaked =
+      '<html></html>\n[TOOL:todo action=update id=1 status=done] [TOOL:todo action=create title="Widgets"]';
+    expect(stripStopMarkers(leaked)).toBe("<html></html>\n");
+  });
+
+  it("still keeps prose that only names the tool", () => {
+    const doc = "Benutze [TOOL:filesystem] um zu schreiben.";
+    expect(stripStopMarkers(doc)).toBe(doc);
+  });
+});

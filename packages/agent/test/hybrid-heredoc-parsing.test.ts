@@ -151,3 +151,79 @@ describe("the tolerant pass must not swallow well-formed calls", () => {
     expect(calls[1]!.input["content"]).toBe("Inhalt B");
   });
 });
+
+/**
+ * A following tool call must never end up inside the written file.
+ *
+ * Both shapes below were found verbatim inside a generated index.html: the model finished the
+ * HTML, forgot the closing [/TOOL], and went straight on to its next call. The strict matcher
+ * ran lazily to the first [/TOOL] *anywhere below*, so those calls became file content.
+ */
+describe("a following tool call must not leak into the file body", () => {
+  it("stops the body at the next call when the block was left open", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=index.html]\n" +
+      HTML +
+      "\n[TOOL:todo action=update id=2 status=in_progress]\nappend";
+
+    const { calls } = extract(agent, response);
+
+    const write = calls.find((c) => c.input["action"] === "write");
+    expect(write).toBeDefined();
+    expect(write!.input["content"]).toBe(HTML);
+    expect(String(write!.input["content"])).not.toContain("[TOOL:todo");
+    expect(String(write!.input["content"])).not.toContain("append");
+  });
+
+  it("stops the body even when a [/TOOL] follows further down", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=index.html]\n" +
+      HTML +
+      "\n[TOOL:todo action=update id=1 status=done]\n[/TOOL]";
+
+    const { calls } = extract(agent, response);
+
+    const write = calls.find((c) => c.input["action"] === "write");
+    expect(write!.input["content"]).toBe(HTML);
+    expect(String(write!.input["content"])).not.toContain("[TOOL:todo");
+  });
+
+  it("handles several calls crammed onto one line after the body", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=index.html]\n" +
+      HTML +
+      '\n[TOOL:todo action=update id=1 status=done] [TOOL:todo action=create title="Widgets" priority="medium"]';
+
+    const { calls } = extract(agent, response);
+
+    const write = calls.find((c) => c.input["action"] === "write");
+    expect(write!.input["content"]).toBe(HTML);
+    expect(String(write!.input["content"])).not.toContain("[TOOL:todo");
+  });
+
+  it("still parses the trailing calls as their own calls", () => {
+    const agent = createAgentForParserTests();
+    const response =
+      "[TOOL:filesystem action=write path=index.html]\n" +
+      HTML +
+      "\n[TOOL:todo action=update id=2 status=in_progress]";
+
+    const { calls } = extract(agent, response);
+
+    // The write is not the only thing recovered - the todo call survives as a real call.
+    expect(calls.some((c) => c.toolName === "todo" && c.input["action"] === "update")).toBe(true);
+  });
+
+  it("keeps a properly closed block intact", () => {
+    const agent = createAgentForParserTests();
+    const response = "[TOOL:filesystem action=write path=index.html]\n" + HTML + "\n[/TOOL]";
+
+    const { calls } = extract(agent, response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.input["content"]).toBe(HTML);
+  });
+});

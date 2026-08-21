@@ -2778,7 +2778,21 @@ export class Agent {
     let markerCount = 0;
     // Header: [TOOL:name <key=value pairs>] on its own line (no ( { in the header),
     // then a newline, lazily up to the first [/TOOL] terminator.
-    const blockRe = /\[TOOL:([A-Za-z_][A-Za-z0-9_\-]*)([^\]\n(){}]*)\]\r?\n([\s\S]*?)\r?\n?\[\/TOOL\]/g;
+    // The body may not contain another `[TOOL:` opener.
+    //
+    // Without that guard the lazy match ran to the first `[/TOOL]` ANYWHERE below, so when a
+    // model forgot to close its write block and went straight on to its next call, that call
+    // was captured as file content:
+    //
+    //   [TOOL:filesystem action=write path=index.html]
+    //   <html>…</html>
+    //   [TOOL:todo action=update id=1 status=done]      <-- ended up inside index.html
+    //   [/TOOL]
+    //
+    // A body that trips this lookahead makes the strict match fail at that position, and the
+    // tolerant pass below picks the call up instead - it ends the body at the nested marker,
+    // which is exactly where the file content ends.
+    const blockRe = /\[TOOL:([A-Za-z_][A-Za-z0-9_\-]*)([^\]\n(){}]*)\]\r?\n((?:(?!\[TOOL:)[\s\S])*?)\r?\n?\[\/TOOL\]/g;
     const matchedBlocks: string[] = [];
     let m: RegExpExecArray | null;
     while ((m = blockRe.exec(response)) !== null) {

@@ -543,3 +543,49 @@ HAS <style>: true · HAS closing </html>: true
 ### Wichtig für den Betrieb
 
 `packages/*/package.json` zeigen mit `exports.import` auf `./dist/index.js`. `tsx watch apps/server/src/index.ts` kompiliert also **nur** `apps/server/src` — Änderungen an den Paketen wirken erst nach einem Paket-Build **und einem Server-Neustart**.
+
+---
+
+## 16. Nachtrag: nachfolgende Tool-Calls landeten in der Datei
+
+**Symptom:** Die Datei wird geschrieben, enthält aber am Ende den nächsten Tool-Aufruf des Modells:
+
+```
+[TOOL:todo action=update id=2 status=in_progress]
+append
+```
+
+bzw.
+
+```
+[TOOL:todo action=update id=1 status=done] [TOOL:todo action=create title="…" priority="medium"]
+```
+
+### Ursache: der strikte Heredoc-Matcher stoppt nur an `[/TOOL]`
+
+`blockRe` griff lazy bis zum ersten `[/TOOL]` **irgendwo weiter unten**. Vergisst das Modell den Abschluss seines Write-Blocks und macht mit dem nächsten Aufruf weiter, wird dieser Aufruf zum Dateiinhalt:
+
+```
+[TOOL:filesystem action=write path=index.html]
+<html>…</html>
+[TOOL:todo action=update id=1 status=done]      ← landete in index.html
+[/TOOL]
+```
+
+Der Body darf jetzt keinen weiteren `[TOOL:`-Öffner enthalten (negatives Lookahead). Trifft er auf einen, scheitert der strikte Treffer an dieser Stelle und der tolerante Durchgang aus Abschnitt 15 übernimmt — der beendet den Body genau am verschachtelten Marker, also dort, wo der Dateiinhalt endet. Die nachfolgenden Aufrufe werden anschließend regulär als eigene Calls geparst.
+
+### Zweite Verteidigungslinie: der Sanitizer erkannte die Block-Form nicht
+
+`LEAKED_CALL_CONTINUATION` prüfte nur auf die JSON-Form (`name(` oder `name{`). Ein geleakter Block-Form-Aufruf (`todo action=update id=1`) hat aber keine Klammer und wurde deshalb als Prosa durchgewinkt. Das Muster erkennt jetzt beide Formen — Tool-Name gefolgt von `(`/`{` **oder** von `key=`. Reiner Fließtext wie „Benutze [TOOL:filesystem] um zu schreiben" bleibt weiterhin unangetastet, weil dort direkt die schließende Klammer folgt und kein Argument.
+
+### Verifikation
+
+Alle drei gemeldeten Formen durch den vollständigen CodingAgent:
+
+```
+todo update + append             | 275 Bytes | ohne Marker: true | endet mit </html>: true
+two todos on one line            | 275 Bytes | ohne Marker: true | endet mit </html>: true
+left open, [/TOOL] further down  | 275 Bytes | ohne Marker: true | endet mit </html>: true
+```
+
+5 weitere Regressionstests in [hybrid-heredoc-parsing.test.ts](packages/agent/test/hybrid-heredoc-parsing.test.ts) (inkl. Nachweis, dass die abgeschnittenen Aufrufe als eigene Calls erhalten bleiben) und 3 in [content-sanitizer.test.ts](packages/tools/test/content-sanitizer.test.ts).

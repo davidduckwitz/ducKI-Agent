@@ -25,8 +25,15 @@ export const CONTENT_STOP_MARKERS = [
 /** Only wrapper punctuation - what a spilled terminator leaves behind it. */
 const WRAPPER_JUNK_ONLY = /^[\s"'`,;:)\]}]*$/;
 
-/** A leaked tool CALL continues with a tool name followed by its argument opener. */
-const LEAKED_CALL_CONTINUATION = /^\s*[A-Za-z_][\w-]*\s*[({]/;
+/**
+ * A leaked tool CALL continues with a tool name followed by its arguments - either the JSON
+ * form's opening bracket (`filesystem({…`) or the block form's key=value pairs
+ * (`todo action=update id=1`). Both shapes were observed leaking into written files.
+ *
+ * Prose that merely mentions the syntax does not look like this: "[TOOL:filesystem] um zu
+ * schreiben" has the closing bracket straight after the name, never an argument.
+ */
+const LEAKED_CALL_CONTINUATION = /^\s*[A-Za-z_][\w-]*(?:\s*[({]|\s+[A-Za-z_][\w-]*\s*=)/;
 
 /**
  * Whether the text following a marker means the marker is a leaked terminator rather than
