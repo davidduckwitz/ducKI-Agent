@@ -57,12 +57,17 @@
   .found-banner { padding: 12px; border-radius: 10px; background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.35); font-size: 12px; }
   .found-banner .mnemonic { font-family: "SFMono-Regular", Consolas, monospace; word-break: break-word; margin-top: 4px; font-weight: 700; }
 
+  /* Fixed height (not max-height) + its own scrollbar: the poll refresh re-renders this
+     panel's contents every few seconds, so a size that reacts to content (found banner
+     appearing, search results growing/shrinking) makes the whole card jump around. A fixed
+     box absorbs all of that internally instead. */
   .detail-panel { margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border); display: none; }
-  .detail-panel.open { display: block; }
-  .attempts-list { max-height: 200px; overflow-y: auto; font-size: 11px; font-family: "SFMono-Regular", Consolas, monospace; background: var(--surface-2); border-radius: 8px; padding: 8px; }
+  .detail-panel.open { display: block; height: 420px; overflow-y: auto; }
+  .attempts-list { height: 160px; overflow-y: auto; font-size: 11px; font-family: "SFMono-Regular", Consolas, monospace; background: var(--surface-2); border-radius: 8px; padding: 8px; }
   .attempts-list div { padding: 2px 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .inline-form { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
   .inline-form input { flex: 1; min-width: 160px; min-height: 34px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 12px; }
+  .search-results .attempts-list { height: 140px; }
 
   .empty { padding: 40px 20px; text-align: center; color: var(--muted); }
   .toast-container { position: fixed; right: 20px; bottom: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
