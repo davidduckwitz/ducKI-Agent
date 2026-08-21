@@ -32,12 +32,27 @@ export class AnthropicAdapter extends BaseAdapter {
     });
   }
 
+  /**
+   * Output-token ceiling per model family. This CLAMPS whatever the caller asked for, so a value
+   * that is too low silently truncates long output - and the previous numbers (4096 for
+   * opus/sonnet, 1024 for haiku) were written for the Claude 3.5 generation and had not moved
+   * since. They cut a current model to a fraction of its real capability, which is exactly how a
+   * file write arrives half-finished.
+   *
+   * Raised only for the generations whose 128K output limit is documented (Fable/Mythos 5,
+   * Opus 5 / 4.8 / 4.7 / 4.6, Sonnet 5 / 4.6). Anything not positively identified keeps the old
+   * conservative ceiling rather than being given a number nobody verified.
+   */
   protected override getMaxOutputTokens(): number {
-    // Claude 3.5 Sonnet, Opus, Haiku variants
-    if (this.model.includes("opus")) return 4096;
-    if (this.model.includes("sonnet")) return 4096;
-    if (this.model.includes("haiku")) return 1024;
-    return 4096; // Default
+    const model = this.model.toLowerCase();
+
+    // 128K-output generation. Matched on the version marker so a 3.x model never falls in here.
+    const modernGeneration = /(fable|mythos)-5|opus-(5|4-[678])|sonnet-(5|4-6)/.test(model);
+    if (modernGeneration) return 128000;
+
+    if (model.includes("opus") || model.includes("sonnet")) return 4096;
+    if (model.includes("haiku")) return 1024;
+    return 4096;
   }
 
   protected override getModelFamily(): string {

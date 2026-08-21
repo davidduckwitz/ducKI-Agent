@@ -589,3 +589,53 @@ left open, [/TOOL] further down  | 275 Bytes | ohne Marker: true | endet mit </h
 ```
 
 5 weitere Regressionstests in [hybrid-heredoc-parsing.test.ts](packages/agent/test/hybrid-heredoc-parsing.test.ts) (inkl. Nachweis, dass die abgeschnittenen Aufrufe als eigene Calls erhalten bleiben) und 3 in [content-sanitizer.test.ts](packages/tools/test/content-sanitizer.test.ts).
+
+---
+
+## 17. Große Dateien: Mechanik sauber, Abbruch war still
+
+Analyse zur Frage, ob große Dateien vollständig geschrieben werden.
+
+### Die Mechanik trägt
+
+Gemessen mit realistischem HTML/JS (Anführungszeichen, geschweifte Klammern, Template-Literale):
+
+| Größe | JSON-Form | Heredoc | Hybrid | auf Platte |
+|---|---|---|---|---|
+| 1 KB | exakt | exakt | exakt | identisch |
+| 10 KB | exakt | exakt | exakt | identisch |
+| 50 KB | exakt | exakt | exakt | identisch |
+| 200 KB | exakt | exakt | exakt | identisch |
+
+Auch gestückelt: 120 KB in 7 Teilen über `write` + `append` → byte-identisch. Im Schreibpfad gibt es **keine** Größenbegrenzung; die einzigen Caps betreffen `read` (256 KB) und Tool-*Ergebnisse*.
+
+### Der eigentliche Engpass war die Ausgabegrenze
+
+Der Hauptgenerierungsaufruf war hart auf `maxTokens: 8192` gesetzt. Reicht das nicht, bricht die Antwort mitten im Inhalt ab — und der JSON-Reparaturlauf schließt den hängenden String und liefert das, was angekommen ist:
+
+```
+Antwort abgeschnitten bei 25%  → contentLen 7523 von 30064   → wurde geschrieben
+Antwort abgeschnitten bei 50%  → contentLen 15112 von 30064  → wurde geschrieben
+Antwort abgeschnitten bei 90%  → contentLen 27075 von 30064  → wurde geschrieben
+```
+
+Bei 90 % entsteht eine Datei, die fertig **aussieht** und es nicht ist — mit `success: true`. Weder Modell noch Nutzer können das erkennen.
+
+### Behebung
+
+| Änderung | Wirkung |
+|---|---|
+| Abgeschnittene Antworten dürfen nichts persistieren | Meldet der Provider `finish_reason: "length"`, werden `write`/`append` aus dieser Antwort abgewiesen — mit der Anweisung, in Teilen zu schreiben. Lesen, Suchen, Editieren bleiben erlaubt; nur das Festschreiben einer unvollständigen Nutzlast nicht. |
+| `maxTokens` konfigurierbar, Default 8192 → **16384** | `AGENT_MAX_OUTPUT_TOKENS` bzw. die Settings-Seite. Der OpenAI-kompatible Pfad reicht den Wert direkt durch. |
+| Veraltete Claude-Ausgabegrenzen im Adapter korrigiert | `getMaxOutputTokens()` **klemmt** den angeforderten Wert ab und gab für Opus/Sonnet 4096, für Haiku 1024 zurück — Werte aus der Claude-3.5-Zeit. Für die Generationen mit dokumentierten 128K Ausgabe (Fable/Mythos 5, Opus 5/4.8/4.7/4.6, Sonnet 5/4.6) gilt jetzt 128000; alles nicht sicher Identifizierte behält die alte konservative Grenze, statt eine ungeprüfte Zahl zu bekommen. |
+
+### Verifikation
+
+Abgeschnittene Antwort (90 %) durch den vollständigen CodingAgent, danach die geforderte Wiederholung in zwei Teilen:
+
+```
+Vollstaendiges Dokument: 30104 Zeichen
+Abgeschnittene Antwort haette geliefert: ~27093 Zeichen
+Tatsaechlich geschrieben: 30104
+KEINE stille Kuerzung: true · Vollstaendig wiederhergestellt: true
+```

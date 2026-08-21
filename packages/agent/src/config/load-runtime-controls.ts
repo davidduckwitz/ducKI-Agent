@@ -11,6 +11,7 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
   return {
     // Existing settings (from Agent.ts pattern)
     maxIterations: parseInt(process.env["AGENT_MAX_ITERATIONS"] ?? "50"),
+    maxOutputTokens: parseInt(process.env["AGENT_MAX_OUTPUT_TOKENS"] ?? "16384"),
     timeoutMs: parseInt(process.env["AGENT_TIMEOUT_MS"] ?? "600000"),
     shellToolTimeoutMs: parseInt(process.env["AGENT_SHELL_TIMEOUT_MS"] ?? "30000"),
     httpToolTimeoutMs: parseInt(process.env["AGENT_HTTP_TIMEOUT_MS"] ?? "30000"),

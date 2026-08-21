@@ -91,6 +91,20 @@ export function isReadOnlyToolCall(toolName: string, input: Record<string, unkno
   return allowed.has(String(input["action"] ?? "").toLowerCase());
 }
 
+/**
+ * True for a call that would persist a payload the model authored - i.e. one where an
+ * incomplete payload means an incomplete artefact on disk.
+ *
+ * Deliberately narrow: only the filesystem writes. A truncated `shell` command or `grep` is
+ * either syntactically broken (and fails loudly) or harmless, whereas a truncated file body
+ * lands as a plausible-looking file nobody can tell is cut off.
+ */
+export function callWouldPersistContent(toolName: string, input: Record<string, unknown>): boolean {
+  if (toolName !== "filesystem") return false;
+  const action = String(input["action"] ?? "").toLowerCase();
+  return action === "write" || action === "append";
+}
+
 export function buildToolResultDedupeKey(
   toolName: string,
   input: Record<string, unknown>
@@ -3737,6 +3751,17 @@ export class Agent {
       // a corrected enum), which leaves no budget for the targeted LLM correction when the
       // mechanical guess was not the right one. Self-repair is the main recovery path now, so
       // it gets one real retry. Still bounded, and still capped at 3 by the settings parser.
+      /**
+       * Output-token ceiling for the main generation call.
+       *
+       * 8192 was the hard-coded value, and it is what caps how much file a model can emit in one
+       * call - a moderately sized HTML page does not fit, so the write arrives truncated. Current
+       * Claude models accept up to 128K here and the OpenAI-compatible path passes the number
+       * straight through, so 8192 was leaving most of the budget unused. Raised to a value that
+       * fits a real file while staying well inside what local runtimes handle; AGENT_MAX_OUTPUT_TOKENS
+       * (or the settings page) moves it either way.
+       */
+      maxOutputTokens: 16384,
       selfRepairMaxAttempts: 2,
       enableAutoSkillSelection: this.enableAutoSkillSelection,
       autoSkillScoreThreshold: this.autoSkillScoreThreshold,
@@ -3837,6 +3862,7 @@ export class Agent {
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
         selfRepairEnabled: this.parseBooleanSetting(get("AGENT_SELF_REPAIR"), defaults.selfRepairEnabled),
+        maxOutputTokens: this.parseNumberSetting(get("AGENT_MAX_OUTPUT_TOKENS"), defaults.maxOutputTokens, 512, 128000),
         selfRepairMaxAttempts: this.parseNumberSetting(get("AGENT_SELF_REPAIR_MAX_ATTEMPTS"), defaults.selfRepairMaxAttempts, 0, 3),
         enableAutoSkillSelection: this.parseBooleanSetting(get("AGENT_AUTO_SKILL_SELECTION"), defaults.enableAutoSkillSelection),
         autoSkillScoreThreshold: this.parseFloatSetting(get("AGENT_AUTO_SKILL_THRESHOLD"), defaults.autoSkillScoreThreshold, 0, 1),
@@ -4375,7 +4401,9 @@ export class Agent {
     emit: (type: AgentRunEventType, message: string, data?: Record<string, unknown>) => void,
     iterations: number,
     repeatedToolCalls: Map<string, number>,
-    nativeToolCalls?: ToolCall[]
+    nativeToolCalls?: ToolCall[],
+    /** True when the model hit its output cap - see the write guard below. */
+    responseWasTruncated = false
   ): Promise<{ resultMap: Map<string, ToolResult>; cleanedResponse: string; browserToolsCount: number; journalEntries: RunJournalEntry[] }> {
     this.logger.info("[TOOL-CALLS] Starting extraction and execution", {
       responseLength: response.length,
@@ -4597,6 +4625,37 @@ export class Agent {
             failureCount: circuitStatus.failureCount,
           });
           resultMap.set(callId, { success: false, data: null, error: skipReason });
+          continue;
+        }
+
+        // A write extracted from a CUT-OFF response carries a cut-off file.
+        //
+        // When the model exhausts its output budget mid-content, the JSON repair pass closes the
+        // dangling string and hands over whatever had arrived. Measured on a 30 KB document:
+        // a response cut at 90% yielded 27 075 of 30 064 characters - a file that looks finished,
+        // is not, and was written with success:true. The model has no way to notice, because from
+        // its side the call succeeded.
+        //
+        // `finish_reason: "length"` is the provider telling us exactly this happened, so a
+        // content-bearing call from such a response is refused rather than half-applied. Reads,
+        // greps and every other action still run: only the ones that would persist a truncated
+        // payload are held back.
+        if (responseWasTruncated && callWouldPersistContent(call.toolName, call.input)) {
+          const truncationError =
+            "Refusing to write from a truncated response. The model hit its output limit partway " +
+            "through this call, so the content is incomplete - writing it would leave a file that " +
+            "looks finished but is cut off. Write the file in parts instead: one write with the " +
+            "first section, then append calls for the rest, each small enough to finish inside one " +
+            "response.";
+          this.logger.warn("[TOOL-CALLS] Blocked a content write from a truncated response", {
+            callId,
+            toolName: call.toolName,
+          });
+          emit("guardrail", "Abgeschnittene Antwort: Schreibvorgang verhindert", {
+            toolName: call.toolName,
+            path: call.input["path"],
+          });
+          resultMap.set(callId, { success: false, data: null, error: truncationError });
           continue;
         }
 
@@ -6353,7 +6412,7 @@ export class Agent {
         // text `[TOOL:...]` protocol described in the system prompt.
         const nativeToolsEnabled = this.provider.supportsNativeTools?.() ?? false;
         const mainGenOptions: { maxTokens: number; tools?: ReturnType<Executor["getToolDefinitions"]>; signal?: AbortSignal } = {
-          maxTokens: 8192,
+          maxTokens: adjustedControls.maxOutputTokens,
           signal: this.abortController?.signal,
         };
         if (nativeToolsEnabled) {
@@ -6681,7 +6740,8 @@ export class Agent {
         emit,
         iterations,
         repeatedToolCalls,
-        currentNativeToolCalls
+        currentNativeToolCalls,
+        currentFinishReason === "length"
       );
 
       if (runJournalEnabled && journalEntries.length > 0) {

@@ -169,6 +169,8 @@ export interface RunJournalEntry {
 export interface AgentRuntimeControls {
   // Execution
   maxIterations: number;
+  /** Output-token ceiling for the main generation call (AGENT_MAX_OUTPUT_TOKENS). */
+  maxOutputTokens: number;
   timeoutMs: number;
   shellToolTimeoutMs: number;
   httpToolTimeoutMs: number;

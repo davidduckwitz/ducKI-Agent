@@ -241,3 +241,27 @@ describe("self-repair must not destroy the file body", () => {
     expect((agent as any).sanitizeRepairedInput("shell", { command: "npm tset" }, repaired)).toBe(repaired);
   });
 });
+
+/**
+ * A truncated response must not produce a truncated file.
+ *
+ * When the model exhausts its output budget mid-content, the JSON repair pass closes the
+ * dangling string and hands over whatever arrived. Measured on a 30 KB document: a response cut
+ * at 90% yielded 27075 of 30064 characters - written with success:true. The provider tells us
+ * this happened via finish_reason "length".
+ */
+describe("callWouldPersistContent", () => {
+  it("covers exactly the actions that persist a model-authored payload", async () => {
+    const { callWouldPersistContent } = await import("../src/agent.ts");
+
+    expect(callWouldPersistContent("filesystem", { action: "write" })).toBe(true);
+    expect(callWouldPersistContent("filesystem", { action: "append" })).toBe(true);
+
+    // Reads and searches stay available - a truncated run still has to be able to look around.
+    for (const action of ["read", "list", "grep", "glob", "edit", "delete", "outline"]) {
+      expect(callWouldPersistContent("filesystem", { action }), action).toBe(false);
+    }
+    expect(callWouldPersistContent("shell", { command: "npm test" })).toBe(false);
+    expect(callWouldPersistContent("todo", { action: "write" })).toBe(false);
+  });
+});
