@@ -85,4 +85,63 @@ describe("filesystem tool - directory vs file handling", () => {
     const recursive = await run({ action: "delete", path: join(root, "sub"), recursive: true });
     expect(recursive.success).toBe(true);
   });
+
+  /**
+   * Regression: an empty path used to join onto the base as a no-op, so every action
+   * silently operated on the BASE ITSELF (basePath, or the shared workspace root) instead
+   * of failing with a clear message. A write there crashed with a cryptic
+   * "EPERM: operation not permitted, copyfile <base> -> <base>.bak" while trying to
+   * atomic-write over the whole directory, instead of the real problem: no path was given.
+   */
+  it("an empty path is rejected instead of resolving to the base directory", async () => {
+    const result = await run({ action: "write", path: "", content: "oops", basePath: root });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/path is required/i);
+  });
+});
+
+/**
+ * Regression: content taken verbatim from a heredoc write block (or a native tool_call whose
+ * arguments never passed through a hand-written JSON string) is marked __contentTrusted so the
+ * caller can skip the leak-stripping heuristics. The tool's own \n\t\r de-escape used to run
+ * UNCONDITIONALLY regardless of that flag, corrupting real code that legitimately contains a
+ * literal `\n`/`\t`/`\r` two-character sequence (a JS string, a regex, documentation about
+ * escape sequences) by turning it into an actual control character.
+ */
+describe("filesystem tool - __contentTrusted content is never re-escaped", () => {
+  let root: string;
+  const run = (input: Record<string, unknown>) =>
+    filesystemTool.execute({ safeMode: false, ...input });
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ducki-fs-trusted-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("leaves literal \\n sequences alone for trusted content", async () => {
+    const literal = 'console.log("line one\\nline two");';
+    const path = join(root, "script.js");
+    const result = await run({ action: "write", path, content: literal, __contentTrusted: true });
+
+    expect(result.success).toBe(true);
+    const read = await run({ action: "read", path, raw: true });
+    expect(read.data).toBe(literal);
+  });
+
+  it("still de-escapes \\n for untrusted (JSON-sourced) content", async () => {
+    const path = join(root, "note.txt");
+    const result = await run({ action: "write", path, content: "line one\\nline two" });
+
+    expect(result.success).toBe(true);
+    const read = await run({ action: "read", path, raw: true });
+    expect(read.data).toBe("line one\nline two");
+  });
+
+  it("does not leak the internal __contentTrusted flag into the result", async () => {
+    const path = join(root, "a.txt");
+    const result = await run({ action: "write", path, content: "hi", __contentTrusted: true });
+    expect(JSON.stringify(result)).not.toContain("__contentTrusted");
+  });
 });
