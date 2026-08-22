@@ -84,6 +84,70 @@ describe("findLatestChecklist", () => {
   });
 });
 
+/** Shape CodingAgent's TodoList actually emits (coding-agent.ts's onChange callback). */
+const todoDecisionEvent = (statuses: Array<"pending" | "in_progress" | "done" | "blocked">): RenderedChatMessage =>
+  event("decision", {
+    todo_items: statuses.map((status, index) => ({ id: index + 1, title: `Schritt ${index + 1}`, status })),
+    open: statuses.filter((s) => s === "pending" || s === "in_progress").length,
+  });
+
+describe("findLatestChecklist - CodingAgent TodoList fallback", () => {
+  it("falls back to the todo_items decision event when no checklist event exists", () => {
+    // The bug this fixes: a plain CodingAgent run never emits an Agent-level "checklist" event,
+    // so the panel used to fall back to null and show every step as pending, looking like the
+    // plan had reset even though the agent's own todo checklist had already progressed.
+    const messages = [
+      event("plan", { goal: "g" }),
+      todoDecisionEvent(["done", "in_progress", "pending", "pending"]),
+    ];
+    const snapshot = findLatestChecklist(messages);
+    expect(snapshot?.doneCount).toBe(1);
+    expect(snapshot?.statusByIndex.get(0)).toBe("done");
+    expect(resolveStepStatus(snapshot, steps[0]!, 0)).toBe("done");
+  });
+
+  it("prefers a real checklist event over the todo fallback when both exist", () => {
+    // A "checklist" event (the Agent-level session checklist) is the more authoritative source
+    // when it's actually present - the fallback must never override it.
+    const messages = [
+      todoDecisionEvent(["pending", "pending", "pending", "pending"]),
+      checklistEvent(["done", "done", "pending", "pending"]),
+    ];
+    expect(findLatestChecklist(messages)?.doneCount).toBe(2);
+  });
+
+  it("takes the newest todo_items event, not an accumulation", () => {
+    const messages = [
+      todoDecisionEvent(["pending", "pending", "pending", "pending"]),
+      todoDecisionEvent(["done", "pending", "pending", "pending"]),
+      todoDecisionEvent(["done", "done", "pending", "pending"]),
+    ];
+    expect(findLatestChecklist(messages)?.doneCount).toBe(2);
+  });
+
+  it("maps 'blocked' to 'failed' and keeps 'in_progress' out of CLOSED_STATUSES", () => {
+    const snapshot = findLatestChecklist([todoDecisionEvent(["done", "blocked", "in_progress", "pending"])]);
+    expect(resolveStepStatus(snapshot, steps[1]!, 1)).toBe("failed");
+    // "in_progress" (index 2) is the first non-closed step - "blocked" (index 1) is terminal.
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(2);
+  });
+
+  it("falls back to title matching when todo ids drift from plan step order", () => {
+    const messages = [
+      event("decision", {
+        todo_items: [{ id: 7, title: "Schritt 3", status: "done" }],
+      }),
+    ];
+    const snapshot = findLatestChecklist(messages);
+    expect(resolveStepStatus(snapshot, { title: "  schritt 3  " }, 99)).toBe("done");
+  });
+
+  it("still returns null when neither a checklist nor a todo_items event exists", () => {
+    const messages = [event("plan", { goal: "g" }), event("tool_call"), event("tool_result")];
+    expect(findLatestChecklist(messages)).toBeNull();
+  });
+});
+
 describe("resolveStepStatus", () => {
   it("matches by step index", () => {
     const snapshot = findLatestChecklist([checklistEvent(["done", "failed", "pending", "pending"])]);

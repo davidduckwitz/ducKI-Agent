@@ -88,7 +88,10 @@ export class ChatCleanupService {
       return { conversationsProcessed: 0, messagesDeleted: 0, conversationsArchived: 0 };
     }
 
-    const conversations = await this.db.listConversations();
+    // Cleanup must reach EVERY conversation, including CodingAgent-originated ones - the chat
+    // overview hides those by default, but that is a display filter, not an exemption from
+    // retention/archival policy.
+    const conversations = await this.db.listConversations(undefined, true);
     let messagesDeleted = 0;
     let conversationsArchived = 0;
 

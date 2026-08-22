@@ -57,6 +57,66 @@ export function findLatestChecklist(messages: RenderedChatMessage[]): ChecklistS
       total: Number.isFinite(total) ? total : items.length,
     };
   }
+  // No "checklist" event this run - the common case for a plain CodingAgent run, which never
+  // produces one (that event belongs to the generic Agent's own internal session checklist, a
+  // separate opt-in subsystem CodingAgent doesn't enable for its own per-attempt calls). Fall
+  // back to CodingAgent's OWN live per-step source instead of giving up: see
+  // findLatestTodoSnapshot below. Priority is deliberate - a real "checklist" event, when
+  // present, is left completely untouched by this fallback.
+  return findLatestTodoSnapshot(messages);
+}
+
+/** Maps CodingAgent's TodoList status vocabulary onto the one this module (and the panel) was
+ *  originally built against (see the "checklist" event parsing above). "in_progress" has no
+ *  distinct visual here - the panel's spinner comes from firstOpenStepIndex, not from the status
+ *  string - so it only needs to stay OUT of CLOSED_STATUSES; "blocked" reads as "failed" since
+ *  both mean "the agent stopped making progress on this step without help". */
+const TODO_STATUS_MAP: Record<string, string> = {
+  pending: "pending",
+  in_progress: "pending",
+  done: "done",
+  blocked: "failed",
+};
+
+/**
+ * Fallback source of live per-step status for a run that produced no Agent-level "checklist"
+ * event: CodingAgent's own TodoList (packages/agent/src/coding/todo-tool.ts), seeded from the
+ * plan's step titles and updated live as the model calls the `todo` tool. Every change emits
+ * `type: "decision"` with `data.todo_items` - a different shape from the "checklist" event this
+ * file originally read, so it gets its own reader rather than being force-fit into the one above.
+ *
+ * Without this, the coding plan panel had NO live source for a plain CodingAgent run: every step
+ * fell back to "pending" regardless of how far the agent's own checklist had actually progressed,
+ * looking like the plan had reset even though the run continued correctly underneath.
+ */
+function findLatestTodoSnapshot(messages: RenderedChatMessage[]): ChecklistSnapshot | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!message || message.eventType !== "decision" || !message.eventData) continue;
+
+    const items = message.eventData["todo_items"];
+    if (!Array.isArray(items)) continue;
+
+    const statusByIndex = new Map<number, string>();
+    const statusByTitle = new Map<string, string>();
+    let doneCount = 0;
+    for (const raw of items) {
+      const item = (raw ?? {}) as { id?: number; title?: string; status?: string };
+      const mapped = TODO_STATUS_MAP[String(item.status ?? "pending")] ?? "pending";
+      if (mapped === "done") doneCount++;
+      // TodoList ids are assigned in the SAME order the plan's steps were originally seeded
+      // (CodingAgent.run(): this.todos.replace(plan.steps.map(...))), so id-1 is a reasonable
+      // positional guess - but the title is the more reliable link if the model later rewrote
+      // the checklist (todo action:write again) with a different order, added, or removed steps.
+      if (typeof item.id === "number") statusByIndex.set(item.id - 1, mapped);
+      if (typeof item.title === "string" && item.title.trim()) {
+        statusByTitle.set(item.title.trim().toLowerCase(), mapped);
+      }
+    }
+    if (statusByIndex.size === 0 && statusByTitle.size === 0) continue;
+
+    return { statusByIndex, statusByTitle, doneCount, total: items.length };
+  }
   return null;
 }
 

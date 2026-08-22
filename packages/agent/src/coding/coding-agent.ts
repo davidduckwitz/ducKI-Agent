@@ -22,7 +22,7 @@ import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
 import { createScopedShellTool } from "./scoped-shell-tool.js";
 import { createScopedDiagnosticsTool, resetDiagnosticsFor } from "./scoped-diagnostics-tool.js";
 import { withAutoDiagnostics } from "./auto-diagnostics.js";
-import { TodoList, createTodoTool } from "./todo-tool.js";
+import { TodoList, createTodoTool, type TodoItem, type TodoStatus } from "./todo-tool.js";
 import { createCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
 import { withPerEditCheckpoints } from "./checkpoint-on-write.js";
 import { createExploreTool } from "./explore-tool.js";
@@ -319,6 +319,29 @@ export class CodingAgent {
   /** Read by withPerEditCheckpoints' label closure - kept as instance state because tools are
    *  registered ONCE in the constructor, before any attempt number exists yet. */
   private currentAttempt = 0;
+  /** Kept for CodingAgent's OWN event persistence (see emit()/emitPlanEvent()) - separate from
+   *  the `db` handed to the internal `Agent`, which persists ITS OWN events but knows nothing
+   *  about CodingAgent's plan/phase/decision events (emitEvent() only ever broadcast them over
+   *  the eventEmitter, with no DB row - see emit()'s doc comment for why that mattered). */
+  private readonly db: DatabaseService;
+  /** conversationId of the run currently in progress - set at the top of run(), read by
+   *  emit()/emitPlanEvent() so they don't need conversationId threaded through every call site
+   *  (mirrors currentAttempt/currentPhase above). Undefined before the first run() call. */
+  private currentConversationId: number | undefined;
+  /** Serializes this instance's own event-persistence writes so row order in the DB matches
+   *  emission order, without making any emit() call itself await the write - same pattern as
+   *  Agent.run()'s internal eventPersistQueue (agent.ts), applied here because CodingAgent now
+   *  persists its OWN events (plan/decision/phase) independently of that one. */
+  private eventPersistQueue: Promise<void> = Promise.resolve();
+  /** The plan currently backing this run - mutable (unlike a `const plan` in run()) so
+   *  syncPlanFromTodos can update it in place when the model rewrites the checklist. Undefined
+   *  before run() computes/rehydrates a plan. */
+  private currentPlan: Plan | undefined;
+  /** True while CodingAgent itself is seeding/reseeding the checklist (initial seed from the
+   *  plan, or rehydration on resume) rather than the MODEL deciding to rewrite it. Those internal
+   *  replace() calls would otherwise trigger syncPlanFromTodos right after the plan they were
+   *  seeded FROM was already emitted, producing an immediate, pointless duplicate "plan" event. */
+  private suppressPlanSync = false;
 
   constructor(
     provider: LLMProvider,
@@ -329,17 +352,23 @@ export class CodingAgent {
     this.defaultMaxAttempts = Math.max(1, options.maxAttempts ?? 4);
     this.sandboxRoot = options.sandboxRoot;
     this.eventEmitter = eventEmitter;
+    this.db = db;
     this.logger = getRootLogger().child(`CodingAgent:${options.name ?? "CodingAgent"}`);
     this.planner = new Planner(provider, this.logger);
 
     // Every checklist change is pushed straight to the UI, so what the user watches is the same
     // state the agent is steering by - not a second, prose-derived approximation of it.
-    this.todos = new TodoList((items) => {
-      this.emit("decision", "Checkliste aktualisiert", {
-        todo_items: items,
-        open: items.filter((item) => item.status === "pending" || item.status === "in_progress").length,
-      });
-    });
+    this.todos = new TodoList(
+      (items) => {
+        this.emit("decision", "Checkliste aktualisiert", {
+          todo_items: items,
+          open: items.filter((item) => item.status === "pending" || item.status === "in_progress").length,
+        });
+      },
+      // Structural change (todo:write) - mirror it back into the Plan the UI's Plan tab
+      // actually renders, see syncPlanFromTodos for why this exists.
+      (items) => this.syncPlanFromTodos(items)
+    );
 
     const basePrompt = options.systemPrompt ?? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}`;
 
@@ -600,6 +629,8 @@ export class CodingAgent {
     this.readBeforeEditRefusals = new Map<string, number>();
     this.currentPhase = "unstarted";
     this.phaseLockRefusals = 0;
+    this.currentPlan = undefined;
+    this.suppressPlanSync = false;
     this.todos.reset();
     // The sandbox may have changed between runs (files added or removed outside the agent), and
     // a stale warm compiler would report diagnostics for a file set that no longer exists.
@@ -614,11 +645,20 @@ export class CodingAgent {
     // The callback fires either way - callers use it to register the run so the Stop button
     // can find it, and that is just as necessary for a joined conversation as for a new one.
     const reuseId = opts.conversationId;
-    const conversationId =
-      typeof reuseId === "number" && Number.isFinite(reuseId) && reuseId > 0
-        ? (await this.agent.loadConversation(reuseId), reuseId)
-        : await this.agent.startConversation({ name: `CodingAgent: ${goal.slice(0, 60)}` });
+    const isResuming = typeof reuseId === "number" && Number.isFinite(reuseId) && reuseId > 0;
+    // origin:"coding_agent" only on a genuinely FRESH conversation - resuming an existing one
+    // (isResuming) must never retag it, since that conversation may well be a normal chat the
+    // user started (e.g. Plan execution reusing the chat it was planned in - see plans.ts).
+    // Tags every conversation CodingAgent.run() opens for itself so the chat overview can
+    // exclude it by default (see the conversations.origin schema comment) - it's already
+    // visible in the Coding area/plugin wizard, whichever caller created it.
+    const conversationId = isResuming
+      ? (await this.agent.loadConversation(reuseId), reuseId)
+      : await this.agent.startConversation({ name: `CodingAgent: ${goal.slice(0, 60)}`, origin: "coding_agent" });
     opts.onConversationStarted?.(conversationId);
+    // Everything emit()/emitPlanEvent()/emitPhase() persist from here on targets this run's
+    // conversation - see persistEvent().
+    this.currentConversationId = conversationId;
 
     // End-of-run guard: if a parted write (totalParts/partNumber) was started during this run
     // but not all parts arrived, the run must NOT end silently - the file(s) on disk are
@@ -684,18 +724,45 @@ export class CodingAgent {
       verifyCommand = this.detectDefaultVerifyCommand();
     }
 
+    // Resuming an existing conversation (e.g. after a Stop) without a caller-supplied plan:
+    // try to recover the EXACT plan + checklist state this conversation already had, instead of
+    // planning from scratch and starting the checklist back at step 1. A caller-supplied
+    // existingPlan always wins - it represents a decision made just now (e.g. a user-reviewed
+    // plan from the Plan panel) and must not be second-guessed by older persisted state.
+    const persisted = isResuming && !opts.existingPlan ? await this.loadPersistedState(conversationId) : undefined;
+
     // Real planning subagent: a structured, detailed plan from the Planner instead of letting
     // the model invent one in free text during the PLAN phase (see buildInitialPrompt). A
     // caller-supplied plan (already reviewed/refined by the user, e.g. via the Plan panel) is
     // used as-is - re-deriving it here would throw away exactly the decision the caller made.
     const toolNames = this.agent.executor.listTools().map((tool) => tool.name);
-    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames));
+    const plan = opts.existingPlan ?? persisted?.plan ?? (await this.planner.createPlan(goal, toolNames));
+    this.currentPlan = plan;
     this.emitPlanEvent(plan);
     // Pre-seeds the checklist with the planner's steps so the UI shows real progress from the
     // very first tool call, instead of an empty list until the model gets around to calling
     // todo:write itself. Title-matched merge (see TodoList.replace) keeps these ids stable if
     // the model later calls todo:write again to adjust the plan post-exploration.
-    this.todos.replace(plan.steps.map((step) => ({ title: step.title })));
+    //
+    // A rehydrated checklist (real per-step status, not just titles) is only trusted when the
+    // PLAN it belongs to was also rehydrated - applying old step statuses to a plan that came
+    // from opts.existingPlan or a fresh Planner call would attach stale progress to steps that
+    // may not even correspond to the same work.
+    //
+    // suppressPlanSync: this seed reflects the plan we JUST emitted above, so mirroring it back
+    // via syncPlanFromTodos would only reconstruct an equivalent plan and fire a redundant,
+    // pointless second "plan" event/DB row - only a MODEL-initiated todo:write later in the run
+    // should trigger that.
+    this.suppressPlanSync = true;
+    try {
+      if (plan === persisted?.plan && persisted.todoItems && persisted.todoItems.length > 0) {
+        this.todos.replace(persisted.todoItems);
+      } else {
+        this.todos.replace(plan.steps.map((step) => ({ title: step.title })));
+      }
+    } finally {
+      this.suppressPlanSync = false;
+    }
 
     const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
 
@@ -958,52 +1025,197 @@ export class CodingAgent {
     }
   }
 
-  private emit(type: "iteration" | "decision" | "phase_started" | "phase_completed" | "phase_failed", message: string, data?: Record<string, unknown>): void {
+  /**
+   * Recovers the last plan + checklist state persisted for this conversation (see
+   * persistEvent/emitPlanEvent), so resuming after a Stop continues where the run left off
+   * instead of re-planning and restarting the checklist at step 1.
+   *
+   * Reads the conversation's full message history once, at the top of run() - only relevant
+   * on resume, so this cost is paid once per resumed run, not on every iteration. Scans
+   * newest-first and stops as soon as both pieces are found (or the history is exhausted).
+   * A malformed/foreign event row is skipped rather than aborting the scan - this is a
+   * best-effort recovery, not a hard requirement for the run to proceed.
+   */
+  /** Maps a TodoItem's status vocabulary onto PlanStep's - distinct enums for historical
+   *  reasons (TodoList predates PlanStep having any per-step status at all), kept in sync here
+   *  so a re-synced plan's step.status is at least meaningful rather than always "pending". */
+  private static readonly TODO_TO_PLAN_STATUS: Record<TodoStatus, PlanStep["status"]> = {
+    pending: "pending",
+    in_progress: "running",
+    done: "completed",
+    blocked: "failed",
+  };
+
+  /**
+   * Mirrors a checklist REWRITE (todo:write, i.e. TodoList.replace - see the TodoList
+   * constructor wiring above) back into the Plan object the UI's Plan tab actually renders.
+   *
+   * Without this, the Plan tab and the checklist could silently diverge: the model is
+   * explicitly instructed to call todo:write with a corrected step list once exploration shows
+   * the drafted plan needs to change (see buildInitialPrompt's PLAN phase), but that never
+   * touched `plan.steps` - the ORIGINAL plan stayed frozen in the "plan" event/DB row forever.
+   * A step the model added, renamed, or dropped had no matching title in the old plan, so the
+   * Plan tab either showed stale steps forever or failed to match up statuses for the new ones -
+   * exactly the "plan looks like it reset / forgot to check something off" symptom this fixes.
+   *
+   * Deliberately narrow: only fires on a STRUCTURAL rewrite, never on a plain status tick
+   * (see TodoList's onReplace vs onChange) - a plain todo:update is not a plan change and must
+   * not re-emit/re-persist a "plan" event for every single status flip.
+   */
+  private syncPlanFromTodos(items: TodoItem[]): void {
+    if (this.suppressPlanSync) return;
+    const plan = this.currentPlan;
+    if (!plan) return;
+
+    // Title-matched against the CURRENT plan's steps (same rule TodoList.replace itself uses)
+    // so a step whose title didn't change keeps its full metadata (description, dependsOn,
+    // riskLevel, toolsNeeded) - only genuinely new/renamed titles fall back to a bare step.
+    const byTitle = new Map(plan.steps.map((step) => [step.title.trim().toLowerCase(), step]));
+    const steps: PlanStep[] = items.map((item) => {
+      const existing = byTitle.get(item.title.trim().toLowerCase());
+      const status = CodingAgent.TODO_TO_PLAN_STATUS[item.status] ?? "pending";
+      if (existing) return { ...existing, title: item.title, status };
+      return { id: `step_${item.id}`, title: item.title, description: "", status };
+    });
+
+    this.currentPlan = { ...plan, steps };
+    this.emitPlanEvent(this.currentPlan);
+  }
+
+  private async loadPersistedState(
+    conversationId: number
+  ): Promise<{ plan?: Plan; todoItems?: Array<{ title: string; status: string; note?: string }> }> {
+    let messages: Array<{ role: string; toolResult: string | null }> = [];
     try {
-      const eventType: "iteration" | "decision" | "internal_instruction" = type === "iteration" ? "iteration" : type === "decision" ? "decision" : "internal_instruction";
-      this.eventEmitter?.emitEvent({ type: eventType, message, data, timestamp: new Date().toISOString() });
+      // Defensively coerced to an array: a test/mock DatabaseService stub (or any future
+      // implementation) that resolves getMessages() to undefined rather than throwing must
+      // never crash resume - this is best-effort recovery, never a hard requirement.
+      const result = await this.db.getMessages(conversationId);
+      if (Array.isArray(result)) messages = result;
+    } catch (error) {
+      this.logger.warn("Failed to load persisted state for resume", {
+        conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
+
+    let plan: Plan | undefined;
+    let todoItems: Array<{ title: string; status: string; note?: string }> | undefined;
+    for (let i = messages.length - 1; i >= 0 && (!plan || !todoItems); i--) {
+      const row = messages[i];
+      if (!row || row.role !== "event" || !row.toolResult) continue;
+      let parsed: { eventType?: string; data?: Record<string, unknown> };
+      try {
+        parsed = JSON.parse(row.toolResult) as typeof parsed;
+      } catch {
+        continue;
+      }
+      if (!plan && parsed.eventType === "plan") {
+        // __rawPlan (see emitPlanEvent) is the exact internal Plan object, never the flattened
+        // UI-facing payload - so no shape reconstruction/guessing is needed here.
+        const raw = parsed.data?.["__rawPlan"] as Plan | undefined;
+        if (raw && typeof raw.goal === "string" && Array.isArray(raw.steps)) plan = raw;
+      }
+      if (!todoItems && parsed.eventType === "decision") {
+        const rawItems = parsed.data?.["todo_items"];
+        if (Array.isArray(rawItems) && rawItems.length > 0) {
+          const mapped = rawItems
+            .map((entry) => {
+              const item = (entry ?? {}) as { title?: unknown; status?: unknown; note?: unknown };
+              if (typeof item.title !== "string" || !item.title.trim()) return undefined;
+              return {
+                title: item.title,
+                status: typeof item.status === "string" ? item.status : "pending",
+                ...(typeof item.note === "string" ? { note: item.note } : {}),
+              };
+            })
+            .filter((x): x is { title: string; status: string; note?: string } => x !== undefined);
+          if (mapped.length > 0) todoItems = mapped;
+        }
+      }
+    }
+    return { plan, todoItems };
+  }
+
+  /**
+   * Persists one CodingAgent event as a `role:"event"` conversation message, same shape
+   * Agent.run()'s own internal emit() writes (agent.ts) - so CodingWorkspace's existing message
+   * mapping (which already whitelists "plan"/"decision"/etc, see CodingWorkspace.tsx) picks these
+   * up on reload with NO frontend change needed.
+   *
+   * Without this, every CodingAgent event (plan, todo/decision, phase) was a pure WebSocket
+   * broadcast with no DB row at all - live-visible while the tab stayed open, but gone the
+   * moment the conversation was reloaded (switching projects, refreshing the page, or resuming
+   * after a stop): the Plan tab found nothing to reconstruct and looked like the plan had been
+   * lost, even though the run itself had continued correctly. Queued (not awaited) so a slow
+   * write never delays the run loop, and ordered so persisted rows land in emission order.
+   */
+  private persistEvent(eventType: string, message: string, data: Record<string, unknown> | undefined, timestamp: string): void {
+    if (this.currentConversationId === undefined) return;
+    const conversationId = this.currentConversationId;
+    const toolResult = JSON.stringify({ eventType, data, timestamp });
+    this.eventPersistQueue = this.eventPersistQueue.then(() =>
+      this.db
+        .addMessage({ conversationId, role: "event", content: message, toolResult, createdAt: timestamp })
+        .then(() => undefined)
+        .catch(() => {
+          // Best-effort: a lost event row means degraded resume/reload fidelity, never a
+          // reason to interrupt the run itself.
+        })
+    );
+  }
+
+  private emit(type: "iteration" | "decision" | "phase_started" | "phase_completed" | "phase_failed", message: string, data?: Record<string, unknown>): void {
+    const eventType: "iteration" | "decision" | "internal_instruction" = type === "iteration" ? "iteration" : type === "decision" ? "decision" : "internal_instruction";
+    const timestamp = new Date().toISOString();
+    try {
+      this.eventEmitter?.emitEvent({ type: eventType, message, data, timestamp });
     } catch {
       // Event delivery is best-effort telemetry - never let it abort a coding run.
     }
+    this.persistEvent(eventType, message, data, timestamp);
   }
 
   /** Emits the Planner's structured plan as a "plan" event, the same payload shape agent.ts's
    *  plan mode uses - CodingPlanPanel filters only on eventType==="plan" with goal+steps, not on
    *  `source`, so this is picked up without any UI change. */
   private emitPlanEvent(plan: Plan): void {
+    const payload = toPlanEventPayload(plan, formatPlanAsMarkdown(plan));
+    // __rawPlan carries the exact internal Plan object (dependsOn/riskLevel/toolsNeeded, the
+    // step id scheme, everything) alongside the UI-shaped payload above - so a later run() on
+    // the same conversation can rehydrate the EXACT plan it already had (see loadPersistedState)
+    // instead of reconstructing an approximation from the flattened UI fields, or re-planning
+    // from scratch and losing whatever the user already saw progress on. The UI ignores the
+    // extra field; it never had a reason to look for it.
+    const data = { ...payload, source: "coding_agent", __rawPlan: plan };
+    const message = `Plan: ${plan.goal}`;
+    const timestamp = new Date().toISOString();
     try {
-      const payload = toPlanEventPayload(plan, formatPlanAsMarkdown(plan));
-      this.eventEmitter?.emitEvent({
-        type: "plan" as AgentRunEventType,
-        message: `Plan: ${plan.goal}`,
-        data: { ...payload, source: "coding_agent" },
-        timestamp: new Date().toISOString(),
-      });
+      this.eventEmitter?.emitEvent({ type: "plan" as AgentRunEventType, message, data, timestamp });
     } catch {
       // Event delivery is best-effort telemetry - never let it abort a coding run.
     }
+    this.persistEvent("plan", message, data, timestamp);
   }
 
   private emitPhase(event: CodingPhaseEvent): void {
+    const message = `${event.title}${event.description ? ': ' + event.description : ''}`;
+    const data = {
+      phase_event: event.type,
+      phase: event.phase,
+      title: event.title,
+      description: event.description,
+      result: event.result,
+      error: event.error,
+      attempt: event.attempt,
+    };
     try {
-      const message = `${event.title}${event.description ? ': ' + event.description : ''}`;
-      this.eventEmitter?.emitEvent({
-        type: "internal_instruction" as const,
-        message,
-        data: {
-          phase_event: event.type,
-          phase: event.phase,
-          title: event.title,
-          description: event.description,
-          result: event.result,
-          error: event.error,
-          attempt: event.attempt,
-        },
-        timestamp: event.timestamp,
-      });
+      this.eventEmitter?.emitEvent({ type: "internal_instruction" as const, message, data, timestamp: event.timestamp });
     } catch {
       // Event delivery is best-effort telemetry - never let it abort a coding run.
     }
+    this.persistEvent("internal_instruction", message, data, event.timestamp);
   }
 
   private extractAndEmitPhaseEvents(response: string, attempt: number): void {

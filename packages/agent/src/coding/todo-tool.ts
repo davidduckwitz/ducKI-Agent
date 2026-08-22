@@ -25,7 +25,16 @@ export class TodoList {
   private items: TodoItem[] = [];
   private nextId = 1;
 
-  constructor(private readonly onChange?: (items: TodoItem[]) => void) {}
+  constructor(
+    private readonly onChange?: (items: TodoItem[]) => void,
+    /**
+     * Fired ONLY when the checklist's STEP SET itself changes (replace()), never on a plain
+     * status/note update() - a caller that wants to mirror the checklist's structure back into
+     * something else (e.g. CodingAgent syncing its Plan object, see coding-agent.ts) needs to
+     * react to "the steps changed" specifically, not to every status tick.
+     */
+    private readonly onReplace?: (items: TodoItem[]) => void
+  ) {}
 
   reset(): void {
     this.items = [];
@@ -63,6 +72,7 @@ export class TodoList {
         return item;
       });
     this.onChange?.(this.snapshot());
+    this.onReplace?.(this.snapshot());
     return this.snapshot();
   }
 

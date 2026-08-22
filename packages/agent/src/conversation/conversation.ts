@@ -6,6 +6,9 @@ export interface ConversationOptions {
   id?: number;
   name?: string;
   projectId?: number;
+  /** Tags who opened this conversation - see the `conversations.origin` schema comment
+   *  (packages/database/src/schema.ts). Undefined/omitted means a normal chat conversation. */
+  origin?: string;
 }
 
 export class ConversationManager {
@@ -21,6 +24,7 @@ export class ConversationManager {
     const conv = await this.db.createConversation({
       name: options.name ?? `Conversation ${new Date().toLocaleString()}`,
       projectId: options.projectId,
+      origin: options.origin,
     });
 
     this.conversationId = conv.id;

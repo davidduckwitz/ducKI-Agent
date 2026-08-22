@@ -667,7 +667,7 @@ export class Agent {
     }
   }
 
-  async startConversation(options: { name?: string; projectId?: number } = {}): Promise<number> {
+  async startConversation(options: { name?: string; projectId?: number; origin?: string } = {}): Promise<number> {
     return this.conversation.start(options);
   }
 

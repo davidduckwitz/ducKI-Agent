@@ -12,6 +12,13 @@ export const conversations = sqliteTable("conversations", {
    *  [CODING_CONTEXT] marker CodingWorkspace uses, so follow-up messages get a proper
    *  coding iteration budget and the filesystem tool scoped to the plugin's own folder. */
   pluginContext: text("plugin_context"),
+  /** Who created this conversation - null for a normal chat conversation, "coding_agent" for
+   *  one CodingAgent.run() opened for itself (Plan execution from a normal chat, a fresh
+   *  /api/coding-agent/run, or the plugin-authoring wizard - all funnel through the same
+   *  startConversation() call). Lets the chat overview exclude conversations that are already
+   *  visible in their own dedicated surface (Coding area / plugin wizard) instead of listing
+   *  every internal agent conversation as if it were a chat the user started. */
+  origin: text("origin"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
