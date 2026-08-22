@@ -123,7 +123,7 @@ export function clearIncompletePartSequences(filter?: (path: string) => boolean)
 }
 
 export const FILESYSTEM_ACTIONS = [
-  "read", "write", "append", "edit", "delete",
+  "read", "write", "append", "edit", "edit_lines", "delete",
   "list", "mkdir", "exists", "stat", "move", "copy",
   "glob", "grep", "outline",
 ] as const;
@@ -489,6 +489,35 @@ function validateContent(filePath: string, content: string): string | undefined 
   return undefined;
 }
 
+const MARKUP_EXTENSIONS = new Set([".html", ".htm", ".xml", ".jsx", ".tsx", ".vue", ".svg"]);
+
+/**
+ * Non-blocking sanity check for the failure mode this whole file's __contentTrusted handling
+ * exists to prevent: a model that JSON-escapes quotes inside content that should have been
+ * written verbatim (heredoc, native tool_call), scattering literal backslash-quote pairs
+ * through the markup - e.g. `id=\'app\'`, `style=\"color:green\"`. That corrupts every
+ * affected attribute but leaves the file otherwise well-formed enough to write successfully,
+ * so nothing else here would ever catch it.
+ *
+ * Deliberately a WARNING, not a write-blocking error: unlike the JSON check above, there is
+ * no reliable parser to confirm the file is actually broken (a string constant could
+ * legitimately contain `=\'` as prose), and refusing to persist a real file over a heuristic
+ * would be worse than the problem it prevents. The signature checked for - a backslash
+ * directly between `=` and a quote - is otherwise vanishingly rare in real markup/JS, so this
+ * stays a strong signal without needing to parse anything.
+ */
+function detectLeakedQuoteEscaping(filePath: string, content: string): string | undefined {
+  if (!MARKUP_EXTENSIONS.has(extname(filePath).toLowerCase())) return undefined;
+  const matches = content.match(/=\s*\\["']/g);
+  if (!matches || matches.length === 0) return undefined;
+  return (
+    `Warning: found ${matches.length} occurrence(s) of a backslash-escaped quote right after '=' ` +
+    `(e.g. ...=\\'...\\'... ), the signature of quotes that were JSON-escaped even though this file ` +
+    `format needs them verbatim. The file was written as received - re-check the affected ` +
+    `attributes/values, they are likely corrupted.`
+  );
+}
+
 /**
  * Writes content via temp-file + rename (atomic on the same volume) and keeps
  * a .bak copy of the previous version, so a truncated/garbled LLM completion
@@ -603,11 +632,14 @@ export const filesystemTool: ToolExecutor = {
       properties: {
         action: {
           type: "string",
-          enum: ["read", "write", "append", "edit", "delete", "list", "mkdir", "exists", "stat", "move", "copy", "glob", "grep", "outline"],
+          enum: ["read", "write", "append", "edit", "edit_lines", "delete", "list", "mkdir", "exists", "stat", "move", "copy", "glob", "grep", "outline"],
           description:
             "Operation to perform: read (content of a SINGLE FILE - for a directory use list instead), " +
             "write (create/overwrite file), append (add to file), " +
             "edit (replace an exact substring in an existing file - PREFER this over write for changes to existing files), " +
+            "edit_lines (replace a LINE RANGE with new content, by number instead of matching text - use this instead of edit " +
+            "when the target text is very long, appears many times in the file, or edit keeps failing with 'not unique'/'not found'; " +
+            "read the file first to get accurate line numbers), " +
             "delete (remove; needs recursive:true for a directory), " +
             "list (contents of a DIRECTORY - use this for paths like ./shared-workspace), mkdir (create directory), " +
             "exists (check if exists), stat (file info incl. isDirectory - use when unsure), move (rename/move), " +
@@ -619,7 +651,7 @@ export const filesystemTool: ToolExecutor = {
             "REQUIRED: Full file or directory path. Examples: /shared-workspace/config.json, ./data/file.txt, data/subfolder/. " +
             "A path without a file extension is usually a directory - use action:'list' for it. Must be provided.",
         },
-        content: { type: "string", description: "Content to write (for write/append). Use actual line breaks (newlines) in multiline content - each line should be on a separate line, not escaped as \\n." },
+        content: { type: "string", description: "Content to write (for write/append/edit_lines). Use actual line breaks (newlines) in multiline content - each line should be on a separate line, not escaped as \\n." },
         offset: { type: "number", description: "For read: first line to return (0-indexed, default 0)" },
         limit: { type: "number", description: "For read: maximum number of lines to return (default 2000)" },
         maxBytes: { type: "number", description: "For read: byte cap before truncation (default 262144 = 256KB)" },
@@ -632,6 +664,8 @@ export const filesystemTool: ToolExecutor = {
         oldString: { type: "string", description: "For edit: exact existing text to replace, WITHOUT the '<n>: ' line-number prefixes that read adds. Must match exactly once unless replaceAll is set." },
         newString: { type: "string", description: "For edit: text to replace oldString with." },
         replaceAll: { type: "boolean", default: false, description: "For edit: replace every occurrence of oldString instead of requiring a unique match." },
+        startLine: { type: "number", description: "For edit_lines: first line to replace, 1-indexed inclusive - matches the '<n>: ' numbers read returns. Use startLine = endLine + 1 to insert new lines without replacing any." },
+        endLine: { type: "number", description: "For edit_lines: last line to replace, 1-indexed inclusive. Must be >= startLine - 1 (endLine = startLine - 1 means a pure insertion before startLine, no lines removed)." },
         encoding: { type: "string", default: "utf8" },
         recursive: { type: "boolean", default: false },
         destination: { type: "string", description: "Destination path for move action" },
@@ -805,10 +839,12 @@ export const filesystemTool: ToolExecutor = {
           // An intermediate part of a split file is not yet a valid whole (e.g. a JSON file
           // is only parseable once every part has arrived) - validate only single calls and
           // the FINAL assembled result (totalParts === 1 is complete on its own).
+          const isCompleteWrite = part.totalParts === undefined || part.totalParts === 1;
           const validationError = validateContent(filePath, content);
-          if (validationError && (part.totalParts === undefined || part.totalParts === 1)) {
+          if (validationError && isCompleteWrite) {
             return { success: false, data: null, error: validationError };
           }
+          const leakWarning = isCompleteWrite ? detectLeakedQuoteEscaping(filePath, content) : undefined;
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, bytes: content.length } };
           }
@@ -821,12 +857,17 @@ export const filesystemTool: ToolExecutor = {
           if (part.totalParts !== undefined && part.totalParts === 1) {
             // A single-part "sequence" is complete the moment it is written.
             partGroups.delete(filePath);
-            return { success: true, data: partResultData(filePath, 1, 1, 1, true) };
+            const done = partResultData(filePath, 1, 1, 1, true);
+            if (leakWarning) done["warning"] = leakWarning;
+            return { success: true, data: done };
           }
           if (part.totalParts !== undefined) {
             return { success: true, data: partResultData(filePath, 1, part.totalParts, 1, false) };
           }
-          return { success: true, data: { path: filePath, bytes: content.length } };
+          return {
+            success: true,
+            data: { path: filePath, bytes: content.length, ...(leakWarning ? { warning: leakWarning } : {}) },
+          };
         }
 
         case "append": {
@@ -909,10 +950,12 @@ export const filesystemTool: ToolExecutor = {
           // Intermediate parts of a split file are not yet a valid whole - validate the
           // assembled result only on the final part (and on plain appends).
           const isFinalPart = group !== undefined && part.partNumber === group.totalParts;
+          const isCompleteAppend = !group || isFinalPart;
           const validationError = validateContent(filePath, combined);
-          if (validationError && (!group || isFinalPart)) {
+          if (validationError && isCompleteAppend) {
             return { success: false, data: null, error: validationError };
           }
+          const leakWarning = isCompleteAppend ? detectLeakedQuoteEscaping(filePath, combined) : undefined;
           atomicWrite(filePath, combined);
           if (group) {
             // partNumber is validated above (the sequence branch requires it and matches
@@ -922,6 +965,7 @@ export const filesystemTool: ToolExecutor = {
             group.next = partNumber + 1;
             if (partNumber === group.totalParts) {
               const done = partResultData(filePath, partNumber, group.totalParts, group.received, true);
+              if (leakWarning) done["warning"] = leakWarning;
               partGroups.delete(filePath);
               return { success: true, data: done };
             }
@@ -930,7 +974,7 @@ export const filesystemTool: ToolExecutor = {
               data: partResultData(filePath, partNumber, group.totalParts, group.received, false),
             };
           }
-          return { success: true, data: { path: filePath } };
+          return { success: true, data: { path: filePath, ...(leakWarning ? { warning: leakWarning } : {}) } };
         }
 
         case "edit": {
@@ -1061,6 +1105,104 @@ export const filesystemTool: ToolExecutor = {
           }
           atomicWrite(filePath, updated);
           return { success: true, data: { path: filePath, occurrences: spans.length, matchedMode, ...fuzzyExtra } };
+        }
+
+        case "edit_lines": {
+          // The line-number counterpart to "edit": replaces a RANGE, addressed by number
+          // instead of matched text. Exists for the case "edit" structurally cannot handle
+          // well - a very large or highly repetitive file, where oldString is either too
+          // long to reproduce byte-for-byte or matches many places at once (the ambiguity
+          // "edit" already refuses via its "not unique" error). Line numbers sidestep both:
+          // the caller reads the file first (read already reports numbers in this exact
+          // scheme), then addresses a range directly with no text-matching involved at all.
+          if (content === undefined) {
+            return { success: false, data: null, error: "content required for edit_lines (use \"\" to delete the range with nothing)." };
+          }
+          const linesKind = pathKind(filePath);
+          if (linesKind === "missing") {
+            return { success: false, data: null, error: `File not found: ${filePath}` };
+          }
+          if (linesKind === "directory") {
+            return {
+              success: false,
+              data: null,
+              error: `Cannot edit_lines: '${filePath}' is a directory, not a file.`,
+            };
+          }
+          partGroups.delete(filePath);
+
+          const rawStart = input["startLine"];
+          const rawEnd = input["endLine"];
+          const startLine = Number(rawStart);
+          const endLine = Number(rawEnd);
+          if (rawStart === undefined || !Number.isInteger(startLine) || startLine < 1) {
+            return { success: false, data: null, error: "startLine must be a positive integer (1-based, inclusive)." };
+          }
+          if (rawEnd === undefined || !Number.isInteger(endLine) || endLine < startLine - 1) {
+            return {
+              success: false,
+              data: null,
+              error: "endLine must be an integer >= startLine - 1 (startLine - 1 means insert before startLine with nothing removed).",
+            };
+          }
+
+          const original = readFileSync(filePath, "utf8");
+          const originalLines = original.split("\n");
+          const totalLines = originalLines.length;
+          const isPureInsert = endLine === startLine - 1;
+          const maxStart = isPureInsert ? totalLines + 1 : totalLines;
+          if (startLine > maxStart) {
+            return {
+              success: false,
+              data: null,
+              error: `startLine ${startLine} is past the end of the file (${totalLines} lines). Re-read the file for current line numbers.`,
+            };
+          }
+          if (!isPureInsert && endLine > totalLines) {
+            return {
+              success: false,
+              data: null,
+              error: `endLine ${endLine} is past the end of the file (${totalLines} lines). Re-read the file for current line numbers.`,
+            };
+          }
+
+          // Keep a CRLF file consistent, same rule as "edit" above: convert the inserted
+          // text's line endings to match the file's dominant style before splitting it.
+          let replacementText = content;
+          const crlfCount = (original.match(/\r\n/g) ?? []).length;
+          const lfOnlyCount = (original.match(/\n/g) ?? []).length - crlfCount;
+          if (crlfCount > lfOnlyCount && replacementText.includes("\n")) {
+            replacementText = replacementText.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n");
+          }
+          // Empty content on a real (non-insert) range means "delete these lines", not
+          // "replace them with one blank line" - split() on "" would otherwise produce [""].
+          const replacementLines = replacementText.length === 0 ? [] : replacementText.split("\n");
+
+          const before = originalLines.slice(0, startLine - 1);
+          const after = isPureInsert ? originalLines.slice(startLine - 1) : originalLines.slice(endLine);
+          const updated = [...before, ...replacementLines, ...after].join("\n");
+
+          const validationError = validateContent(filePath, updated);
+          if (validationError) return { success: false, data: null, error: validationError };
+          const leakWarning = detectLeakedQuoteEscaping(filePath, updated);
+          const linesRemoved = isPureInsert ? 0 : endLine - startLine + 1;
+          if (dryRun) {
+            return {
+              success: true,
+              data: { dryRun: true, action, path: filePath, linesRemoved, linesInserted: replacementLines.length },
+            };
+          }
+          atomicWrite(filePath, updated);
+          return {
+            success: true,
+            data: {
+              path: filePath,
+              linesRemoved,
+              linesInserted: replacementLines.length,
+              totalLines: updated.split("\n").length,
+              ...(leakWarning ? { warning: leakWarning } : {}),
+            },
+          };
         }
 
         case "delete": {
