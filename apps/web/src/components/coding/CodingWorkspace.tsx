@@ -6,6 +6,7 @@ import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
 import {
   Columns2,
   FileCode2,
+  Globe,
   Maximize2,
   PanelRightOpen,
   Pencil,
@@ -208,6 +209,15 @@ export function CodingWorkspace() {
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+  /**
+   * false (default): the preview iframe uses `srcDoc` with the in-editor content - instant,
+   * reflects unsaved edits, but has no real URL/origin so relative asset references
+   * (<script src="./app.js">, <link href="style.css">) never resolve.
+   * true: the iframe loads the file over real HTTP (api.coding.previewUrl) instead - relative
+   * references resolve correctly for multi-file HTML/CSS/JS, at the cost of only reflecting the
+   * last SAVED version (the server reads from disk, not from the editor's draft).
+   */
+  const [useRealPreview, setUseRealPreview] = useState(false);
   const [showPlanPanel, setShowPlanPanel] = useState(false);
   const lastPlanIdRef = useRef<number | undefined>();
   const [renaming, setRenaming] = useState(false);
@@ -889,6 +899,20 @@ export function CodingWorkspace() {
           >
             <Maximize2 className="h-3.5 w-3.5" />
           </button>
+          {previewType === "html" && (
+            <button
+              className={`rounded-md border border-border p-1.5 transition hover:bg-accent ${
+                useRealPreview ? "border-primary/50 bg-primary/10 text-primary" : "text-muted-foreground"
+              }`}
+              onClick={() => {
+                setUseRealPreview(true);
+                setShowPreviewModal(true);
+              }}
+              title={t("codingPage.realPreview")}
+            >
+              <Globe className="h-3.5 w-3.5" />
+            </button>
+          )}
           <button
             className="rounded-md border border-border p-1.5 text-muted-foreground transition hover:bg-accent disabled:opacity-40"
             onClick={() => setShowUploadModal(true)}
@@ -975,12 +999,26 @@ export function CodingWorkspace() {
 
               {codingSplitPreview && previewType !== "none" && (
                 <div className="flex min-h-0 w-1/2 min-w-0 flex-col border-l border-border">
-                  <div className="shrink-0 border-b border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
-                    {t("codingPage.previewFile")}
+                  <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+                    <span>{t("codingPage.previewFile")}</span>
+                    {previewType === "html" && useRealPreview && hasChanges && (
+                      <span className="text-amber-500" title={t("codingPage.realPreviewStaleHint")}>
+                        {t("codingPage.realPreviewStale")}
+                      </span>
+                    )}
                   </div>
                   <div className="min-h-0 flex-1 overflow-auto bg-background/40">
                     {previewType === "html" && (
-                      <iframe title="coding-html-preview" srcDoc={editorContent} className="h-full w-full bg-white" />
+                      useRealPreview ? (
+                        <iframe
+                          key={`${selectedProject}/${selectedPath}`}
+                          title="coding-html-preview"
+                          src={api.coding.previewUrl(selectedProject!, selectedPath!)}
+                          className="h-full w-full bg-white"
+                        />
+                      ) : (
+                        <iframe title="coding-html-preview" srcDoc={editorContent} className="h-full w-full bg-white" />
+                      )
                     )}
                     {previewType === "image" && (
                       <div className="flex h-full items-center justify-center p-3">
@@ -1197,17 +1235,53 @@ export function CodingWorkspace() {
               <h2 className="truncate text-lg font-semibold">
                 {t("codingPage.previewFile")}: {selectedPath}
               </h2>
-              <button className="rounded p-1 hover:bg-accent" onClick={() => setShowPreviewModal(false)}>
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                {previewType === "html" && (
+                  <div className="flex overflow-hidden rounded-md border border-border text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setUseRealPreview(false)}
+                      className={`px-2 py-1 transition ${!useRealPreview ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}
+                      title={t("codingPage.livePreview")}
+                    >
+                      {t("codingPage.livePreview")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUseRealPreview(true)}
+                      className={`px-2 py-1 transition ${useRealPreview ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"}`}
+                      title={t("codingPage.realPreview")}
+                    >
+                      {t("codingPage.realPreview")}
+                    </button>
+                  </div>
+                )}
+                {previewType === "html" && useRealPreview && hasChanges && (
+                  <span className="text-[11px] text-amber-500" title={t("codingPage.realPreviewStaleHint")}>
+                    {t("codingPage.realPreviewStale")}
+                  </span>
+                )}
+                <button className="rounded p-1 hover:bg-accent" onClick={() => setShowPreviewModal(false)}>
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-hidden p-4">
               {previewType === "html" && (
-                <iframe
-                  title="coding-html-preview-full"
-                  srcDoc={editorContent}
-                  className="h-full w-full rounded-lg border border-border bg-white"
-                />
+                useRealPreview ? (
+                  <iframe
+                    key={`${selectedProject}/${selectedPath}`}
+                    title="coding-html-preview-full"
+                    src={api.coding.previewUrl(selectedProject!, selectedPath!)}
+                    className="h-full w-full rounded-lg border border-border bg-white"
+                  />
+                ) : (
+                  <iframe
+                    title="coding-html-preview-full"
+                    srcDoc={editorContent}
+                    className="h-full w-full rounded-lg border border-border bg-white"
+                  />
+                )
               )}
               {previewType === "image" && (
                 <div className="flex h-full w-full items-center justify-center rounded-lg border border-border bg-background/50">

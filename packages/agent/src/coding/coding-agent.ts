@@ -23,7 +23,7 @@ import { createScopedShellTool } from "./scoped-shell-tool.js";
 import { createScopedDiagnosticsTool, resetDiagnosticsFor } from "./scoped-diagnostics-tool.js";
 import { withAutoDiagnostics } from "./auto-diagnostics.js";
 import { TodoList, createTodoTool, type TodoItem, type TodoStatus } from "./todo-tool.js";
-import { createCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
+import { createCheckpoint, diffCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
 import { withPerEditCheckpoints } from "./checkpoint-on-write.js";
 import { createExploreTool } from "./explore-tool.js";
 import { Planner, type Plan, type PlanStep } from "../planner/planner.js";
@@ -370,7 +370,15 @@ export class CodingAgent {
       (items) => this.syncPlanFromTodos(items)
     );
 
-    const basePrompt = options.systemPrompt ?? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}`;
+    // The text-based [TOOL:...] format block is only relevant when the provider falls back to
+    // parsing tool calls out of plain text. A provider with native tool_calls support (the
+    // agent.ts run loop already prefers that path, see nativeToolsEnabled) never needs this
+    // block - appending it anyway just adds ~1.5-2KB of now-irrelevant instructions to every
+    // single LLM call of the run, and risks the model mixing both formats.
+    const needsTextToolFormat = !(provider.supportsNativeTools?.() ?? false);
+    const basePrompt =
+      options.systemPrompt ??
+      (needsTextToolFormat ? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}` : CODING_DIRECTIVE);
 
     // Phase 1 & 2: Register discipline hooks for CodingAgent
     const disciplineHooks: AgentHook[] = [
@@ -466,6 +474,15 @@ export class CodingAgent {
             phase: this.currentPhase,
             refusals: this.phaseLockRefusals,
           });
+          // The model is now demonstrably editing, whatever text marker it did or didn't
+          // produce - a mutating filesystem call is a stronger, structural signal than the
+          // freetext ">> PHASE: EDIT" marker updatePhaseFromResponse relies on. Without this,
+          // currentPhase stays stuck at "explore"/"plan" for the REST of the run once a model
+          // that never emits the marker gets past this one-time bypass: every later write keeps
+          // logging a misleading "Phasensperre uebergangen (Phase: explore)", and any prompt
+          // text that references currentPhase (e.g. buildFollowUpPrompt) would describe a phase
+          // the run is clearly long past.
+          this.currentPhase = "edit";
           return { proceed: true };
         },
       },
@@ -510,6 +527,21 @@ export class CodingAgent {
       // Code responses are long and slow to re-evaluate; the reflection/verify
       // passes repeatedly hit their timeout with a local model. Skip them here.
       disableQualityPasses: true,
+      // CodingAgent already has its OWN structured plan (this.planner.createPlan() above,
+      // seeded into this.todos before the attempt loop starts). Agent.run()'s enablePlanning
+      // defaults to true and would otherwise call the Planner AGAIN, independently, on every
+      // single attempt (this.agent.run() call) - a second, unrelated plan derived from whatever
+      // that attempt's prompt happens to be (the ORIGINAL goal on attempt 1, but a follow-up
+      // "fix this error" prompt on later attempts), never wired into CodingAgent's checklist and
+      // never used for anything but a log line. That wasted a full extra Planner LLM round-trip
+      // PER ATTEMPT and produced the confusing "Plan erstellt mit N Schritten" events with
+      // shifting, seemingly random step counts that don't correspond to the actual checklist.
+      enablePlanning: false,
+      // Every attempt is this.agent.run() again on the SAME Agent instance for the SAME
+      // overall goal - the relevant skill (usually just "coding-system" plus whatever
+      // auto-selects) does not need re-scoring and re-loading from disk on every attempt.
+      // run() itself resets the cache so a genuinely new goal still gets fresh selection.
+      stickySkillSelection: true,
     });
 
     const baseFsTool = options.sandboxRoot ? createScopedFilesystemTool(options.sandboxRoot) : filesystemTool;
@@ -576,27 +608,35 @@ export class CodingAgent {
   }
 
   /**
+   * package.json's "scripts" map, or undefined when there is no package.json (i.e. this is not
+   * an npm project at all) or it fails to parse. The single place that reads it, so every
+   * npm-command decision below is gated on the same "does this project actually have this
+   * script" check instead of assuming npm just because a skill or heuristic suggests one.
+   */
+  private readPackageJsonScripts(): Record<string, string> | undefined {
+    if (!this.sandboxRoot) return undefined;
+    const packageJsonPath = join(this.sandboxRoot, "package.json");
+    if (!existsSync(packageJsonPath)) return undefined;
+    try {
+      const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { scripts?: Record<string, string> };
+      return pkg.scripts;
+    } catch {
+      return undefined; // malformed package.json - nothing detectable
+    }
+  }
+
+  /**
    * Best-effort default so "no verifyCommand" doesn't silently mean "no check
    * at all" - falls back to a project-detected typecheck/build, or undefined
    * if nothing detectable exists (never fabricates a command that would fail
-   * for unrelated reasons).
+   * for unrelated reasons, e.g. an npm command on a project that isn't npm at all).
    */
   private detectDefaultVerifyCommand(): string | undefined {
     if (!this.sandboxRoot) return undefined;
     if (existsSync(join(this.sandboxRoot, "tsconfig.json"))) {
       return "npx tsc --noEmit";
     }
-    const packageJsonPath = join(this.sandboxRoot, "package.json");
-    if (existsSync(packageJsonPath)) {
-      try {
-        const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
-          scripts?: Record<string, string>;
-        };
-        if (pkg.scripts?.["build"]) return "npm run build";
-      } catch {
-        // malformed package.json - nothing detectable, fall through
-      }
-    }
+    if (this.readPackageJsonScripts()?.["build"]) return "npm run build";
     return undefined;
   }
 
@@ -632,6 +672,9 @@ export class CodingAgent {
     this.currentPlan = undefined;
     this.suppressPlanSync = false;
     this.todos.reset();
+    // A new goal on this instance must re-select skills, not reuse the previous goal's - see
+    // stickySkillSelection in the Agent constructor above.
+    this.agent.resetSkillSelectionCache();
     // The sandbox may have changed between runs (files added or removed outside the agent), and
     // a stale warm compiler would report diagnostics for a file set that no longer exists.
     resetDiagnosticsFor(this.sandboxRoot);
@@ -712,12 +755,13 @@ export class CodingAgent {
     const detectedSkill = this.autoSelectCodingSkill(goal);
     let verifyCommand = opts.verifyCommand;
 
-    if (!verifyCommand && detectedSkill) {
-      if (detectedSkill === "test-driven-development") {
-        verifyCommand = "npm test";
-      } else if (detectedSkill === "code-review") {
-        verifyCommand = "npm run lint";
-      }
+    if (!verifyCommand && detectedSkill === "code-review") {
+      // "npm test" is deliberately never auto-selected as a verifyCommand - a project's test
+      // suite can be slow, flaky, or require setup the sandbox doesn't have, so forcing it as
+      // the pass/fail gate for every TDD-flavored goal caused more false failures than it
+      // caught. Lint stays: cheap, fast, no state to set up.
+      const scripts = this.readPackageJsonScripts();
+      if (scripts?.["lint"]) verifyCommand = "npm run lint";
     }
 
     if (!verifyCommand) {
@@ -778,6 +822,12 @@ export class CodingAgent {
     // and changing approach - this surfaces that signal explicitly instead of retrying blind.
     let previousVerifyError: string | undefined;
     let identicalFailureStreak = 0;
+    // Whether ANY attempt in this run has produced a real file change yet. The checklist
+    // grounding check below must only fire while this is still false - a VERIFY or REPORT step
+    // legitimately marks itself "done" without touching a single file (there is nothing to edit
+    // in a verification or a summary), and demoting those on an empty per-attempt diff would
+    // punish entirely normal steps once EDIT already did its job in an earlier attempt.
+    let anyFileChangedThisRun = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       this.currentAttempt = attempt;
       // Soft wall-clock budget: stop before starting another attempt once the deadline has passed
@@ -833,6 +883,10 @@ export class CodingAgent {
       // ceiling closes that gap: Agent.run() already turns timeoutMsOverride into a hard,
       // abort-backed timeout (agent.ts's armTimeout/abortController), no new mechanism needed.
       const remainingMs = deadline ? deadline - Date.now() : undefined;
+      // Snapshot BEFORE the model runs so the grounding check below (after the run) can tell
+      // which checklist items THIS attempt newly marked "done" - the checkpoint diff is only
+      // meaningful measured against that same attempt's edits, not the whole run's history.
+      const todosBeforeAttempt = this.todos.snapshot();
       let runResult: AgentRunResult;
       try {
         runResult = await this.agent.run(prompt, {
@@ -869,7 +923,125 @@ export class CodingAgent {
       // Extract and emit phase events from response
       this.extractAndEmitPhaseEvents(lastSummary, attempt);
 
+      // Agent.run() aborted this attempt early via a guardrail - until now nothing here ever
+      // looked at that, so an abort was silently treated exactly like a normal completion: the
+      // checklist/verify logic below would run against whatever partial response the guardrail
+      // produced, and either declare "success" on an aborted attempt or (for an explicit user
+      // Stop) start ANOTHER attempt as if nothing happened. Two different outcomes needed:
+      if (runResult.abortedReason === "user_stopped") {
+        // The user asked this run to stop - starting another attempt (or even finalizing as a
+        // normal "success") would ignore that. End here, honestly, with whatever happened.
+        return finalize({
+          success: false,
+          verified: false,
+          summary: lastSummary,
+          attempts: attempt,
+          conversationId,
+          ...(verifyCommand ? { verifyCommand } : {}),
+        });
+      }
+      if (
+        (runResult.abortedReason === "stale_read_loop" ||
+          runResult.abortedReason === "repeated_error_loop" ||
+          runResult.abortedReason === "consecutive_tool_failures") &&
+        attempt < maxAttempts
+      ) {
+        // These are recoverable stalls, not real failures or a stop request: the model got
+        // stuck repeating one action (re-reading the same file, retrying the same failing call)
+        // and the guardrail correctly cut that off before it burned the whole iteration budget.
+        // Ending the RUN here (the previous behavior - nothing checked abortedReason at all)
+        // is exactly the "the coding agent just stops" symptom this fixes: a stall is not a
+        // dead end, it just needs a nudge to stop repeating and either act or conclude.
+        this.emit(
+          "decision",
+          `Versuch ${attempt} durch Guardrail abgebrochen (${runResult.abortedReason}) - naechster Versuch mit Korrektur-Hinweis.`,
+          { attempt, abortedReason: runResult.abortedReason }
+        );
+        const stallNote =
+          runResult.abortedReason === "stale_read_loop"
+            ? "you repeated the exact same read-only call(s) several times in a row without making any change or reaching a conclusion - that is a loop, not verification."
+            : "you kept repeating the exact same tool call although it (or an identical one) already failed or was already answered.";
+        lastSummary =
+          `${lastSummary}\n\n[Attempt ${attempt} was aborted: ${stallNote} On this next attempt, do NOT repeat that exact action again. ` +
+          `Either make a concrete, different change, or - if you are confident the work is already correct - say so explicitly ONCE ` +
+          `("<< VERIFY COMPLETE - looks correct") and move on. Do not re-check the same thing twice.]`;
+        continue;
+      }
+
+      // Ground the checklist against what the shadow-git checkpoint actually recorded: the
+      // model is instructed never to mark a step "done" on the strength of an edit alone (see
+      // buildInitialPrompt), but nothing enforced that until now - a model can call
+      // todo:update(done) without having written anything. The checkpoint diff is the one
+      // signal in this loop that reflects the real working tree rather than the model's own
+      // account of it, so a "done" step with zero changed files is demoted back to in_progress
+      // instead of being trusted at face value - but ONLY while this run has made no real
+      // change yet at all. Once EDIT has genuinely written something in an earlier attempt,
+      // later steps like VERIFY ("run a check") or REPORT ("summarize what changed") are
+      // legitimately done without touching another file - demoting those on an empty diff would
+      // punish entirely normal steps and could never converge (each such demotion re-opens the
+      // checklist, which re-triggers the "checklist not finished" continuation below, forever).
+      if (this.sandboxRoot && checkpoint) {
+        const attemptDiff = await diffCheckpoint(this.sandboxRoot, checkpoint.sha);
+        const changedFileCount = attemptDiff?.files.length ?? 0;
+        if (changedFileCount > 0) anyFileChangedThisRun = true;
+        if (changedFileCount === 0 && !anyFileChangedThisRun) {
+          const newlyDone = this.todos
+            .snapshot()
+            .filter(
+              (item) =>
+                item.status === "done" &&
+                todosBeforeAttempt.find((before) => before.id === item.id)?.status !== "done"
+            );
+          if (newlyDone.length > 0) {
+            for (const item of newlyDone) {
+              this.todos.update(
+                item.id,
+                "in_progress",
+                'Als "done" gemeldet, aber der Checkpoint-Diff dieses Versuchs zeigt keine Dateiänderung - zurückgestuft.'
+              );
+            }
+            this.emit(
+              "decision",
+              `Checkliste behauptete ${newlyDone.length} erledigte(n) Schritt(e) in Versuch ${attempt}, aber es wurden keine Dateien geändert - zurückgestuft auf "in_progress".`,
+              { attempt, items: newlyDone.map((item) => item.title) }
+            );
+            lastSummary = `${lastSummary}\n\n[Checklist grounding: ${newlyDone.length} step(s) marked "done" were reset to "in_progress" - the checkpoint diff shows no file changes in this attempt, so the completion claim could not be confirmed: ${newlyDone.map((item) => item.title).join(", ")}]`;
+          }
+        }
+      }
+
       if (!verifyCommand) {
+        // No shell command to grade against, but the model's OWN checklist may still list
+        // unfinished steps (typically VERIFY/REPORT) - accepting the run here regardless is
+        // exactly "the agent just stopped" from the user's perspective: EDIT wrote a file and
+        // the model's next response happened to contain no tool call, which the inner Agent
+        // loop reads as "final answer" even though nothing actually verified or reported
+        // anything. One bounded follow-up attempt asking the model to finish those steps
+        // (self-check via shell/browser if available, then a REPORT) beats silently declaring
+        // success on an incomplete checklist. Once the checklist is settled (or attempts run
+        // out), fall through to the honest "unverified" result exactly as before.
+        //
+        // Gated on anyFileChangedThisRun: a model that never touches the checklist tool at all
+        // (never calls todo:write/update, however unusual) would otherwise show "open items"
+        // forever - that is absence of checklist discipline, not evidence of unfinished work,
+        // and retrying would just burn the whole attempt budget for nothing. Real file changes
+        // are the actual signal that the model was doing the task and got cut off mid-checklist.
+        const openItems = this.todos.snapshot().filter((item) => item.status === "pending" || item.status === "in_progress");
+        if (openItems.length > 0 && attempt < maxAttempts && anyFileChangedThisRun) {
+          this.emit(
+            "decision",
+            `Keine Verifikation moeglich, aber ${openItems.length} Checklisten-Schritt(e) noch offen - fordere Fortsetzung an.`,
+            { attempt, openItems: openItems.map((item) => item.title) }
+          );
+          lastSummary =
+            `${lastSummary}\n\nNo verification command exists for this project, but your own checklist still has ` +
+            `open step(s): ${openItems.map((item) => item.title).join(", ")}. Finish them - in particular VERIFY ` +
+            `(if you have NOT already read the file(s) you wrote in this attempt, read them ONCE now, or run/open ` +
+            `them via the shell or browser tool if possible; if you already read them, do NOT read them again - ` +
+            `just judge what you already saw) and REPORT (summarize what changed and what you checked) - then STOP. ` +
+            `State a clear PASS/FAIL conclusion in words; do not repeat any check you already performed this attempt.`;
+          continue;
+        }
         // Nothing to check against - report honestly that the result is unverified
         // instead of letting "no check" masquerade as a passing check.
         this.emit("decision", "Keine Verifikation moeglich - Ergebnis ist ungeprueft.", { attempt });

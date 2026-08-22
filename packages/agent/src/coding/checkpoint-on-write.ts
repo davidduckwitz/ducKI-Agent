@@ -38,7 +38,13 @@ export function withPerEditCheckpoints(
         const action = String(input["action"] ?? "").toLowerCase();
         if (MUTATING_ACTIONS.has(action)) {
           const label = `${getAttemptLabel()}: ${summarizeToolCall("filesystem", input)}`;
-          await createCheckpoint(sandboxRoot, label);
+          // Stage only the path(s) this call actually touched instead of the whole tree - see
+          // createCheckpoint's doc comment. move/copy touch two paths (source + destination);
+          // every other mutating action touches exactly the one in `path`.
+          const paths = [input["path"], input["destination"]].filter(
+            (value): value is string => typeof value === "string" && value.length > 0
+          );
+          await createCheckpoint(sandboxRoot, label, paths);
         }
       }
       return result;

@@ -24,6 +24,17 @@ export interface AgentOptions {
    * repeatedly hitting the per-pass timeout while adding little value.
    */
   disableQualityPasses?: boolean;
+  /**
+   * When true, skill selection (auto-scoring + related-skill expansion + SKILL.md loading) is
+   * computed once and reused across every run() call on this instance, instead of being
+   * recomputed from scratch on each one. Meant for a caller that issues several run() calls for
+   * the SAME overall task (the coding agent's per-attempt calls) where the relevant skill set
+   * does not meaningfully change between calls - recomputing it each time is pure overhead
+   * (Jaccard scoring, a BFS over related-skill chains, disk reads) for a result that is almost
+   * always identical. Call resetSkillSelectionCache() when starting a genuinely new task on the
+   * same instance so the next run() call re-selects instead of reusing stale skills.
+   */
+  stickySkillSelection?: boolean;
   /** Hooks for intercepting agent lifecycle events (Phase 1) */
   hooks?: AgentHook[];
 }

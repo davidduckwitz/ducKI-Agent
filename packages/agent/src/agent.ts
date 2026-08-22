@@ -402,6 +402,10 @@ export class Agent {
   private enablePlanning: boolean;
   private enableAutoMemory: boolean;
   private disableQualityPasses: boolean;
+  /** See stickySkillSelection option: when true, skill selection is computed once and reused
+   *  across run() calls on this same instance until resetSkillSelectionCache() clears it. */
+  private stickySkillSelection: boolean;
+  private skillSelectionCache: { activeSkills: SkillSummary[]; activeSkillSlugs: string[]; workflowOrchestratorActive: boolean } | undefined;
   /** True when the caller passed an explicit per-run maxIterations to the constructor (see
    *  the constructor for why this is tracked separately from the value itself). */
   private hasExplicitMaxIterations: boolean;
@@ -504,6 +508,7 @@ export class Agent {
     this.enablePlanning = options.enablePlanning ?? true;
     this.enableAutoMemory = options.enableAutoMemory ?? (process.env["AGENT_AUTO_MEMORY"] ?? "true").toLowerCase() !== "false";
     this.disableQualityPasses = options.disableQualityPasses ?? false;
+    this.stickySkillSelection = options.stickySkillSelection ?? false;
 
     this.logger = getRootLogger().child(`Agent:${this.name}`);
     const configuredSkillsPath = process.env["SKILLS_PATH"]?.trim();
@@ -669,6 +674,12 @@ export class Agent {
 
   async startConversation(options: { name?: string; projectId?: number; origin?: string } = {}): Promise<number> {
     return this.conversation.start(options);
+  }
+
+  /** Clears the stickySkillSelection cache (see AgentOptions.stickySkillSelection) so the NEXT
+   *  run() call re-selects skills from scratch instead of reusing a previous task's selection. */
+  resetSkillSelectionCache(): void {
+    this.skillSelectionCache = undefined;
   }
 
   async loadConversation(id: number): Promise<void> {
@@ -1161,7 +1172,13 @@ export class Agent {
     const visited = new Set(selected.map((skill) => skill.slug));
     const queue = [...selected];
     const extras: SkillManifest[] = [];
-    const maxExtras = 10;
+    // Was 10: with a broad ENABLED_SKILLS allowlist, a BFS over primary/related/fallback chains
+    // could pull in up to 10 full SKILL.md files on top of the one auto-selected skill - on
+    // every single LLM call of the run, regardless of skillBehavior="automatic". That silently
+    // defeated automatic mode's whole point (load only what's relevant). 3 keeps the "pull in
+    // closely related skills" behavior the chaining was meant for, without reintroducing
+    // "active"-mode-sized prompts through the back door.
+    const maxExtras = 3;
 
     const enqueueByPriority = (slugs: string[]): number => {
       let added = 0;
@@ -6179,6 +6196,18 @@ export class Agent {
     await this.conversation.addMessage(userMessage);
     this.history.add(userMessage);
 
+    let activeSkills: SkillSummary[];
+    let activeSkillSlugs: string[];
+    let workflowOrchestratorActive: boolean;
+    if (this.stickySkillSelection && this.skillSelectionCache) {
+      // Reuse the selection computed on an earlier run() call on this same instance - see
+      // AgentOptions.stickySkillSelection. Skips the scoring/BFS/disk-read work below entirely,
+      // not just its logging, since that work is exactly the overhead this option exists to
+      // avoid on repeat calls for the same overall task.
+      ({ activeSkills, activeSkillSlugs, workflowOrchestratorActive } = this.skillSelectionCache);
+      this.activeSkillSlugsForRun = new Set(activeSkillSlugs);
+      emit("decision", "Skills aus vorherigem Versuch wiederverwendet", { skills: activeSkillSlugs });
+    } else {
     const enabledAllowlist = new Set(controls.enabledSkillAllowlist);
     const allowlistCandidates = installedSkillManifests.filter((skill) => enabledAllowlist.has(skill.slug));
     const dateSkillFallback = installedSkillManifests.find((skill) => skill.slug === "datum-uhrzeit-tag");
@@ -6257,10 +6286,10 @@ export class Agent {
       activeSkillManifests = [...activeSkillManifests, ...relatedSkillManifests];
     }
 
-    const activeSkills = activeSkillManifests.map((skill) => this.loadSkillContent(skill));
-    const activeSkillSlugs = activeSkills.map((skill) => skill.slug);
+    activeSkills = activeSkillManifests.map((skill) => this.loadSkillContent(skill));
+    activeSkillSlugs = activeSkills.map((skill) => skill.slug);
     this.activeSkillSlugsForRun = new Set(activeSkillSlugs);
-    const workflowOrchestratorActive = activeSkillSlugs.includes("workflow-orchestrator");
+    workflowOrchestratorActive = activeSkillSlugs.includes("workflow-orchestrator");
 
     // Track ever-used skills (non-blocking)
     if (activeSkillSlugs.length > 0) {
@@ -6347,6 +6376,11 @@ export class Agent {
         prioritized: "workflow-orchestrator",
         alsoLoaded: activeSkills.filter((s) => s.slug !== "workflow-orchestrator").map((s) => s.slug),
       });
+    }
+
+    if (this.stickySkillSelection) {
+      this.skillSelectionCache = { activeSkills, activeSkillSlugs, workflowOrchestratorActive };
+    }
     }
 
     let memoryContext = "";

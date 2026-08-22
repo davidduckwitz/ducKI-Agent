@@ -434,6 +434,18 @@ export const api = {
       request<{ project: string; path: string; size: number; isText: boolean; content?: string; contentBase64?: string }>(
         `/coding/projects/${encodeURIComponent(project)}/read?path=${encodeURIComponent(path)}`
       ),
+    /**
+     * A REAL url for a project file (GET /coding/projects/:project/serve/*path), for use as an
+     * iframe `src` - unlike readFile's JSON content, this gives the browser an actual document
+     * URL/origin, so relative asset references inside the file (<script src="./app.js">, <link
+     * href="style.css">, fetch("data.json")) resolve correctly. Each path segment is encoded on
+     * its own so a literal "/" still separates directories instead of becoming %2F.
+     */
+    previewUrl: (project: string, path: string): string =>
+      `${getApiBaseUrl()}/coding/projects/${encodeURIComponent(project)}/serve/${path
+        .split("/")
+        .map((segment) => encodeURIComponent(segment))
+        .join("/")}`,
     writeFile: (project: string, path: string, content: string) =>
       request<{ written: boolean; project: string; path: string }>(`/coding/projects/${encodeURIComponent(project)}/write`, {
         method: "POST",

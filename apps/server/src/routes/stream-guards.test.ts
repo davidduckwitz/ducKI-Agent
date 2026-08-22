@@ -263,6 +263,40 @@ describe("streaming / size-guard routes", () => {
     await server.close();
   });
 
+  it("coding /serve delivers a project file over real HTTP so relative asset paths resolve", async () => {
+    const ws = mkdtempSync(join(tmpdir(), "ducki-coding-serve-"));
+    dirs.push(ws);
+    const proj = join(ws, "coding", "proj");
+    mkdirSync(join(proj, "assets"), { recursive: true });
+    writeFileSync(join(proj, "index.html"), '<html><script src="./assets/app.js"></script></html>', "utf8");
+    writeFileSync(join(proj, "assets", "app.js"), "console.log('hi');", "utf8");
+
+    process.env["SHARED_WORKSPACE_PATH"] = ws;
+    vi.resetModules();
+    const { codingRouter } = await import("./coding.js");
+    const mockDb = {
+      async getSetting(key: string) {
+        if (key === "CODING_ENABLED") return "true";
+        return undefined;
+      },
+    };
+    const server = await startApp(codingRouter, "/api/coding", { db: mockDb });
+
+    const html = await fetch(`${server.baseUrl}/api/coding/projects/proj/serve/index.html`);
+    expect(html.status).toBe(200);
+    expect(html.headers.get("content-type")).toContain("text/html");
+    expect(await html.text()).toContain('src="./assets/app.js"');
+
+    // The exact scenario srcDoc cannot handle: a relative reference from the served document
+    // resolving to a second real request under the same /serve/ prefix.
+    const asset = await fetch(`${server.baseUrl}/api/coding/projects/proj/serve/assets/app.js`);
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get("content-type")).toContain("text/javascript");
+    expect(await asset.text()).toBe("console.log('hi');");
+
+    await server.close();
+  });
+
   it("serves plugin UI pages by streaming with content-type and CSP headers", async () => {
     const plugins = mkdtempSync(join(tmpdir(), "ducki-plugins-"));
     dirs.push(plugins);

@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "@ducki/tools";
@@ -207,6 +207,83 @@ codingRouter.get("/projects/:project/read", (req, res) => {
       content: isText ? buffer.toString("utf8") : undefined,
       contentBase64: !isText ? buffer.toString("base64") : undefined,
     }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+const PREVIEW_CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".htm": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".otf": "font/otf",
+  ".txt": "text/plain; charset=utf-8",
+  ".xml": "application/xml; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".wasm": "application/wasm",
+};
+
+/**
+ * Serves a single project file over real HTTP so the Coding area's file preview can load it in
+ * an iframe via `src` instead of `srcDoc`.
+ *
+ * `srcDoc` gives the document no real URL/origin, so relative references
+ * (`<script src="./app.js">`, `<link href="style.css">`, `fetch("data.json")`) never resolve -
+ * every multi-file HTML/CSS/JS project silently rendered broken/unstyled. Serving it at a real
+ * URL fixes that for free: a page at `.../serve/index.html` that references "./app.js" is
+ * resolved by the BROWSER's own relative-URL rules to `.../serve/app.js`, no path rewriting
+ * needed on either side. Path-based (not `?path=`) specifically so that resolution works.
+ *
+ * Framing/caching headers mirror servePluginPage in plugins.ts - same reasoning: the response
+ * is meant to be embedded in the web UI's own iframe, so CSP must explicitly allow that, and a
+ * file actively being edited must never be served stale from a cache.
+ */
+codingRouter.get("/projects/:project/serve/*", (req, res) => {
+  try {
+    ensureCodingRoot();
+    const { absolute } = projectRoot(String(req.params["project"] ?? ""));
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+
+    // Express types the wildcard capture group loosely; the route itself guarantees it exists.
+    const rel = String((req.params as Record<string, string>)["0"] ?? "");
+    const target = absoluteFromProjectRelative(absolute, rel);
+    if (!existsSync(target) || statSync(target).isDirectory()) {
+      res.status(404).json(createApiError("File not found"));
+      return;
+    }
+
+    const ext = extname(target).toLowerCase();
+    res.setHeader("Content-Type", PREVIEW_CONTENT_TYPES[ext] ?? "application/octet-stream");
+    const trustedOrigins = "tauri://localhost https://tauri.localhost http://tauri.localhost https://ducki.cloud";
+    const selfHost = String(req.headers["host"] ?? "").trim();
+    const hostOrigins = /^[a-z0-9.-]+(:\d+)?$/i.test(selfHost) ? ` https://${selfHost} http://${selfHost}` : "";
+    const extra = process.env["DUCKI_FRAME_ANCESTORS"] ? ` ${process.env["DUCKI_FRAME_ANCESTORS"]}` : "";
+    res.setHeader("Content-Security-Policy", `frame-ancestors 'self' http://localhost:* http://127.0.0.1:* ${trustedOrigins}${hostOrigins}${extra}`);
+    res.removeHeader("X-Frame-Options");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "no-store, must-revalidate");
+
+    createReadStream(target).on("error", (err) => {
+      console.error(`Error streaming coding preview file: ${err}`);
+      if (!res.headersSent) res.status(500).end();
+      else res.end();
+    }).pipe(res);
   } catch (error) {
     res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
   }

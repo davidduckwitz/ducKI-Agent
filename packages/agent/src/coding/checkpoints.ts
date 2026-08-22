@@ -89,11 +89,21 @@ export async function ensureCheckpointRepo(root: string): Promise<boolean> {
  * `--allow-empty` is deliberate: a checkpoint taken before an attempt that then changes nothing
  * still has to exist, otherwise "restore to before attempt 3" would silently land on attempt 1's
  * state and the user would have no way to tell.
+ *
+ * `paths`: when the caller already knows exactly which file(s) just changed (a per-edit
+ * checkpoint, see checkpoint-on-write.ts), staging only those paths skips `git add -A`'s full
+ * working-tree scan - on every single file write, that scan is the dominant cost of a checkpoint
+ * on a project of any real size. Omit it (the attempt-level checkpoint, taken BEFORE the attempt
+ * runs and so unable to know what will change) to fall back to the full `-A` scan.
  */
-export async function createCheckpoint(root: string, label: string): Promise<Checkpoint | undefined> {
+export async function createCheckpoint(root: string, label: string, paths?: string[]): Promise<Checkpoint | undefined> {
   try {
     if (!(await ensureCheckpointRepo(root))) return undefined;
-    await git(root, ["add", "-A"]);
+    if (paths && paths.length > 0) {
+      await git(root, ["add", "--", ...paths]);
+    } else {
+      await git(root, ["add", "-A"]);
+    }
     await git(root, ["commit", "--allow-empty", "-m", label]);
     const sha = (await git(root, ["rev-parse", "HEAD"])).trim();
     return { sha, label, createdAt: new Date().toISOString() };
