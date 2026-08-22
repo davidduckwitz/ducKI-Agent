@@ -2,12 +2,78 @@ import { Router, type IRouter } from "express";
 import { resolve } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
 import type { Agent, AgentRunResult, Plan, PlanStep } from "@ducki/agent";
-import { formatPlanAsMarkdown } from "@ducki/agent";
+import { formatPlanAsMarkdown, Planner } from "@ducki/agent";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { parseMarkdownToPlan } from "@ducki/planer";
 import { CODING_WORKSPACE_ROOT } from "@ducki/tools";
+import { getRootLogger } from "@ducki/logger";
 
 export const plansRouter: IRouter = Router();
+
+/** Validates and normalizes the loosely-typed `plan` field a client sends back (its own copy of
+ *  a Plan object round-tripped through JSON) into what the Planner expects. */
+function coercePlan(raw: unknown): Plan | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj["goal"] !== "string" || !Array.isArray(obj["steps"])) return null;
+  return obj as unknown as Plan;
+}
+
+/**
+ * Proposes up to 3 clarifying questions for a plan (the "Plan verbessern" dialog's structured
+ * question flow) - a Single-Shot Planner call, not a chat round-trip. MUST be BEFORE /:id
+ * routes, same reason as /import/markdown above.
+ */
+plansRouter.post("/questions", async (req, res, next) => {
+  try {
+    const provider = req.app.locals["provider"] as import("@ducki/providers").LLMProvider | undefined;
+    if (!provider) {
+      res.status(500).json(createApiError("LLM provider is not configured"));
+      return;
+    }
+    const plan = coercePlan((req.body as Record<string, unknown>)?.["plan"]);
+    if (!plan) {
+      res.status(400).json(createApiError("plan is required (an object with goal + steps)"));
+      return;
+    }
+    const planner = new Planner(provider, getRootLogger().child("PlanQuestions"));
+    const questions = await planner.suggestClarifyingQuestions(plan);
+    res.json(createApiResponse({ questions }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Refines a plan deterministically via the Planner - no chat round-trip, no dependence on the
+ * model choosing to call a tool. Returns the new plan synchronously, same shape as
+ * /import/markdown. MUST be BEFORE /:id routes, same reason as above.
+ */
+plansRouter.post("/refine", async (req, res, next) => {
+  try {
+    const provider = req.app.locals["provider"] as import("@ducki/providers").LLMProvider | undefined;
+    if (!provider) {
+      res.status(500).json(createApiError("LLM provider is not configured"));
+      return;
+    }
+    const body = req.body as Record<string, unknown>;
+    const plan = coercePlan(body["plan"]);
+    const feedback = String(body["feedback"] ?? "").trim();
+    if (!plan) {
+      res.status(400).json(createApiError("plan is required (an object with goal + steps)"));
+      return;
+    }
+    if (!feedback) {
+      res.status(400).json(createApiError("feedback is required"));
+      return;
+    }
+    const planner = new Planner(provider, getRootLogger().child("PlanRefine"));
+    const refined = await planner.refinePlan(plan, feedback);
+    res.json(createApiResponse({ plan: refined, markdown: formatPlanAsMarkdown(refined) }));
+  } catch (error) {
+    next(error);
+  }
+});
 
 plansRouter.get("/", async (req, res, next) => {
   try {
@@ -122,7 +188,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
   try {
     const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
     const createCodingAgent = req.app.locals["createCodingAgent"] as
-      | ((options?: { sandboxRoot?: string }) => import("@ducki/agent").CodingAgent)
+      | ((options?: { sandboxRoot?: string; eventEmitter?: import("@ducki/agent").AgentEventEmitter }) => import("@ducki/agent").CodingAgent)
       | undefined;
     const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
     const io = req.app.locals["io"] as import("socket.io").Server | undefined;
@@ -272,20 +338,38 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     // Writes the plan back to its markdown file with each step's current status checked
     // off (EXECUTION_MODE_UPDATE_PLAN_FILE). Keyed by conversationId so re-executing the
     // same plan on the same conversation updates the same file instead of piling up copies.
-    const savePlanProgress = async (planResult: AgentRunResult, executor: Agent | import("@ducki/agent").CodingAgent) => {
-      if (!updatePlanFile || !db || planResult.checklistRunId === undefined) return;
+    //
+    // A CodingAgent run (see below) doesn't produce a checklistRunId - that gating belongs to
+    // the Agent.run()-level session checklist, which CodingAgent.run()'s own macro loop
+    // (phases/checkpoints/verify-retry, tracked via its todo tool instead) doesn't go through.
+    // For that case this falls back to marking every step done/failed from the run's overall
+    // success - coarser than per-step, but no regression: the session-checklist path was never
+    // reached for a coding sandbox execution anyway once run() replaced runOnExistingConversation.
+    const savePlanProgress = async (
+      planResult: AgentRunResult | import("@ducki/agent").CodingRunResult,
+      executor: Agent | import("@ducki/agent").CodingAgent
+    ) => {
+      if (!updatePlanFile || !db) return;
       try {
-        const items = await db.getChecklist(conversationId, planResult.checklistRunId);
-        const statusByTitle = new Map(items.map((item) => [item.title, item.status]));
-        const updatedPlan: Plan = {
-          ...existingPlan,
-          steps: existingPlan.steps.map((step) => {
-            const dbStatus = statusByTitle.get(step.title);
-            const status: PlanStep["status"] =
-              dbStatus === "done" ? "completed" : dbStatus === "failed" ? "failed" : dbStatus === "in_progress" ? "running" : step.status;
-            return { ...step, status };
-          }),
-        };
+        let updatedPlan: Plan;
+        if ("checklistRunId" in planResult && planResult.checklistRunId !== undefined) {
+          const items = await db.getChecklist(conversationId, planResult.checklistRunId);
+          const statusByTitle = new Map(items.map((item) => [item.title, item.status]));
+          updatedPlan = {
+            ...existingPlan,
+            steps: existingPlan.steps.map((step) => {
+              const dbStatus = statusByTitle.get(step.title);
+              const status: PlanStep["status"] =
+                dbStatus === "done" ? "completed" : dbStatus === "failed" ? "failed" : dbStatus === "in_progress" ? "running" : step.status;
+              return { ...step, status };
+            }),
+          };
+        } else if ("verified" in planResult) {
+          const status: PlanStep["status"] = planResult.success ? "completed" : "failed";
+          updatedPlan = { ...existingPlan, steps: existingPlan.steps.map((step) => ({ ...step, status })) };
+        } else {
+          return;
+        }
         const markdown = formatPlanAsMarkdown(updatedPlan);
         const savePath = `${markdownDir}/plan-${conversationId}.md`;
         await executor.executor.execute("filesystem", { action: "write", path: savePath, content: markdown });
@@ -322,32 +406,39 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
               }
             }
 
-            const codingAgent = createCodingAgent({ sandboxRoot });
-            await codingAgent.loadConversation(conversationId);
+            // Forwards CodingAgent's own events (phases, checkpoints, decisions) onto the same
+            // "chat:*" stream the chat UI already listens to - previously this branch called
+            // runOnExistingConversation(), which only runs Agent.run() ONCE and skips
+            // CodingAgent.run()'s whole macro loop (phases, per-attempt checkpoints, verify-
+            // command retry). Routing through run() here makes a plan executed from the UI go
+            // through the same discipline as a plan started directly via /api/coding-agent/run.
+            const codingEventEmitter: import("@ducki/agent").AgentEventEmitter = {
+              emitChunk: (chunk: string) => {
+                io?.emit("chat:chunk", { content: chunk, conversationId });
+              },
+              emitEvent: (event: unknown) => {
+                io?.emit("chat:event", { ...(event as Record<string, unknown>), conversationId });
+              },
+            };
+            const codingAgent = createCodingAgent({ sandboxRoot, eventEmitter: codingEventEmitter });
 
             // Emit start event
             if (io) {
               io.emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
             }
 
-            const result = await codingAgent.runOnExistingConversation(executionPrompt, {
-              stream: true,
+            const result = await codingAgent.run(executionPrompt, {
+              conversationId,
               existingPlan,
-              timeoutMsOverride,
-              checklistMaxItemAttemptsOverride,
-              onChunk: (chunk) => {
-                io?.emit("chat:chunk", { content: chunk, conversationId });
-              },
-              onEvent: (event) => {
-                io?.emit("chat:event", { ...event, conversationId });
-              },
+              maxAttempts: maxRetries,
+              timeoutMs: timeoutMsOverride,
             });
             await savePlanProgress(result, codingAgent);
 
             // Emit completion event
             if (io) {
               io.emit("chat:complete", {
-                response: `Plan execution finished.\n\n${result.response}`,
+                response: `Plan execution finished.\n\n${result.summary}`,
                 conversationId
               });
             }

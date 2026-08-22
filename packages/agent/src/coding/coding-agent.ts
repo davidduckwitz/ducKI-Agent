@@ -1,6 +1,8 @@
 import type { LLMProvider } from "@ducki/providers";
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor } from "@ducki/shared";
+import type { Logger } from "@ducki/logger";
+import { getRootLogger } from "@ducki/logger";
 import {
   diagnosticsTool,
   filesystemTool,
@@ -13,7 +15,7 @@ import {
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
-import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, RunJournalEntry } from "../config/interfaces_types.js";
+import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, AgentRunEventType, RunJournalEntry } from "../config/interfaces_types.js";
 import { AGENT_HOOK_NAMES, type AgentHook } from "../hooks/index.js";
 import { ToolApprovalPolicy, AllowedShellCommands } from "../tools/tool-approval-policy.js";
 import { createScopedFilesystemTool } from "./scoped-filesystem-tool.js";
@@ -23,6 +25,8 @@ import { withAutoDiagnostics } from "./auto-diagnostics.js";
 import { TodoList, createTodoTool } from "./todo-tool.js";
 import { createCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
 import { createExploreTool } from "./explore-tool.js";
+import { Planner, type Plan } from "../planner/planner.js";
+import { formatPlanAsMarkdown, toPlanEventPayload } from "../planner/plan-tool.js";
 
 const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
 
@@ -135,6 +139,12 @@ export interface CodingRunOptions {
   verifyCommand?: string;
   /** Overrides the instance's default macro attempt budget for this run only. */
   maxAttempts?: number;
+  /**
+   * A plan the caller already has (e.g. user-reviewed in the Plan panel, or refined via the
+   * Planner). When set, run() uses it as-is instead of calling the Planner itself - the point of
+   * asking first is wasted if the answer gets thrown away and re-derived.
+   */
+  existingPlan?: Plan;
   /**
    * Wall-clock budget for the whole run, in milliseconds. Enforced as a soft deadline checked at
    * each attempt boundary (never aborts an in-flight LLM/tool call mid-way), so the run stops
@@ -269,6 +279,8 @@ export class CodingAgent {
   /** How often read-before-edit refused a given file this run (see the hook for why it is bounded). */
   private readBeforeEditRefusals = new Map<string, number>();
   private readonly todos: TodoList;
+  private readonly logger: Logger;
+  private readonly planner: Planner;
 
   constructor(
     provider: LLMProvider,
@@ -279,6 +291,8 @@ export class CodingAgent {
     this.defaultMaxAttempts = Math.max(1, options.maxAttempts ?? 4);
     this.sandboxRoot = options.sandboxRoot;
     this.eventEmitter = eventEmitter;
+    this.logger = getRootLogger().child(`CodingAgent:${options.name ?? "CodingAgent"}`);
+    this.planner = new Planner(provider, this.logger);
 
     // Every checklist change is pushed straight to the UI, so what the user watches is the same
     // state the agent is steering by - not a second, prose-derived approximation of it.
@@ -579,6 +593,19 @@ export class CodingAgent {
       verifyCommand = this.detectDefaultVerifyCommand();
     }
 
+    // Real planning subagent: a structured, detailed plan from the Planner instead of letting
+    // the model invent one in free text during the PLAN phase (see buildInitialPrompt). A
+    // caller-supplied plan (already reviewed/refined by the user, e.g. via the Plan panel) is
+    // used as-is - re-deriving it here would throw away exactly the decision the caller made.
+    const toolNames = this.agent.executor.listTools().map((tool) => tool.name);
+    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames));
+    this.emitPlanEvent(plan);
+    // Pre-seeds the checklist with the planner's steps so the UI shows real progress from the
+    // very first tool call, instead of an empty list until the model gets around to calling
+    // todo:write itself. Title-matched merge (see TodoList.replace) keeps these ids stable if
+    // the model later calls todo:write again to adjust the plan post-exploration.
+    this.todos.replace(plan.steps.map((step) => ({ title: step.title })));
+
     const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
 
     let lastSummary = "";
@@ -633,7 +660,7 @@ export class CodingAgent {
 
       const prompt =
         attempt === 1
-          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill)
+          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan)
           : this.buildFollowUpPrompt(goal, lastSummary);
       // The `deadline` check above only ever fires BETWEEN attempts - a single attempt can run
       // up to maxIterations tool-call iterations, and Agent's own progress timeout only catches
@@ -838,6 +865,23 @@ export class CodingAgent {
     }
   }
 
+  /** Emits the Planner's structured plan as a "plan" event, the same payload shape agent.ts's
+   *  plan mode uses - CodingPlanPanel filters only on eventType==="plan" with goal+steps, not on
+   *  `source`, so this is picked up without any UI change. */
+  private emitPlanEvent(plan: Plan): void {
+    try {
+      const payload = toPlanEventPayload(plan, formatPlanAsMarkdown(plan));
+      this.eventEmitter?.emitEvent({
+        type: "plan" as AgentRunEventType,
+        message: `Plan: ${plan.goal}`,
+        data: { ...payload, source: "coding_agent" },
+        timestamp: new Date().toISOString(),
+      });
+    } catch {
+      // Event delivery is best-effort telemetry - never let it abort a coding run.
+    }
+  }
+
   private emitPhase(event: CodingPhaseEvent): void {
     try {
       const message = `${event.title}${event.description ? ': ' + event.description : ''}`;
@@ -928,20 +972,32 @@ export class CodingAgent {
     ];
   }
 
-  private buildInitialPrompt(goal: string, verifyCommand: string | undefined, detectedSkill: string | undefined): string {
+  private buildInitialPrompt(
+    goal: string,
+    verifyCommand: string | undefined,
+    detectedSkill: string | undefined,
+    plan: Plan
+  ): string {
     const parts: string[] = [`Goal: ${goal}`, "", ...this.pathHandlingBlock()];
 
     parts.push(
-      "Track your progress with the todo tool: after EXPLORE, call todo action:\"write\" with the concrete",
-      "steps you are going to take; mark a step in_progress before starting it and done once it is verified.",
-      "That checklist is what the user sees, so keep it truthful - never mark a step done on the strength of",
-      "an edit alone, only once diagnostics or the verification command confirmed it.",
+      "Track your progress with the todo tool: it already contains the plan below as pending steps.",
+      "Mark a step in_progress before starting it and done once it is verified. That checklist is what",
+      "the user sees, so keep it truthful - never mark a step done on the strength of an edit alone,",
+      "only once diagnostics or the verification command confirmed it.",
+      "",
+      "A planning subagent already analyzed this goal and drafted the following plan:",
+      "",
+      plan.steps.map((step, i) => `${i + 1}. ${step.title}${step.description ? ` - ${step.description}` : ""}`).join("\n"),
       "",
       "Work in these phases, and EXPLICITLY STATE the phase you are starting and completing:",
       "1. EXPLORE - locate the relevant files and read them before changing anything.",
       "   At start: \">> PHASE: EXPLORE\"",
       "   At end: \"<< EXPLORE COMPLETE\"",
-      "2. PLAN - name the exact files you will edit and what changes each one needs.",
+      "2. PLAN - review the draft plan above against what you found in EXPLORE. Name the exact files",
+      "   you will edit and what changes each one needs. If exploration shows the draft needs to",
+      "   change (a step is unnecessary, missing, or targets the wrong file), call todo action:\"write\"",
+      "   with the corrected steps - do not silently ignore the draft, adjust it explicitly.",
       "   At start: \">> PHASE: PLAN\"",
       "   At end: \"<< PLAN COMPLETE\"",
       "3. EDIT - make minimal, targeted edits (prefer the filesystem tool's \"edit\" action).",

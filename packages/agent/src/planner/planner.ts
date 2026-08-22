@@ -69,6 +69,23 @@ export interface PlanSubtask {
   status: "pending" | "running" | "completed" | "failed";
 }
 
+export interface ClarifyingQuestionOption {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/** Mirrors the frontend's AgentQuestion shape (apps/web/src/components/chat/AgentQuestionBox.tsx)
+ *  so the UI can render these directly without a translation step. */
+export interface ClarifyingQuestion {
+  id: string;
+  question: string;
+  description?: string;
+  type: "multiple-choice" | "text" | "combined";
+  options?: ClarifyingQuestionOption[];
+  placeholder?: string;
+}
+
 export interface PlanValidationResult {
   isValid: boolean;
   issues: string[];
@@ -225,6 +242,74 @@ export class Planner {
     });
 
     return this.createFallbackPlan(goal);
+  }
+
+  /**
+   * Single-shot call that proposes up to 3 short clarifying questions about a plan - ambiguous
+   * scope, missing constraints, style choices. Used by the "Plan verbessern" UI to ask something
+   * concrete instead of showing an empty free-text box. Deliberately low-stakes: on parse
+   * failure or an empty/malformed result this returns [] rather than retrying, so the caller can
+   * degrade to a plain textarea without the user ever seeing an error.
+   */
+  async suggestClarifyingQuestions(plan: Plan): Promise<ClarifyingQuestion[]> {
+    try {
+      const stepSummary = plan.steps.map((s) => `- ${s.title}${s.description ? `: ${s.description}` : ""}`).join("\n");
+      const messages: LLMMessage[] = [
+        {
+          role: "system",
+          content:
+            "You help refine task plans. Given a plan, propose at most 3 short clarifying questions that " +
+            "would make it more concrete - ambiguous scope, missing constraints, or a style choice with " +
+            "real alternatives. Skip anything the plan already answers. If nothing is genuinely ambiguous, " +
+            "return an empty array.\n\n" +
+            "Return ONLY valid JSON, an array of:\n" +
+            `[{"id": "q1", "question": "...", "description": "optional one-line context", ` +
+            `"type": "multiple-choice"|"text"|"combined", ` +
+            `"options": [{"id": "opt1", "label": "...", "description": "optional"}], "placeholder": "optional"}]\n` +
+            'Use "text" when there is no fixed set of answers, "multiple-choice" when there is, "combined" for both.',
+        },
+        {
+          role: "user",
+          content: `Goal: ${plan.goal}\n\nPlan steps:\n${stepSummary}`,
+        },
+      ];
+
+      const response = await this.provider.generate(messages, { temperature: 0.4, maxTokens: 800 });
+      const cleaned = response.content
+        .replace(/^```json\s*/, "")
+        .replace(/```\s*$/, "")
+        .replace(/^```\s*/, "")
+        .trim();
+      const parsed = JSON.parse(cleaned);
+      if (!Array.isArray(parsed)) return [];
+
+      return parsed
+        .filter((q): q is Record<string, unknown> => q && typeof q === "object" && typeof q["question"] === "string")
+        .slice(0, 3)
+        .map((q, idx) => ({
+          id: typeof q["id"] === "string" && q["id"] ? q["id"] : `q${idx + 1}`,
+          question: String(q["question"]),
+          ...(typeof q["description"] === "string" ? { description: q["description"] } : {}),
+          type: q["type"] === "multiple-choice" || q["type"] === "combined" ? q["type"] : "text",
+          ...(Array.isArray(q["options"])
+            ? {
+                options: (q["options"] as unknown[])
+                  .filter((o): o is Record<string, unknown> => !!o && typeof o === "object" && typeof (o as any)["label"] === "string")
+                  .map((o, oIdx) => ({
+                    id: typeof o["id"] === "string" && o["id"] ? o["id"] : `opt${oIdx + 1}`,
+                    label: String(o["label"]),
+                    ...(typeof o["description"] === "string" ? { description: o["description"] } : {}),
+                  })),
+              }
+            : {}),
+          ...(typeof q["placeholder"] === "string" ? { placeholder: q["placeholder"] } : {}),
+        }));
+    } catch (error) {
+      this.logger.debug("Clarifying question generation failed, returning none", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   async refinePlan(plan: Plan, feedback: string): Promise<Plan> {

@@ -25,7 +25,8 @@ function buildCodingAgent(sandboxRoot: string): CodingAgent {
 describe("CodingAgent path-handling guidance persists across retries", () => {
   it("buildInitialPrompt includes the CRITICAL PATH HANDLING block when sandboxed", () => {
     const agent = buildCodingAgent("/sandbox/my-plugin");
-    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", undefined);
+    const plan = { goal: "do the thing", steps: [], estimatedComplexity: "low" as const };
+    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", undefined, plan);
     expect(prompt).toContain("CRITICAL PATH HANDLING");
     expect(prompt).toContain("/sandbox/my-plugin");
   });

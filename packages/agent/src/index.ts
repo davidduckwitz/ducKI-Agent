@@ -18,7 +18,7 @@ export type { AdapterConfig, ProviderRouterConfig } from "@ducki/providers";
 export { ConversationManager } from "./conversation/conversation.js";
 export { MemorySystem } from "./memory/memory.js";
 export { Planner } from "./planner/planner.js";
-export type { Plan, PlanStep } from "./planner/planner.js";
+export type { Plan, PlanStep, ClarifyingQuestion, ClarifyingQuestionOption } from "./planner/planner.js";
 export { formatPlanAsMarkdown } from "./planner/plan-tool.js";
 export { Executor } from "./executor/executor.js";
 export type { ToolExecutor } from "@ducki/shared";

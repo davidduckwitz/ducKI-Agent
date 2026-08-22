@@ -53,6 +53,18 @@ afterEach(() => {
   sandboxes.length = 0;
 });
 
+// CodingAgent.run() now calls the Planner once before the first attempt (see
+// coding-agent.ts), which consumes the FIRST scripted provider.generate() response. A
+// non-JSON response there would trigger the Planner's retry-with-backoff loop and eat
+// further scripted entries meant for the agent's own turns - so every script below is
+// prefixed with a valid plan JSON response the Planner can parse on the first try.
+const PLAN_JSON = JSON.stringify({
+  goal: "schreibe die Datei app.js",
+  planType: "coding",
+  steps: [{ id: "step_1", title: "Write app.js" }],
+  estimatedComplexity: "low",
+});
+
 describe("CodingAgent incomplete part-sequence warning", () => {
   it("heals a missing part automatically: a follow-up run appends the missing part", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-part-"));
@@ -60,6 +72,7 @@ describe("CodingAgent incomplete part-sequence warning", () => {
     // Main run: part 1 of 2 written, then "Fertig.". Healing run (lightweight, no planning):
     // the append marker lands in its first response and completes the sequence.
     const provider = scriptedProvider([
+      PLAN_JSON,
       "[TOOL:filesystem action=write path=app.js totalParts=2]\npart1\n[/TOOL]",
       "Fertig.",
       "[TOOL:filesystem action=append path=app.js partNumber=2 totalParts=2]\npart2\n[/TOOL]",
@@ -83,6 +96,7 @@ describe("CodingAgent incomplete part-sequence warning", () => {
     // Response 1 writes part 1 of 2; response 2 (the post-tool turn) finishes the run
     // without sending part 2 - the sequence stays incomplete.
     const provider = scriptedProvider([
+      PLAN_JSON,
       "[TOOL:filesystem action=write path=app.js totalParts=2]\npart1\n[/TOOL]",
       "Fertig.",
     ]);
@@ -106,6 +120,7 @@ describe("CodingAgent incomplete part-sequence warning", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-part-"));
     sandboxes.push(sandbox);
     const provider = scriptedProvider([
+      PLAN_JSON,
       "[TOOL:filesystem action=write path=app.js totalParts=2]\npart1\n[/TOOL]",
       "[TOOL:filesystem action=append path=app.js partNumber=2 totalParts=2]\npart2\n[/TOOL]",
       "Fertig.",
@@ -122,6 +137,7 @@ describe("CodingAgent incomplete part-sequence warning", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-part-"));
     sandboxes.push(sandbox);
     const provider = scriptedProvider([
+      PLAN_JSON,
       "[TOOL:filesystem action=write path=app.js totalParts=2]\npart1\n[/TOOL]",
       "Fertig.",
     ]);
@@ -144,6 +160,7 @@ describe("CodingAgent incomplete part-sequence warning", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-part-"));
     sandboxes.push(sandbox);
     const provider = scriptedProvider([
+      PLAN_JSON,
       "[TOOL:filesystem action=write path=app.js totalParts=2]\npart1\n[/TOOL]",
       "Fertig.",
     ]);

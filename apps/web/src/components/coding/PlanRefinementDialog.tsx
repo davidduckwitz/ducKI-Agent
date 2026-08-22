@@ -1,54 +1,78 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, Sparkles, X } from "lucide-react";
+import { api, type ClarifyingQuestion } from "../../lib/api";
+import { AgentQuestionBox } from "../chat/AgentQuestionBox";
 import type { Plan } from "../chat/PlanExecutionPanel";
 
 interface PlanRefinementDialogProps {
   plan: Plan;
-  onSubmit: (refinementPrompt: string) => void;
+  /** Fired once POST /plans/refine returns a new plan - the caller swaps it in directly, no
+   *  chat round-trip and no dependence on the model choosing to emit a fresh plan event. */
+  onRefined: (plan: Plan) => void;
   onCancel: () => void;
 }
 
-export function PlanRefinementDialog({ plan, onSubmit, onCancel }: PlanRefinementDialogProps) {
+/** One question's answer, in the shape AgentQuestionBox's onAnswer callback provides. */
+type QuestionAnswer = string | { option: string; custom?: string };
+
+function answerToText(question: ClarifyingQuestion, answer: QuestionAnswer): string {
+  if (typeof answer === "string") return answer;
+  const label = question.options?.find((o) => o.id === answer.option)?.label ?? answer.option;
+  return answer.custom ? `${label} (${answer.custom})` : label;
+}
+
+export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefinementDialogProps) {
+  const [questions, setQuestions] = useState<ClarifyingQuestion[]>([]);
+  const [loadingQuestions, setLoadingQuestions] = useState(true);
+  const [answers, setAnswers] = useState<Record<string, QuestionAnswer>>({});
   const [improvement, setImprovement] = useState("");
-  const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = () => {
-    if (!improvement.trim()) return;
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingQuestions(true);
+    api.plans
+      .questions({ goal: plan.goal, steps: plan.steps ?? [] })
+      .then((res) => {
+        if (!cancelled) setQuestions(res.questions ?? []);
+      })
+      .catch(() => {
+        // Degrade to a plain free-text box - the questions are a nice-to-have, not a
+        // requirement, and the user can still describe what to improve.
+        if (!cancelled) setQuestions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingQuestions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan.goal]);
 
-    setSubmitted(true);
+  const handleSubmit = async () => {
+    const answeredParts = questions
+      .filter((q) => answers[q.id] !== undefined)
+      .map((q) => `- ${q.question}: ${answerToText(q, answers[q.id]!)}`);
+    const feedback = [...answeredParts, improvement.trim()].filter(Boolean).join("\n");
+    if (!feedback) return;
 
-    const refinementPrompt = `
-# Plan-Verbesserung angefordert
-
-**Aktueller Plan:** ${plan.goal}
-
-**Verbesserungswunsch:** ${improvement}
-
-**Bisheriger Plan:**
-\`\`\`
-${plan.markdown || JSON.stringify(plan.steps, null, 2)}
-\`\`\`
-
-Bitte überarbeite den Plan basierend auf dem Verbesserungswunsch:
-1. Analysiere den aktuellen Plan
-2. Identifiziere die angeforderten Verbesserungen
-3. Erstelle einen verbesserten Plan mit besseren/klareren Schritten
-4. Erkläre kurz, was sich geändert hat und warum
-5. Frage am Ende, ob weitere Verbesserungen gewünscht sind
-
-Antworte im folgenden Format:
-## Verbesserter Plan
-[Plan mit Schritten]
-
-## Änderungen
-- [Was sich geändert hat]
-
-## Weitere Verbesserungen?
-Möchtest du noch weitere Verbesserungen vornehmen? (Ja/Nein)
-`;
-
-    onSubmit(refinementPrompt);
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await api.plans.refine(
+        { goal: plan.goal, steps: plan.steps ?? [], markdown: plan.markdown },
+        feedback
+      );
+      onRefined(result.plan);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setSubmitting(false);
+    }
   };
+
+  const hasFeedback = questions.some((q) => answers[q.id] !== undefined) || improvement.trim().length > 0;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -66,34 +90,36 @@ Möchtest du noch weitere Verbesserungen vornehmen? (Ja/Nein)
           </div>
           <button
             onClick={onCancel}
-            className="p-1 text-gray-400 hover:text-gray-300"
+            disabled={submitting}
+            className="p-1 text-gray-400 hover:text-gray-300 disabled:opacity-50"
             aria-label="Schließen"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Info Box */}
-        <div className="bg-blue-500/10 border border-blue-500/20 rounded p-3">
-          <p className="text-xs text-blue-300">
-            Beschreibe, was am Plan verbessert werden soll. Der Agent wird den Plan überarbeiten und einen Verbesserungsvorschlag machen.
-          </p>
-        </div>
+        {loadingQuestions && (
+          <p className="text-xs text-gray-400">Analysiere den Plan für Rückfragen...</p>
+        )}
 
-        {/* Current Plan Preview */}
-        <div className="space-y-2">
-          <label className="text-xs font-semibold text-gray-300">Bisheriger Plan:</label>
-          <div className="bg-gray-800/50 rounded p-3 max-h-32 overflow-y-auto">
-            <p className="text-xs text-gray-400 whitespace-pre-wrap">
-              {plan.markdown || JSON.stringify(plan.steps, null, 2)}
-            </p>
+        {!loadingQuestions && questions.length > 0 && (
+          <div className="space-y-3">
+            {questions.map((question) => (
+              <AgentQuestionBox
+                key={question.id}
+                question={question}
+                isLoading={submitting}
+                onAnswer={(answer) => setAnswers((prev) => ({ ...prev, [question.id]: answer }))}
+              />
+            ))}
           </div>
-        </div>
+        )}
 
-        {/* Improvement Input */}
+        {/* Free-text fallback/addition - always available so nothing is lost when no
+            questions come back, or the user wants to say something the questions didn't cover. */}
         <div className="space-y-2">
           <label htmlFor="improvement" className="text-xs font-semibold text-gray-300">
-            Was soll verbessert werden?
+            {questions.length > 0 ? "Weitere Anmerkungen (optional):" : "Was soll verbessert werden?"}
           </label>
           <textarea
             id="improvement"
@@ -101,17 +127,21 @@ Möchtest du noch weitere Verbesserungen vornehmen? (Ja/Nein)
             onChange={(e) => setImprovement(e.target.value)}
             placeholder="z.B.: Füge mehr Fehlerbehandlung hinzu, verkürze die Anzahl der Schritte, mache den Plan detaillierter..."
             className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none resize-none"
-            rows={4}
-            disabled={submitted}
+            rows={3}
+            disabled={submitting}
           />
         </div>
 
-        {/* Status Message */}
-        {submitted && (
+        {error && (
+          <div className="bg-red-500/10 border border-red-500/20 rounded p-3 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-300">{error}</p>
+          </div>
+        )}
+
+        {submitting && (
           <div className="bg-green-500/10 border border-green-500/20 rounded p-3">
-            <p className="text-xs text-green-300">
-              Der Agent überarbeitet den Plan...
-            </p>
+            <p className="text-xs text-green-300">Plan wird überarbeitet...</p>
           </div>
         )}
 
@@ -119,14 +149,14 @@ Möchtest du noch weitere Verbesserungen vornehmen? (Ja/Nein)
         <div className="flex gap-2 justify-end">
           <button
             onClick={onCancel}
-            disabled={submitted}
+            disabled={submitting}
             className="px-4 py-2 rounded border border-gray-600 text-sm font-medium text-gray-300 hover:bg-gray-800 disabled:opacity-50"
           >
             Abbrechen
           </button>
           <button
-            onClick={handleSubmit}
-            disabled={submitted || !improvement.trim()}
+            onClick={() => void handleSubmit()}
+            disabled={submitting || !hasFeedback}
             className="px-4 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
           >
             <Sparkles className="w-4 h-4" />

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, Circle, ListChecks, Loader2, Play, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
@@ -27,28 +27,24 @@ export function CodingPlanPanel({
   isLoading,
   overridePlan,
   onExecutePlan,
-  onRefine,
 }: {
   messages: RenderedChatMessage[];
   conversationId?: number;
   isLoading: boolean;
   overridePlan?: Plan | null;
   onExecutePlan?: (plan: Plan) => Promise<void>;
-  onRefine: (prompt: string) => void;
 }) {
   const { t } = useI18n();
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefinement, setShowRefinement] = useState(false);
+  // A plan that came back from POST /plans/refine (see PlanRefinementDialog) - takes priority
+  // over a plan derived from messages/handoff since it's the most recently reviewed version.
+  const [refinedPlan, setRefinedPlan] = useState<Plan | null>(null);
   const settingsQuery = useSettings();
   const autoExecuteEnabled = readFlag(settingsQuery.data, "PLAN_MODE_AUTO_EXECUTE");
-  // Set right before a refinement prompt is submitted; consumed by the auto-execute effect
-  // below once the refined plan actually arrives, so a normal (non-refinement) plan event
-  // never triggers an unrequested execution.
-  const refinementPendingRef = useRef(false);
-  const lastAutoExecutedPlanIndexRef = useRef(-1);
 
-  const { plan: derivedPlan, planIndex } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
+  const { plan: derivedPlan } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const msg = messages[i];
       if (!msg || msg.eventType !== "plan" || !msg.eventData) continue;
@@ -63,9 +59,10 @@ export function CodingPlanPanel({
     return { plan: null, planIndex: -1 };
   }, [messages]);
 
-  // Prefer a plan from this conversation's messages; fall back to a plan handed
-  // over from the chat page (which lives in a different conversation).
-  const plan = derivedPlan ?? overridePlan ?? null;
+  // A refined plan (just returned by POST /plans/refine) takes priority; otherwise prefer a
+  // plan from this conversation's messages; fall back to a plan handed over from the chat page
+  // (which lives in a different conversation).
+  const plan = refinedPlan ?? derivedPlan ?? overridePlan ?? null;
 
   // Real per-step state from the agent's own checklist (see lib/planChecklist for why this
   // replaced a tool-call counter, and why the logic lives in a testable module).
@@ -76,20 +73,20 @@ export function CodingPlanPanel({
   const runningIndex = useMemo(() => firstOpenStepIndex(checklist, steps), [checklist, steps]);
   const doneCount = checklist?.doneCount ?? 0;
 
-  const execute = async () => {
-    if (!plan) return;
+  const execute = async (planToExecute: Plan | null = plan) => {
+    if (!planToExecute) return;
     setError(null);
     setExecuting(true);
     try {
       if (onExecutePlan) {
         // Robust path: parent guarantees a coding project + conversation exist and
         // passes the project slug through so files land in the project sandbox.
-        await onExecutePlan(plan);
+        await onExecutePlan(planToExecute);
       } else {
-        await api.plans.execute(plan.id, {
-          goal: plan.goal,
-          steps,
-          markdown: plan.markdown,
+        await api.plans.execute(planToExecute.id, {
+          goal: planToExecute.goal,
+          steps: planToExecute.steps ?? [],
+          markdown: planToExecute.markdown,
           conversationId,
         });
       }
@@ -99,20 +96,6 @@ export function CodingPlanPanel({
       setExecuting(false);
     }
   };
-
-  // PLAN_MODE_AUTO_EXECUTE: once a refined plan arrives (refinementPendingRef was set right
-  // before submitting the refinement prompt), start execution automatically instead of
-  // waiting for a manual "Execute" click. Never fires for the plan's initial creation or any
-  // other unrelated plan event - only the refinement round-trip sets the pending flag.
-  useEffect(() => {
-    if (!autoExecuteEnabled) return;
-    if (!refinementPendingRef.current) return;
-    if (planIndex < 0 || planIndex === lastAutoExecutedPlanIndexRef.current) return;
-    refinementPendingRef.current = false;
-    lastAutoExecutedPlanIndexRef.current = planIndex;
-    void execute();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planIndex, autoExecuteEnabled]);
 
   if (!plan) {
     return (
@@ -255,10 +238,13 @@ export function CodingPlanPanel({
       {showRefinement && (
         <PlanRefinementDialog
           plan={plan}
-          onSubmit={(prompt) => {
+          onRefined={(newPlan) => {
             setShowRefinement(false);
-            refinementPendingRef.current = true;
-            onRefine(prompt);
+            setRefinedPlan(newPlan);
+            // PLAN_MODE_AUTO_EXECUTE: skip the manual "Umsetzen" click once a refinement
+            // completes. Passed explicitly (not read from state) because setRefinedPlan above
+            // hasn't re-rendered yet - `plan` in this closure would still be the old one.
+            if (autoExecuteEnabled) void execute(newPlan);
           }}
           onCancel={() => setShowRefinement(false)}
         />

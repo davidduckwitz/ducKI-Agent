@@ -89,6 +89,31 @@ export function isIncompleteResponse(finishReason: string | undefined): boolean 
   return finishReason === "length" || finishReason === INCOMPLETE_STREAM_FINISH_REASON;
 }
 
+/**
+ * True when a response's completion-token count sits close enough to the requested output cap
+ * that it was very likely cut off, REGARDLESS of what finish_reason the backend reported.
+ *
+ * `isIncompleteResponse` trusts the provider to say so honestly - many local/OpenAI-compatible
+ * backends report "stop" even when they hit the token limit mid-generation, because their
+ * server-side cap silently overrides the requested one. Aider hit the same gap and added the
+ * same style of guard: a response landing at ~92%+ of the requested cap is treated as truncated
+ * even on a clean finish_reason, because a model that finished on its own almost never stops
+ * exactly at the wall - it stops mid-sentence when the wall stops it.
+ *
+ * Deliberately conservative in the other direction too: `outputTokens` is sometimes an
+ * ESTIMATE (chars/4) rather than a true provider count, so the threshold stays high (92%) to
+ * keep false positives rare - a false positive here only costs a retry prompt, never data loss,
+ * so erring toward "ask again" is the safe side of this trade-off.
+ */
+export function isLikelyTruncatedByLength(
+  outputTokens: number | undefined,
+  maxOutputTokens: number | undefined,
+  thresholdRatio = 0.92
+): boolean {
+  if (!outputTokens || !maxOutputTokens || maxOutputTokens <= 0) return false;
+  return outputTokens >= maxOutputTokens * thresholdRatio;
+}
+
 export interface GenerateOptions {
   temperature?: number;
   topP?: number;

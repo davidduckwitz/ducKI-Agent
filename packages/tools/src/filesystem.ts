@@ -546,6 +546,15 @@ function displayScopeRoot(basePath: string | undefined): string {
 
 function resolvePath(inputPath: string, options: PathOptions): string {
   const trimmed = String(inputPath ?? "").trim();
+  // An empty path must never silently resolve to the base itself - joining "" onto a base
+  // (relative or scoped) is a no-op path join, so every action below would then operate on
+  // the whole workspace/sandbox ROOT instead of failing with a clear message. That surfaced
+  // as a write attempting to atomic-write over the sandbox directory itself, crashing with
+  // a cryptic "EPERM: operation not permitted, copyfile <sandbox> -> <sandbox>.bak" instead
+  // of the actual problem: the caller never supplied a path.
+  if (!trimmed) {
+    throw new Error("path is required and must not be empty.");
+  }
   const scopedBase = options.basePath ? resolve(options.basePath) : undefined;
   const isAbsolute = ABSOLUTE_PATH_RE.test(trimmed);
 
@@ -649,15 +658,29 @@ export const filesystemTool: ToolExecutor = {
     let content = extractFileContent(input, String(input["path"] ?? ""));
     const recursive = (input["recursive"] as boolean | undefined) ?? false;
 
+    // Content delivered verbatim - a heredoc write/append block, or a native tool_call whose
+    // arguments never passed through a hand-written JSON string - carries NO escape sequences
+    // of its own; whatever bytes the model wrote ARE the file. Running the JSON-string
+    // de-escape below on it would corrupt genuine content: a JS/regex file containing a
+    // literal `\n`, `\t` or `\r` (extremely common) had those two-character sequences turned
+    // into real control characters, silently mangling the file while reporting success.
+    const contentTrusted = input["__contentTrusted"] === true;
+    delete input["__contentTrusted"];
+
     // De-escape literal \n, \t, \r escape sequences (from JSON string parsing)
     // ONLY convert actual escape sequences, not random 'n' characters - other patterns break code
     if (content !== undefined) {
-      content = content
-        .replace(/\\n/g, "\n")
-        .replace(/\\t/g, "\t")
-        .replace(/\\r/g, "\r");
-      // Cut off any leaked tool-call / stop-token syntax a weak model mangled into
-      // the content string (no-op unless a marker is actually present).
+      if (!contentTrusted) {
+        content = content
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "\t")
+          .replace(/\\r/g, "\r");
+      }
+      // Cut off any leaked tool-call / stop-token syntax a weak model mangled into the content
+      // string. Runs even for trusted content: it only cuts a marker that LOOKS like a spilled
+      // terminator (see stripStopMarkers's guards) and is a no-op otherwise, so it stays a safe
+      // second line of defense for native tool_call content that never went through the
+      // heredoc boundary scanner in the first place.
       content = stripStopMarkers(content) as string;
     }
 

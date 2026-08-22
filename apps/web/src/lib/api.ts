@@ -1,8 +1,17 @@
 import { getApiBaseUrl } from "./backendUrl";
+import type { Plan } from "../components/chat/PlanExecutionPanel";
+import type { AgentQuestion } from "../components/chat/AgentQuestionBox";
 
 /** @deprecated Use getApiBaseUrl from ./backendUrl - kept as a named re-export so
  *  existing importers keep working. */
 export const getBaseUrl = getApiBaseUrl;
+
+/** Structurally identical to AgentQuestion - the backend (packages/agent's Planner) returns
+ *  this shape directly so the UI can render it via AgentQuestionBox with no translation. */
+export type ClarifyingQuestion = AgentQuestion;
+/** The refined plan comes back with richer per-step fields (id, status, ...) than the
+ *  frontend's own Plan.steps type needs - a superset is fine, Plan only reads what it declares. */
+export type RefinedPlan = Plan;
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // No localhost fallback: it used to retry every failed request against
@@ -271,6 +280,26 @@ export const api = {
       ),
     importMarkdown: (markdown: string) =>
       request<unknown>("/plans/import/markdown", { method: "POST", body: JSON.stringify({ markdown }) }),
+    questions: (plan: {
+      goal: string;
+      steps: Array<{ title: string; description?: string; tools?: string[] }>;
+    }) =>
+      request<{ questions: ClarifyingQuestion[] }>("/plans/questions", {
+        method: "POST",
+        body: JSON.stringify({ plan }),
+      }),
+    refine: (
+      plan: {
+        goal: string;
+        steps: Array<{ title: string; description?: string; tools?: string[] }>;
+        markdown?: string;
+      },
+      feedback: string
+    ) =>
+      request<{ plan: RefinedPlan; markdown: string }>("/plans/refine", {
+        method: "POST",
+        body: JSON.stringify({ plan, feedback }),
+      }),
   },
 
   memory: {

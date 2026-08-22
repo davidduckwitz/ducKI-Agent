@@ -327,15 +327,6 @@ export function CodingAgentPanel({
           isLoading={isLoading}
           overridePlan={overridePlan}
           onExecutePlan={onExecutePlan}
-          onRefine={(prompt) => {
-            setCodingAgentTab("chat");
-            setPlanMode(true);
-            setInput(prompt);
-            window.requestAnimationFrame(() => {
-              autoGrow(textareaRef.current);
-              textareaRef.current?.focus();
-            });
-          }}
         />
       )}
 

@@ -2,7 +2,7 @@ import { jsonrepair } from "jsonrepair";
 import type { LLMProvider } from "@ducki/providers";
 import { isProviderConnectionError, isAbortError } from "@ducki/providers";
 import type { LLMMessage, ToolResult, LLMContent, ToolCall } from "@ducki/shared";
-import { tokenizeText, isIncompleteResponse } from "@ducki/shared";
+import { tokenizeText, isIncompleteResponse, isLikelyTruncatedByLength } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
@@ -3112,8 +3112,9 @@ export class Agent {
       // call, or the end of the response. Same rules as the strict pass, so a body that
       // mentions the tool syntax ([TOOL: / [/TOOL]) is not cut at the mention.
       const bodyStart = m.index + m[0].length;
-      const { end } = this.findHeredocBodyEnd(response, bodyStart);
-      const absEnd = end === -1 ? response.length : end;
+      const { end, terminator } = this.findHeredocBodyEnd(response, bodyStart);
+      const ranToResponseEnd = end === -1;
+      const absEnd = ranToResponseEnd ? response.length : end;
       const body = response.slice(bodyStart, absEnd).replace(/\r?\n$/, "");
       if (body.trim().length === 0) continue;
 
@@ -3125,6 +3126,22 @@ export class Agent {
         // only risk damaging it.
         __contentTrusted: true,
       };
+      // Missing `[/TOOL]` is deliberately NOT treated as truncation on its own - that is
+      // exactly the case this rescue exists for (see the file header): a model that wrote a
+      // complete file and simply forgot the closing marker before starting its NEXT call.
+      // The "still stops the body at a leaked next call" test below is a complete document
+      // that must keep writing successfully.
+      //
+      // The one case worth flagging is different: the body ran all the way to the END of the
+      // response with NOTHING after it (no next call, no closing prose) AND it looks cut off
+      // mid-token (see looksTruncatedTail). That combination - nothing follows, AND the last
+      // thing on the page is an unterminated tag/attribute - cannot be a model that finished
+      // and just forgot punctuation; it is the fingerprint of hitting the output limit
+      // mid-write. Reuses `__argsTruncated` so the existing guard (which blocks persisting
+      // calls regardless of how they were parsed) also covers this path.
+      if (!terminator && ranToResponseEnd && this.looksTruncatedTail(body)) {
+        input["__argsTruncated"] = true;
+      }
       const parsed = this.resolveToolNameAndInput(toolName, input);
       if (parsed) {
         calls.push(parsed);
@@ -3138,6 +3155,25 @@ export class Agent {
     }
 
     return { calls, markerCount, remaining };
+  }
+
+  /**
+   * True when the end of a heredoc body looks like generation stopped mid-token rather than
+   * at a natural boundary - the plain-text equivalent of isTruncatedJsonTail, for content that
+   * has no JSON structure to check. Deliberately narrow (markup-shaped signals only) so a
+   * complete file in any other format is never misclassified - see the two checks' comments.
+   */
+  private looksTruncatedTail(content: string): boolean {
+    const tail = content.slice(-2000);
+    const lastOpen = tail.lastIndexOf("<");
+    const lastClose = tail.lastIndexOf(">");
+    // A '<' with no matching '>' after it: the last thing written was the start of a tag
+    // ("<div id=\"app") that never got to close, e.g. "<span id='brainPass'" with nothing more.
+    if (lastOpen > lastClose) return true;
+    // An attribute value opened after the last '>' whose quote is never closed before the end,
+    // e.g. `style="color:green` with no closing quote anywhere after it.
+    const afterLastClose = tail.slice(lastClose + 1);
+    return /=\s*["'][^"'\n]*$/.test(afterLastClose);
   }
 
   /** Strips a wrapping `( ... )` from a header's argument list and drops separator commas, so
@@ -7325,7 +7361,12 @@ export class Agent {
         iterations,
         repeatedToolCalls,
         currentNativeToolCalls,
-        isIncompleteResponse(currentFinishReason)
+        // Two independent signals, either one is enough: an honest finish_reason, or the
+        // completion landing suspiciously close to the requested cap (see
+        // isLikelyTruncatedByLength for why the latter matters - backends that silently cap
+        // output below what was requested still report a clean finish_reason).
+        isIncompleteResponse(currentFinishReason) ||
+          isLikelyTruncatedByLength(currentResponseTokens.output, adjustedControls.maxOutputTokens)
       );
 
       if (runJournalEnabled && journalEntries.length > 0) {

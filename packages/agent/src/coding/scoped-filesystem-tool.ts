@@ -32,15 +32,21 @@ export function normalizeScopedPath(rawPath: string, sandboxRoot: string): strin
   }
 
   // Leading run of segments equal to the SANDBOX TAIL (which always ends in the
-  // project dir), longest match first. Requires at least 2 segments so a project
-  // slug that happens to match an ordinary subfolder name (e.g. a real project here
-  // is literally called "js") is never mistaken for a repeated sandbox prefix -
-  // stripping "js/utils.js" down to "utils.js" would silently misplace a file the
-  // model genuinely meant to put in a js/ subfolder, with no error to signal it. A
-  // bare repeated project name (single segment, e.g. "js/utils.js" meant as the
-  // redundant-prefix case) is left alone; worst case it lands one harmless
-  // directory level deeper instead of being silently discarded.
-  for (let take = Math.min(sbSegs.length, pSegs.length); take >= 2; take--) {
+  // project dir), longest match first, down to a single segment.
+  //
+  // This used to require at least 2 segments, on the theory that a project slug matching
+  // an ordinary subfolder name (e.g. a real project here is literally called "js") could
+  // be mistaken for a repeated sandbox prefix and misplace a genuine "js/utils.js"
+  // subfolder. That theory undersold the cost of NOT stripping: every coding sandbox is
+  // exactly `CODING_WORKSPACE_ROOT/<project-slug>` - ONE segment - so the single-segment
+  // case this used to skip is the COMMON case, not the rare one, and a model that repeats
+  // its own project slug as a leading path segment (which it does constantly, having just
+  // seen that slug in its own prompt) got silently nested one directory level too deep -
+  // a same-session `read("index.html")` at the path the model actually believes is
+  // correct then fails with "File not found". Write and read silently disagreeing on
+  // where the file lives is far worse than the rare false-positive strip of a
+  // genuinely-intended same-named subfolder.
+  for (let take = Math.min(sbSegs.length, pSegs.length); take >= 1; take--) {
     const sbSuffix = sbLc.slice(sbLc.length - take).join("/");
     const pPrefix = pLc.slice(0, take).join("/");
     if (sbSuffix === pPrefix) {
@@ -117,9 +123,11 @@ export function createScopedFilesystemTool(sandboxRoot: string): ToolExecutor {
       // verbatim - there is no JSON-string wrapper for tool-call syntax to leak into, so
       // sanitizeCodeContent's heuristics (especially the unconditional trailing `"}` strip)
       // can only do harm here, e.g. truncating a JSON file that legitimately ends in `"}`.
-      // Skip sanitizing for trusted sources; always drop the internal flag before forwarding.
+      // Skip sanitizing for trusted sources. The flag itself is left on scopedInput (rather
+      // than deleted here) so filesystemTool.execute can also see it and skip its own \n\t\r
+      // de-escape, which would otherwise corrupt verbatim content the same way sanitizing
+      // would - filesystemTool deletes the flag itself before it could leak any further.
       const contentTrusted = scopedInput["__contentTrusted"] === true;
-      delete scopedInput["__contentTrusted"];
       for (const field of ["path", "file_path", "filePath", "oldPath", "newPath", "source", "destination", "dest"]) {
         if (typeof scopedInput[field] === "string") {
           scopedInput[field] = normalizeScopedPath(scopedInput[field] as string, sandboxRoot);

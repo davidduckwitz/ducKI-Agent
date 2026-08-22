@@ -90,6 +90,40 @@ describe("hybrid header + heredoc body", () => {
     expect(calls[0]!.input["action"]).toBe("append");
     expect(calls[0]!.input["content"]).toBe("mehr Text");
   });
+
+  it("does NOT flag a missing terminator as truncated when the file is complete", () => {
+    // Regression guard for the fix above: the whole point of this rescue path is a model that
+    // wrote a complete file and only forgot [/TOOL] - flagging that as truncated would defeat it.
+    const agent = createAgentForParserTests();
+    const response = '[TOOL:filesystem(action="write", path="index.html")]\n' + HTML;
+
+    const { calls } = extract(agent, response);
+
+    expect(calls[0]!.input["__argsTruncated"]).toBeUndefined();
+  });
+
+  it("flags a body cut off mid-attribute with no terminator as truncated", () => {
+    const agent = createAgentForParserTests();
+    const cutOffHtml =
+      '<!DOCTYPE html>\n<html>\n<body>\n  <span id="totalBalance" style="color:green';
+    const response = '[TOOL:filesystem(action="write", path="index.html")]\n' + cutOffHtml;
+
+    const { calls } = extract(agent, response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.input["__argsTruncated"]).toBe(true);
+  });
+
+  it("flags a body cut off mid-tag with no terminator as truncated", () => {
+    const agent = createAgentForParserTests();
+    const cutOffHtml = "<!DOCTYPE html>\n<html>\n<body>\n  <span id=\"brainPass";
+    const response = '[TOOL:filesystem(action="write", path="index.html")]\n' + cutOffHtml;
+
+    const { calls } = extract(agent, response);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.input["__argsTruncated"]).toBe(true);
+  });
 });
 
 describe("the tolerant pass must not swallow well-formed calls", () => {

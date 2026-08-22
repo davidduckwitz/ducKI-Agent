@@ -71,6 +71,9 @@ describe("CodingAgent no-op checkpoint discard", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-cp-write-"));
     sandboxes.push(sandbox);
     const provider = scriptedProvider([
+      // CodingAgent.run() calls the Planner first, consuming the first scripted response - a
+      // non-JSON response there would trigger the Planner's retry loop and eat further entries.
+      JSON.stringify({ goal: "schreibe app.js", steps: [{ id: "step_1", title: "Write app.js" }], estimatedComplexity: "low" }),
       "[TOOL:filesystem action=write path=app.js]\ncontent\n[/TOOL]",
       "Fertig.",
     ]);
