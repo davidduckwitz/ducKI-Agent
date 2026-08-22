@@ -582,7 +582,11 @@ codingRouter.get("/projects/:project/checkpoints", async (req, res) => {
       res.status(404).json(createApiError("Project not found"));
       return;
     }
-    const checkpoints = await listCheckpoints(absolute);
+    // Default limit (50) comfortably covered one checkpoint per attempt; CodingAgent now also
+    // checkpoints every individual file mutation (see withPerEditCheckpoints), so a single
+    // multi-edit run can add far more than 50 - raised so the "Before attempt N" boundary
+    // markers from earlier attempts/runs don't fall out of view behind a chatty later one.
+    const checkpoints = await listCheckpoints(absolute, 200);
     res.json(createApiResponse({ project: slug, checkpoints }));
   } catch (error) {
     res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));

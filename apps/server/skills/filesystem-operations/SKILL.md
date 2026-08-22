@@ -39,6 +39,7 @@ but don't rely on that, use `list` directly.
 | `write` | Create/fully overwrite a file | `path`, `content` |
 | `append` | Append content | `path`, `content` |
 | `edit` | Replace an exact text section | `path`, `oldString`, `newString` |
+| `edit_lines` | Replace a line range by number, no text matching | `path`, `startLine`, `endLine`, `content` |
 | `delete` | Delete file/folder | `path` (folder: `recursive:true`) |
 | `list` | List folder contents | `path` |
 | `mkdir` | Create folder (recursive) | `path` |
@@ -70,6 +71,20 @@ Read large files in sections instead of all at once:
   → provide more context or set `replaceAll:true`
 - `write` overwrites the **entire** file — only for new files or a full replacement
 - `write`/`append` create a `.bak` and write atomically; JSON is validated before writing
+
+### Modifying a huge or repetitive block — `edit_lines`
+When the section to change is very long, or the exact text appears many times in the file
+(so `oldString` keeps failing with "not unique" or "not found"), address it by **line
+number** instead of matching text — read the file first to get accurate numbers:
+```
+[TOOL:filesystem({"action": "read", "path": "src/big.ts"})]
+[TOOL:filesystem({"action": "edit_lines", "path": "src/big.ts", "startLine": 42, "endLine": 58, "content": "[replacement lines]"})]
+```
+- `startLine`/`endLine` are 1-based and **inclusive** — same numbering `read` shows
+- `endLine: startLine - 1` inserts new lines before `startLine` without removing anything
+  (e.g. `startLine: 10, endLine: 9` inserts before line 10)
+- `content: ""` on a real range **deletes** those lines
+- Line numbers shift after every edit — re-read before a second `edit_lines` on the same file
 
 ### Creating
 Single-line / tiny content — inline JSON is fine:
@@ -138,8 +153,8 @@ The tool responds with clear, actionable messages — follow them instead of giv
 |---|---|
 | `'…' is a file, not a directory` | use `read` instead of `list` |
 | `'…' is a directory, not a file` | use `list` instead of `read`/`edit`/`append` |
-| `oldString is not unique (N matches)` | more context in `oldString`, or `replaceAll:true` |
-| `oldString not found in file` | `read` the file first, copy the exact text |
+| `oldString is not unique (N matches)` | more context in `oldString`, `replaceAll:true`, or switch to `edit_lines` |
+| `oldString not found in file` | `read` the file first, copy the exact text (or use `edit_lines` with line numbers) |
 | `Path is outside shared workspace` | put the path under `shared-workspace` or set `basePath` |
 | `is a directory. Pass recursive:true` | add `recursive:true` |
 

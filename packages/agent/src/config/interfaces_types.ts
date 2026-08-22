@@ -117,6 +117,17 @@ export interface AgentRunOptions {
    *  doesn't lose the record of what it already did (see AgentRunResult.runJournal). Opt-in
    *  and per-call: regular one-shot run() callers never set this and see no behavior change. */
   initialRunJournal?: RunJournalEntry[];
+  /** Called once per journal entry, at the moment the entry is created, to tag it with the
+   *  caller's own notion of "current step" (e.g. CodingAgent's in-progress todo id). Optional
+   *  and read-only from the run loop's perspective - a plain one-shot run() never sets this
+   *  and journal entries simply carry no stepId. Called synchronously so it reflects the
+   *  state exactly at that tool call, not at the end of the whole attempt. */
+  getCurrentStepId?: () => string | undefined;
+  /** Called once per iteration with the model's raw response text, BEFORE that response's own
+   *  tool calls are validated/executed - lets a caller derive state from the response (e.g.
+   *  CodingAgent scanning for its ">> PHASE: X" markers) in time for a beforeTool hook to act
+   *  on it for calls in that SAME response. Optional; a plain run() never sets this. */
+  onModelResponse?: (response: string) => void;
   /** The delivery channel this run's response will go out on (e.g. "discord", "telegram",
    *  "cli"), when known to the caller (gateway/chat routes). Selects a short formatting hint
    *  appended to the system prompt (see prompt/guidance-blocks.ts::platformHintGuidance) -
@@ -174,6 +185,20 @@ export interface RunJournalEntry {
   toolName: string;
   summary: string;
   success: boolean;
+  /** When this entry was created. Iteration numbers alone are ambiguous across CodingAgent's
+   *  multiple attempts (each attempt's agent.run() restarts its own iteration count at 1), so
+   *  this is the only field that orders entries unambiguously across a whole multi-attempt run. */
+  timestamp: string;
+  /** The actual error message when success is false - previously only the boolean survived,
+   *  so a failed step's journal entry told a reader THAT it failed but never WHY, and a later
+   *  attempt (or a human reviewing the run) had to re-derive the reason from the raw response
+   *  text. Absent on success. Clamped short: this rides along in every follow-up prompt. */
+  errorDetail?: string;
+  /** The caller-supplied "current step" id at the moment this entry was created (see
+   *  AgentRunOptions.getCurrentStepId) - e.g. CodingAgent's in-progress todo item. Lets a
+   *  reader answer "what did step 3 actually do?" instead of only "what ran in what order".
+   *  Undefined for callers that don't track steps. */
+  stepId?: string;
 }
 
 export interface AgentRuntimeControls {

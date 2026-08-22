@@ -102,7 +102,10 @@ export function isReadOnlyToolCall(toolName: string, input: Record<string, unkno
 export function callWouldPersistContent(toolName: string, input: Record<string, unknown>): boolean {
   if (toolName !== "filesystem") return false;
   const action = String(input["action"] ?? "").toLowerCase();
-  return action === "write" || action === "append";
+  // "edit"/"edit_lines" persist a model-authored payload (newString / content) exactly like
+  // write/append - a cut-off newString would splice a truncated fragment into an otherwise
+  // real file just as invisibly as a cut-off write.
+  return action === "write" || action === "append" || action === "edit" || action === "edit_lines";
 }
 
 /**
@@ -1813,7 +1816,7 @@ export class Agent {
     if (normalizedName === "filesystem") {
       const action = String(normalizedInput["action"] ?? "").toLowerCase();
       const path = normalizedInput["path"];
-      if (!action) return { ok: false, error: "filesystem: 'action' parameter required. Valid actions: read, write, append, edit, delete, list, mkdir, exists, stat, move, copy" };
+      if (!action) return { ok: false, error: "filesystem: 'action' parameter required. Valid actions: read, write, append, edit, edit_lines, delete, list, mkdir, exists, stat, move, copy" };
       if (!path || String(path).trim().length === 0) {
         return { ok: false, error: "filesystem: 'path' parameter is REQUIRED and must not be empty. Provide the file or directory path you want to operate on. Example: filesystem({action:'read', path:'data/file.txt'})" };
       }
@@ -1850,6 +1853,24 @@ export class Agent {
         if (typeof normalizedInput["newString"] !== "string") {
           return { ok: false, error: "filesystem:edit requires string field 'newString' (use \"\" to delete the matched text)." };
         }
+      }
+      if (action === "edit_lines") {
+        const startLine = Number(normalizedInput["startLine"]);
+        const endLine = Number(normalizedInput["endLine"]);
+        if (!Number.isInteger(startLine) || startLine < 1) {
+          return { ok: false, error: "filesystem:edit_lines requires integer field 'startLine' (1-based, inclusive)." };
+        }
+        if (!Number.isInteger(endLine) || endLine < startLine - 1) {
+          return { ok: false, error: "filesystem:edit_lines requires integer field 'endLine' >= startLine - 1 (startLine - 1 means insert with nothing removed)." };
+        }
+        const resolvedContent = extractFileContent(normalizedInput, String(path));
+        if (resolvedContent === undefined) {
+          return {
+            ok: false,
+            error: "filesystem:edit_lines needs the replacement text in 'content' (use \"\" to delete the line range).",
+          };
+        }
+        normalizedInput["content"] = resolvedContent;
       }
       if (action === "move" && String(normalizedInput["destination"] ?? "").trim().length === 0) {
         return { ok: false, error: "filesystem:move requires field 'destination'" };
@@ -3590,10 +3611,10 @@ export class Agent {
     // Filesystem recovery hints in English: recovery steps are LLM/agent-specific, not user-facing.
     if (normalizedTool === "filesystem") {
       if (/oldstring is not unique/.test(normalizedError)) {
-        return "Expand oldString with more surrounding context to make it unique, or set replaceAll:true to replace all occurrences.";
+        return "Expand oldString with more surrounding context to make it unique, or set replaceAll:true to replace all occurrences. For a very long or highly repetitive block, action:'edit_lines' with startLine/endLine is often simpler than making oldString unique.";
       }
       if (/oldstring not found/.test(normalizedError)) {
-        return "Re-read the file with action:'read' to see the exact text, then copy it exactly including indentation; do not retype from memory.";
+        return "Re-read the file with action:'read' to see the exact text, then copy it exactly including indentation; do not retype from memory. If the block is very long, action:'edit_lines' with the line numbers from that read avoids matching text altogether.";
       }
       if (/path is outside|outside shared workspace|outside basepath scope/.test(normalizedError)) {
         return "Use a path relative to the project root: no leading /, no drive letter, no .. traversal. Example: 'src/app.ts' instead of 'C:/...'.";
@@ -4925,6 +4946,10 @@ export class Agent {
       nativeCallCount: nativeToolCalls?.length ?? 0,
     });
 
+    // Give the caller a chance to derive state from the raw response BEFORE this response's
+    // own tool calls reach the beforeTool hooks below - see AgentRunOptions.onModelResponse.
+    options.onModelResponse?.(response);
+
     // Shared by every tool_call/tool_result/browser_preview event below so the UI can
     // fold all tool calls issued by this single LLM response into one collapsible group.
     const toolBatchId = randomUUID();
@@ -5533,11 +5558,15 @@ export class Agent {
         // Lead with what ran, not with the internal call id: "call_1a2b3c: Success" told
         // the reader nothing about which tool produced it.
         const resultSummary = toolCall ? summarizeToolCall(toolCall.toolName, toolCall.input) : "tool";
+        const stepId = options.getCurrentStepId?.();
         journalEntries.push({
           iteration: iterations,
           toolName: toolCall?.toolName ?? "unknown",
           summary: resultSummary,
           success: executed.result.success,
+          timestamp: new Date().toISOString(),
+          ...(executed.result.success ? {} : { errorDetail: String(executed.result.error ?? "").slice(0, 300) }),
+          ...(stepId !== undefined ? { stepId } : {}),
         });
         const resultOutcome = executed.result.success
           ? "OK"
@@ -5693,7 +5722,15 @@ export class Agent {
     if (journal.length === 0) return "";
     const recent = journal.slice(-15);
     const list = recent
-      .map((e, idx) => `${idx + 1}. [${e.success ? "ok" : "fail"}] ${e.summary}`)
+      .map((e, idx) => {
+        const step = e.stepId !== undefined ? ` (step ${e.stepId})` : "";
+        // A failed entry used to say only "[fail] edit src/App.tsx" - the model had no way to
+        // tell WHY without re-deriving it from raw response text further back in the
+        // conversation. The actual error is right there in errorDetail; showing it here means
+        // a retry no longer has to guess or repeat a fix that already provably failed.
+        const reason = !e.success && e.errorDetail ? `: ${e.errorDetail}` : "";
+        return `${idx + 1}. [${e.success ? "ok" : "fail"}]${step} ${e.summary}${reason}`;
+      })
       .join("\n");
     return `\n\n## Actions taken so far this run\n${list}\nDo not repeat an action already listed above unless it failed or the task requires it again.`;
   }

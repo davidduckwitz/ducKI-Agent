@@ -80,7 +80,7 @@ function convertLLMContentToOpenAI(content: string | LLMContent[]): string | Cha
  * the whole class of "tool-call syntax leaked into a written file" failures that the
  * text protocol suffers with weaker local models.
  */
-function toOpenAITools(tools: ToolDefinition[]): ChatCompletionTool[] {
+export function toOpenAITools(tools: ToolDefinition[]): ChatCompletionTool[] {
   return tools.map((t): ChatCompletionTool => ({
     type: "function",
     function: {
@@ -93,7 +93,7 @@ function toOpenAITools(tools: ToolDefinition[]): ChatCompletionTool[] {
 }
 
 /** Normalize the OpenAI SDK's tool_calls into our provider-agnostic ToolCall[]. */
-function fromOpenAIToolCalls(
+export function fromOpenAIToolCalls(
   raw: ChatCompletionMessageToolCall[] | undefined | null
 ): ToolCall[] | undefined {
   if (!raw || raw.length === 0) return undefined;
@@ -234,8 +234,10 @@ export class OpenAIProvider implements LLMProvider {
   /** Flipped when a backend rejects the `tools` param (many local llama.cpp/older
    *  LM Studio builds don't implement it). After that we stop sending `tools` for this
    *  provider instance and the agent's text parser takes over - same self-healing
-   *  pattern as streamOptionsUnsupported. */
-  private nativeToolsUnsupported = false;
+   *  pattern as streamOptionsUnsupported. Protected (not private) so OllamaProvider's
+   *  own raw-fetch request path - which cannot go through this class's `generate()` -
+   *  can still participate in the same self-healing fallback. */
+  protected nativeToolsUnsupported = false;
 
   constructor(options: ProviderOptions) {
     const rawApiKey = options.apiKey ?? "";

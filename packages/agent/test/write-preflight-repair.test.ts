@@ -256,9 +256,14 @@ describe("callWouldPersistContent", () => {
 
     expect(callWouldPersistContent("filesystem", { action: "write" })).toBe(true);
     expect(callWouldPersistContent("filesystem", { action: "append" })).toBe(true);
+    // "edit"/"edit_lines" persist a model-authored payload (newString/content) exactly like
+    // write/append - a cut-off value would splice truncated text into a real file just as
+    // invisibly as a cut-off write.
+    expect(callWouldPersistContent("filesystem", { action: "edit" })).toBe(true);
+    expect(callWouldPersistContent("filesystem", { action: "edit_lines" })).toBe(true);
 
     // Reads and searches stay available - a truncated run still has to be able to look around.
-    for (const action of ["read", "list", "grep", "glob", "edit", "delete", "outline"]) {
+    for (const action of ["read", "list", "grep", "glob", "delete", "outline"]) {
       expect(callWouldPersistContent("filesystem", { action }), action).toBe(false);
     }
     expect(callWouldPersistContent("shell", { command: "npm test" })).toBe(false);

@@ -24,8 +24,9 @@ import { createScopedDiagnosticsTool, resetDiagnosticsFor } from "./scoped-diagn
 import { withAutoDiagnostics } from "./auto-diagnostics.js";
 import { TodoList, createTodoTool } from "./todo-tool.js";
 import { createCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
+import { withPerEditCheckpoints } from "./checkpoint-on-write.js";
 import { createExploreTool } from "./explore-tool.js";
-import { Planner, type Plan } from "../planner/planner.js";
+import { Planner, type Plan, type PlanStep } from "../planner/planner.js";
 import { formatPlanAsMarkdown, toPlanEventPayload } from "../planner/plan-tool.js";
 
 const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
@@ -74,6 +75,20 @@ IMPORTANT - Multiline Content:
 - When writing code with multiple lines, ALWAYS use actual line breaks (newlines), not \\n escape sequences.
 - Each statement/line should be on its own line with proper indentation.
 - This is CRITICAL for code to work correctly - improper formatting will break the code.`;
+
+/** Filesystem actions that persist a change - gated by the phase-lock hook below during
+ *  EXPLORE/PLAN, same set the truncation guard (callWouldPersistContent) cares about plus
+ *  delete/move/copy, which are equally irreversible-by-accident during a read-only phase. */
+const MUTATING_FILESYSTEM_ACTIONS = new Set(["write", "append", "edit", "edit_lines", "delete", "move", "copy"]);
+
+/**
+ * Matches a ">> PHASE: X" marker in a response (see CodingAgent.buildInitialPrompt). Not
+ * anchored to line boundaries or exact spacing - weaker models reproduce the marker with
+ * stray leading whitespace or trailing punctuation often enough that a strict match would
+ * silently never fire for them, leaving the lock stuck on EXPLORE/PLAN forever (bounded by
+ * phaseLockRefusals, but still worse than just recognizing the marker loosely).
+ */
+const PHASE_MARKER_RE = />>\s*PHASE:\s*(EXPLORE|PLAN|EDIT|VERIFY|REPORT)\b/gi;
 
 /**
  * Shell commands a sandboxed CodingAgent may run. Read-only inspection, the JS/TS toolchain
@@ -281,6 +296,29 @@ export class CodingAgent {
   private readonly todos: TodoList;
   private readonly logger: Logger;
   private readonly planner: Planner;
+  /**
+   * The phase the model last declared via its ">> PHASE: X" marker (see buildInitialPrompt),
+   * kept as REAL state instead of only being read back after the whole attempt finished (the
+   * old extractAndEmitPhaseEvents, which runs once the response is already complete - too late
+   * to gate anything). Updated live via AgentRunOptions.onModelResponse, so the phase-lock hook
+   * below sees the CURRENT phase for every tool call, including ones in the same response that
+   * declared the transition.
+   *
+   * "unstarted" is the sentinel before any marker has been seen this run/attempt - it does NOT
+   * lock writes. Only "explore"/"plan" do. This matters for anything that drives the discipline
+   * hooks without going through the actual phase-prompt flow (unit tests calling the hook
+   * directly, runOnExistingConversation, a caller-supplied existingPlan skipping straight to
+   * edits) - none of those ever call updatePhaseFromResponse, so without this sentinel they
+   * would be locked out of every write by a default they never opted into.
+   */
+  private currentPhase: "unstarted" | "explore" | "plan" | "edit" | "verify" | "report" = "unstarted";
+  /** How often the phase lock refused a write this run - bounded for the same reason as
+   *  readBeforeEditRefusals (see that hook): an unbounded refusal on a model that never emits
+   *  the phase marker would deadlock the run instead of ever letting it edit anything. */
+  private phaseLockRefusals = 0;
+  /** Read by withPerEditCheckpoints' label closure - kept as instance state because tools are
+   *  registered ONCE in the constructor, before any attempt number exists yet. */
+  private currentAttempt = 0;
 
   constructor(
     provider: LLMProvider,
@@ -370,6 +408,38 @@ export class CodingAgent {
           return { proceed: true };
         },
       },
+      {
+        name: "coding-discipline-phase-lock",
+        priority: 55,
+        handler: async (context: any) => {
+          const toolName = context.toolName as string;
+          const input = context.input as Record<string, unknown>;
+          if (toolName !== "filesystem") return { proceed: true };
+
+          const action = String(input.action ?? "").toLowerCase();
+          if (!MUTATING_FILESYSTEM_ACTIONS.has(action)) return { proceed: true };
+          if (this.currentPhase !== "explore" && this.currentPhase !== "plan") return { proceed: true };
+
+          // Bounded exactly like read-before-edit above: one refusal states the rule, then get
+          // out of the way rather than risk deadlocking a run whose model never emits the
+          // ">> PHASE: EDIT" marker at all.
+          this.phaseLockRefusals++;
+          if (this.phaseLockRefusals === 1) {
+            return {
+              proceed: false,
+              reason:
+                `Discipline violation: you are still in the ${this.currentPhase.toUpperCase()} phase (no ` +
+                `">> PHASE: EDIT" marker seen yet), which is read/plan-only - no file changes yet. ` +
+                `State "<< ${this.currentPhase.toUpperCase()} COMPLETE" and ">> PHASE: EDIT" first, then repeat this call.`,
+            };
+          }
+          this.emit("decision", `Phasensperre uebergangen (Phase: ${this.currentPhase}).`, {
+            phase: this.currentPhase,
+            refusals: this.phaseLockRefusals,
+          });
+          return { proceed: true };
+        },
+      },
     ];
 
     // Phase 2: Create approval policy for safe coding (restrict destructive operations).
@@ -414,7 +484,10 @@ export class CodingAgent {
     });
 
     const baseFsTool = options.sandboxRoot ? createScopedFilesystemTool(options.sandboxRoot) : filesystemTool;
-    const fsTool = withAutoDiagnostics(baseFsTool, options.sandboxRoot);
+    const diagnosedFsTool = withAutoDiagnostics(baseFsTool, options.sandboxRoot);
+    // Per-edit checkpoints (see the wrapper's own doc comment) - a no-op when there is no
+    // sandboxRoot, since the shadow-git checkpoint mechanism only exists for sandboxed runs.
+    const fsTool = withPerEditCheckpoints(diagnosedFsTool, options.sandboxRoot, () => `Attempt ${this.currentAttempt}`);
     const shTool = options.sandboxRoot ? createScopedShellTool(options.sandboxRoot) : shellTool;
     const dxTool = options.sandboxRoot ? createScopedDiagnosticsTool(options.sandboxRoot) : diagnosticsTool;
     const exploreTool = createExploreTool(options.explorerProvider ?? provider, db, {
@@ -423,6 +496,22 @@ export class CodingAgent {
     });
     for (const tool of [fsTool, shTool, dxTool, gitTool, skillsTool, createTodoTool(this.todos), exploreTool, ...(options.extraTools ?? [])]) {
       this.agent.executor.registerTool(tool);
+    }
+  }
+
+  /**
+   * Scans a model response for its LATEST ">> PHASE: X" marker and updates currentPhase, which
+   * the phase-lock hook (see the constructor) reads for every tool call in this same response.
+   * Called via AgentRunOptions.onModelResponse, i.e. before this response's own tool calls are
+   * validated - a response that says ">> PHASE: EDIT" and then immediately writes a file in the
+   * same turn is exactly the intended flow, not a race.
+   */
+  private updatePhaseFromResponse(response: string): void {
+    let lastMatch: RegExpExecArray | null = null;
+    for (const match of response.matchAll(PHASE_MARKER_RE)) lastMatch = match;
+    const declared = lastMatch?.[1]?.toLowerCase();
+    if (declared === "explore" || declared === "plan" || declared === "edit" || declared === "verify" || declared === "report") {
+      this.currentPhase = declared;
     }
   }
 
@@ -509,6 +598,8 @@ export class CodingAgent {
     // touched in an earlier, unrelated goal.
     this.filesRead = new Set<string>();
     this.readBeforeEditRefusals = new Map<string, number>();
+    this.currentPhase = "unstarted";
+    this.phaseLockRefusals = 0;
     this.todos.reset();
     // The sandbox may have changed between runs (files added or removed outside the agent), and
     // a stale warm compiler would report diagnostics for a file set that no longer exists.
@@ -621,6 +712,7 @@ export class CodingAgent {
     let previousVerifyError: string | undefined;
     let identicalFailureStreak = 0;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      this.currentAttempt = attempt;
       // Soft wall-clock budget: stop before starting another attempt once the deadline has passed
       // rather than burning further attempts. In-flight calls are never interrupted mid-way.
       if (deadline && Date.now() > deadline && attempt > 1) {
@@ -662,6 +754,11 @@ export class CodingAgent {
         attempt === 1
           ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan)
           : this.buildFollowUpPrompt(goal, lastSummary);
+      // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
+      // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
+      // (possibly still "explore" if it timed out early) would permanently lock every retry
+      // out of editing, since nothing in a follow-up prompt would ever move it forward again.
+      if (attempt > 1) this.currentPhase = "edit";
       // The `deadline` check above only ever fires BETWEEN attempts - a single attempt can run
       // up to maxIterations tool-call iterations, and Agent's own progress timeout only catches
       // true stalls (it re-arms on every event, so a model that keeps doing SOMETHING, just
@@ -673,6 +770,8 @@ export class CodingAgent {
       try {
         runResult = await this.agent.run(prompt, {
           initialRunJournal: journal,
+          getCurrentStepId: () => this.todos.currentStepId(),
+          onModelResponse: (response) => this.updatePhaseFromResponse(response),
           ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
         });
       } catch (error) {
@@ -818,6 +917,9 @@ export class CodingAgent {
     incomplete: Array<{ path: string; totalParts: number; received: number; next: number }>,
     conversationId: number
   ): Promise<string | null> {
+    // This is a targeted append-only fix-up with no explore/plan step of its own - the phase
+    // lock would otherwise refuse its very first (and only) write.
+    this.currentPhase = "edit";
     const lines = incomplete.map(
       (g) => `- ${g.path}: Teil ${g.received} von ${g.totalParts} geschrieben, Teil ${g.next} fehlt`
     );
@@ -955,6 +1057,24 @@ export class CodingAgent {
    * decides success" existed only in the system directive - the agent had no way to know
    * which command its work would actually be judged by.
    */
+  /**
+   * Renders one plan step with its metadata, not just title/description.
+   *
+   * The Planner already computes dependsOn (ordering constraints), riskLevel and toolsNeeded
+   * for every step - PlanStep carries all of it - but until now only title and description
+   * ever reached the executing model; the rest was computed and then silently discarded. A
+   * step marked high-risk got no different treatment than a trivial one, and a step that
+   * depends on an earlier one carried no signal that order matters.
+   */
+  private renderPlanStep(step: PlanStep, index: number): string {
+    const line = `${index + 1}. ${step.title}${step.description ? ` - ${step.description}` : ""}`;
+    const meta: string[] = [];
+    if (step.dependsOn && step.dependsOn.length > 0) meta.push(`depends on: ${step.dependsOn.join(", ")}`);
+    if (step.riskLevel && step.riskLevel !== "low") meta.push(`risk: ${step.riskLevel}`);
+    if (step.toolsNeeded && step.toolsNeeded.length > 0) meta.push(`tools: ${step.toolsNeeded.join(", ")}`);
+    return meta.length > 0 ? `${line} [${meta.join(" · ")}]` : line;
+  }
+
   /** Shared with buildFollowUpPrompt (see there for why this must not be initial-attempt-only). */
   private pathHandlingBlock(): string[] {
     if (!this.sandboxRoot) return [];
@@ -988,7 +1108,7 @@ export class CodingAgent {
       "",
       "A planning subagent already analyzed this goal and drafted the following plan:",
       "",
-      plan.steps.map((step, i) => `${i + 1}. ${step.title}${step.description ? ` - ${step.description}` : ""}`).join("\n"),
+      plan.steps.map((step, i) => this.renderPlanStep(step, i)).join("\n"),
       "",
       "Work in these phases, and EXPLICITLY STATE the phase you are starting and completing:",
       "1. EXPLORE - locate the relevant files and read them before changing anything.",

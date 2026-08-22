@@ -82,8 +82,12 @@ describe("CodingAgent no-op checkpoint discard", () => {
 
     await codingAgent.run("schreibe app.js", { maxAttempts: 1 });
 
+    // Two checkpoints now: the pre-attempt snapshot AND one per-edit checkpoint for the write
+    // itself (see withPerEditCheckpoints) - `git log` orders newest first, so the write's
+    // checkpoint comes before the "Before attempt 1" one it was committed after.
     const checkpoints = await listCheckpoints(sandbox);
-    expect(checkpoints).toHaveLength(1);
-    expect(checkpoints[0]!.label).toContain("Before attempt 1");
+    expect(checkpoints).toHaveLength(2);
+    expect(checkpoints[0]!.label).toContain("write");
+    expect(checkpoints[1]!.label).toContain("Before attempt 1");
   });
 });

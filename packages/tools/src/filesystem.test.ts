@@ -145,3 +145,169 @@ describe("filesystem tool - __contentTrusted content is never re-escaped", () =>
     expect(JSON.stringify(result)).not.toContain("__contentTrusted");
   });
 });
+
+/**
+ * Regression: a model that JSON-escapes quotes inside content meant to be written verbatim
+ * (heredoc/native content, see __contentTrusted above) scatters `=\'`/`=\"` through the
+ * markup - e.g. `id=\'app\'` - which is otherwise well-formed enough to write successfully
+ * and pass every other check. Non-blocking: the file is still written, but a warning surfaces
+ * so the model (or a human) notices the corruption instead of it going unnoticed.
+ */
+describe("filesystem tool - leaked quote-escaping warning", () => {
+  let root: string;
+  const run = (input: Record<string, unknown>) =>
+    filesystemTool.execute({ safeMode: false, ...input });
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ducki-fs-leak-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("warns (but still writes) when an .html file contains escaped quotes after '='", async () => {
+    const path = join(root, "index.html");
+    const content = '<div id=\\\'app\\\'><span style=\\\'color:green\\\'>hi</span></div>';
+    const result = await run({ action: "write", path, content, __contentTrusted: true });
+
+    expect(result.success).toBe(true);
+    expect(String((result.data as Record<string, unknown>)["warning"])).toContain("backslash-escaped quote");
+
+    const read = await run({ action: "read", path, raw: true });
+    expect(read.data).toBe(content);
+  });
+
+  it("does not warn for normal HTML with no escaped quotes", async () => {
+    const path = join(root, "index.html");
+    const result = await run({ action: "write", path, content: "<div id=\"app\">hi</div>" });
+
+    expect(result.success).toBe(true);
+    expect((result.data as Record<string, unknown>)["warning"]).toBeUndefined();
+  });
+
+  it("does not check non-markup file types", async () => {
+    const path = join(root, "note.txt");
+    const content = "a=\\'weird prose, not markup\\'";
+    const result = await run({ action: "write", path, content });
+
+    expect(result.success).toBe(true);
+    expect((result.data as Record<string, unknown>)["warning"]).toBeUndefined();
+  });
+
+  it("surfaces the warning on append too", async () => {
+    const path = join(root, "index.html");
+    await run({ action: "write", path, content: "<div>" });
+    const result = await run({ action: "append", path, content: '<span id=\\\'x\\\'>hi</span></div>' });
+
+    expect(result.success).toBe(true);
+    expect(String((result.data as Record<string, unknown>)["warning"])).toContain("backslash-escaped quote");
+  });
+});
+
+/**
+ * edit_lines: the line-number counterpart to "edit" for files where oldString matching is
+ * either impractical (huge blocks) or ambiguous (repetitive content) - see the tool
+ * definition's own doc comment for the motivating case.
+ */
+describe("filesystem tool - edit_lines", () => {
+  let root: string;
+  const run = (input: Record<string, unknown>) =>
+    filesystemTool.execute({ safeMode: false, ...input });
+  const readRaw = async (path: string) => {
+    const result = await run({ action: "read", path, raw: true });
+    return result.data as string;
+  };
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ducki-fs-lines-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("replaces an inclusive line range with new content", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo\nthree\nfour\nfive", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 2, endLine: 3, content: "TWO\nTHREE" });
+
+    expect(result.success).toBe(true);
+    expect(await readRaw(path)).toBe("one\nTWO\nTHREE\nfour\nfive");
+  });
+
+  it("replaces a single line", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo\nthree", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 2, endLine: 2, content: "TWO" });
+
+    expect(result.success).toBe(true);
+    expect(await readRaw(path)).toBe("one\nTWO\nthree");
+  });
+
+  it("deletes a line range when content is empty", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo\nthree\nfour", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 2, endLine: 3, content: "" });
+
+    expect(result.success).toBe(true);
+    expect(await readRaw(path)).toBe("one\nfour");
+  });
+
+  it("inserts new lines before startLine without removing anything (endLine = startLine - 1)", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo\nthree", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 2, endLine: 1, content: "ONE-AND-A-HALF" });
+
+    expect(result.success).toBe(true);
+    expect(await readRaw(path)).toBe("one\nONE-AND-A-HALF\ntwo\nthree");
+  });
+
+  it("appends new lines at the very end via insertion at totalLines + 1", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 3, endLine: 2, content: "three" });
+
+    expect(result.success).toBe(true);
+    expect(await readRaw(path)).toBe("one\ntwo\nthree");
+  });
+
+  it("rejects a startLine past the end of the file", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 5, endLine: 5, content: "x" });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("past the end of the file");
+  });
+
+  it("rejects endLine before startLine - 1", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 2, endLine: 0, content: "x" });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("endLine");
+  });
+
+  it("reports missing content distinctly from an intentional empty-string delete", async () => {
+    const path = join(root, "a.txt");
+    writeFileSync(path, "one\ntwo", "utf8");
+
+    const result = await run({ action: "edit_lines", path, startLine: 1, endLine: 1 });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("content required");
+  });
+
+  it("fails on a missing file with a clear message", async () => {
+    const result = await run({ action: "edit_lines", path: join(root, "nope.txt"), startLine: 1, endLine: 1, content: "x" });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("File not found");
+  });
+});

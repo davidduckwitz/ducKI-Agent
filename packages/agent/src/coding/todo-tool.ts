@@ -90,6 +90,18 @@ export class TodoList {
   get openCount(): number {
     return this.items.filter((item) => item.status === "pending" || item.status === "in_progress").length;
   }
+
+  /**
+   * The step the model is currently working on, as a string id for RunJournalEntry.stepId.
+   * Undefined when nothing is in_progress (before the first todo:update, or between steps) -
+   * a journal entry created at that moment simply carries no stepId rather than a stale one.
+   * If more than one item is somehow in_progress at once (the model updated out of order), the
+   * first one wins - an approximate answer beats none, and this is a display aid, not a lock.
+   */
+  currentStepId(): string | undefined {
+    const current = this.items.find((item) => item.status === "in_progress");
+    return current ? String(current.id) : undefined;
+  }
 }
 
 export function createTodoTool(list: TodoList): ToolExecutor {

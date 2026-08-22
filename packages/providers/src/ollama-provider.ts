@@ -1,7 +1,6 @@
 // Ollama uses OpenAI-compatible API endpoint but with different image handling
 // Ollama expects: { role, content, images: [base64_raw] } not { role, content: [{type: "image_url", ...}] }
-import OpenAI from "openai";
-import { OpenAIProvider } from "./openai-provider.js";
+import { OpenAIProvider, toOpenAITools, fromOpenAIToolCalls } from "./openai-provider.js";
 import type { ProviderOptions } from "./base.js";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
@@ -107,46 +106,54 @@ export class OllamaProvider extends OpenAIProvider {
     logger.debug("Transformed messages", { messageImagesMapSize: messageImages.size });
 
     try {
-      const client = (this as any).client as OpenAI;
-
-      // Create a custom fetch that injects images into the request body
-      const originalFetch = (this as any).customFetch ?? fetch;
-      const customFetchWithImages = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const response = await originalFetch(input, init);
-
-        // If this is a chat completions request, we need to modify it
-        // But we can't modify a response... we need to intercept the request
-        // This approach won't work. We need a different strategy.
-
-        return response;
-      };
-
       // Actually, we need to intercept BEFORE the request is sent
       // Let's use a different approach: make the request ourselves
-      const requestBody = {
+      const originalFetch = (this as any).customFetch ?? fetch;
+      const endpoint = `${(this as any).endpoint}/chat/completions`;
+      const authHeaders = { "Content-Type": "application/json", ...(this.getAuthHeaders?.()) };
+      const enrichedMessages = this.enrichMessagesWithImages(transformedMessages, messageImages);
+
+      // This custom fetch path bypassed the base class's native tool-calling entirely: no
+      // `tools`/`tool_choice` were ever sent, and `choice.message.tool_calls` was never read
+      // back. supportsNativeTools() (inherited) still reported true, so the agent believed
+      // structured tool calls were available and skipped straight to trusting them - meaning
+      // every non-streaming Ollama call (sync fallback, low-temperature utility calls) fell
+      // through to the far more fragile text `[TOOL:...]` protocol with no native path to
+      // catch it, even though this exact model/backend combination could have used one.
+      const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
+      const buildBody = (withTools: boolean) => ({
         model: this.model,
-        messages: this.enrichMessagesWithImages(transformedMessages, messageImages),
+        messages: enrichedMessages,
         temperature: merged.temperature,
         top_p: merged.topP,
         max_tokens: merged.maxTokens,
         stream: false,
-      };
+        ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
+      });
 
-      const response = await (originalFetch ?? fetch)(
-        `${(this as any).endpoint}/chat/completions`,
-        {
+      const doFetch = (withTools: boolean) =>
+        (originalFetch ?? fetch)(endpoint, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(this.getAuthHeaders?.()),
-          },
-          body: JSON.stringify(requestBody),
+          headers: authHeaders,
+          body: JSON.stringify(buildBody(withTools)),
           // Previously omitted entirely, so Stop's abortController.abort() never actually
           // cancelled an in-flight Ollama request - the generation ran to completion
           // regardless, and only the NEXT iteration check noticed stopRequested.
           signal: merged.signal,
+        });
+
+      let response = await doFetch(useNativeTools);
+
+      // Same self-healing fallback as the base class's generate(): a backend that doesn't
+      // implement `tools` rejects it with a 400 naming the param - disable native tools for
+      // this instance and retry once without them instead of failing the whole run.
+      if (!response.ok && useNativeTools && response.status === 400 && !this.nativeToolsUnsupported) {
+        const bodyText = await response.clone().text().catch(() => "");
+        if (/\btools?\b|function[_ -]?call|tool[_ -]?choice|unsupported|not supported/i.test(bodyText)) {
+          this.nativeToolsUnsupported = true;
+          response = await doFetch(false);
         }
-      );
+      }
 
       if (!response.ok) {
         throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
@@ -158,6 +165,7 @@ export class OllamaProvider extends OpenAIProvider {
 
       return {
         content: choice.message?.content || "",
+        toolCalls: fromOpenAIToolCalls(choice.message?.tool_calls),
         usage: {
           promptTokens: completion.usage?.prompt_tokens ?? 0,
           completionTokens: completion.usage?.completion_tokens ?? 0,
@@ -210,24 +218,41 @@ export class OllamaProvider extends OpenAIProvider {
     }
 
     const originalFetch = (this as any).customFetch ?? fetch;
-    const requestBody = {
+    // Same gap as generate() above, for the vision-with-tools case: this custom SSE reader
+    // never sent `tools` and never accumulated `delta.tool_calls`, so a screenshot-analysis
+    // turn that also needed to call a tool had no native path at all.
+    const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
+    const enrichedMessages = this.enrichMessagesWithImages(transformedMessages, messageImages);
+    const buildBody = (withTools: boolean) => ({
       model: this.model,
-      messages: this.enrichMessagesWithImages(transformedMessages, messageImages),
+      messages: enrichedMessages,
       temperature: merged.temperature,
       top_p: merged.topP,
       max_tokens: merged.maxTokens,
       stream: true,
-    };
-
-    const response = await originalFetch(`${(this as any).endpoint}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(this.getAuthHeaders?.()),
-      },
-      body: JSON.stringify(requestBody),
-      signal: merged.signal,
+      ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
     });
+    const endpoint = `${(this as any).endpoint}/chat/completions`;
+    const authHeaders = { "Content-Type": "application/json", ...(this.getAuthHeaders?.()) };
+    const doFetch = (withTools: boolean) =>
+      originalFetch(endpoint, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify(buildBody(withTools)),
+        signal: merged.signal,
+      });
+
+    let response = await doFetch(useNativeTools);
+
+    // A 400 rejecting `tools` can only be told apart from other errors by reading the body,
+    // which requires an ok-or-not check first - the streaming body itself is consumed below.
+    if (!response.ok && useNativeTools && response.status === 400 && !this.nativeToolsUnsupported) {
+      const bodyText = await response.clone().text().catch(() => "");
+      if (/\btools?\b|function[_ -]?call|tool[_ -]?choice|unsupported|not supported/i.test(bodyText)) {
+        this.nativeToolsUnsupported = true;
+        response = await doFetch(false);
+      }
+    }
 
     if (!response.ok || !response.body) {
       throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
@@ -239,6 +264,10 @@ export class OllamaProvider extends OpenAIProvider {
     let promptTokens = 0;
     let completionTokens = 0;
     let reportedUsage = false;
+    // Streamed tool_calls arrive as fragments keyed by array index - name and id on the
+    // first fragment, `arguments` accumulated in pieces across subsequent ones. Same shape
+    // the base OpenAIProvider.generateStream() accumulates for the non-vision path.
+    const toolCallAccumulator = new Map<number, { id?: string; name?: string; arguments: string }>();
 
     const reader = (response.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
@@ -263,6 +292,14 @@ export class OllamaProvider extends OpenAIProvider {
             fullContent += delta;
             onChunk?.(delta);
           }
+          for (const tc of choice0?.delta?.tool_calls ?? []) {
+            const idx = typeof tc.index === "number" ? tc.index : 0;
+            const entry = toolCallAccumulator.get(idx) ?? { arguments: "" };
+            if (tc.id) entry.id = tc.id;
+            if (tc.function?.name) entry.name = tc.function.name;
+            if (tc.function?.arguments) entry.arguments += tc.function.arguments;
+            toolCallAccumulator.set(idx, entry);
+          }
           if (chunk.usage) {
             promptTokens = chunk.usage.prompt_tokens ?? 0;
             completionTokens = chunk.usage.completion_tokens ?? 0;
@@ -276,8 +313,20 @@ export class OllamaProvider extends OpenAIProvider {
       }
     }
 
+    const toolCalls = fromOpenAIToolCalls(
+      [...toolCallAccumulator.entries()]
+        .sort(([a], [b]) => a - b)
+        .filter(([, v]) => v.name)
+        .map(([idx, v]) => ({
+          id: v.id || `call_${idx}`,
+          type: "function" as const,
+          function: { name: v.name!, arguments: v.arguments || "{}" },
+        }))
+    );
+
     return {
       content: fullContent,
+      toolCalls,
       usage: reportedUsage
         ? { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens, estimated: false }
         : { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimated: true },
