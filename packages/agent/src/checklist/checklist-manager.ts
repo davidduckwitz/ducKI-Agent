@@ -125,6 +125,27 @@ export function deriveItemStatus(verify: VerifyResult): { status: ChecklistItemS
   return { status: "done", confidence: "verified" };
 }
 
+/** Action verbs (DE/EN) whose presence in a step's own text implies it can only be
+ *  satisfied by an actual tool call (write a file, send a message, run a command, ...) —
+ *  never by the model merely narrating that it did the thing. Deliberately broad and
+ *  DE/EN because the agent's chat and plans mix both. */
+const ACTION_VERB_PATTERN =
+  /\b(schreib\w*|erstell\w*|speicher\w*|sende\w*|versende\w*|lösch\w*|entfern\w*|änder\w*|bearbeite\w*|aktualisier\w*|commit\w*|push\w*|deploy\w*|installier\w*|ausführ\w*|hochlad\w*|write\w*|creat\w*|save\w*|send\w*|delete\w*|remove\w*|edit\w*|modify\w*|update\w*|run\b|execute\w*|deploy\w*|upload\w*|install\w*|commit\w*|push\w*)\b/i;
+
+/** True when a checklist item's own wording implies it requires an actual tool call to
+ *  satisfy (e.g. "write index.html") rather than being pure analysis/explanation. */
+export function requiresToolEvidence(item: Pick<ChecklistItem, "title" | "description" | "acceptanceCriteria">): boolean {
+  const text = [item.title, item.description, item.acceptanceCriteria].filter(Boolean).join(" ");
+  return ACTION_VERB_PATTERN.test(text);
+}
+
+/** True when the compiled evidence string actually carries a tool-result section (see
+ *  `compileChecklistEvidence` / the `[tools] ...` entries the run-loop appends), as opposed
+ *  to only the model's own prose (`[assistant] ...`). */
+export function hasToolEvidence(evidence: string): boolean {
+  return /\[tools\]/.test(evidence);
+}
+
 export class ChecklistManager {
   constructor(
     private readonly store: ChecklistStore,
@@ -209,7 +230,28 @@ export class ChecklistManager {
       verify = { passed: true, checks: [], failures: [], shouldFix: false };
     }
 
-    const { status, confidence } = deriveItemStatus(verify);
+    let { status, confidence } = deriveItemStatus(verify);
+    let failures = verify.failures;
+
+    // The LLM checker only ever sees the compiled evidence text, so a step that can only be
+    // satisfied by an actual tool call (e.g. "write index.html") must not be graded "done" from
+    // the model's own claim alone - it needs a real `[tools]` result in the evidence. Without
+    // this a reasoning-block bug (or a model that just narrates success) can check off a step
+    // whose file/action never actually happened. Downgrade instead of failing outright: the
+    // step may simply not have run yet.
+    if (status === "done" && requiresToolEvidence(item) && !hasToolEvidence(evidence)) {
+      status = "unverified";
+      confidence = "soft";
+      failures = [
+        ...failures,
+        `[requirement] ${constraint.description} — verifier said "done" but no tool-call evidence backs it; not trusting the model's own claim`,
+      ];
+      this.logger.warn("Checklist item claimed done without tool evidence, downgrading to unverified", {
+        itemId: item.id,
+        title: item.title,
+      });
+    }
+
     const attempts = (item.attempts ?? 0) + 1;
 
     await this.store.updateChecklistItem(item.id, {
@@ -217,13 +259,13 @@ export class ChecklistManager {
       confidence: confidence ?? null,
       attempts,
       verifyState: JSON.stringify({
-        passed: verify.passed,
-        failures: verify.failures.slice(0, 5),
+        passed: verify.passed && status !== "unverified",
+        failures: failures.slice(0, 5),
         checks: verify.checks.map((c) => ({ status: c.status, kind: c.kind })),
       }),
     });
 
-    return { itemId: item.id, status, confidence, failures: verify.failures, verify };
+    return { itemId: item.id, status, confidence, failures, verify };
   }
 
   /**
@@ -256,6 +298,18 @@ export class ChecklistManager {
 
     const { status, confidence } = deriveItemStatus(verify);
     if (status !== "done") return false; // not clearly finished yet — no state change, no cost to the attempt budget
+
+    // Same guard as verifyAndMark: a mid-run "done" for an action step still needs a real
+    // `[tools]` result in the evidence, not just the model's own claim. Leave the pointer where
+    // it is (don't advance) rather than trust unbacked prose — the end-of-loop verifyAndMark
+    // gets the final say once real tool evidence (or its absence) is in.
+    if (requiresToolEvidence(item) && !hasToolEvidence(evidence)) {
+      this.logger.debug("Mid-run checklist advance claimed done without tool evidence, not advancing", {
+        itemId: item.id,
+        title: item.title,
+      });
+      return false;
+    }
 
     await this.store.updateChecklistItem(item.id, {
       status: "done",

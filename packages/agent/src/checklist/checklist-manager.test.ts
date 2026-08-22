@@ -3,7 +3,9 @@ import {
   ChecklistManager,
   deriveAcceptanceCriteria,
   deriveItemStatus,
+  hasToolEvidence,
   pickConstraintKind,
+  requiresToolEvidence,
   type ChecklistItem,
   type ChecklistStore,
 } from "./checklist-manager.js";
@@ -135,6 +137,24 @@ describe("pure helpers", () => {
       confidence: "soft",
     });
   });
+
+  it("requiresToolEvidence flags action-verb steps (DE/EN) and ignores analysis steps", () => {
+    expect(requiresToolEvidence({ title: "Write index.html", description: null, acceptanceCriteria: null })).toBe(true);
+    expect(requiresToolEvidence({ title: "schreibe die Datei app.js", description: null, acceptanceCriteria: null })).toBe(
+      true
+    );
+    expect(
+      requiresToolEvidence({ title: "A", description: null, acceptanceCriteria: 'Der Schritt "A" ist erfüllt: sende die Nachricht' })
+    ).toBe(true);
+    expect(requiresToolEvidence({ title: "Explain the tradeoffs", description: null, acceptanceCriteria: null })).toBe(
+      false
+    );
+  });
+
+  it("hasToolEvidence detects a [tools] section vs prose-only evidence", () => {
+    expect(hasToolEvidence('[assistant] I wrote the file.\n[tools] {"success":true}')).toBe(true);
+    expect(hasToolEvidence("[assistant] I wrote the file.")).toBe(false);
+  });
 });
 
 describe("ChecklistManager.deriveFromPlan", () => {
@@ -237,6 +257,44 @@ describe("ChecklistManager.verifyAndMark", () => {
     expect(call[2][0].kind).toBe("requirement");
     expect(call[2][0].id).toBe("step-0");
   });
+
+  it("does NOT trust a passing verify for an action step when the evidence has no [tools] result", async () => {
+    const store = makeFakeStore();
+    const mgr = new ChecklistManager(store, noopLogger);
+    const [item] = await mgr.deriveFromPlan(plan({ steps: [step({ title: "Write index.html" })] }), 1, "r");
+
+    // The verifier is graded PASS purely from the model's self-report prose - no [tools] evidence.
+    const res = await mgr.verifyAndMark(item!, "req", "[assistant] I wrote index.html successfully.", makeVerifier(PASS));
+
+    expect(res.status).toBe("unverified");
+    expect(res.confidence).toBe("soft");
+    expect(res.failures.some((f) => f.includes("no tool-call evidence"))).toBe(true);
+    expect(store.rows[0]?.status).toBe("unverified");
+  });
+
+  it("marks an action step done when the evidence carries a real [tools] result", async () => {
+    const store = makeFakeStore();
+    const mgr = new ChecklistManager(store, noopLogger);
+    const [item] = await mgr.deriveFromPlan(plan({ steps: [step({ title: "Write index.html" })] }), 1, "r");
+
+    const res = await mgr.verifyAndMark(
+      item!,
+      "req",
+      '[assistant] Done.\n[tools] {"success":true,"data":{"path":"index.html"}}',
+      makeVerifier(PASS)
+    );
+
+    expect(res.status).toBe("done");
+    expect(res.confidence).toBe("verified");
+    expect(store.rows[0]?.status).toBe("done");
+  });
+
+  it("does not gate non-action steps on tool evidence", async () => {
+    const { mgr, item, store } = await seed(); // title "A" - no action verb
+    const res = await mgr.verifyAndMark(item, "req", "[assistant] Explained the tradeoffs.", makeVerifier(PASS));
+    expect(res.status).toBe("done");
+    expect(store.rows[0]?.status).toBe("done");
+  });
 });
 
 describe("ChecklistManager.tryAdvanceDuringRun", () => {
@@ -276,6 +334,38 @@ describe("ChecklistManager.tryAdvanceDuringRun", () => {
     const advanced = await mgr.tryAdvanceDuringRun(item, "req", "evidence", throwing);
     expect(advanced).toBe(false);
     expect(store.rows[0]?.status).toBe("pending");
+  });
+
+  it("does not advance an action step on a clear pass when evidence lacks a [tools] result", async () => {
+    const store = makeFakeStore();
+    const mgr = new ChecklistManager(store, noopLogger);
+    const [item] = await mgr.deriveFromPlan(plan({ steps: [step({ title: "Write index.html" })] }), 1, "r");
+
+    const advanced = await mgr.tryAdvanceDuringRun(
+      item!,
+      "req",
+      "[assistant] I wrote index.html successfully.",
+      makeVerifier(PASS)
+    );
+
+    expect(advanced).toBe(false);
+    expect(store.rows[0]?.status).toBe("pending");
+  });
+
+  it("advances an action step once the evidence carries a real [tools] result", async () => {
+    const store = makeFakeStore();
+    const mgr = new ChecklistManager(store, noopLogger);
+    const [item] = await mgr.deriveFromPlan(plan({ steps: [step({ title: "Write index.html" })] }), 1, "r");
+
+    const advanced = await mgr.tryAdvanceDuringRun(
+      item!,
+      "req",
+      '[assistant] Done.\n[tools] {"success":true}',
+      makeVerifier(PASS)
+    );
+
+    expect(advanced).toBe(true);
+    expect(store.rows[0]?.status).toBe("done");
   });
 });
 

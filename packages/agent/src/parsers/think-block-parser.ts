@@ -139,6 +139,15 @@ export class ThinkBlockParser {
           continue;
         }
 
+        // A block that carries a real [TOOL:...] call is not pure reasoning - stripping it
+        // here would silently swallow the call before tool extraction ever sees it (the
+        // model still gets a "thinking" UI event and the file/action never happens, but the
+        // checklist can still get marked done from the model's own claim that it did it).
+        // Leave the whole range untouched so it flows through the normal response/tool path.
+        if (this.containsToolCall(thinkContent)) {
+          continue;
+        }
+
         const block = this.createThinkBlock(thinkContent);
         blocks.push(block);
         ranges.push({
@@ -166,6 +175,10 @@ export class ThinkBlockParser {
       }
 
       const thinkContent = match[1] ?? "";
+      if (this.containsToolCall(thinkContent)) {
+        continue;
+      }
+
       const block = this.createThinkBlock(thinkContent);
       blocks.push(block);
       ranges.push({
@@ -192,6 +205,10 @@ export class ThinkBlockParser {
       }
 
       const thinkContent = match[1] ?? "";
+      if (this.containsToolCall(thinkContent)) {
+        continue;
+      }
+
       const block = this.createThinkBlock(thinkContent);
       blocks.push(block);
       ranges.push({
@@ -199,6 +216,13 @@ export class ThinkBlockParser {
         end: match.index + match[0].length,
       });
     }
+  }
+
+  /**
+   * True if the content carries an actual [TOOL:...] marker (not just prose about tools).
+   */
+  private containsToolCall(content: string): boolean {
+    return content.includes("[TOOL:");
   }
 
   /**

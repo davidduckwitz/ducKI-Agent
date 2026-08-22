@@ -295,4 +295,44 @@ describe("ThinkBlockParser", () => {
       expect(result.statistics.totalThinkTokens).toBe(0);
     });
   });
+
+  describe("Tool calls embedded in think blocks", () => {
+    it("does not strip a <think> block that contains a [TOOL:...] call", () => {
+      const content =
+        'Sure. <think>I should write the file now [TOOL:filesystem({"action":"write","path":"index.html","content":"<h1>hi</h1>"})][/TOOL]</think> done';
+      const result = parser.parse(content);
+
+      expect(result.thinkBlocks).toHaveLength(0);
+      expect(result.remainingContent).toBe(content);
+    });
+
+    it("does not strip a ```thinking``` block that contains a [TOOL:...] call", () => {
+      const content =
+        'Sure.\n```thinking\nI should write the file now [TOOL:filesystem({"action":"write","path":"a.txt"})][/TOOL]\n```\ndone';
+      const result = parser.parse(content);
+
+      expect(result.thinkBlocks).toHaveLength(0);
+      expect(result.remainingContent).toBe(content);
+    });
+
+    it("does not strip a [THINKING] block that contains a [TOOL:...] call", () => {
+      const content =
+        'Sure. [THINKING]I should write the file now [TOOL:filesystem({"action":"write","path":"a.txt"})][/TOOL][/THINKING] done';
+      const result = parser.parse(content);
+
+      expect(result.thinkBlocks).toHaveLength(0);
+      expect(result.remainingContent).toBe(content);
+    });
+
+    it("still strips sibling think blocks that have no tool call while keeping the one that does", () => {
+      const content =
+        '<think>just musing</think> <think>time to act [TOOL:shell({"command":"ls"})][/TOOL]</think> end';
+      const result = parser.parse(content);
+
+      expect(result.thinkBlocks).toHaveLength(1);
+      expect(result.thinkBlocks[0].content).toBe("just musing");
+      expect(result.remainingContent).toContain("[TOOL:shell");
+      expect(result.remainingContent).toContain("end");
+    });
+  });
 });
