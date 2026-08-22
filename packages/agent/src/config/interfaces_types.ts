@@ -85,6 +85,11 @@ export interface AgentRunOptions {
    *  via the Planner and returns it as the response, without executing any tools. */
   agentMode?: "full" | "lightweight" | "chatbot" | "plan";
   attachments?: AgentRunAttachment[];
+  /** When true AND `attachments` includes an image, short-circuits the run loop into a
+   *  direct vision completion: no skills, no tool docs, no planner/checklist - just the
+   *  attached image(s) plus the user's prompt sent straight to the model. Set by the UI's
+   *  "Bildanalyse" toggle; ignored when no image attachment is present. */
+  visionOnly?: boolean;
   /** Client-side UUID for message deduplication */
   localMessageId?: string;
   /** A plan the caller already built (e.g. the user-approved plan from the UI's Plan tab).

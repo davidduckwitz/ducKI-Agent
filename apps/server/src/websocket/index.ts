@@ -256,6 +256,7 @@ export function setupWebSocket(
       sessionChatId?: string;
       attachments?: Array<{ name: string; path?: string; url?: string; mimeType?: string }>;
       agentMode?: "full" | "plan";
+      visionOnly?: boolean;
       localMessageId?: string;
     }) => {
       let registryRunId: string | undefined;
@@ -379,6 +380,7 @@ export function setupWebSocket(
           stream: true,
           attachments: data.attachments,
           agentMode: requestedAgentMode,
+          visionOnly: data.visionOnly,
           localMessageId: data.localMessageId,
           onChunk: (chunk: string) => {
             attemptProducedOutput = true;

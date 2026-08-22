@@ -230,7 +230,10 @@ interface AppState {
     /** What to show in the chat when `content` carries extra machine-facing context. */
     displayContent?: string,
     provider?: string,
-    model?: string
+    model?: string,
+    /** "Bildanalyse" toggle: skip skills/tools/planner and analyze the attached image(s)
+     *  directly with the user's prompt. No-op server-side unless an image is attached. */
+    visionOnly?: boolean
   ) => Promise<void>;
   handleNewChat: () => void;
   stopMessage: () => void;
@@ -818,7 +821,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ socket: null, connected: false });
   },
 
-  sendMessage: async (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string, provider?: string, model?: string) => {
+  sendMessage: async (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string, provider?: string, model?: string, visionOnly?: boolean) => {
     const { socket, conversationId, sessionChatId, isLoading } = get();
     if (!socket || !content.trim() || isLoading) return;
 
@@ -882,6 +885,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         sessionChatId,
         attachments,
         agentMode,
+        visionOnly,
         provider,
         model,
         localMessageId: messageId,

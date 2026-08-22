@@ -172,6 +172,121 @@ export class OllamaProvider extends OpenAIProvider {
   }
 
   /**
+   * Override generateStream to convert LLMContent[] with image_url to Ollama's separate
+   * images field, same as generate() above. The inherited OpenAIProvider.generateStream()
+   * sends OpenAI-style content-array image blocks that Ollama's chat endpoint doesn't
+   * accept, so a streamed vision turn (the default - supportsStreaming() is true) silently
+   * lost the image even when generate() handled it correctly. Only messages actually
+   * carrying image content take this path; everything else defers to the base
+   * implementation so its retry/native-tools/stream_options handling stays intact.
+   */
+  override async generateStream(
+    messages: LLMMessage[],
+    options?: GenerateOptions,
+    onChunk?: (chunk: string) => void
+  ): Promise<LLMResponse> {
+    const hasImages = messages.some(
+      (msg) =>
+        msg.role === "user" &&
+        Array.isArray(msg.content) &&
+        (msg.content as LLMContent[]).some((part) => part.type === "image_url" || part.type === "image_data")
+    );
+
+    if (!hasImages) {
+      return super.generateStream(messages, options, onChunk);
+    }
+
+    logger.debug("generateStream() called with image content", { messageCount: messages.length });
+    const merged = { ...this.getDefaultOptions?.() ?? {}, ...options };
+
+    const transformedMessages: ChatCompletionMessageParam[] = [];
+    const messageImages: Map<number, string[]> = new Map();
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (!msg) continue;
+      const { message, images } = transformMessageForOllama(msg);
+      transformedMessages.push(message);
+      if (images && images.length > 0) messageImages.set(i, images);
+    }
+
+    const originalFetch = (this as any).customFetch ?? fetch;
+    const requestBody = {
+      model: this.model,
+      messages: this.enrichMessagesWithImages(transformedMessages, messageImages),
+      temperature: merged.temperature,
+      top_p: merged.topP,
+      max_tokens: merged.maxTokens,
+      stream: true,
+    };
+
+    const response = await originalFetch(`${(this as any).endpoint}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(this.getAuthHeaders?.()),
+      },
+      body: JSON.stringify(requestBody),
+      signal: merged.signal,
+    });
+
+    if (!response.ok || !response.body) {
+      throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    }
+
+    let fullContent = "";
+    let finalModel = this.model;
+    let finalFinishReason: string | undefined;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let reportedUsage = false;
+
+    const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        try {
+          const chunk = JSON.parse(data);
+          const choice0 = chunk.choices?.[0];
+          const delta = choice0?.delta?.content ?? "";
+          if (delta) {
+            fullContent += delta;
+            onChunk?.(delta);
+          }
+          if (chunk.usage) {
+            promptTokens = chunk.usage.prompt_tokens ?? 0;
+            completionTokens = chunk.usage.completion_tokens ?? 0;
+            reportedUsage = promptTokens > 0 || completionTokens > 0;
+          }
+          finalModel = chunk.model ?? finalModel;
+          finalFinishReason = choice0?.finish_reason ?? finalFinishReason;
+        } catch {
+          // Malformed/partial SSE line (can happen at chunk boundaries) - skip it.
+        }
+      }
+    }
+
+    return {
+      content: fullContent,
+      usage: reportedUsage
+        ? { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens, estimated: false }
+        : { promptTokens: 0, completionTokens: 0, totalTokens: 0, estimated: true },
+      model: finalModel,
+      finishReason: finalFinishReason,
+    };
+  }
+
+  /**
    * Enrich messages with images field where applicable.
    * Ollama expects images at the message level, not in content array.
    */

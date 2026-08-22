@@ -743,6 +743,7 @@ export function ChatContainer() {
     if ((!input.trim() && attachedFiles.length === 0) || isLoading || uploading) return;
 
     let uploadSummary = "";
+    let visionOnly = false;
     const attachments: ChatAttachment[] = [];
     if (attachedFiles.length > 0) {
       setUploading(true);
@@ -758,9 +759,15 @@ export function ChatContainer() {
         }
 
         const imagePaths = attachments.filter((a) => a.mimeType?.startsWith("image/")).map((a) => a.path);
+        // "Bildanalyse" fast path: the image now rides directly in the message content sent
+        // to the model (see runVisionMode/buildUserTurnContent server-side), so the old
+        // "please analyze - here are the paths" text would just tell the model to go search
+        // for a file it already has in front of it. Only append the plain attachment list;
+        // the vision system prompt covers the instruction.
+        visionOnly = analyzeImages && imagePaths.length > 0;
         const list = attachments.map((a) => `- shared-workspace/${a.path}`).join("\n");
         uploadSummary = `\n\n${t("chat.attachedFilesHeader")}\n${list}`;
-        if (analyzeImages && imagePaths.length > 0) {
+        if (!visionOnly && analyzeImages && imagePaths.length > 0) {
           uploadSummary += `\n\n${t("chat.pleaseAnalyzeImages")}\n${imagePaths
             .map((p) => `- shared-workspace/${p}`)
             .join("\n")}`;
@@ -795,7 +802,8 @@ export function ChatContainer() {
       planMode ? "plan" : undefined,
       pluginContext ? finalInput : undefined,
       chatProvider,
-      chatModel
+      chatModel,
+      visionOnly
     );
     setInput("");
     setAttachedFiles([]);

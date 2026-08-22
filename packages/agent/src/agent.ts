@@ -7,7 +7,7 @@ import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve, basename } from "node:path";
+import { join, resolve, basename, sep } from "node:path";
 import { listPluginSkillDirs } from "./plugins/index.js";
 import { randomUUID } from "node:crypto";
 import { ConversationManager } from "./conversation/conversation.js";
@@ -33,7 +33,7 @@ import { withManifestCache, listSkillMdFiles } from "./skill-selector/skill-cach
 import { taskRulesGuidance, platformHintGuidance, type PlatformChannel } from "./prompt/guidance-blocks.js";
 import { ConversationCompressor } from "./conversation/compressor.js";
 import { TokenCounter } from "./context/token-counter.js";
-import { extractFileContent, EMPTY_CONTENT_ERROR, isIntentionalEmptyWrite } from "@ducki/tools";
+import { extractFileContent, EMPTY_CONTENT_ERROR, isIntentionalEmptyWrite, SHARED_WORKSPACE_ROOT } from "@ducki/tools";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
 import { createDynamicToolResolver } from "./dynamic-tools/dynamic-tool-resolver.js";
@@ -52,7 +52,7 @@ import { ToolHealthMonitor } from "./tool-health/tool-health-monitor.js";
 import { ThinkBlockParser } from "./parsers/think-block-parser.js";
 import { ToolDependencyChecker } from "./tool-strategy/tool-dependencies.js";
 
-import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunEventType, RunJournalEntry } from "./config/interfaces_types";
+import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunAttachment, AgentRunEventType, RunJournalEntry } from "./config/interfaces_types";
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
 
 /**
@@ -373,6 +373,14 @@ When you receive an image, analyze it carefully and provide insights about:
 Use visual information to make better decisions about browser interactions and UI testing.
 
 ${TOOL_CALL_FORMAT_BLOCK}`;
+
+/**
+ * Minimal system prompt for runVisionMode ("Bildanalyse" fast path). Deliberately excludes
+ * everything the full SYSTEM_PROMPT carries - directive, tool-call protocol, skills - since
+ * this path has no tools available and the whole point is to stop that machinery from
+ * competing with the model just looking at the image it was sent.
+ */
+const VISION_ONLY_SYSTEM_PROMPT = `You are analyzing an image the user attached to their message. Look at it directly and answer the user's prompt using what you actually see - describe layout, text, UI elements, errors, or whatever they asked about. You have no tools available and none are needed: everything you need is already in the image and the prompt. Answer in the same language the user wrote in.`;
 
 /**
  * Skill roots whose merged-pool summary (core + enabled plugin skills) has already been
@@ -4226,6 +4234,190 @@ export class Agent {
     };
   }
 
+  private isImageAttachment(attachment: AgentRunAttachment): boolean {
+    if (attachment.mimeType) return attachment.mimeType.startsWith("image/");
+    const name = attachment.name || attachment.path || attachment.url || "";
+    return /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+  }
+
+  /**
+   * Reads image attachments from disk/URL and converts them into LLMContent image
+   * blocks so they actually reach the vision model, instead of only being recorded
+   * as UI display metadata (which the model never sees).
+   */
+  private async buildAttachmentImageContent(attachments: AgentRunAttachment[]): Promise<LLMContent[]> {
+    const imageBlocks: LLMContent[] = [];
+    const workspaceRoot = resolve(SHARED_WORKSPACE_ROOT);
+
+    for (const attachment of attachments) {
+      if (!this.isImageAttachment(attachment)) continue;
+
+      try {
+        let buffer: Buffer | undefined;
+
+        if (attachment.path) {
+          const absolutePath = resolve(workspaceRoot, attachment.path);
+          if (absolutePath !== workspaceRoot && !absolutePath.startsWith(workspaceRoot + sep)) {
+            this.logger.warn("Skipped image attachment outside shared workspace", { path: attachment.path });
+            continue;
+          }
+          if (existsSync(absolutePath)) {
+            buffer = readFileSync(absolutePath);
+          } else {
+            this.logger.warn("Image attachment file not found", { path: attachment.path, absolutePath });
+          }
+        } else if (attachment.url) {
+          const response = await fetch(attachment.url);
+          if (response.ok) {
+            buffer = Buffer.from(await response.arrayBuffer());
+          } else {
+            this.logger.warn("Failed to fetch image attachment", { url: attachment.url, status: response.status });
+          }
+        }
+
+        if (!buffer) continue;
+
+        buffer = await this.compressImageBuffer(buffer);
+        const base64 = buffer.toString("base64");
+        imageBlocks.push({
+          type: "image_url",
+          image_url: { url: `data:image/jpeg;base64,${base64}`, detail: "high" },
+        });
+      } catch (error) {
+        this.logger.warn("Failed to process image attachment", {
+          name: attachment.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return imageBlocks;
+  }
+
+  /**
+   * Builds the user turn's LLM content: plain text when there are no image attachments
+   * (unchanged behavior), or a text+image LLMContent[] array when there are - so the
+   * vision model actually receives the image instead of just a text mention of it.
+   */
+  private async buildUserTurnContent(text: string, attachments: AgentRunAttachment[] | undefined): Promise<string | LLMContent[]> {
+    if (!attachments?.length) return text;
+    const [imageBlocks, attachmentText] = await Promise.all([
+      this.buildAttachmentImageContent(attachments),
+      this.buildAttachmentTextContent(attachments),
+    ]);
+    const combinedText = attachmentText ? `${text}${attachmentText}` : text;
+    if (imageBlocks.length === 0) return combinedText;
+    return [{ type: "text", text: combinedText }, ...imageBlocks];
+  }
+
+  private isPdfAttachment(attachment: AgentRunAttachment): boolean {
+    if (attachment.mimeType === "application/pdf") return true;
+    const name = attachment.name || attachment.path || attachment.url || "";
+    return /\.pdf$/i.test(name);
+  }
+
+  /** Text-like formats whose content is small/reliable enough to inline directly into the
+   *  prompt (txt, html, css, json, csv, code, config, ...), rather than making the model
+   *  reach for the filesystem tool just to see what it was sent. */
+  private isTextAttachment(attachment: AgentRunAttachment): boolean {
+    if (this.isImageAttachment(attachment) || this.isPdfAttachment(attachment)) return false;
+    if (attachment.mimeType) {
+      if (attachment.mimeType.startsWith("text/")) return true;
+      if (/^application\/(json|ld\+json|xml|x-yaml|yaml|javascript|x-sh|toml|csv)/i.test(attachment.mimeType)) return true;
+    }
+    const name = attachment.name || attachment.path || attachment.url || "";
+    return /\.(txt|md|markdown|rst|html?|css|scss|less|json|jsonc|csv|tsv|xml|ya?ml|js|mjs|cjs|jsx|ts|tsx|log|ini|toml|conf|cfg|env|sh|bash|py|java|c|cpp|h|hpp|go|rs|rb|php|sql|graphql|vue|svelte)$/i.test(name);
+  }
+
+  /** Extracts plain text from a PDF buffer via pdf-parse - dynamically imported and
+   *  best-effort, same optional-dependency pattern as sharp in compressImageBuffer: if the
+   *  package or a particular PDF fails to parse, the attachment is simply skipped rather
+   *  than failing the whole turn. */
+  private async extractPdfText(buffer: Buffer): Promise<string | undefined> {
+    try {
+      // Importing "pdf-parse" itself (rather than its lib/ entry point) triggers a debug
+      // code path in the package's index.js that tries to read a bundled sample PDF from
+      // its own test/ directory and throws ENOENT when that isn't present in the installed
+      // tree - a known pdf-parse@1.x quirk. lib/pdf-parse.js is the actual implementation
+      // without that wrapper.
+      // @ts-expect-error pdf-parse ships no bundled type declarations
+      const pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default;
+      const result = await pdfParse(buffer);
+      return result?.text;
+    } catch (error) {
+      this.logger.warn("Failed to extract PDF text", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * Reads non-image attachments (PDF, txt, html, css, json, csv, code, ...) and returns
+   * their content as a text block to append to the prompt, so the model has it directly
+   * instead of needing to guess a tool call to go find and open the file. Bounded per-file
+   * and in total so a large or many attachments can't blow out the context window; anything
+   * cut off tells the model where to read the rest with the filesystem tool.
+   */
+  private async buildAttachmentTextContent(attachments: AgentRunAttachment[]): Promise<string> {
+    const MAX_CHARS_PER_FILE = 20000;
+    const MAX_TOTAL_CHARS = 60000;
+    const workspaceRoot = resolve(SHARED_WORKSPACE_ROOT);
+    let totalChars = 0;
+    const parts: string[] = [];
+
+    for (const attachment of attachments) {
+      const isPdf = this.isPdfAttachment(attachment);
+      const isText = this.isTextAttachment(attachment);
+      if (!isPdf && !isText) continue;
+      if (!attachment.path) continue;
+      if (totalChars >= MAX_TOTAL_CHARS) break;
+
+      try {
+        const absolutePath = resolve(workspaceRoot, attachment.path);
+        if (absolutePath !== workspaceRoot && !absolutePath.startsWith(workspaceRoot + sep)) {
+          this.logger.warn("Skipped attachment outside shared workspace", { path: attachment.path });
+          continue;
+        }
+        if (!existsSync(absolutePath)) {
+          this.logger.warn("Attachment file not found", { path: attachment.path, absolutePath });
+          continue;
+        }
+
+        const text = isPdf
+          ? await this.extractPdfText(readFileSync(absolutePath))
+          : readFileSync(absolutePath, "utf-8");
+        if (!text || text.trim().length === 0) continue;
+
+        let clipped = text;
+        let truncated = false;
+        if (clipped.length > MAX_CHARS_PER_FILE) {
+          clipped = clipped.slice(0, MAX_CHARS_PER_FILE);
+          truncated = true;
+        }
+        if (totalChars + clipped.length > MAX_TOTAL_CHARS) {
+          clipped = clipped.slice(0, Math.max(0, MAX_TOTAL_CHARS - totalChars));
+          truncated = true;
+        }
+        if (clipped.length === 0) break;
+        totalChars += clipped.length;
+
+        let block = `\n\n--- Attached ${isPdf ? "PDF" : "file"}: ${attachment.name} (shared-workspace/${attachment.path}) ---\n${clipped}`;
+        if (truncated) {
+          block += `\n[... truncated - use the filesystem tool (read action) to read the rest at shared-workspace/${attachment.path} ...]`;
+        }
+        parts.push(block);
+      } catch (error) {
+        this.logger.warn("Failed to read text/PDF attachment", {
+          name: attachment.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return parts.join("");
+  }
+
   private async executePreFlightTools(userInput: string, options: AgentRunOptions): Promise<void> {
     // BEST PRACTICE: Execute real-time data tools BEFORE LLM inference to prevent hallucination
     // This ensures the agent has ground truth before reasoning
@@ -4509,6 +4701,79 @@ export class Agent {
     });
   }
 
+  /**
+   * Fast path for "Bildanalyse" turns: attached image(s) + the user's own prompt, sent
+   * straight to the model with a minimal system prompt - no skill selection, no tool
+   * definitions/docs, no planner, no checklist. Mirrors runPlanMode's short-circuit shape.
+   *
+   * This is intentionally NOT a separate spawned Agent/sub-process: constructing a whole
+   * second Agent (tool registry, skill pool, memory system, conversation manager) costs far
+   * more than it saves. Skipping all of that work on the CURRENT instance for this one turn
+   * gets the same "nothing but vision" isolation the user asked for, without the extra
+   * construction overhead a real sub-agent would add.
+   */
+  private async runVisionMode(
+    userInput: string,
+    options: AgentRunOptions,
+    emit: (type: AgentRunEventType, message: string, data?: Record<string, unknown>) => void,
+    maxOutputTokens: number
+  ): Promise<AgentRunResult> {
+    const metadata: Record<string, unknown> = {};
+    if (options.attachments?.length) {
+      metadata.attachments = options.attachments;
+    }
+    if (options.localMessageId) {
+      metadata.localMessageId = options.localMessageId;
+    }
+    const userMessage: LLMMessage = {
+      role: "user",
+      content: await this.buildUserTurnContent(userInput, options.attachments),
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    };
+    await this.conversation.addMessage(userMessage);
+    this.history.add(userMessage);
+
+    emit("decision", "Bildanalyse-Modus: direkter Vision-Aufruf ohne Skills/Tools.", {
+      source: "vision_mode",
+    });
+
+    const systemMessage: LLMMessage = {
+      role: "system",
+      content: VISION_ONLY_SYSTEM_PROMPT,
+    };
+    const messages: LLMMessage[] = [systemMessage, userMessage];
+    const genOptions = { maxTokens: maxOutputTokens, signal: this.abortController?.signal };
+
+    let response: string;
+    if (options.stream && this.provider.supportsStreaming()) {
+      const result = await this.provider.generateStream(messages, genOptions, options.onChunk);
+      response = result.content;
+    } else {
+      const result = await this.provider.generate(messages, genOptions);
+      response = result.content;
+      if (options.stream) options.onChunk?.(response);
+    }
+
+    const assistantMetadata: Record<string, unknown> = {};
+    if (options.localMessageId) {
+      assistantMetadata.localMessageId = options.localMessageId;
+    }
+    const assistantMessage: LLMMessage = {
+      role: "assistant",
+      content: response,
+      metadata: Object.keys(assistantMetadata).length > 0 ? assistantMetadata : undefined,
+    };
+    await this.conversation.addMessage(assistantMessage);
+    this.history.add(assistantMessage);
+
+    return {
+      response,
+      iterations: 1,
+      toolsUsed: [],
+      conversationId: this.conversation.id,
+    };
+  }
+
   private async runPlanMode(
     userInput: string,
     options: AgentRunOptions,
@@ -4523,7 +4788,7 @@ export class Agent {
     }
     const userMessage: LLMMessage = {
       role: "user",
-      content: userInput,
+      content: await this.buildUserTurnContent(userInput, options.attachments),
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
     await this.conversation.addMessage(userMessage);
@@ -5634,6 +5899,13 @@ export class Agent {
       return await this.runPlanMode(userInput, options, emit);
     }
 
+    // Vision mode short-circuits the same way: an image attachment with "Bildanalyse"
+    // enabled is a direct vision completion, not a task that needs skill selection, tool
+    // docs, or planning - so none of that setup runs for it either.
+    if (options.visionOnly && (options.attachments ?? []).some((att) => this.isImageAttachment(att))) {
+      return await this.runVisionMode(userInput, options, emit, controls.maxOutputTokens);
+    }
+
     // Determine agent mode (full, lightweight, or chatbot) - P3.2
     const explicitMode = options.agentMode ?? "full";
     const recentHistory = this.history.getLast(3);
@@ -5828,7 +6100,7 @@ export class Agent {
     }
     const userMessage: LLMMessage = {
       role: "user",
-      content: effectiveInput,
+      content: await this.buildUserTurnContent(effectiveInput, options.attachments),
       metadata: Object.keys(userMetadata).length > 0 ? userMetadata : undefined,
     };
     await this.conversation.addMessage(userMessage);
@@ -6122,11 +6394,23 @@ export class Agent {
     // unchanged evidence; this additionally caps how OFTEN the (LLM-backed) verifier runs
     // at all, for callers that want to bound its cost/frequency during a long plan run.
     let checklistLastVerifyAtMs = 0;
+    // A turn with an image attachment is now a direct single-turn vision completion (the
+    // image rides in the message content itself, see buildUserTurnContent) - not a
+    // multi-step tool workflow. The heuristic Planner only sees the flattened text (file
+    // path mentions, "please analyze" wording) and, unaware the image is already attached,
+    // used to break this into steps like "locate the file" / "retrieve and prepare image",
+    // which fought the model's own (correct) first-response analysis and kept the run
+    // looping afterwards trying to satisfy tool-based steps that no longer apply. Skip
+    // auto-derived checklist tracking for these turns; an explicitly caller-supplied plan
+    // (usingExternalPlan) is left untouched since the user reviewed and approved it.
+    const currentTurnHasImageAttachments = (options.attachments ?? []).some((att) => this.isImageAttachment(att));
     if (
       (checklistCfg.enabled || usingExternalPlan) &&
       planContext &&
       this.conversation.id !== undefined &&
-      (usingExternalPlan || this.meetsMinComplexity(planContext.estimatedComplexity, checklistCfg.minComplexity))
+      (usingExternalPlan ||
+        (this.meetsMinComplexity(planContext.estimatedComplexity, checklistCfg.minComplexity) &&
+          !currentTurnHasImageAttachments))
     ) {
       const items = await this.checklistManager.deriveFromPlan(planContext, this.conversation.id, checklistRunId);
       if (items.length > 0) {
@@ -6413,6 +6697,21 @@ export class Agent {
       // actions already taken this run. Reassigned each iteration; buildMessages closes over it.
       const runJournalHint = runJournalEnabled ? this.renderRunJournalHint(runJournal) : "";
 
+      // Vision nudge: when the current turn carries an actual image (user attachment or
+      // browser screenshot), the system prompt's tool-call protocol otherwise dominates and
+      // biases smaller/local models toward reaching for a tool instead of just describing
+      // what they were sent an image to look at. A short, recent reminder counteracts that -
+      // recency is what makes a model actually follow it, same reasoning as checklistHint above.
+      const latestTurnHasImage = this.history.getLast(1).some(
+        (msg) =>
+          msg.role === "user" &&
+          Array.isArray(msg.content) &&
+          (msg.content as LLMContent[]).some((part) => part.type === "image_url" || part.type === "image_data")
+      );
+      const visionNudgeHint = latestTurnHasImage
+        ? "\n\nThe message above includes an image. Look at it directly and answer using what you see - do not call a tool to \"analyze\" or \"process\" the image, you already have full vision access to it in this turn."
+        : "";
+
       const dynamicMemorySignals = [
         effectiveInput,
         ...activeSkillSlugs,
@@ -6603,7 +6902,7 @@ export class Agent {
           contextOptions?.charLimit ?? maxContextChars
         );
 
-        const volatileSuffix = `${clippedDynamicMemory}${checklistHint}${runJournalHint}`.trim();
+        const volatileSuffix = `${clippedDynamicMemory}${checklistHint}${runJournalHint}${visionNudgeHint}`.trim();
         const suffixMessages: LLMMessage[] = volatileSuffix
           ? [{ role: "user", content: volatileSuffix }]
           : [];
