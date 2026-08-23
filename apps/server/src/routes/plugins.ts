@@ -369,6 +369,42 @@ pluginsRouter.get("/:name/ui/:page/*", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+/**
+ * GET /api/plugins/:name/data/* - read-only byte stream of a file under a plugin's own
+ * data/ folder, confined the same way servePluginPage() confines UI assets (resolve+relative
+ * traversal guard). Plugins that store binary blobs (video, audio, large images) in their
+ * plugin-owned storage had no way to get bytes into a <video>/<audio>/<img> tag other than
+ * inlining them as base64 in a JSON tool response - fine for a thumbnail, unusable for a
+ * multi-MB source video or a rendered export (no seeking/scrubbing, huge JSON payloads). This
+ * is generic (not tied to any one plugin) so any plugin with storage.sqlite + a data/ folder
+ * of files benefits, not just video-editor. Uses res.sendFile() specifically because it - unlike
+ * the manual createReadStream() in servePluginPage() - handles Range requests out of the box,
+ * which is what lets a browser <video> element seek/scrub instead of only playing linearly.
+ */
+pluginsRouter.get("/:name/data/*", async (req, res, next) => {
+  try {
+    const name = String(req.params.name ?? "");
+    if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
+    const info = (await currentPlugins(req)).find((p) => p.name === name);
+    if (!info) { res.status(404).json(createApiError("Plugin not found")); return; }
+
+    const dataRoot = resolve(pluginsRoot(), name, "data");
+    const rel = String((req.params as Record<string, string>)[0] ?? "");
+    const target = resolve(dataRoot, rel);
+    const within = relative(dataRoot, target);
+    if (!rel || within.startsWith("..") || isAbsolute(within)) {
+      res.status(400).json(createApiError("Path escapes the plugin's data folder"));
+      return;
+    }
+    if (!existsSync(target) || !statSync(target).isFile()) { res.status(404).json(createApiError("Not found")); return; }
+
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.sendFile(target, (err) => {
+      if (err && !res.headersSent) next(err);
+    });
+  } catch (error) { next(error); }
+});
+
 interface PluginBundle {
   name?: string;
   files?: Array<{ path?: string; content?: string }>;
