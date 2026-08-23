@@ -2,7 +2,7 @@
 
 **A self-hosted, pure-Node.js AI agent platform** — chat, tasks, coding, workflows, persistent memory and a file-first plugin system, all behind one web UI, REST API and WebSocket stream. No cloud lock-in: run it fully local against LM Studio, Ollama, OpenRouter or OpenAI.
 
-[**🌐 ducki.cloud**](https://ducki.cloud) · [**⚡ Installation**](https://ducki.cloud/download) · [**📘 Documentation**](https://ducki.cloud/docs) · [**🧩 Plugin System**](#plugin-system) · [**❤️ Sponsor**](https://ducki.cloud/sponsor) · [**👤 Author**](https://www.davidduckwitz.de/)
+[**🌐 ducki.cloud**](https://ducki.cloud) · [**⚡ Installation**](https://ducki.cloud/download) · [**📘 Documentation**](https://ducki.cloud/docs) · [**🧩 Plugin System**](#plugin-system) · [**🎬 Video & Image Analysis**](#video--image-analysis) · [**❤️ Sponsor**](https://ducki.cloud/sponsor) · [**👤 Author**](https://www.davidduckwitz.de/)
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Runtime: Node.js](https://img.shields.io/badge/Runtime-Node.js-339933.svg?logo=node.js&logoColor=white) ![Language: TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6.svg?logo=typescript&logoColor=white) ![Made in Fulda](https://img.shields.io/badge/Made%20in-Fulda%2C%20Germany-red.svg)
 
@@ -24,6 +24,7 @@
 | --- | --- |
 | 🤖 **Multi-agent core** | Parallel chat / task / websocket runs without global lock contention; live metrics on `/agents` |
 | 🧠 **Persistent memory** | Self-updating agent & user memory with profiles, approvals and curation flows |
+| 🎬 **Video & image analysis** | Any attachment gets a transcript + sampled frames (video) or a direct vision pass (image) — see [below](#video--image-analysis) |
 | 🧩 **Plugin system** | File-first bundles: agent tools, OAuth connectors, encrypted settings/secrets, and typed UI pages — see [below](#plugin-system) |
 | 🛠️ **Rich tooling** | Filesystem, HTTP, shell, git, browser automation, workflow, cronjob and memory tools — enable per tool |
 | 🕸️ **Workflow engine** | Build, run and resume graph workflows from the UI and from tools |
@@ -136,6 +137,7 @@ hot-reloads without interrupting running agents.
 | `notes` | Own SQLite DB, auto `notes_storage` tool, and a **frontend** page in the sidebar |
 | `clock` | A **widget** (time / date / weekday) shown in the sidebar and on the dashboard |
 | `github-connector` | Node module tool + **OAuth2** connector + encrypted secrets + **settings** page |
+| `social-media` | Node module tool using the [agent capability API](#video--image-analysis) (`ctx.agent.analyzeVideo`/`analyzeImage`) to analyze a video/image from any URL (YouTube, TikTok, Instagram, X, or a direct link) |
 
 ## Configuration
 
@@ -685,6 +687,49 @@ Minimal flow example:
 3. Interact with `goto`/`click`/`type`/`form_fill`/`login`
 4. Capture artifacts with `screenshot` or `pdf`
 5. `close`
+
+## Video & Image Analysis
+
+Any image or video attachment — via the web chat composer, a Discord message, or the Cloud
+Voice-App — is analyzed automatically as part of the same turn, no separate upload/processing
+step required.
+
+- **Images** are sent straight to the active vision-capable model.
+- **Videos** run through an ffmpeg + Whisper pipeline
+  (`packages/agent/src/media/video-processing.ts`): the audio track is extracted and transcribed
+  locally (same `nodejs-whisper` pipeline as voice messages), and a handful of frames are
+  **sampled** — not every frame, which would blow the context window on anything longer than a
+  few seconds. Transcript + frames are then sent to the model together. Hard caps: ~3 min of a
+  video actually sampled, ~80MB input, up to 6 frames.
+- Every entry point shares the same code
+  (`buildAttachmentImageContent`/`buildAttachmentVideoContent` in `packages/agent/src/agent.ts`),
+  so a video attachment behaves identically whether it arrives through the chat UI, a Discord
+  message, or the Cloud Voice-App's `chat.send` command.
+
+### Plugin capability API
+
+A `trust: "node"` plugin can call the **same** vision/transcription pipeline the core agent uses,
+via `ctx.agent` in its module tool's context
+(`packages/agent/src/plugins/agent-capabilities.ts`):
+
+```ts
+ctx.agent.analyzeImage(images, question?)   // vision reasoning over one or more images
+ctx.agent.transcribeAudio(buffer, opts?)    // Whisper transcription of a raw audio buffer
+ctx.agent.analyzeVideo(buffer, question?)   // transcript + sampled frames (+ optional vision pass)
+ctx.agent.analyzeText(text, instruction)    // plain text-in, text-out LLM call
+```
+
+This is deliberately **not** the raw `LLMProvider` — a plugin can't fire arbitrary prompts at any
+model or step around cost/provider governance; each method wraps exactly one narrow, existing
+capability. Only `trust: "node"` plugins receive `ctx.agent` (same bar as `moduleTools`);
+`sandboxed` plugins never see it.
+
+**Example — the `social-media` plugin** (`plugins/social-media/`): analyzes a video or image from
+a URL (YouTube, TikTok, Instagram, X/Twitter and hundreds more sites via `yt-dlp`, or a direct
+image/video link). Analyses are organized into projects in the plugin's own SQLite DB; each item
+supports unlimited follow-up questions (the transcript + frames are stored, not just one answer),
+and its downloaded video file can be deleted independently to free disk space while the
+transcript/frames/Q&A history stay fully intact.
 
 ## MCP Integration
 
