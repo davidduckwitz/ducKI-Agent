@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import { Server as SocketIOServer } from "socket.io";
 import {
 	Agent,
+	DEFAULT_SYSTEM_PROMPT,
 	WorkflowEngine,
 	createWorkflowManagementTool,
 	createWorkflowTools,
@@ -36,6 +37,7 @@ import { setupDefaultCronjobs } from "./lib/default-cronjobs.js";
 import { LlmWikiService } from "./lib/llm-wiki-service.js";
 import { CloudBackupScheduler } from "./lib/cloud-backup-scheduler.js";
 import { CloudHeartbeatService } from "./lib/cloud-heartbeat.js";
+import { CloudVoiceChatService } from "./lib/cloud-voice.js";
 import { createWikiTool } from "./lib/wiki-tool.js";
 import { PromptManager } from "./lib/prompt-manager.js";
 import {
@@ -401,12 +403,21 @@ function buildAgentFactory(
 			maxIterationsSetting,
 			parsed: maxIterationsSetting ? parseInt(maxIterationsSetting) : undefined,
 		});
-		// The Memory settings UI lets a user edit system.md via PromptManager - without this it
-		// was a dead letter, saved to the DB/file but never read back into any Agent instance.
-		const customSystemPrompt = await promptManager.getPrompt("system");
+		// The Memory settings UI lets a user edit system.md/agent.md/human.md via PromptManager -
+		// without reading all three back here, agent persona (character) and human-info edits were
+		// dead letters: saved to the DB/file but never reaching any Agent instance's system prompt.
+		const [customSystemPrompt, agentBehavior, humanInfo] = await Promise.all([
+			promptManager.getPrompt("system"),
+			promptManager.getPrompt("agent"),
+			promptManager.getPrompt("human"),
+		]);
+		const profileSections =
+			(agentBehavior.trim() ? `\n\n## Agent Persona\n${agentBehavior.trim()}` : "") +
+			(humanInfo.trim() ? `\n\n## About the User\n${humanInfo.trim()}` : "");
+		const combinedSystemPrompt = (customSystemPrompt.trim() || DEFAULT_SYSTEM_PROMPT) + profileSections;
 		const agentOptions = {
 			...(maxIterationsSetting ? { maxIterations: parseInt(maxIterationsSetting) } : {}),
-			...(customSystemPrompt.trim() ? { systemPrompt: customSystemPrompt } : {}),
+			...(customSystemPrompt.trim() || profileSections ? { systemPrompt: combinedSystemPrompt } : {}),
 		};
 
 		const agent = new Agent(providerRef.current, db, undefined, agentOptions);
@@ -665,6 +676,13 @@ async function bootstrap(): Promise<void> {
 		createAgent,
 	});
 	cloudHeartbeatService.start();
+	const cloudVoiceChatService = new CloudVoiceChatService(db, logger.child("CloudVoiceChatService"), {
+		db,
+		getPlugins: () => pluginManager.getPlugins(),
+		requestPluginReload: () => { pluginManager.requestReload(); },
+		createAgent,
+	});
+	cloudVoiceChatService.start();
 
 	app.locals["db"] = db;
 	app.locals["logger"] = logger;

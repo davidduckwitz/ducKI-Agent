@@ -222,7 +222,7 @@ Rules for the block form:
 
 If you are instead given tools as a structured/native function-calling list (not writing [TOOL:...] text yourself), the block form above does not apply - there is no heredoc body in a native call. In that case you MUST put the ENTIRE file content as a plain JSON string in the tool's "content" argument, in the SAME call as "action" and "path" - never omit it, never send it in a separate message, and never just describe the file in your own text. A write/append call with no "content" argument does nothing and fails.`;
 
-const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
+export const DEFAULT_SYSTEM_PROMPT = `You are DucKI, an intelligent AI coding and task agent. You are helpful, accurate, and professional.
 Use the available tools to create and manage projects and tasks, then work them through to completion.
 When a request needs execution, plan first, create or update project/task records as needed, then use tools to carry out the work.
 Always think step-by-step, keep state in the database, and return concise progress updates.

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CloudUpload, CloudDownload, Unlink, Link2, AlertCircle, CheckCircle, Info, Clock, Radio } from "lucide-react";
+import { CloudUpload, CloudDownload, Unlink, Link2, AlertCircle, CheckCircle, Info, Clock, Radio, Mic } from "lucide-react";
 import { api } from "../../lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
@@ -73,6 +73,20 @@ export function CloudBackupSettings() {
     mutationFn: (payload: { enabled?: boolean; heartbeatIntervalMinutes?: number }) => api.sync.setControl(payload),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["sync", "control"] });
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const voice = useQuery({
+    queryKey: ["sync", "voice"],
+    queryFn: () => api.sync.getVoice(),
+    enabled: !!status.data?.connected,
+  });
+
+  const setVoice = useMutation({
+    mutationFn: (payload: { enabled: boolean }) => api.sync.setVoice(payload),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sync", "voice"] });
     },
     onError: (e: Error) => setError(e.message),
   });
@@ -264,6 +278,30 @@ export function CloudBackupSettings() {
               <p className="text-xs text-muted-foreground">
                 Gilt für Online-Status und (falls Cloud Control aktiv) für die Befehlsabholung — kürzere Intervalle machen Befehle schneller wirksam, senden aber häufiger.
               </p>
+            </div>
+
+            <div className="space-y-3 p-3 bg-muted rounded-lg">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Mic className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <div className="text-sm font-medium">Voice-Chat (schnelles Polling)</div>
+                    <div className="text-xs text-muted-foreground">
+                      Standardmäßig aus — braucht Cloud Control oben. Fragt alle 2s statt alle paar Minuten nach neuen
+                      Chat-Nachrichten aus der Voice-App auf ducki.cloud, damit sich ein Gespräch von unterwegs wie ein
+                      echter Chat statt ein Ticket-System anfühlt.
+                    </div>
+                  </div>
+                </div>
+                <Switch
+                  checked={!!voice.data?.enabled}
+                  disabled={!control.data?.enabled || voice.isLoading || setVoice.isPending}
+                  onCheckedChange={(checked) => setVoice.mutate({ enabled: checked })}
+                />
+              </div>
+              {!control.data?.enabled && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">Erst „Cloud Control" oben aktivieren.</p>
+              )}
             </div>
 
             <div className="space-y-2">

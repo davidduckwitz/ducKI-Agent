@@ -27,6 +27,7 @@ import {
   DEFAULT_HEARTBEAT_INTERVAL_MINUTES,
   MIN_HEARTBEAT_INTERVAL_MINUTES,
 } from "../lib/cloud-heartbeat.js";
+import { isVoiceChatEnabled, setVoiceChatEnabled } from "../lib/cloud-voice.js";
 
 export const syncRouter: IRouter = Router();
 
@@ -170,6 +171,26 @@ syncRouter.put("/control", async (req, res) => {
     }
     if (typeof heartbeatIntervalMinutes === "number" && heartbeatIntervalMinutes >= MIN_HEARTBEAT_INTERVAL_MINUTES) {
       await database.setSetting(SETTING_HEARTBEAT_INTERVAL_MINUTES, String(heartbeatIntervalMinutes));
+    }
+    res.json(createApiResponse({ ok: true }));
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+syncRouter.get("/voice", async (req, res) => {
+  try {
+    res.json(createApiResponse({ enabled: await isVoiceChatEnabled(db(req)) }));
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+syncRouter.put("/voice", async (req, res) => {
+  try {
+    const { enabled } = req.body as { enabled?: boolean };
+    if (typeof enabled === "boolean") {
+      await setVoiceChatEnabled(db(req), enabled);
     }
     res.json(createApiResponse({ ok: true }));
   } catch (error) {

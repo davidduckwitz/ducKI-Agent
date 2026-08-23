@@ -1,4 +1,4 @@
-export { Agent } from "./agent.js";
+export { Agent, DEFAULT_SYSTEM_PROMPT } from "./agent.js";
 export type { AgentEventEmitter } from "./config/interfaces_types.js";
 export { AgentOptions, AgentRunResult, AgentRunEvent, AgentRunEventType, AgentRunOptions, AgentRuntimeControls } from "./config/interfaces_types.js"
 export { ErrorClassifier, ErrorCategory } from "./executor/error-classifier.js";

@@ -393,6 +393,9 @@ export const api = {
     getControl: () => request<{ enabled: boolean; heartbeatIntervalMinutes: number }>("/sync/control"),
     setControl: (payload: { enabled?: boolean; heartbeatIntervalMinutes?: number }) =>
       request<{ ok: boolean }>("/sync/control", { method: "PUT", body: JSON.stringify(payload) }),
+    getVoice: () => request<{ enabled: boolean }>("/sync/voice"),
+    setVoice: (payload: { enabled: boolean }) =>
+      request<{ ok: boolean }>("/sync/voice", { method: "PUT", body: JSON.stringify(payload) }),
   },
 
   plugins: {

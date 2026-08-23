@@ -52,8 +52,11 @@ const MAX_ARCHIVE_BYTES = 480 * 1024 * 1024;
  * (packages/agent/src/crypto/bitcoin-puzzle-service.ts) kann alleine >500MB an CSV-Logs
  * anhaeufen und liess das Backup vorher endlos haengen (voller rekursiver Kopiervorgang +
  * gzip ueber teils 800MB grosse Einzeldateien, ohne dass der Upload je den Server erreichte).
+ * voice-uploads (cloud-control.ts) sind Chat-Bildanhaenge, die nach jeder Analyse sofort
+ * wieder geloescht werden -- der Eintrag hier ist nur ein Sicherheitsnetz falls das Loeschen
+ * mal fehlschlaegt, kein regulaerer Zustand.
  */
-const EXCLUDED_WORKSPACE_DIRS = new Set(["bitcoin-puzzle-attempts"]);
+const EXCLUDED_WORKSPACE_DIRS = new Set(["bitcoin-puzzle-attempts", "voice-uploads"]);
 
 export class CloudSyncError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -190,6 +193,26 @@ export async function sendHeartbeat(
       agent_version: version,
       ...(opts.stateSnapshot ? { state_snapshot: opts.stateSnapshot } : {}),
     }
+  );
+  return response.data.pendingCommands ?? [];
+}
+
+/**
+ * Dedizierter, schneller Poll-Kanal fuer Voice-Chat-Befehle (siehe cloud-voice.ts) --
+ * unabhaengig vom trägen Heartbeat-Intervall (Default 3 Min.), damit ein Chat in der
+ * Voice-App sich wie ein echtes Gespraech anfuehlt statt wie ein Ticket-System. Liefert NUR
+ * `chat.send`/`voice.transcribe` aus (Laravel-seitig gefiltert), alle anderen Cloud-Control-
+ * Befehlstypen bleiben exklusiv beim normalen Heartbeat.
+ */
+export async function pollVoiceCommands(db: DatabaseService): Promise<HeartbeatPendingCommand[]> {
+  const apiKey = await getDecryptedApiKey(db);
+  const baseUrl = await getCloudBaseUrl(db);
+  const jwt = await exchangeForJwt(baseUrl, apiKey);
+  const response = await authedJson<{ data: { pendingCommands?: HeartbeatPendingCommand[] } }>(
+    db,
+    "POST",
+    "/api/agent/voice/poll",
+    jwt
   );
   return response.data.pendingCommands ?? [];
 }
