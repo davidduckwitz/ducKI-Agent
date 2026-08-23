@@ -28,6 +28,7 @@ export function PluginsPage() {
   // Name of the plugin whose iframe settings page is currently expanded (Phase 3), or null.
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [reloading, setReloading] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -42,9 +43,28 @@ export function PluginsPage() {
     }
   }, []);
 
+  // The installed-plugin list is cached server-side (only refreshed on enable/disable/install
+  // through this API) so a plugin folder dropped directly onto disk stays invisible without
+  // this: a fresh re-scan when the page is opened, so newly added plugins show up without a
+  // server restart.
+  const reload = useCallback(async (silent: boolean) => {
+    setReloading(true);
+    try {
+      await api.plugins.reload();
+      await refresh();
+      await queryClient.invalidateQueries({ queryKey: ["plugins"] });
+      if (!silent) toast.success("Plugin-Liste aktualisiert");
+    } catch (e) {
+      if (!silent) toast.error(e instanceof Error ? e.message : "Aktualisieren fehlgeschlagen");
+    } finally {
+      setReloading(false);
+    }
+  }, [refresh, queryClient]);
+
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void reload(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Catalog is fetched server-side filtered (?search=) with a small debounce so typing
   // doesn't hammer the endpoint. Re-runs whenever the search term changes on the catalog tab.
@@ -121,12 +141,22 @@ export function PluginsPage() {
             Datei-basierte Erweiterungen aus <code>plugins/</code> — Tools, Skills und Mappings. Keine node_modules, keine Belastung der Hauptdatenbank.
           </p>
         </div>
-        <button
-          onClick={() => setCreateOpen(true)}
-          className="shrink-0 rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground"
-        >
-          + Plugin erstellen
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            onClick={() => void reload(false)}
+            disabled={reloading}
+            title="Plugin-Verzeichnis neu einlesen (z. B. nach manuell hinzugefügten Plugin-Ordnern)"
+            className="rounded border border-border px-3 py-1.5 text-sm disabled:opacity-50"
+          >
+            {reloading ? "Aktualisiere…" : "⟳ Aktualisieren"}
+          </button>
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground"
+          >
+            + Plugin erstellen
+          </button>
+        </div>
       </div>
 
       <CreatePluginWizardModal

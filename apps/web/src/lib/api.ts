@@ -36,6 +36,25 @@ export interface PluginReload {
   deferred: boolean;
 }
 
+export interface ArtifactInfo {
+  id: number;
+  filename: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  path: string | null;
+  sourceUrl: string | null;
+  platform: string | null;
+  transcript: string | null;
+  thumbnailDataUrl: string | null;
+  durationSec: number | null;
+  conversationId: number | null;
+  source: string;
+  status: string;
+  error: string | null;
+  createdAt: string;
+  hasFrames?: boolean;
+}
+
 export interface PluginInfo {
   name: string;
   version: string;
@@ -400,6 +419,7 @@ export const api = {
 
   plugins: {
     list: () => request<PluginInfo[]>("/plugins"),
+    reload: () => request<{ reload: PluginReload }>("/plugins/reload", { method: "POST" }),
     get: (name: string) => request<PluginInfo & { manifest: unknown }>(`/plugins/${name}`),
     enable: (name: string) => request<{ name: string; enabled: boolean; reload: PluginReload }>(`/plugins/${name}/enable`, { method: "POST" }),
     disable: (name: string) => request<{ name: string; enabled: boolean; reload: PluginReload }>(`/plugins/${name}/disable`, { method: "POST" }),
@@ -880,5 +900,18 @@ export const api = {
           timestamp: string;
         }
       >(`/provider-models/${provider}`),
+  },
+
+  artifacts: {
+    list: (params?: { conversationId?: number; source?: string; limit?: number }) => {
+      const query = new URLSearchParams();
+      if (params?.conversationId) query.set("conversationId", String(params.conversationId));
+      if (params?.source) query.set("source", params.source);
+      if (params?.limit) query.set("limit", String(params.limit));
+      const qs = query.toString();
+      return request<ArtifactInfo[]>(`/artifacts${qs ? `?${qs}` : ""}`);
+    },
+    get: (id: number) => request<ArtifactInfo & { hasFrames: boolean }>(`/artifacts/${id}`),
+    delete: (id: number) => request<{ deleted: boolean; id: number }>(`/artifacts/${id}`, { method: "DELETE" }),
   },
 };

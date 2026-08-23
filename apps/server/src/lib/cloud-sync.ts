@@ -230,6 +230,32 @@ export async function reportCommandResult(
   await authedJson(db, "POST", `/api/agent/commands/${commandId}/result`, jwt, { status, result });
 }
 
+export interface PushNotificationResult {
+  sent: number;
+  failed: number;
+  reason?: string;
+}
+
+/**
+ * Schickt eine Browser-Push-Benachrichtigung an alle Voice-App-Subscriptions des Nutzers (siehe
+ * PushNotificationController::send() im ducki-cloud-v1-Repo) - z.B. wenn eine lang laufende
+ * Aufgabe fertig ist, waehrend die Voice-App-Seite nicht offen/fokussiert ist. Derselbe
+ * JWT-Austausch wie jeder andere Cloud-Control-Call; wirft CloudSyncError, wenn kein Cloud-
+ * API-Key hinterlegt ist oder der Server nicht erreichbar ist - der Aufrufer (push-notification-
+ * tool.ts) behandelt das als "nicht verfuegbar", nicht als harten Fehler.
+ */
+export async function sendPushNotification(
+  db: DatabaseService,
+  title: string,
+  body: string,
+  url?: string
+): Promise<PushNotificationResult> {
+  const apiKey = await getDecryptedApiKey(db);
+  const baseUrl = await getCloudBaseUrl(db);
+  const jwt = await exchangeForJwt(baseUrl, apiKey);
+  return authedJson<PushNotificationResult>(db, "POST", "/api/agent/push/send", jwt, { title, body, url });
+}
+
 export async function listBackups(db: DatabaseService): Promise<BackupSummary[]> {
   const apiKey = await getDecryptedApiKey(db);
   const baseUrl = await getCloudBaseUrl(db);

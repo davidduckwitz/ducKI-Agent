@@ -8,12 +8,19 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parsePluginManifest, parseOAuthConfig, type PluginManifest, type PluginToolMapping, type PluginSettingSpec, type OAuthConfig } from "./plugin-manifest.js";
 import { withManifestCache } from "../skill-selector/skill-cache.js";
+import type { AgentCapabilities } from "./agent-capabilities.js";
 
 /**
  * Runtime context handed to a plugin's async script tools and module tools. Sandboxed sync
  * script tools deliberately do NOT receive this (no secrets, no fetch) - they stay locked to
  * the vm surface. `settings`/`secrets` come from the plugin's own settings store; `fetch` is
  * host-guarded by the manifest's allowedHosts; `logger` is namespaced to the plugin.
+ *
+ * `agent` (vision/transcription/video/text-analysis via the currently configured LLM provider)
+ * is only populated for trust:"node" plugins - same bar as moduleTools, since it can trigger
+ * real LLM API calls/cost. Sandboxed plugins never see it. Callers of loadPlugins()/loadOnePlugin()
+ * that don't pass a `capabilities` factory simply get plugins without this (e.g. metadata-only
+ * listing endpoints) - existing behavior for those callers is unchanged.
  */
 export interface PluginToolContext {
   pluginName: string;
@@ -22,6 +29,7 @@ export interface PluginToolContext {
   secrets: Record<string, string>;
   fetch: typeof fetch;
   logger: Logger;
+  agent?: AgentCapabilities;
 }
 
 /** Wrap global fetch so a plugin can only reach hosts on its manifest allowlist. */
@@ -297,7 +305,7 @@ function buildStorageTool(pluginName: string, storage: PluginStorage): ToolExecu
 type LoadedPluginInternal = LoadedPluginInfo & { tools: ToolExecutor[] };
 
 /** Load one plugin directory into tools/skills/mappings/settings. Never throws. */
-async function loadOnePlugin(root: string, name: string, enabled: boolean): Promise<LoadedPluginInternal> {
+async function loadOnePlugin(root: string, name: string, enabled: boolean, capabilities?: AgentCapabilities): Promise<LoadedPluginInternal> {
   const dir = join(root, name);
   const info: LoadedPluginInternal = {
     name, version: "?", description: "", enabled,
@@ -356,6 +364,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean): Prom
       secrets: runtime.secrets,
       fetch: guardedFetch(manifest.allowedHosts),
       logger: getRootLogger().child(`Plugin:${manifest.name}`),
+      agent: manifest.trust === "node" ? capabilities : undefined,
     };
 
     // Every plugin with its own DB gets an auto storage tool the agent can call directly.
@@ -406,7 +415,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean): Prom
  * the source of truth, plugins/.state.json only carries user disable overrides. Returns the
  * combined tools, skill dirs, mappings and settings for the caller to wire in.
  */
-export async function loadPlugins(root = pluginsRoot()): Promise<PluginLoadResult> {
+export async function loadPlugins(root = pluginsRoot(), capabilities?: AgentCapabilities): Promise<PluginLoadResult> {
   const logger = getRootLogger().child("Plugins");
   const result: PluginLoadResult = { tools: [], skillDirs: [], mappings: [], settings: [], plugins: [] };
 
@@ -423,7 +432,7 @@ export async function loadPlugins(root = pluginsRoot()): Promise<PluginLoadResul
 
   for (const name of entries) {
     const enabled = !disabled.has(name);
-    const { tools, ...info } = await loadOnePlugin(root, name, enabled);
+    const { tools, ...info } = await loadOnePlugin(root, name, enabled, capabilities);
     result.plugins.push(info);
     if (info.error) {
       logger.warn("Plugin skipped", { name, error: info.error });

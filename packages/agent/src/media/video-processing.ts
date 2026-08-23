@@ -52,8 +52,10 @@ export interface VideoAnalysis {
 
 /** Mirrors transcribeAudioBuffer() in apps/server/src/lib/audio-transcription.ts -- kept as
  *  a small local copy rather than a cross-package import so packages/agent doesn't need to
- *  depend on apps/server (wrong dependency direction). Both read the same DB settings keys. */
-async function transcribeExtractedAudio(db: DatabaseService, audioBuffer: Buffer): Promise<string> {
+ *  depend on apps/server (wrong dependency direction). Both read the same DB settings keys.
+ *  Exported so agent-capabilities.ts can offer it to plugins as `transcribeAudio()` without a
+ *  second copy of the same whisper-settings wiring. */
+export async function transcribeExtractedAudio(db: DatabaseService, audioBuffer: Buffer): Promise<string> {
   const allSettings = await db.getAllSettings();
   const settings = new Map(allSettings.map((s) => [s.key, s.value]));
   const read = (key: string, fallback?: string) => settings.get(key) || fallback;

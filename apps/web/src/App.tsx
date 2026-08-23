@@ -29,6 +29,11 @@ const SharedWorkspace = lazy(async () => {
   return { default: module.SharedWorkspace };
 });
 
+const ArtifactsPage = lazy(async () => {
+  const module = await import("./components/shared/ArtifactsPage");
+  return { default: module.ArtifactsPage };
+});
+
 const WorkflowGraphEditor = lazy(async () => {
   const module = await import("./components/workflow/WorkflowGraphEditor");
   return { default: module.WorkflowGraphEditor };
@@ -140,6 +145,7 @@ function AppContent() {
           <Route path="plugins" element={<LazyRoute><PluginsPage /></LazyRoute>} />
           <Route path="plugin/:name" element={<LazyRoute><PluginFrontendView /></LazyRoute>} />
           <Route path="shared" element={<LazyRoute><SharedWorkspace /></LazyRoute>} />
+          <Route path="shared/artifacts" element={<LazyRoute><ArtifactsPage /></LazyRoute>} />
           <Route
             path="memory"
             element={

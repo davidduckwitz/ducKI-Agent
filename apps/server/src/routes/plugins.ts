@@ -66,6 +66,23 @@ pluginsRouter.get("/", async (req, res, next) => {
   }
 });
 
+/**
+ * POST /api/plugins/reload - manually re-scan the plugins/ directory. The cached PluginManager
+ * (see currentPlugins() above) is only ever refreshed automatically on enable/disable/install
+ * through this API, so a plugin folder added directly on disk (e.g. during development, or by
+ * an out-of-band deploy step) stays invisible until either a server restart or this endpoint is
+ * called. Same hot-reload path as those mutations: applied immediately if no agent is currently
+ * running, otherwise deferred until the system goes idle.
+ */
+pluginsRouter.post("/reload", async (req, res, next) => {
+  try {
+    const reload = reloadPlugins(req);
+    res.json(createApiResponse({ reload }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 /** GET /api/plugins/:name - one plugin's info plus its raw manifest. */
 pluginsRouter.get("/:name", async (req, res, next) => {
   try {

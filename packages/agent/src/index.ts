@@ -180,6 +180,10 @@ export {
   type PluginSettingSpec,
   type PluginToolContext,
   type OAuthConfig,
+  createAgentCapabilities,
+  type AgentCapabilities,
+  type AgentImageInput,
+  type AgentVideoAnalysisResult,
 } from "./plugins/index.js";
 export type {
   ConnectorTarget,
@@ -196,6 +200,15 @@ export type {
   ConnectorModuleExports,
 } from "./plugins/connector-types.js";
 export type { SkillValidationResult, SkillValidationIssue } from "./skill-selector/validate.js";
+
+// Video source fetch (YouTube/TikTok/Instagram/X + direct video links via yt-dlp)
+export {
+  detectPlatform,
+  isKnownVideoPlatform,
+  fetchVideoFromUrl,
+  type VideoFetchResult,
+} from "./media/video-source-fetch.js";
+export { analyzeVideo, transcribeExtractedAudio, type VideoAnalysis, type VideoFrame } from "./media/video-processing.js";
 
 // Bitcoin Puzzle Solver
 export { BitcoinPuzzleService } from "./crypto/bitcoin-puzzle-service.js";

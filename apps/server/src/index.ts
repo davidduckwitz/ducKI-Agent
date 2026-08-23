@@ -28,6 +28,7 @@ import type { ToolExecutor } from "@ducki/shared";
 import { createProvider, type ProviderName } from "@ducki/providers";
 import { allTools, browserFrameEvents, stopAllBackgroundProcesses } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
+import { loadProviderFromSettings } from "./lib/provider-settings.js";
 import { ConnectorRegistry } from "./lib/connector-registry.js";
 import { agentRegistry } from "./lib/agent-registry.js";
 import { CronjobManager } from "./lib/cronjob-manager.js";
@@ -48,6 +49,8 @@ import {
 } from "./lib/tool-staging/index.js";
 import { initChatToolEventBroadcaster } from "./lib/chat-tool-events.js";
 import { wrapTools } from "./lib/tool-wrapper.js";
+import { withBrowserArtifactRecording, withFilesystemArtifactRecording } from "./lib/artifact-recording.js";
+import { createPushNotificationTool } from "./lib/push-notification-tool.js";
 import { initScreenshotStorage } from "./lib/screenshot-storage.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
@@ -69,6 +72,7 @@ import { credentialRouter, setupCredentialRoutes } from "./routes/credentials.js
 import { sharedRouter } from "./routes/shared.js";
 import { skillsRouter } from "./routes/skills.js";
 import { tasksRouter } from "./routes/tasks.js";
+import { artifactsRouter } from "./routes/artifacts.js";
 import { toolsRouter } from "./routes/tools.js";
 import { updatesRouter } from "./routes/updates.js";
 import { workflowsRouter } from "./routes/workflows.js";
@@ -133,49 +137,6 @@ async function listenWithRetry(httpServer: ReturnType<typeof createServer>, host
 			await sleep(retryDelayMs);
 		}
 	}
-}
-
-function normalizeApiKey(value: string | undefined): string | undefined {
-	const trimmed = value?.trim();
-	if (!trimmed) return undefined;
-	const normalized = trimmed.replace(/^Bearer\s+/i, "").trim();
-	if (!normalized) return undefined;
-	const lowered = normalized.toLowerCase();
-	if (["lm-studio", "not-needed", "none", "null", "undefined"].includes(lowered)) {
-		return undefined;
-	}
-	return normalized;
-}
-
-function readSettingValue(
-	settings: Map<string, string>,
-	key: string,
-	envKey?: string,
-	fallback?: string
-): string | undefined {
-	const fromSettings = settings.get(key)?.trim();
-	if (fromSettings) return fromSettings;
-	if (envKey) {
-		const fromEnv = process.env[envKey]?.trim();
-		if (fromEnv) return fromEnv;
-	}
-	if (fallback && fallback.trim()) return fallback;
-	return undefined;
-}
-
-function parseProviderName(value: string | undefined): ProviderName {
-	const normalized = value?.trim().toLowerCase();
-	if (
-		normalized === "openai" ||
-		normalized === "openrouter" ||
-		normalized === "ollama" ||
-		normalized === "lmstudio" ||
-		normalized === "claude" ||
-		normalized === "nous"
-	) {
-		return normalized;
-	}
-	return "lmstudio";
 }
 
 async function ensureLogCleanupCron(db: Awaited<ReturnType<typeof getDatabase>>): Promise<void> {
@@ -265,90 +226,6 @@ async function migrateLegacyDiscordGatewaySettings(db: Awaited<ReturnType<typeof
 			error: error instanceof Error ? error.message : String(error),
 		});
 	}
-}
-
-async function loadProviderFromSettings(db: Awaited<ReturnType<typeof getDatabase>>) {
-	const allSettings = await db.getAllSettings();
-	const settingMap = new Map(allSettings.map((entry) => [entry.key, entry.value]));
-	const providerName = parseProviderName(
-		readSettingValue(settingMap, "DEFAULT_PROVIDER", "DEFAULT_PROVIDER", "lmstudio")
-	);
-
-	if (providerName === "lmstudio") {
-		const rawApiKey = readSettingValue(settingMap, "LM_STUDIO_API_KEY", "LM_STUDIO_API_KEY");
-		const normalizedKey = normalizeApiKey(rawApiKey);
-		logger.debug("loadProviderFromSettings: LM Studio config", {
-			hasRawApiKey: !!rawApiKey,
-			rawKeyLength: rawApiKey?.length ?? 0,
-			hasNormalizedKey: !!normalizedKey,
-			normalizedKeyLength: normalizedKey?.length ?? 0,
-		});
-		const provider = createProvider({
-			name: "lmstudio",
-			baseUrl: readSettingValue(settingMap, "LM_STUDIO_BASE_URL", "LM_STUDIO_BASE_URL", "http://localhost:1234/v1"),
-			model: readSettingValue(settingMap, "LM_STUDIO_MODEL", "LM_STUDIO_MODEL", "local-model"),
-			apiKey: normalizedKey,
-		});
-		return { provider, providerName };
-	}
-
-	if (providerName === "openrouter") {
-		const provider = createProvider({
-			name: "openrouter",
-			baseUrl: readSettingValue(settingMap, "OPENROUTER_BASE_URL", "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-			model: readSettingValue(settingMap, "OPENROUTER_MODEL", "OPENROUTER_MODEL", "anthropic/claude-3-5-sonnet"),
-			apiKey: normalizeApiKey(readSettingValue(settingMap, "OPENROUTER_API_KEY", "OPENROUTER_API_KEY")),
-		});
-		return { provider, providerName };
-	}
-
-	if (providerName === "openai") {
-		const provider = createProvider({
-			name: "openai",
-			baseUrl: readSettingValue(settingMap, "OPENAI_BASE_URL", "OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			model: readSettingValue(settingMap, "OPENAI_MODEL", "OPENAI_MODEL", "gpt-4o"),
-			apiKey: normalizeApiKey(readSettingValue(settingMap, "OPENAI_API_KEY", "OPENAI_API_KEY")),
-		});
-		return { provider, providerName };
-	}
-
-	if (providerName === "claude") {
-		const rawKey = readSettingValue(settingMap, "CLAUDE_API_KEY", "CLAUDE_API_KEY");
-		const normalizedKey = normalizeApiKey(rawKey);
-		logger.debug("loadProviderFromSettings: Claude config", {
-			hasRawApiKey: !!rawKey,
-			rawKeyLength: rawKey?.length ?? 0,
-			hasNormalizedKey: !!normalizedKey,
-			normalizedKeyLength: normalizedKey?.length ?? 0,
-			normalizedKeyStart: normalizedKey?.substring(0, 20) ?? "none",
-			baseUrl: "https://api.anthropic.com/v1",
-			model: readSettingValue(settingMap, "CLAUDE_MODEL", "CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
-		});
-		const provider = createProvider({
-			name: "claude",
-			baseUrl: readSettingValue(settingMap, "CLAUDE_BASE_URL", "CLAUDE_BASE_URL", "https://api.anthropic.com/v1"),
-			model: readSettingValue(settingMap, "CLAUDE_MODEL", "CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
-			apiKey: normalizedKey,
-		});
-		return { provider, providerName };
-	}
-
-	if (providerName === "nous") {
-		const provider = createProvider({
-			name: "nous",
-			baseUrl: readSettingValue(settingMap, "NOUS_BASE_URL", "NOUS_BASE_URL"),
-			model: readSettingValue(settingMap, "NOUS_MODEL", "NOUS_MODEL"),
-			apiKey: normalizeApiKey(readSettingValue(settingMap, "NOUS_API_KEY", "NOUS_API_KEY")),
-		});
-		return { provider, providerName };
-	}
-
-	const provider = createProvider({
-		name: "ollama",
-		baseUrl: readSettingValue(settingMap, "OLLAMA_BASE_URL", "OLLAMA_BASE_URL", "http://localhost:11434"),
-		model: readSettingValue(settingMap, "OLLAMA_MODEL", "OLLAMA_MODEL", "llama3"),
-	});
-	return { provider, providerName };
 }
 
 const MCP_SERVERS_SETTING = "MCP_SERVERS";
@@ -447,6 +324,7 @@ function buildAgentFactory(
 function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/chat", chatRouter);
 	app.use("/api/tasks", tasksRouter);
+	app.use("/api/artifacts", artifactsRouter);
 	app.use("/api/projects", projectsRouter);
 	app.use("/api/plans", plansRouter);
 	app.use("/api/plugins", pluginsRouter);
@@ -556,7 +434,7 @@ async function bootstrap(): Promise<void> {
 	// File-first plugins (plugins/<name>/): the PluginManager owns the current tool set and
 	// hot-reloads it on enable/disable/install WITHOUT interrupting running agents (it defers
 	// the swap until no agent is active). Per-request agents register these via the factory.
-	const pluginManager = await PluginManager.create();
+	const pluginManager = await PluginManager.create(db);
 	logger.info("Plugins loaded at startup", {
 		enabled: pluginManager.getPlugins().filter((p) => p.enabled && !p.error).length,
 		tools: pluginManager.getTools().length,
@@ -572,7 +450,17 @@ async function bootstrap(): Promise<void> {
 		createTasksMcpTool(db),
 		createWorkflowMcpTool(db),
 		createCronjobsMcpTool(db),
-	];
+		createPushNotificationTool(db),
+	].map((tool) => {
+		// Screenshots/PDFs the agent captures and documents it writes join the artifact
+		// registry alongside chat uploads and video previews - see artifact-recording.ts.
+		// This is the SHARED_WORKSPACE_ROOT-scoped `filesystem` tool from allTools, not the
+		// CodingAgent's separate project-scoped instance, so coding writes are excluded by
+		// construction (that instance is never part of runtimeTools).
+		if (tool.name === "browser") return withBrowserArtifactRecording(tool, db, logger.child("ArtifactRecording"));
+		if (tool.name === "filesystem") return withFilesystemArtifactRecording(tool, db, logger.child("ArtifactRecording"));
+		return tool;
+	});
 	const providerRef: { current: ReturnType<typeof createProvider> } = { current: provider };
 
 	// Persistent Executor dedicated to the WorkflowEngine (tool_call nodes dispatch
@@ -671,6 +559,7 @@ async function bootstrap(): Promise<void> {
 	cloudBackupScheduler.start();
 	const cloudHeartbeatService = new CloudHeartbeatService(db, logger.child("CloudHeartbeatService"), {
 		db,
+		logger: logger.child("CloudControl"),
 		getPlugins: () => pluginManager.getPlugins(),
 		requestPluginReload: () => { pluginManager.requestReload(); },
 		createAgent,
@@ -678,6 +567,7 @@ async function bootstrap(): Promise<void> {
 	cloudHeartbeatService.start();
 	const cloudVoiceChatService = new CloudVoiceChatService(db, logger.child("CloudVoiceChatService"), {
 		db,
+		logger: logger.child("CloudControl"),
 		getPlugins: () => pluginManager.getPlugins(),
 		requestPluginReload: () => { pluginManager.requestReload(); },
 		createAgent,

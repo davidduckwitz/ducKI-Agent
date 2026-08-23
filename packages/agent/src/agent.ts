@@ -14,6 +14,7 @@ import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
 import { Planner, type Plan } from "./planner/planner.js";
 import { createPlanTool, formatPlanAsMarkdown, toPlanEventPayload } from "./planner/plan-tool.js";
+import { createArtifactTool } from "./tools/artifact-tool.js";
 import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
 import { Reflection } from "./reflection/reflection.js";
@@ -632,6 +633,7 @@ export class Agent {
       this.executor.registerTool(tool);
     }
     this.executor.registerTool(createPlanTool(() => this.provider, this.logger));
+    this.executor.registerTool(createArtifactTool(db, () => this.provider, this.logger));
     this.toolRegistry = createToolExecutorRegistry(
       (name) => this.executor.getTool(name),
       createDynamicToolResolver(db),

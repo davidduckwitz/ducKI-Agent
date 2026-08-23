@@ -1,7 +1,9 @@
 import type { ToolExecutor } from "@ducki/shared";
-import { loadPlugins, type LoadedPluginInfo } from "@ducki/agent";
+import { loadPlugins, createAgentCapabilities, type LoadedPluginInfo, type AgentCapabilities } from "@ducki/agent";
+import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "./agent-registry.js";
+import { loadProviderFromSettings } from "./provider-settings.js";
 
 /**
  * Holds the current set of plugin tools and reloads them on enable/disable/install.
@@ -19,8 +21,14 @@ export class PluginManager {
   private debounceTimer: NodeJS.Timeout | undefined;
   private readonly debounceMs = Number.parseInt(process.env["PLUGIN_RELOAD_DEBOUNCE_MS"] ?? "300", 10);
   private readonly logger = getRootLogger().child("PluginManager");
+  private readonly capabilities: AgentCapabilities;
 
-  private constructor() {
+  private constructor(db: DatabaseService) {
+    // Lazy, no-cache provider lookup: every capability call re-resolves the CURRENTLY
+    // configured provider (see provider-settings.ts) instead of pinning it at construction
+    // time, so a settings change takes effect on a plugin's very next capability call without
+    // needing a plugin reload.
+    this.capabilities = createAgentCapabilities(db, this.logger, async () => (await loadProviderFromSettings(db)).provider);
     // Apply any deferred reload as soon as the last active agent finishes.
     agentRegistry.subscribe((snap) => {
       if (this.pending && snap.runningCount === 0) void this.apply("idle");
@@ -28,9 +36,9 @@ export class PluginManager {
   }
 
   /** Async factory - loadPlugins is async (module tools import ESM, settings read from disk). */
-  static async create(): Promise<PluginManager> {
-    const mgr = new PluginManager();
-    const loaded = await loadPlugins();
+  static async create(db: DatabaseService): Promise<PluginManager> {
+    const mgr = new PluginManager(db);
+    const loaded = await loadPlugins(undefined, mgr.capabilities);
     mgr.tools = loaded.tools;
     mgr.plugins = loaded.plugins;
     return mgr;
@@ -75,7 +83,7 @@ export class PluginManager {
   }
 
   private async apply(reason: string): Promise<void> {
-    const loaded = await loadPlugins();
+    const loaded = await loadPlugins(undefined, this.capabilities);
     this.tools = loaded.tools;
     this.plugins = loaded.plugins;
     this.pending = false;

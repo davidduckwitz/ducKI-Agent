@@ -24,6 +24,47 @@ export const conversations = sqliteTable("conversations", {
 });
 
 // ============================================================
+// Artifacts
+// ============================================================
+/**
+ * Cross-cutting registry of files/media the agent has produced or fetched - uploads, screenshots,
+ * video previews (transcript + sampled frames). Deliberately a CORE table, not a plugin DB: it
+ * needs to be writable from every producer (chat uploads, the Cloud Voice-App, Discord, ...)
+ * regardless of which subsystem created the artifact, which a plugin's isolated storage can't do.
+ *
+ * `path` is nullable and gets cleared once the underlying file is deleted (e.g. a video artifact
+ * right after its transcript/frames are extracted, see cloud-control.ts's "video.preview") -
+ * `framesJson`/`transcript` are what make the artifact still USEFUL after that: a later chat.send
+ * can feed the stored frames back into the model without needing the file, and `refetch_video` on
+ * the `artifact` tool can re-download from `sourceUrl` on request if the raw file is needed again.
+ */
+export const artifacts = sqliteTable("artifacts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  filename: text("filename").notNull(),
+  mimeType: text("mime_type"),
+  sizeBytes: integer("size_bytes"),
+  /** Relative to the shared workspace root, or null once the file has been deleted. */
+  path: text("path"),
+  /** Origin URL for a URL-fetched artifact (e.g. a video preview) - lets refetch_video work. */
+  sourceUrl: text("source_url"),
+  /** Best-effort source platform label ("YouTube", "TikTok", "Instagram", "X", or a hostname). */
+  platform: text("platform"),
+  /** Video-only: whisper transcript. */
+  transcript: text("transcript"),
+  /** Video-only: JSON array of {timestampSec, base64} sampled frames - see media/video-processing.ts. */
+  framesJson: text("frames_json"),
+  /** Small preview image - a data: URL, or an external og:image-style URL. */
+  thumbnailDataUrl: text("thumbnail_data_url"),
+  durationSec: real("duration_sec"),
+  conversationId: integer("conversation_id").references(() => conversations.id),
+  /** Producer of this artifact, e.g. "chat_upload" | "voice_app" | "discord". */
+  source: text("source").notNull(),
+  status: text("status").notNull().default("ready"), // ready | processing | error
+  error: text("error"),
+  createdAt: text("created_at").notNull(),
+});
+
+// ============================================================
 // Messages
 // ============================================================
 export const messages = sqliteTable("messages", {
@@ -461,3 +502,5 @@ export type CryptoPriceAlertInsert = typeof cryptoPriceAlerts.$inferInsert;
 export type CryptoPriceAlertSelect = typeof cryptoPriceAlerts.$inferSelect;
 export type CryptoBalanceAlertInsert = typeof cryptoBalanceAlerts.$inferInsert;
 export type CryptoBalanceAlertSelect = typeof cryptoBalanceAlerts.$inferSelect;
+export type ArtifactInsert = typeof artifacts.$inferInsert;
+export type ArtifactSelect = typeof artifacts.$inferSelect;

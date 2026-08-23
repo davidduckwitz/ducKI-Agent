@@ -1,6 +1,6 @@
 import type { Agent } from "@ducki/agent";
 import { AVAILABLE_SKILLS, jaccardSimilarity } from "@ducki/agent";
-import { computeNextRun, type CronJobSelect, type DatabaseService } from "@ducki/database";
+import { computeNextRun, openPluginDb, type CronJobSelect, type DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { runAgentWithRepairRetry } from "./agent-retry.js";
 import { ChatCleanupService } from "./chat-cleanup-service.js";
 import { agentRegistry } from "./agent-registry.js";
+import { sendPushNotification, CloudSyncError } from "./cloud-sync.js";
+import { notifyCodingRunFinished } from "./coding-notify.js";
 
 interface PromptPayload {
   prompt?: string;
@@ -104,6 +106,7 @@ export class CronjobManager {
   private async executeJob(job: CronJobSelect): Promise<void> {
     if (this.running.has(job.id)) return;
     this.running.add(job.id);
+    this.notifyJobStarted(job);
 
     // One-shot jobs (e.g. a calendar appointment trigger) fire exactly once, then disable
     // themselves so a failed run also never repeats.
@@ -119,6 +122,9 @@ export class CronjobManager {
         nextRunAt,
       });
       this.logger.info("Cronjob executed", { id: job.id, name: job.name, targetType: job.targetType });
+      if (job.targetType === "coding") {
+        notifyCodingRunFinished(this.db, this.logger, job.name, { success: true, summary: result });
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isOneShot) await this.db.updateCronJob(job.id, { enabled: 0 });
@@ -127,9 +133,24 @@ export class CronjobManager {
         error: message,
       });
       this.logger.error("Cronjob execution failed", { id: job.id, name: job.name, error: message });
+      if (job.targetType === "coding") {
+        notifyCodingRunFinished(this.db, this.logger, job.name, { success: false, summary: message });
+      }
     } finally {
       this.running.delete(job.id);
     }
+  }
+
+  /** Fire-and-forget "a cronjob started" push - skipped for internal maintenance jobs
+   *  (log cleanup, skill curation, the daily calendar reminder scan itself) since the user
+   *  never scheduled those themselves and a notification for each would just be noise. The
+   *  calendar reminder job sends its own, more useful per-event notifications instead. */
+  private notifyJobStarted(job: CronJobSelect): void {
+    if (job.targetType === "cleanup" || job.targetType === "skill_curation" || job.targetType === "calendar_reminder") return;
+    void sendPushNotification(this.db, `Cronjob gestartet: ${job.name}`, `Typ: ${job.targetType}`, "/cronjobs").catch((error) => {
+      if (error instanceof CloudSyncError) return;
+      this.logger.warn("Cronjob-start push notification failed", { error: error instanceof Error ? error.message : String(error) });
+    });
   }
 
   private async dispatch(job: CronJobSelect): Promise<string> {
@@ -158,6 +179,8 @@ export class CronjobManager {
         return this.runWorkflowJob(job);
       case "coding":
         return this.runCodingJob(job);
+      case "calendar_reminder":
+        return this.runCalendarReminderJob(job);
       default:
         throw new Error(`Unsupported cronjob target type '${job.targetType}'`);
     }
@@ -188,6 +211,55 @@ export class CronjobManager {
       sandboxRoot: payload.sandboxRoot,
     });
     return typeof result === "string" ? result : JSON.stringify(result);
+  }
+
+  /** Daily built-in job (see default-cronjobs.ts) - pushes one notification per calendar event
+   *  whose `start` falls on today's local date. Reads the calendar plugin's own SQLite storage
+   *  directly rather than going through its tool, since there's no chat turn to run a tool call
+   *  in here. Matches by date-prefix (not a parsed Date range) because the calendar tool stores
+   *  `start` as whatever ISO-ish string the caller gave it (e.g. "2026-08-10T10:00", no explicit
+   *  timezone) - a LIKE 'YYYY-MM-DD%' prefix match is the only comparison that doesn't need to
+   *  guess a timezone for it. Never calls storage.close() - openPluginDb() hands out one shared,
+   *  process-wide client per plugin name, and close() would tear it down for every other caller.
+   */
+  private async runCalendarReminderJob(_job: CronJobSelect): Promise<string> {
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    interface EventRow {
+      id: number;
+      title: string;
+      start: string;
+      all_day: number;
+      location: string | null;
+    }
+
+    let events: EventRow[];
+    try {
+      const storage = openPluginDb("calendar");
+      events = await storage.query<EventRow>(
+        "SELECT id, title, start, all_day, location FROM events WHERE start LIKE ? ORDER BY start ASC",
+        [`${todayStr}%`]
+      );
+    } catch (error) {
+      // Calendar plugin not installed/enabled, or its table doesn't exist yet - not an error
+      // worth failing the cronjob run over.
+      return `Calendar lookup skipped: ${error instanceof Error ? error.message : String(error)}`;
+    }
+
+    for (const event of events) {
+      const timeLabel = event.all_day ? "Ganztägig" : (event.start.split("T")[1]?.slice(0, 5) ?? "");
+      const body = [timeLabel, event.location].filter(Boolean).join(" · ") || "Heute";
+      void sendPushNotification(this.db, `Termin heute: ${event.title}`, body, "/calendar").catch((error) => {
+        if (error instanceof CloudSyncError) return;
+        this.logger.warn("Calendar reminder push failed", {
+          eventId: event.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    return `${events.length} Termin(e) heute`;
   }
 
   private async runTaskJob(job: CronJobSelect): Promise<string> {

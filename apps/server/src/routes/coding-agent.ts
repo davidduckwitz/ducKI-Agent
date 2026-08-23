@@ -7,6 +7,7 @@ import { isAbortError } from "@ducki/providers";
 import { EventEmitter } from "node:events";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { registerCodingRun, unregisterCodingRun } from "../lib/coding-run-registry.js";
+import { notifyCodingRunFinished } from "../lib/coding-notify.js";
 
 export const codingAgentRouter: IRouter = Router();
 
@@ -169,6 +170,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         },
       });
       res.json(createApiResponse(result));
+      notifyCodingRunFinished(db, req.app.locals["logger"] || console, body.sandboxRoot || goal.slice(0, 60), result);
     } catch (error) {
       if (isAbortError(error)) {
         res.json(createApiResponse({ success: false, verified: false, stopped: true, summary: "Vom Nutzer gestoppt", attempts: 0 }));

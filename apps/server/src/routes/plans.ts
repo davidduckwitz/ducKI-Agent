@@ -7,6 +7,7 @@ import { createApiResponse, createApiError } from "@ducki/shared";
 import { parseMarkdownToPlan } from "@ducki/planer";
 import { CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { getRootLogger } from "@ducki/logger";
+import { notifyCodingRunFinished } from "../lib/coding-notify.js";
 
 export const plansRouter: IRouter = Router();
 
@@ -434,6 +435,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
               timeoutMs: timeoutMsOverride,
             });
             await savePlanProgress(result, codingAgent);
+            if (db) notifyCodingRunFinished(db, req.app.locals["logger"] || console, existingPlan.goal.slice(0, 60), result);
 
             // Emit completion event
             if (io) {

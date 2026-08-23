@@ -33,6 +33,8 @@ import type {
   DynamicToolInsert,
   DynamicToolSelect,
   SkillUsageSelect,
+  ArtifactInsert,
+  ArtifactSelect,
 } from "./schema.js";
 
 export type { LibSQLDatabase };
@@ -152,6 +154,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS crypto_price_history (id INTEGER PRIMARY KEY AUTOINCREMENT, currency TEXT NOT NULL, price REAL NOT NULL, price_usd REAL NOT NULL, change_24h REAL, market_cap REAL, volume_24h REAL, timestamp INTEGER NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS session_checklist (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), run_id TEXT, step_index INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance_criteria TEXT, constraint_kind TEXT, status TEXT NOT NULL DEFAULT 'pending', confidence TEXT, verify_state TEXT, attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS skill_usage (slug TEXT PRIMARY KEY, total_uses INTEGER NOT NULL DEFAULT 0, successful_uses INTEGER NOT NULL DEFAULT 0, avg_iterations REAL NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active')`,
+      `CREATE TABLE IF NOT EXISTS artifacts (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL, mime_type TEXT, size_bytes INTEGER, path TEXT, source_url TEXT, platform TEXT, transcript TEXT, frames_json TEXT, thumbnail_data_url TEXT, duration_sec REAL, conversation_id INTEGER REFERENCES conversations(id), source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready', error TEXT, created_at TEXT NOT NULL)`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -355,6 +358,40 @@ export class DatabaseService {
 
   async deleteMessages(conversationId: number): Promise<void> {
     await this.db.delete(schema.messages).where(eq(schema.messages.conversationId, conversationId)).run();
+  }
+
+  // ============================================================
+  // Artifacts
+  // ============================================================
+  async createArtifact(data: Omit<ArtifactInsert, "id" | "createdAt">): Promise<ArtifactSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db.insert(schema.artifacts).values({ ...data, createdAt: now }).returning().get();
+    if (!result) throw new Error("Failed to create artifact");
+    return result;
+  }
+
+  async getArtifact(id: number): Promise<ArtifactSelect | undefined> {
+    return this.db.select().from(schema.artifacts).where(eq(schema.artifacts.id, id)).get();
+  }
+
+  async updateArtifact(id: number, data: Partial<Omit<ArtifactInsert, "id" | "createdAt">>): Promise<ArtifactSelect | undefined> {
+    return this.db.update(schema.artifacts).set(data).where(eq(schema.artifacts.id, id)).returning().get();
+  }
+
+  async listArtifacts(args?: { conversationId?: number; source?: string; limit?: number }): Promise<ArtifactSelect[]> {
+    const limit = Math.max(1, Math.min(500, Number(args?.limit ?? 200)));
+    const conditions = [];
+    if (args?.conversationId !== undefined) conditions.push(eq(schema.artifacts.conversationId, args.conversationId));
+    if (args?.source !== undefined) conditions.push(eq(schema.artifacts.source, args.source));
+
+    if (conditions.length === 0) {
+      return this.db.select().from(schema.artifacts).orderBy(desc(schema.artifacts.id)).limit(limit).all();
+    }
+    return this.db.select().from(schema.artifacts).where(and(...conditions)).orderBy(desc(schema.artifacts.id)).limit(limit).all();
+  }
+
+  async deleteArtifact(id: number): Promise<void> {
+    await this.db.delete(schema.artifacts).where(eq(schema.artifacts.id, id)).run();
   }
 
   // ============================================================

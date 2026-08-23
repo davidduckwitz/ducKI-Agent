@@ -1,0 +1,23 @@
+{
+  "name": "social-media",
+  "version": "1.0.0",
+  "description": "Videos und Bilder von einer URL analysieren (YouTube, TikTok, Instagram, X/Twitter und Hunderte weitere Seiten via yt-dlp, sowie direkte Bild-/Video-Links). Erstellt Transkript + Szenen-Frames für Videos bzw. eine Vision-Analyse für Bilder, mit frei wählbaren Fragen dazu. Nach Projekten organisiert, eigene Frontend-Seite, plugin-eigene SQLite-Datenbank. Heruntergeladene Videodateien lassen sich einzeln wieder löschen (Analyse/Transkript/Frames bleiben erhalten).",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🎬",
+  "category": "knowledge",
+  "trust": "node",
+  "storage": { "sqlite": true },
+  "provides": {
+    "moduleTools": ["tools/social-media.js"],
+    "skills": ["skills/social-media-usage"],
+    "frontendPage": "app/index.html",
+    "toolMappings": [
+      { "alias": "analyze_video", "tool": "social_media" },
+      { "alias": "analyze_image", "tool": "social_media" },
+      { "alias": "analyze_social_media", "tool": "social_media" },
+      { "alias": "video_analyze", "tool": "social_media" }
+    ]
+  },
+  "enabled": true
+}

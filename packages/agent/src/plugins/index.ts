@@ -12,6 +12,12 @@ export {
   type PluginToolContext,
 } from "./plugin-registry.js";
 export {
+  createAgentCapabilities,
+  type AgentCapabilities,
+  type AgentImageInput,
+  type AgentVideoAnalysisResult,
+} from "./agent-capabilities.js";
+export {
   parsePluginManifest,
   parseOAuthConfig,
   PluginManifestSchema,

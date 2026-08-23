@@ -8,3 +8,4 @@ packages:
 # clean install and video analysis fails at runtime.
 onlyBuiltDependencies:
   - ffmpeg-static
+  - yt-dlp-exec

@@ -19,8 +19,8 @@ import { extname, join, relative } from "node:path";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import type { Agent, LoadedPluginInfo } from "@ducki/agent";
-import { setPluginEnabled } from "@ducki/agent";
-import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
+import { setPluginEnabled, isKnownVideoPlatform, fetchVideoFromUrl, analyzeVideo } from "@ducki/agent";
+import { SHARED_WORKSPACE_ROOT, browserTool } from "@ducki/tools";
 import { installSkillFromSource } from "./skill-install.js";
 import { transcribeAudioBuffer } from "./audio-transcription.js";
 
@@ -202,10 +202,39 @@ async function findNewMediaFiles(sinceMs: number): Promise<OutboundMediaAttachme
 
 export interface CloudControlDeps {
   db: DatabaseService;
+  logger: Logger;
   getPlugins: () => LoadedPluginInfo[];
   requestPluginReload: () => void;
   createAgent: () => Promise<Agent>;
 }
+
+/**
+ * Runs inside the target page (via the browser tool's "evaluate" action, see "url.preview"
+ * below) to pull Open Graph/meta preview data in one round trip: og:title/description/image
+ * with sensible fallbacks (<title>, name="description"), plus the page's actual favicon href.
+ * A page with no real favicon <link> can still resolve to a useless "data:," placeholder
+ * (observed on example.com) - rejected here too, not just a missing href, before falling back
+ * to the conventional /favicon.ico path.
+ */
+const EXTRACT_URL_PREVIEW_META_SCRIPT = `(() => {
+  const meta = (name) => {
+    const el = document.querySelector('meta[property="' + name + '"]') || document.querySelector('meta[name="' + name + '"]');
+    const content = el ? el.getAttribute('content') : null;
+    return content && content.trim() ? content.trim() : null;
+  };
+  const iconLink = document.querySelector('link[rel~="icon"]') || document.querySelector('link[rel="shortcut icon"]');
+  const iconHref = iconLink && iconLink.href;
+  let ogImage = meta('og:image') || meta('twitter:image');
+  if (ogImage) {
+    try { ogImage = new URL(ogImage, location.href).href; } catch {}
+  }
+  return {
+    title: meta('og:title') || document.title || '',
+    description: meta('og:description') || meta('description'),
+    ogImage: ogImage || null,
+    faviconUrl: (iconHref && !iconHref.startsWith('data:')) ? iconHref : new URL('/favicon.ico', location.href).href,
+  };
+})()`;
 
 /** Provider-Namen -> Setting-Key des dort konfigurierten Modells (siehe loadProviderFromSettings in index.ts). */
 const MODEL_SETTING_BY_PROVIDER: Record<string, string> = {
@@ -362,7 +391,39 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
         const conversationId = await resolveVoiceConversation(deps, agent, payload, `Cloud Control: ${message.slice(0, 40)}`);
 
         const attachmentBase64 = typeof payload["attachment"] === "string" ? payload["attachment"].trim() : "";
+        const artifactId = payload["artifactId"] != null ? Number(payload["artifactId"]) : undefined;
         const runStartedAt = Date.now();
+
+        // A video the Voice-App auto-detected and previewed BEFORE this message was sent (see
+        // "video.preview") - the video itself was deleted right after analysis, but its stored
+        // frames/transcript are still on the artifact row. Materialize the frames as temp image
+        // attachments (same buildAttachmentImageContent path any image attachment already goes
+        // through) and prepend the transcript, instead of re-downloading anything - this is
+        // exactly where the LLM actually gets involved with the video, per design.
+        if (Number.isFinite(artifactId) && artifactId! > 0) {
+          const artifact = await deps.db.getArtifact(artifactId!);
+          if (!artifact) throw new Error(`chat.send: Artefakt ${artifactId} nicht gefunden`);
+          const frames = artifact.framesJson ? (JSON.parse(artifact.framesJson) as { timestampSec: number; base64: string }[]) : [];
+          if (frames.length === 0) throw new Error(`chat.send: Artefakt ${artifactId} hat keine gespeicherten Frames`);
+
+          const framePaths: string[] = [];
+          try {
+            for (const frame of frames) {
+              framePaths.push(await writeTempWorkspaceFile(frame.base64, "image/jpeg"));
+            }
+            const transcriptLine = artifact.transcript ? `[Video-Transkript: ${artifact.transcript}]\n\n` : "";
+            const runResult = await agent.run(`${transcriptLine}${message}`, {
+              attachments: framePaths.map((path, i) => ({ name: `frame-${i}.jpg`, path, mimeType: "image/jpeg" })),
+              visionOnly: true,
+            });
+            const mediaAttachments = await findNewMediaFiles(runStartedAt);
+            const { providerName, model } = await describeActiveProvider(deps.db);
+            const contextMessageCount = await deps.db.getMessageCount(conversationId);
+            return { status: "done", result: { reply: runResult.response, conversationId, mediaAttachments, providerName, model, contextMessageCount } };
+          } finally {
+            for (const path of framePaths) await removeTempWorkspaceFile(path);
+          }
+        }
 
         if (!attachmentBase64) {
           const runResult = await agent.run(message);
@@ -455,6 +516,138 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
         return {
           status: "done",
           result: { summary: summaryResult.response, skipped: false, conversationId, providerName, model, contextMessageCount },
+        };
+      }
+
+      case "url.preview": {
+        // Best-effort link preview WHILE TYPING (not a sent message) - the Voice-App queues
+        // this as the user pauses typing on a detected URL. Uses the agent's OWN browser tool
+        // (packages/tools/src/browser.ts) directly, bypassing the LLM entirely.
+        //
+        // Prefers real Open Graph/meta data (title, description, og:image, favicon) read via a
+        // single evaluate() call over a full-page screenshot - that's what an actual "URL
+        // preview" (a Slack/Discord/Twitter unfurl) is built from, and it's available for the
+        // vast majority of real content (articles, videos, social posts) without the extra
+        // render+screenshot round trip. A screenshot is only taken as a visual fallback when the
+        // page has no og:image to show.
+        const rawUrl = String(payload["url"] ?? "").trim();
+        if (!rawUrl) throw new Error("url.preview: 'url' fehlt");
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(rawUrl);
+        } catch {
+          throw new Error("url.preview: ungueltige URL");
+        }
+        if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+          throw new Error("url.preview: nur http/https URLs erlaubt");
+        }
+
+        const launch = await browserTool.execute({ action: "launch" });
+        if (!launch.success) throw new Error(String(launch.error || "Browser konnte nicht gestartet werden"));
+        const sessionId = (launch.data as { sessionId: string }).sessionId;
+
+        try {
+          const goto = await browserTool.execute({
+            action: "goto",
+            sessionId,
+            url: rawUrl,
+            waitUntil: "domcontentloaded",
+            timeout: 12000,
+          });
+          if (!goto.success) throw new Error(String(goto.error || "Seite konnte nicht geladen werden"));
+
+          // A few hundred ms for client-side-rendered pages to inject their <meta> tags -
+          // domcontentloaded alone can fire before a JS-heavy SPA has added them.
+          await new Promise((resolve) => setTimeout(resolve, 300));
+
+          const meta = await browserTool.execute({
+            action: "evaluate",
+            sessionId,
+            script: EXTRACT_URL_PREVIEW_META_SCRIPT,
+          });
+          if (!meta.success) throw new Error(String(meta.error || "Meta-Daten konnten nicht gelesen werden"));
+          const metaData = ((meta.data as { result?: Record<string, unknown> } | null)?.result ?? {}) as {
+            title?: string;
+            description?: string | null;
+            ogImage?: string | null;
+            faviconUrl?: string | null;
+          };
+
+          let screenshotBase64: string | undefined;
+          if (!metaData.ogImage) {
+            const shot = await browserTool.execute({ action: "screenshot", sessionId, format: "jpeg" });
+            if (shot.success) screenshotBase64 = (shot.data as { screenshot?: string } | null)?.screenshot;
+          }
+
+          return {
+            status: "done",
+            result: {
+              title: metaData.title || rawUrl,
+              description: metaData.description ?? undefined,
+              url: rawUrl,
+              faviconUrl: metaData.faviconUrl ?? undefined,
+              previewImageUrl: metaData.ogImage ?? undefined,
+              screenshotBase64,
+            },
+          };
+        } finally {
+          await browserTool.execute({ action: "close", sessionId }).catch(() => {});
+        }
+      }
+
+      case "video.preview": {
+        // Automatic video detection WHILE TYPING, like the social-media plugin's add_item but
+        // with no question (no LLM call here - see the artifact-tool.ts doc comment: the LLM
+        // only gets involved once the user actually sends the message, via chat.send's
+        // artifactId path above). Extracts transcript+frames and stores them as an artifact
+        // row, then discards the downloaded video immediately - it was only ever held in
+        // memory, never written to the shared workspace, so there is nothing further to delete.
+        const rawUrl = String(payload["url"] ?? "").trim();
+        if (!rawUrl) throw new Error("video.preview: 'url' fehlt");
+        try {
+          new URL(rawUrl);
+        } catch {
+          throw new Error("video.preview: ungueltige URL");
+        }
+
+        const fetched = await fetchVideoFromUrl(rawUrl, deps.logger);
+        if (!fetched) throw new Error("video.preview: Video konnte nicht geladen werden (nicht unterstuetzte URL oder Download fehlgeschlagen)");
+
+        const analysis = await analyzeVideo(deps.db, deps.logger, fetched.buffer);
+        if (!analysis) throw new Error("video.preview: Videoanalyse fehlgeschlagen (ffmpeg nicht verfuegbar oder Datei zu gross)");
+
+        const frames = analysis.frames.map((frame) => ({ timestampSec: frame.timestampSec, base64: frame.buffer.toString("base64") }));
+        const thumbnailDataUrl = frames[0] ? `data:image/jpeg;base64,${frames[0].base64}` : undefined;
+        const conversationIdRaw = payload["conversationId"];
+        const conversationId = typeof conversationIdRaw === "number" ? conversationIdRaw : undefined;
+
+        const artifact = await deps.db.createArtifact({
+          filename: `${fetched.title || fetched.platform}.mp4`,
+          mimeType: "video/mp4",
+          sizeBytes: fetched.buffer.length,
+          path: null,
+          sourceUrl: rawUrl,
+          platform: fetched.platform,
+          transcript: analysis.transcript,
+          framesJson: JSON.stringify(frames),
+          thumbnailDataUrl: thumbnailDataUrl ?? null,
+          durationSec: analysis.durationSec,
+          conversationId: conversationId ?? null,
+          source: "voice_app",
+          status: "ready",
+          error: null,
+        });
+
+        return {
+          status: "done",
+          result: {
+            artifactId: artifact.id,
+            title: fetched.title || rawUrl,
+            platform: fetched.platform,
+            durationSec: analysis.durationSec,
+            thumbnailDataUrl,
+            transcript: analysis.transcript,
+          },
         };
       }
 

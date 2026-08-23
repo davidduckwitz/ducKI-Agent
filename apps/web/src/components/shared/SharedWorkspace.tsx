@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import { FileText, FolderOpen, Upload, Trash2, Plus, RefreshCw, Save, ArrowRightLeft, Download, ChevronRight, ChevronDown, Folder, X } from "lucide-react";
+import { FileText, FolderOpen, Upload, Trash2, Plus, RefreshCw, Save, ArrowRightLeft, Download, ChevronRight, ChevronDown, Folder, X, LayoutGrid } from "lucide-react";
 import { CodePreview } from "../common/CodePreview";
 import { useI18n } from "../../lib/i18n";
 
@@ -36,6 +37,7 @@ interface TreeNode {
 
 export function SharedWorkspace() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -338,6 +340,10 @@ export function SharedWorkspace() {
           <p className="break-all text-xs text-gray-500 mt-1">Root: {data?.root ?? "-"}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => navigate("/shared/artifacts")} className="btn-secondary flex items-center gap-2">
+            <LayoutGrid className="w-4 h-4" />
+            Artefakte
+          </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             className="btn-secondary flex items-center gap-2"

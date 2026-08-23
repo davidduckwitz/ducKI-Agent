@@ -2,7 +2,17 @@ import { Router, type IRouter } from "express";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, renameSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
+import type { DatabaseService } from "@ducki/database";
 import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
+
+/** Coarse extension -> mime lookup, just for the artifact record (see "chat-uploads" branch of
+ *  POST /upload below) - the browser knows the real File.type but doesn't send it today, and
+ *  extending the upload payload for this alone isn't worth it when a best-effort guess is fine. */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+  mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+  pdf: "application/pdf", txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json",
+};
 
 export const sharedRouter: IRouter = Router();
 
@@ -178,7 +188,7 @@ sharedRouter.post("/write", (req, res) => {
   }
 });
 
-sharedRouter.post("/upload", (req, res) => {
+sharedRouter.post("/upload", async (req, res) => {
   try {
     ensureSharedRoot();
     const { fileName, contentBase64, folder } = req.body as { fileName?: string; contentBase64?: string; folder?: string };
@@ -197,6 +207,32 @@ sharedRouter.post("/upload", (req, res) => {
 
     const buffer = Buffer.from(contentBase64, "base64");
     writeFileSync(absolutePath, buffer);
+
+    // Only chat attachments (folder="chat-uploads", see ChatContainer.tsx) become artifacts -
+    // a plain SharedWorkspace file-browser upload is just the user organizing their own
+    // workspace, not something the agent produced/received as part of a conversation.
+    if (safeFolder.startsWith("chat-uploads")) {
+      const db = req.app.locals["db"] as DatabaseService | undefined;
+      const ext = safeFileName.split(".").pop()?.toLowerCase() ?? "";
+      await db?.createArtifact({
+        filename: safeFileName,
+        mimeType: MIME_BY_EXTENSION[ext] ?? "application/octet-stream",
+        sizeBytes: buffer.length,
+        path: relativePath,
+        sourceUrl: null,
+        platform: null,
+        transcript: null,
+        framesJson: null,
+        thumbnailDataUrl: null,
+        durationSec: null,
+        conversationId: null,
+        source: "chat_upload",
+        status: "ready",
+        error: null,
+      }).catch(() => {
+        // Best-effort - a failed artifact record must never break the actual upload.
+      });
+    }
 
     res.json(createApiResponse({ uploaded: true, path: relativePath, size: buffer.length }));
   } catch (error) {
