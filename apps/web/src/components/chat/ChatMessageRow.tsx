@@ -39,6 +39,7 @@ interface RowCommonProps {
 
 const ANIMATE_IN = "animate-in fade-in slide-in-from-bottom-1 duration-300";
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+const VIDEO_EXTENSIONS = /\.(mp4|webm|mov|mkv|avi|m4v)$/i;
 
 type Attachment = Record<string, unknown>;
 
@@ -47,6 +48,13 @@ function isImageAttachment(attachment: Attachment): boolean {
   if (typeof mimeType === "string") return mimeType.startsWith("image/");
   const name = attachment["name"] ?? attachment["path"] ?? attachment["url"];
   return typeof name === "string" && IMAGE_EXTENSIONS.test(name);
+}
+
+function isVideoAttachment(attachment: Attachment): boolean {
+  const mimeType = attachment["mimeType"];
+  if (typeof mimeType === "string") return mimeType.startsWith("video/");
+  const name = attachment["name"] ?? attachment["path"] ?? attachment["url"];
+  return typeof name === "string" && VIDEO_EXTENSIONS.test(name);
 }
 
 // Prefer the locally-saved shared-workspace path (served inline via /shared/view or
@@ -316,7 +324,8 @@ export function MessageRow({
     <>
       {metadata?.attachments && metadata.attachments.length > 0 && (() => {
         const images = metadata.attachments.filter(isImageAttachment);
-        const documents = metadata.attachments.filter((a) => !isImageAttachment(a));
+        const videos = metadata.attachments.filter(isVideoAttachment);
+        const documents = metadata.attachments.filter((a) => !isImageAttachment(a) && !isVideoAttachment(a));
         return (
           <div className="mt-2 space-y-2">
             {images.length > 0 && (
@@ -333,6 +342,22 @@ export function MessageRow({
                         className="max-h-[220px] max-w-[220px] rounded-lg border border-border object-cover"
                       />
                     </a>
+                  );
+                })}
+              </div>
+            )}
+            {videos.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {videos.map((attachment, index) => {
+                  const src = attachmentViewSrc(attachment);
+                  if (!src) return null;
+                  return (
+                    <video
+                      key={index}
+                      src={src}
+                      controls
+                      className="max-h-[260px] max-w-[320px] rounded-lg border border-border"
+                    />
                   );
                 })}
               </div>

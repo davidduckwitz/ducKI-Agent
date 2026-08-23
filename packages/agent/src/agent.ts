@@ -27,6 +27,7 @@ import { summarizeToolCall } from "./tools/tool-summary.js";
 import { loadToolManifests, isToolActive, createToolExecutorRegistry, type ToolManifestEntry, type ToolExecutorRegistry } from "./tools/tool-registry.js";
 import { createScriptTools } from "./tools/script-tools.js";
 import { createVisionTools } from "./vision/vision-tools.js";
+import { analyzeVideo } from "./media/video-processing.js";
 import { ToolExecutionGraph } from "./executor/tool-graph.js";
 import { skillSelector } from "./skill-selector/selector.js";
 import { withManifestCache, listSkillMdFiles } from "./skill-selector/skill-cache.js";
@@ -4314,6 +4315,80 @@ export class Agent {
     return /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
   }
 
+  private isVideoAttachment(attachment: AgentRunAttachment): boolean {
+    if (attachment.mimeType) return attachment.mimeType.startsWith("video/");
+    const name = attachment.name || attachment.path || attachment.url || "";
+    return /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(name);
+  }
+
+  /**
+   * Reads video attachments from disk and runs them through the ffmpeg/whisper pipeline
+   * (see media/video-processing.ts): an audio transcript plus a handful of sampled frames,
+   * NOT the whole clip. Returns both a text block (transcript + frame timestamps, so the
+   * model knows what order the frames come in) and the frame images as LLMContent blocks,
+   * so it plugs into buildUserTurnContent the same way buildAttachmentImageContent does.
+   */
+  private async buildAttachmentVideoContent(attachments: AgentRunAttachment[]): Promise<{ text: string; frameBlocks: LLMContent[] }> {
+    const videoAttachments = attachments.filter((att) => this.isVideoAttachment(att));
+    if (videoAttachments.length === 0) return { text: "", frameBlocks: [] };
+
+    const workspaceRoot = resolve(SHARED_WORKSPACE_ROOT);
+    let text = "";
+    const frameBlocks: LLMContent[] = [];
+
+    for (const attachment of videoAttachments) {
+      try {
+        let buffer: Buffer | undefined;
+        if (attachment.path) {
+          const absolutePath = resolve(workspaceRoot, attachment.path);
+          if (absolutePath !== workspaceRoot && !absolutePath.startsWith(workspaceRoot + sep)) {
+            this.logger.warn("Skipped video attachment outside shared workspace", { path: attachment.path });
+            continue;
+          }
+          if (existsSync(absolutePath)) {
+            buffer = readFileSync(absolutePath);
+          } else {
+            this.logger.warn("Video attachment file not found", { path: attachment.path, absolutePath });
+          }
+        } else if (attachment.url) {
+          const response = await fetch(attachment.url);
+          if (response.ok) buffer = Buffer.from(await response.arrayBuffer());
+        }
+        if (!buffer) continue;
+
+        const analysis = await analyzeVideo(this.db, this.logger, buffer);
+        if (!analysis) {
+          text += `\n\n[Video "${attachment.name}" konnte nicht analysiert werden (ffmpeg nicht verfuegbar oder Datei zu gross).]`;
+          continue;
+        }
+
+        const durationLabel = `${Math.round(analysis.durationSec)}s${analysis.truncated ? ", nur die ersten 180s ausgewertet" : ""}`;
+        text += `\n\n[Video "${attachment.name}", ${durationLabel}]`;
+        text += analysis.transcript
+          ? `\nTranskript: ${analysis.transcript}`
+          : `\nTranskript: (keine Sprache erkannt)`;
+        if (analysis.frames.length > 0) {
+          text += `\nEs folgen ${analysis.frames.length} Einzelbilder aus dem Video, zeitlich sortiert (Sekunde ${analysis.frames.map((f) => Math.round(f.timestampSec)).join(", ")}).`;
+        }
+
+        for (const frame of analysis.frames) {
+          const compressed = await this.compressImageBuffer(frame.buffer);
+          frameBlocks.push({
+            type: "image_url",
+            image_url: { url: `data:image/jpeg;base64,${compressed.toString("base64")}`, detail: "high" },
+          });
+        }
+      } catch (error) {
+        this.logger.warn("Failed to process video attachment", {
+          name: attachment.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return { text, frameBlocks };
+  }
+
   /**
    * Reads image attachments from disk/URL and converts them into LLMContent image
    * blocks so they actually reach the vision model, instead of only being recorded
@@ -4375,13 +4450,15 @@ export class Agent {
    */
   private async buildUserTurnContent(text: string, attachments: AgentRunAttachment[] | undefined): Promise<string | LLMContent[]> {
     if (!attachments?.length) return text;
-    const [imageBlocks, attachmentText] = await Promise.all([
+    const [imageBlocks, videoResult, attachmentText] = await Promise.all([
       this.buildAttachmentImageContent(attachments),
+      this.buildAttachmentVideoContent(attachments),
       this.buildAttachmentTextContent(attachments),
     ]);
-    const combinedText = attachmentText ? `${text}${attachmentText}` : text;
-    if (imageBlocks.length === 0) return combinedText;
-    return [{ type: "text", text: combinedText }, ...imageBlocks];
+    const combinedText = `${text}${attachmentText}${videoResult.text}`;
+    const allImageBlocks = [...imageBlocks, ...videoResult.frameBlocks];
+    if (allImageBlocks.length === 0) return combinedText;
+    return [{ type: "text", text: combinedText }, ...allImageBlocks];
   }
 
   private isPdfAttachment(attachment: AgentRunAttachment): boolean {
@@ -5989,10 +6066,11 @@ export class Agent {
       return await this.runPlanMode(userInput, options, emit);
     }
 
-    // Vision mode short-circuits the same way: an image attachment with "Bildanalyse"
+    // Vision mode short-circuits the same way: an image (or video, whose sampled frames ride
+    // the same content array - see buildAttachmentVideoContent) attachment with "Bildanalyse"
     // enabled is a direct vision completion, not a task that needs skill selection, tool
     // docs, or planning - so none of that setup runs for it either.
-    if (options.visionOnly && (options.attachments ?? []).some((att) => this.isImageAttachment(att))) {
+    if (options.visionOnly && (options.attachments ?? []).some((att) => this.isImageAttachment(att) || this.isVideoAttachment(att))) {
       return await this.runVisionMode(userInput, options, emit, controls.maxOutputTokens);
     }
 
@@ -6510,7 +6588,7 @@ export class Agent {
     // looping afterwards trying to satisfy tool-based steps that no longer apply. Skip
     // auto-derived checklist tracking for these turns; an explicitly caller-supplied plan
     // (usingExternalPlan) is left untouched since the user reviewed and approved it.
-    const currentTurnHasImageAttachments = (options.attachments ?? []).some((att) => this.isImageAttachment(att));
+    const currentTurnHasImageAttachments = (options.attachments ?? []).some((att) => this.isImageAttachment(att) || this.isVideoAttachment(att));
     if (
       (checklistCfg.enabled || usingExternalPlan) &&
       planContext &&

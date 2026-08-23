@@ -84,6 +84,11 @@ function isImageMimeType(mimeType: string): boolean {
   return mimeType.toLowerCase().startsWith("image/");
 }
 
+/** Muss dem isVideoAttachment-Check in agent.ts entsprechen (mimeType-Praefix). */
+function isVideoMimeType(mimeType: string): boolean {
+  return mimeType.toLowerCase().startsWith("video/");
+}
+
 /** Unterordner unter dem Shared-Workspace fuer kurzlebige Chat-Datei-Uploads (Voice-Chat-Anhaenge). */
 const VOICE_UPLOAD_DIR = "voice-uploads";
 
@@ -376,7 +381,7 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
           // Pfad umgehen und die Datei ignorieren, wenn es kein Bild ist.
           const runResult = await agent.run(message, {
             attachments: [{ name: attachmentName ?? "voice-chat-upload", path: attachmentPath, mimeType: attachmentMimeType }],
-            visionOnly: isImageMimeType(attachmentMimeType),
+            visionOnly: isImageMimeType(attachmentMimeType) || isVideoMimeType(attachmentMimeType),
           });
           const mediaAttachments = await findNewMediaFiles(runStartedAt);
           const { providerName, model } = await describeActiveProvider(deps.db);

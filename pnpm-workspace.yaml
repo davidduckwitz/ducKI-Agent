@@ -1,3 +1,10 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# ffmpeg-static's postinstall downloads the actual ffmpeg binary for the current platform
+# (packages/agent's video-attachment pipeline, see media/video-processing.ts) - pnpm blocks
+# postinstall scripts by default, so without this the binary is silently missing after a
+# clean install and video analysis fails at runtime.
+onlyBuiltDependencies:
+  - ffmpeg-static
