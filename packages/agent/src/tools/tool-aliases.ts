@@ -105,6 +105,11 @@ export const TOOL_ALIAS_TABLE: ToolAliasEntry[] = [
     aliases: ["model_context_protocol", "mcp_tool", "mcp_call"],
     notes: "Model Context Protocol integration.",
   },
+  {
+    canonicalTool: "push_notification",
+    aliases: ["push-notification", "notify", "notification", "send_notification", "push_notify"],
+    notes: "Browser push notification to the Cloud Voice-App.",
+  },
 ];
 
 export const TOOL_ALIAS_MAP = new Map<string, string>(

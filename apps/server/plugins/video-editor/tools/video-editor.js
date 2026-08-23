@@ -99,11 +99,11 @@ export const definition = {
     "action=add_scene_background_image (project_id, image_base64, original_name?) laedt ein Bild fuer background.kind='image' hoch (value=zurueckgegebene background_id). " +
     "action=add_title_card (project_id, text, duration_sec?, background_color?, order?) Komfort-Action: erzeugt in EINEM Aufruf eine Szene + zentriertes Text-Overlay (Titelkarte). " +
     "action=generate_captions_from_clip (project_id, clip_id, timeline_offset_sec) erzeugt Untertitel aus dem Transkript eines Clips, verschoben um seine Timeline-Position. " +
-    "action=list_captions / add_caption (project_id, start_sec, end_sec, text) / update_caption (id, ...) / delete_caption (id). " +
-    "action=add_overlay (project_id, type:'text'|'shape', start_sec, end_sec, x, y, width?, height?, z_index?, props) - x/y/width/height in PROZENT (0-100) der Zielaufloesung. props text: {content, font_size?, color?, background_color?, align?}. props shape: {shape_type:'rect'|'circle', color, opacity?, stroke_width?}. " +
-    "action=list_overlays / update_overlay (id, ...) / delete_overlay (id). " +
-    "action=add_audio_track (project_id, audio_base64, start_sec, volume?, original_name?) mischt eine zusaetzliche Audiodatei an einer Timeline-Position ein. " +
-    "action=list_audio_tracks / update_audio_track (id, start_sec?, volume?) / delete_audio_track (id). " +
+    "action=list_captions / add_caption (project_id, start_sec, end_sec, text, pos_x?, pos_y?) / update_caption (id, ..., pos_x?, pos_y?) / delete_caption (id). pos_x/pos_y sind Prozent-Position (0-100, Default 50/88) - nur pos_y wirkt sich aufs gerenderte Video aus, solange pos_x beim Default 50 bleibt (horizontal zentriert); sobald pos_x veraendert wird, wird links-buendig anhand von pos_x gerendert. " +
+    "action=add_overlay (project_id, type:'text'|'shape', start_sec, end_sec, x, y, width?, height?, z_index?, track_index?, props) - x/y/width/height in PROZENT (0-100) der Zielaufloesung (width/height ohne Angabe: Default 30x10 fuer Text, 20x20 fuer Formen). track_index (Default 0) ist rein eine UI-Spur-Gruppierung, hat KEINEN Effekt auf das Rendering. props text: {content, font_size?, color?, background_color?, align?}. props shape: {shape_type:'rect'|'circle', color, opacity?, stroke_width?}. " +
+    "action=list_overlays / update_overlay (id, ..., track_index?) / delete_overlay (id). " +
+    "action=add_audio_track (project_id, audio_base64, start_sec, volume?, track_index?, original_name?) mischt eine zusaetzliche Audiodatei an einer Timeline-Position ein (track_index: reine UI-Spur-Gruppierung, Default 0, kein Render-Effekt). " +
+    "action=list_audio_tracks / update_audio_track (id, start_sec?, volume?, track_index?) / delete_audio_track (id). " +
     "action=render (project_id, options?: {burn_captions}) startet den Export im HINTERGRUND, gibt sofort {render_id} zurueck - Fortschritt mit get_render abfragen. " +
     "action=get_render (id) / list_renders (project_id).",
   parameters: {
@@ -146,9 +146,12 @@ export const definition = {
       width: { type: "number", description: "Breite in Prozent (0-100), optional" },
       height: { type: "number", description: "Hoehe in Prozent (0-100), optional" },
       z_index: { type: "number", description: "Stapelreihenfolge, optional" },
+      track_index: { type: "number", description: "UI-Spur-Nummer (Overlays/Audiospuren), Default 0, reine Anzeige-Gruppierung ohne Render-Effekt" },
       props: { type: "object", description: "Typ-spezifische Overlay-Eigenschaften, siehe Tool-Beschreibung" },
       audio_base64: { type: "string", description: "Audiodatei als Base64 (add_audio_track)" },
       volume: { type: "number", description: "Lautstaerke-Faktor (add_audio_track/update_audio_track, Default 1)" },
+      pos_x: { type: "number", description: "Untertitel-X-Position in Prozent (0-100, Default 50), add_caption/update_caption" },
+      pos_y: { type: "number", description: "Untertitel-Y-Position in Prozent (0-100, Default 88), add_caption/update_caption" },
       options: { type: "object", description: "Render-Optionen (render)", properties: { burn_captions: { type: "boolean" } } },
     },
     required: ["action"],
@@ -173,17 +176,24 @@ async function ensureSchema(storage) {
       "id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, start_sec REAL NOT NULL, end_sec REAL NOT NULL, " +
       "text TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)"
   );
+  // Additive migrations for columns introduced after the original CREATE TABLE - safe to run
+  // unconditionally on every startup (ALTER TABLE ADD COLUMN throws "duplicate column" once the
+  // column already exists, which is swallowed here) so existing installs pick them up too.
+  try { await storage.exec("ALTER TABLE captions ADD COLUMN pos_x REAL NOT NULL DEFAULT 50"); } catch (e) { /* already applied */ }
+  try { await storage.exec("ALTER TABLE captions ADD COLUMN pos_y REAL NOT NULL DEFAULT 88"); } catch (e) { /* already applied */ }
   await storage.exec(
     "CREATE TABLE IF NOT EXISTS overlays (" +
       "id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, type TEXT NOT NULL, " +
       "start_sec REAL NOT NULL, end_sec REAL NOT NULL, x REAL NOT NULL DEFAULT 0, y REAL NOT NULL DEFAULT 0, " +
       "width REAL, height REAL, z_index INTEGER NOT NULL DEFAULT 0, props_json TEXT NOT NULL, created_at TEXT NOT NULL)"
   );
+  try { await storage.exec("ALTER TABLE overlays ADD COLUMN track_index INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already applied */ }
   await storage.exec(
     "CREATE TABLE IF NOT EXISTS audio_tracks (" +
       "id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, filename TEXT NOT NULL, original_name TEXT, " +
       "start_sec REAL NOT NULL DEFAULT 0, volume REAL NOT NULL DEFAULT 1, created_at TEXT NOT NULL)"
   );
+  try { await storage.exec("ALTER TABLE audio_tracks ADD COLUMN track_index INTEGER NOT NULL DEFAULT 0"); } catch (e) { /* already applied */ }
   await storage.exec(
     "CREATE TABLE IF NOT EXISTS backgrounds (" +
       "id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, filename TEXT NOT NULL, original_name TEXT, created_at TEXT NOT NULL)"
@@ -195,9 +205,9 @@ async function ensureSchema(storage) {
   );
 }
 
-const CAPTION_COLUMNS = 'id, project_id, start_sec, end_sec, text, sort_order AS "order", created_at';
-const OVERLAY_COLUMNS = "id, project_id, type, start_sec, end_sec, x, y, width, height, z_index, props_json, created_at";
-const AUDIO_TRACK_COLUMNS = "id, project_id, filename, original_name, start_sec, volume, created_at";
+const CAPTION_COLUMNS = 'id, project_id, start_sec, end_sec, text, pos_x, pos_y, sort_order AS "order", created_at';
+const OVERLAY_COLUMNS = "id, project_id, type, start_sec, end_sec, x, y, width, height, z_index, track_index, props_json, created_at";
+const AUDIO_TRACK_COLUMNS = "id, project_id, filename, original_name, start_sec, volume, track_index, created_at";
 
 function overlayRowToApi(row) {
   if (!row) return row;
@@ -582,7 +592,21 @@ async function buildRenderFilterGraph(items, clipsById, backgroundsById, caption
     let shapeLavfiCount = 0;
     const drawItems = [
       ...overlays.map((o) => ({ kind: "overlay", ...o })),
-      ...captions.map((c) => ({ kind: "caption", type: "text", start_sec: c.start_sec, end_sec: c.end_sec, x: 50, y: 88, width: 90, height: 10, z_index: 1000, props: { content: c.text, font_size: Math.round(height * 0.045), color: "#ffffff", background_color: "#000000", align: "center" } })),
+      // x/y come from each caption's own pos_x/pos_y (draggable in the UI) instead of a fixed
+      // literal. align stays "center" (full-frame horizontal centering, ignoring x - see the
+      // xExpr branch below) ONLY while pos_x is still exactly the untouched default of 50, so a
+      // caption nobody has ever dragged renders byte-for-byte the same as before pos_x/pos_y
+      // existed. The moment a caption is dragged horizontally, align switches to "left" so x
+      // actually drives the drawtext position - otherwise pos_x would be a stored-but-inert
+      // field and the horizontal drag handle in the UI would visibly lie about having any effect.
+      ...captions.map((c) => ({
+        kind: "caption", type: "text", start_sec: c.start_sec, end_sec: c.end_sec,
+        x: c.pos_x, y: c.pos_y, width: 90, height: 10, z_index: 1000,
+        props: {
+          content: c.text, font_size: Math.round(height * 0.045), color: "#ffffff", background_color: "#000000",
+          align: Number(c.pos_x) === 50 ? "center" : "left",
+        },
+      })),
     ].sort((a, b) => (a.z_index ?? 0) - (b.z_index ?? 0));
 
     for (const draw of drawItems) {
@@ -927,20 +951,28 @@ async function generateCaptionsFromClip(input, storage) {
   return { count: created.length, captions: created };
 }
 
+// Default box size (percent) for a newly created overlay when width/height aren't given - the
+// schema allows both to be null (no size = nothing concrete to see or drag-resize from in the
+// UI), so pick a sane starting box per type instead of leaving it null.
+const OVERLAY_DEFAULT_SIZE = { text: { width: 30, height: 10 }, shape: { width: 20, height: 20 } };
+
 async function addOverlay(input, storage) {
   const projectId = Number(input.project_id);
   if (!Number.isFinite(projectId)) return { error: "project_id ist erforderlich" };
   const type = input.overlay_type || input.type;
   if (!["text", "shape"].includes(type)) return { error: "type/overlay_type muss 'text' oder 'shape' sein" };
   const now = new Date().toISOString();
+  const defaultSize = OVERLAY_DEFAULT_SIZE[type];
   const [row] = await storage.query(
-    `INSERT INTO overlays (project_id, type, start_sec, end_sec, x, y, width, height, z_index, props_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ${OVERLAY_COLUMNS}`,
+    `INSERT INTO overlays (project_id, type, start_sec, end_sec, x, y, width, height, z_index, track_index, props_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING ${OVERLAY_COLUMNS}`,
     [
       projectId, type,
       Number(input.start_sec) || 0, Number(input.end_sec) || 0,
       Number(input.x) || 0, Number(input.y) || 0,
-      input.width != null ? Number(input.width) : null, input.height != null ? Number(input.height) : null,
+      input.width != null ? Number(input.width) : defaultSize.width,
+      input.height != null ? Number(input.height) : defaultSize.height,
       input.z_index != null ? Number(input.z_index) : 0,
+      input.track_index != null ? Number(input.track_index) : 0,
       JSON.stringify(input.props || {}), now,
     ]
   );
@@ -1121,8 +1153,12 @@ export async function execute(input, ctx) {
       [projectId]
     );
     const [row] = await storage.query(
-      `INSERT INTO captions (project_id, start_sec, end_sec, text, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING ${CAPTION_COLUMNS}`,
-      [projectId, Number(input.start_sec) || 0, Number(input.end_sec) || 0, String(input.text || ""), (maxOrder ?? -1) + 1, new Date().toISOString()]
+      `INSERT INTO captions (project_id, start_sec, end_sec, text, pos_x, pos_y, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING ${CAPTION_COLUMNS}`,
+      [
+        projectId, Number(input.start_sec) || 0, Number(input.end_sec) || 0, String(input.text || ""),
+        input.pos_x != null ? Number(input.pos_x) : 50, input.pos_y != null ? Number(input.pos_y) : 88,
+        (maxOrder ?? -1) + 1, new Date().toISOString(),
+      ]
     );
     return { caption: row };
   }
@@ -1134,7 +1170,9 @@ export async function execute(input, ctx) {
     const startSec = input.start_sec != null ? Number(input.start_sec) : existing.start_sec;
     const endSec = input.end_sec != null ? Number(input.end_sec) : existing.end_sec;
     const text = input.text != null ? String(input.text) : existing.text;
-    await storage.exec("UPDATE captions SET start_sec=?, end_sec=?, text=? WHERE id=?", [startSec, endSec, text, id]);
+    const posX = input.pos_x != null ? Number(input.pos_x) : existing.pos_x;
+    const posY = input.pos_y != null ? Number(input.pos_y) : existing.pos_y;
+    await storage.exec("UPDATE captions SET start_sec=?, end_sec=?, text=?, pos_x=?, pos_y=? WHERE id=?", [startSec, endSec, text, posX, posY, id]);
     const [row] = await storage.query(`SELECT ${CAPTION_COLUMNS} FROM captions WHERE id = ?`, [id]);
     return { caption: row };
   }
@@ -1166,11 +1204,12 @@ export async function execute(input, ctx) {
       width: input.width != null ? Number(input.width) : existing.width,
       height: input.height != null ? Number(input.height) : existing.height,
       z_index: input.z_index != null ? Number(input.z_index) : existing.z_index,
+      track_index: input.track_index != null ? Number(input.track_index) : existing.track_index,
       props_json: input.props != null ? JSON.stringify(input.props) : existing.props_json,
     };
     await storage.exec(
-      "UPDATE overlays SET start_sec=?, end_sec=?, x=?, y=?, width=?, height=?, z_index=?, props_json=? WHERE id=?",
-      [merged.start_sec, merged.end_sec, merged.x, merged.y, merged.width, merged.height, merged.z_index, merged.props_json, id]
+      "UPDATE overlays SET start_sec=?, end_sec=?, x=?, y=?, width=?, height=?, z_index=?, track_index=?, props_json=? WHERE id=?",
+      [merged.start_sec, merged.end_sec, merged.x, merged.y, merged.width, merged.height, merged.z_index, merged.track_index, merged.props_json, id]
     );
     const [row] = await storage.query(`SELECT ${OVERLAY_COLUMNS} FROM overlays WHERE id = ?`, [id]);
     return { overlay: overlayRowToApi(row) };
@@ -1189,8 +1228,8 @@ export async function execute(input, ctx) {
     if (!input.audio_base64) return { error: "audio_base64 ist erforderlich" };
     const now = new Date().toISOString();
     const [row] = await storage.query(
-      "INSERT INTO audio_tracks (project_id, filename, original_name, start_sec, volume, created_at) VALUES (?, '', ?, ?, ?, ?) RETURNING *",
-      [projectId, input.original_name ?? null, Number(input.start_sec) || 0, input.volume != null ? Number(input.volume) : 1, now]
+      "INSERT INTO audio_tracks (project_id, filename, original_name, start_sec, volume, track_index, created_at) VALUES (?, '', ?, ?, ?, ?, ?) RETURNING *",
+      [projectId, input.original_name ?? null, Number(input.start_sec) || 0, input.volume != null ? Number(input.volume) : 1, input.track_index != null ? Number(input.track_index) : 0, now]
     );
     try {
       const buffer = decodeBase64(input.audio_base64);
@@ -1220,7 +1259,8 @@ export async function execute(input, ctx) {
     if (!existing) return { error: "Audiospur nicht gefunden" };
     const startSec = input.start_sec != null ? Number(input.start_sec) : existing.start_sec;
     const volume = input.volume != null ? Number(input.volume) : existing.volume;
-    await storage.exec("UPDATE audio_tracks SET start_sec=?, volume=? WHERE id=?", [startSec, volume, id]);
+    const trackIndex = input.track_index != null ? Number(input.track_index) : existing.track_index;
+    await storage.exec("UPDATE audio_tracks SET start_sec=?, volume=?, track_index=? WHERE id=?", [startSec, volume, trackIndex, id]);
     const [row] = await storage.query(`SELECT ${AUDIO_TRACK_COLUMNS} FROM audio_tracks WHERE id = ?`, [id]);
     return { audio_track: row };
   }
