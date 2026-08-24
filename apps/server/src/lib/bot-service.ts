@@ -19,10 +19,27 @@ export const CODING_BOT_SLUG = "coding";
 export const BOT_AGENT_MAX_ITERATIONS_SETTING = "BOT_AGENT_MAX_ITERATIONS";
 export const BOT_AGENT_TIMEOUT_MS_SETTING = "BOT_AGENT_TIMEOUT_MS";
 
+const UNRESTRICTED_ACCESS = "*";
+
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   const n = Number.parseInt(value, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function parseAccessList(raw: string | null): string[] | undefined {
+  // Legacy rows used NULL to mean unrestricted. Keep that meaning for backward compatibility,
+  // but new/updated custom bots now store an explicit JSON array so [] can safely mean no access.
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const values = parsed.filter((value): value is string => typeof value === "string");
+    return values.includes(UNRESTRICTED_ACCESS) ? undefined : values;
+  } catch {
+    // Malformed access policy must fail closed rather than silently grant every capability.
+    return [];
+  }
 }
 
 /**
@@ -75,9 +92,9 @@ export interface CreateBotInput {
   systemPrompt?: string;
   providerId?: string;
   modelId?: string;
-  /** Skill slugs this bot is allowed to use. Empty/undefined = every skill (unrestricted). */
+  /** Skill access: [] = none, ["*"] = unrestricted, otherwise only listed slugs. */
   skillWhitelist?: string[];
-  /** Tool names this bot is allowed to call. Empty/undefined = every tool (unrestricted). */
+  /** Tool access: [] = none, ["*"] = unrestricted, otherwise only listed names. */
   toolWhitelist?: string[];
 }
 
@@ -137,8 +154,10 @@ export class BotService {
       systemPrompt: input.systemPrompt?.trim() || null,
       providerId: input.providerId?.trim() || null,
       modelId: input.modelId?.trim() || null,
-      skillWhitelist: input.skillWhitelist?.length ? JSON.stringify(input.skillWhitelist) : null,
-      toolWhitelist: input.toolWhitelist?.length ? JSON.stringify(input.toolWhitelist) : null,
+      // New custom bots are fail-closed: omitted/empty lists mean no access. Full access is an
+      // explicit wildcard selected by the user. Legacy NULL remains unrestricted when reading.
+      skillWhitelist: JSON.stringify(input.skillWhitelist ?? []),
+      toolWhitelist: JSON.stringify(input.toolWhitelist ?? []),
       isBuiltIn: 0,
       conversationId: null,
     });
@@ -154,12 +173,8 @@ export class BotService {
       ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt.trim() || null } : {}),
       ...(input.providerId !== undefined ? { providerId: input.providerId.trim() || null } : {}),
       ...(input.modelId !== undefined ? { modelId: input.modelId.trim() || null } : {}),
-      ...(input.skillWhitelist !== undefined
-        ? { skillWhitelist: input.skillWhitelist.length ? JSON.stringify(input.skillWhitelist) : null }
-        : {}),
-      ...(input.toolWhitelist !== undefined
-        ? { toolWhitelist: input.toolWhitelist.length ? JSON.stringify(input.toolWhitelist) : null }
-        : {}),
+      ...(input.skillWhitelist !== undefined ? { skillWhitelist: JSON.stringify(input.skillWhitelist) } : {}),
+      ...(input.toolWhitelist !== undefined ? { toolWhitelist: JSON.stringify(input.toolWhitelist) } : {}),
     });
     if (!updated) throw new Error("Bot not found");
     return updated;
@@ -336,7 +351,7 @@ export class BotService {
     }
 
     const provider = this.resolveProvider(bot);
-    const allowedSkillSlugs = bot.skillWhitelist ? (JSON.parse(bot.skillWhitelist) as string[]) : undefined;
+    const allowedSkillSlugs = parseAccessList(bot.skillWhitelist);
     const [maxIterationsSetting, timeoutMsSetting] = await Promise.all([
       this.deps.db.getSetting(BOT_AGENT_MAX_ITERATIONS_SETTING),
       this.deps.db.getSetting(BOT_AGENT_TIMEOUT_MS_SETTING),
@@ -344,7 +359,7 @@ export class BotService {
     const agent = new Agent(provider, this.deps.db, undefined, {
       name: bot.name,
       ...(bot.systemPrompt ? { systemPrompt: bot.systemPrompt } : {}),
-      ...(allowedSkillSlugs ? { allowedSkillSlugs } : {}),
+      ...(allowedSkillSlugs !== undefined ? { allowedSkillSlugs } : {}),
       // Configurable per Settings > Bots instead of only the env-var defaults every other agent
       // falls back to - a bot stuck failing tool calls mid-task (see the filesystem path bug
       // fixed earlier) or doing a genuinely long research task benefits from its own budget
@@ -373,7 +388,8 @@ export class BotService {
       disableQualityPasses: true,
     });
 
-    const allowedTools = bot.toolWhitelist ? new Set<string>(JSON.parse(bot.toolWhitelist) as string[]) : undefined;
+    const allowedToolNames = parseAccessList(bot.toolWhitelist);
+    const allowedTools = allowedToolNames === undefined ? undefined : new Set<string>(allowedToolNames);
     const registerScoped = (tool: ToolExecutor) => {
       if (!allowedTools || allowedTools.has(tool.name)) agent.executor.registerTool(tool);
     };
