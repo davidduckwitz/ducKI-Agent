@@ -296,7 +296,7 @@ export class BotChatOrchestrator {
 
   private buildDelegatedPrompt(bot: BotSelect, trigger: Trigger, handoffContext?: string): string {
     const handoffHeader = handoffContext
-      ? [`[Offene Aufgaben für diesen Chat:]", ${handoffContext}`, ""].join("\n")
+      ? ["[Offene Aufgaben für diesen Chat:]", handoffContext, ""].join("\n")
       : "";
     const contentReminder =
       "Schreibe das eigentliche Ergebnis (den Text, die Antwort, den Bericht - was auch immer verlangt wurde) direkt in diese Nachricht. Beschreibe nicht nur, dass du etwas erledigt oder \"gesendet\" hast - eine Beschreibung ohne Inhalt ist für die anderen im Chat unsichtbar. Kürze echte, umfangreiche Inhalte nicht künstlich, nur damit die Antwort kompakter wirkt.";
