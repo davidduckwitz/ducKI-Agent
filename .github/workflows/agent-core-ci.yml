@@ -84,12 +84,13 @@ jobs:
       - name: Build server dependency graph
         run: pnpm --filter "@ducki/server..." run build
 
-      # These existing tests protect the capability paths that must not regress while the
-      # agent controller/settings are being tuned: bot-to-bot handoffs, plugin hot-loading,
-      # and skill install/runner behavior.
+      # These tests protect capability paths that must not regress while the agent controller
+      # and model profiles are tuned: bot-to-bot handoffs, plugin hot-loading, skill behavior,
+      # plus an explicit assertion that profiles never alter capability/routing settings.
       - name: Run capability compatibility tests
         run: >-
           pnpm exec vitest run
+          apps/server/src/lib/agent-model-profiles.test.ts
           apps/server/src/lib/bot-handoff-service.test.ts
           apps/server/src/lib/plugin-manager.test.ts
           apps/server/src/lib/skill-install.test.ts
