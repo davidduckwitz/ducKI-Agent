@@ -5,6 +5,8 @@ export type AgentModelProfile = "legacy" | "small" | "balanced" | "large";
 
 type ProfileDefaults = {
   maxIterations: number;
+  lightweightMaxIterations: number;
+  chatbotMaxIterations: number;
   maxOutputTokens: number;
   timeoutMs: number;
   enableReflection: boolean;
@@ -37,6 +39,8 @@ type ProfileDefaults = {
 const PROFILE_DEFAULTS: Record<AgentModelProfile, ProfileDefaults> = {
   legacy: {
     maxIterations: 50,
+    lightweightMaxIterations: 10,
+    chatbotMaxIterations: 5,
     maxOutputTokens: 16384,
     timeoutMs: 600000,
     enableReflection: true,
@@ -56,6 +60,8 @@ const PROFILE_DEFAULTS: Record<AgentModelProfile, ProfileDefaults> = {
   },
   small: {
     maxIterations: 18,
+    lightweightMaxIterations: 8,
+    chatbotMaxIterations: 5,
     maxOutputTokens: 6144,
     timeoutMs: 480000,
     enableReflection: false,
@@ -75,6 +81,8 @@ const PROFILE_DEFAULTS: Record<AgentModelProfile, ProfileDefaults> = {
   },
   balanced: {
     maxIterations: 30,
+    lightweightMaxIterations: 10,
+    chatbotMaxIterations: 5,
     maxOutputTokens: 8192,
     timeoutMs: 540000,
     enableReflection: false,
@@ -94,6 +102,8 @@ const PROFILE_DEFAULTS: Record<AgentModelProfile, ProfileDefaults> = {
   },
   large: {
     maxIterations: 45,
+    lightweightMaxIterations: 10,
+    chatbotMaxIterations: 5,
     maxOutputTokens: 12288,
     timeoutMs: 600000,
     enableReflection: true,
@@ -191,8 +201,8 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     costGovernorStop: (process.env["AGENT_COST_GOVERNOR_STOP"] ?? "false").toLowerCase() === "true",
     autoDowngrade: (process.env["AGENT_AUTO_DOWNGRADE"] ?? "false").toLowerCase() === "true",
 
-    lightweightMaxIterations: parseInt(process.env["AGENT_LIGHTWEIGHT_MAX_ITERATIONS"] ?? "10"),
-    chatbotMaxIterations: parseInt(process.env["AGENT_CHATBOT_MAX_ITERATIONS"] ?? "5"),
+    lightweightMaxIterations: envInt("AGENT_LIGHTWEIGHT_MAX_ITERATIONS", profile.lightweightMaxIterations),
+    chatbotMaxIterations: envInt("AGENT_CHATBOT_MAX_ITERATIONS", profile.chatbotMaxIterations),
 
     enableVerify: (process.env["AGENT_ENABLE_VERIFY"] ?? "false").toLowerCase() === "true",
     verifyMaxFixAttempts: parseInt(process.env["AGENT_VERIFY_MAX_FIX_ATTEMPTS"] ?? "1"),
