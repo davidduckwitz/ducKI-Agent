@@ -28,6 +28,9 @@ import { BotAvatar } from "./BotAvatar";
 import { SkillMultiSelect } from "./SkillMultiSelect";
 import { ToolMultiSelect } from "./ToolMultiSelect";
 
+const UNRESTRICTED = "*";
+
+/** New bots deliberately start with no skills/tools. Full access must be selected explicitly. */
 const EMPTY_FORM: BotInput = {
   name: "",
   description: "",
@@ -47,8 +50,10 @@ function botToForm(bot: BotInfo): BotInput {
     avatar: bot.avatar ?? "",
     providerId: bot.providerId ?? "",
     modelId: bot.modelId ?? "",
-    skillWhitelist: bot.skillWhitelist ? (JSON.parse(bot.skillWhitelist) as string[]) : [],
-    toolWhitelist: bot.toolWhitelist ? (JSON.parse(bot.toolWhitelist) as string[]) : [],
+    // Legacy custom bots used NULL to mean unrestricted. Convert that implicit state to an
+    // explicit wildcard so opening and saving an old bot does not unexpectedly revoke access.
+    skillWhitelist: bot.skillWhitelist ? (JSON.parse(bot.skillWhitelist) as string[]) : [UNRESTRICTED],
+    toolWhitelist: bot.toolWhitelist ? (JSON.parse(bot.toolWhitelist) as string[]) : [UNRESTRICTED],
   };
 }
 
