@@ -41,7 +41,8 @@ function normalizeStringList(value: unknown, maxItems = 4): string[] {
  *
  * The pass is capped by both tokens and wall-clock time. Any timeout, provider error or malformed
  * JSON degrades to `undefined`; the existing deterministic verify-feedback path continues exactly
- * as before. This makes reflection an optional quality boost rather than a new failure mode.
+ * as before. The timeout also aborts the provider request itself, so a discarded reflection cannot
+ * keep consuming remote/local inference resources after the coding run has already moved on.
  */
 export class CodingFailureReflector {
   constructor(
@@ -84,13 +85,21 @@ export class CodingFailureReflector {
       },
     ];
 
+    const abortController = new AbortController();
     let timeoutHandle: NodeJS.Timeout | undefined;
     try {
       const timeout = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => reject(new Error(`failure reflection timeout after ${this.timeoutMs}ms`)), this.timeoutMs);
+        timeoutHandle = setTimeout(() => {
+          abortController.abort();
+          reject(new Error(`failure reflection timeout after ${this.timeoutMs}ms`));
+        }, this.timeoutMs);
       });
       const response = await Promise.race([
-        this.provider.generate(messages, { temperature: 0.1, maxTokens: 500 }),
+        this.provider.generate(messages, {
+          temperature: 0.1,
+          maxTokens: 500,
+          signal: abortController.signal,
+        }),
         timeout,
       ]);
       const parsed = this.parse(response.content);
