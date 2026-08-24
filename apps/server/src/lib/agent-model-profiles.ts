@@ -23,7 +23,9 @@ export const MODEL_PROFILE_PROTECTED_KEYS = new Set([
   // Vision / media capability
   "AGENT_ENABLE_VISION",
 
-  // Skill discovery / loading capability
+  // Skill discovery / loading capability. Keep both the current DB-backed names consumed by
+  // Agent.loadRuntimeControls() and older/env-oriented aliases protected: a future profile must
+  // never gain the ability to silently change which skills are available.
   "AGENT_AUTO_SKILL_SELECTION",
   "AGENT_SKILL_BEHAVIOR",
   "AGENT_AUTO_SKILL_FALLBACK_NONE",
@@ -31,11 +33,14 @@ export const MODEL_PROFILE_PROTECTED_KEYS = new Set([
   "AGENT_AUTO_SKILL_MARGIN",
   "AGENT_AUTO_SKILL_MIN_INPUT_LEN",
   "AGENT_AUTO_SKILL_MIN_OVERLAP",
+  "ENABLED_SKILLS",
+  "ALWAYS_LOAD_SKILLS",
   "AGENT_ENABLED_SKILL_ALLOWLIST",
   "AGENT_ALWAYS_LOAD_SKILLS",
 
   // Optional/core tool capability. Plugin tools are intentionally not represented by profile
-  // settings at all, but this protects the generic optional-tool gate too.
+  // settings at all, but protect both the DB runtime key and the historical env-style alias.
+  "ENABLED_OPTIONAL_TOOLS",
   "AGENT_ENABLED_OPTIONAL_TOOLS",
   "PLUGIN_CREATION_ENABLED",
 
