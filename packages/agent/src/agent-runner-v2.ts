@@ -1,13 +1,13 @@
 /**
  * AgentRunnerV2: Streaming-first API for agent execution via async generators.
- * Enables real-time UI updates without polling, with frame-by-frame visibility.
+ * Emits chunks/events while Agent.run() is still in flight instead of buffering
+ * everything until completion.
  */
 
 import type { LLMProvider } from "@ducki/providers";
 import type { DatabaseService } from "@ducki/database";
-import type { AgentEventEmitter, AgentRunOptions, AgentRunResult } from "./config/interfaces_types.js";
+import type { AgentOptions, AgentRunOptions, AgentRunResult } from "./config/interfaces_types.js";
 import { Agent } from "./agent.js";
-import type { AgentOptions } from "./config/interfaces_types.js";
 
 /**
  * Frame types emitted during agent execution.
@@ -31,6 +31,51 @@ export interface AgentRunEvent {
 }
 
 /**
+ * Tiny single-consumer async queue bridging synchronous Agent callbacks into an
+ * async generator. Frames are delivered FIFO in the exact callback order in which
+ * they were produced, even when Agent.run() is still waiting on the model/tool loop.
+ */
+class AsyncFrameQueue<T> {
+  private readonly values: T[] = [];
+  private waiter: ((result: IteratorResult<T>) => void) | undefined;
+  private closed = false;
+
+  push(value: T): void {
+    if (this.closed) return;
+    if (this.waiter) {
+      const resolve = this.waiter;
+      this.waiter = undefined;
+      resolve({ value, done: false });
+      return;
+    }
+    this.values.push(value);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.waiter && this.values.length === 0) {
+      const resolve = this.waiter;
+      this.waiter = undefined;
+      resolve({ value: undefined as never, done: true });
+    }
+  }
+
+  next(): Promise<IteratorResult<T>> {
+    const value = this.values.shift();
+    if (value !== undefined) {
+      return Promise.resolve({ value, done: false });
+    }
+    if (this.closed) {
+      return Promise.resolve({ value: undefined as never, done: true });
+    }
+    return new Promise<IteratorResult<T>>((resolve) => {
+      this.waiter = resolve;
+    });
+  }
+}
+
+/**
  * AgentRunnerV2: Exposes agent execution as async generator.
  * Each frame represents a discrete event the UI can render immediately.
  */
@@ -49,6 +94,11 @@ export class AgentRunnerV2 {
    * Run agent and stream frames via async generator.
    * Caller can iterate and update UI for each frame without polling.
    *
+   * The previous implementation collected onChunk/onEvent callbacks into arrays and
+   * yielded those arrays only AFTER Agent.run() resolved. That looked like a streaming
+   * API but had completion-time latency. This implementation starts Agent.run() in the
+   * background and bridges each callback into an async FIFO immediately.
+   *
    * Example:
    *   const runner = new AgentRunnerV2(provider, db);
    *   for await (const frame of runner.run(userInput)) {
@@ -58,62 +108,82 @@ export class AgentRunnerV2 {
    *   }
    */
   async *run(userInput: string, options: AgentRunOptions = {}): AsyncGenerator<AgentRunFrame, void, unknown> {
-    const chunks: string[] = [];
-    const events: AgentRunEvent[] = [];
-    let conversationId: number | undefined;
-
-    // Emit start frame
-    yield { type: "start", data: { conversationId, maxIterations: this.agent["maxIterations"] ?? 50 } };
-
-    // Override event/chunk handlers to capture for frames
+    const queue = new AsyncFrameQueue<AgentRunFrame>();
     const originalOnEvent = options.onEvent;
     const originalOnChunk = options.onChunk;
+    let settled = false;
 
-    const newOptions: AgentRunOptions = {
+    const runOptions: AgentRunOptions = {
       ...options,
+      // AgentRunnerV2's contract is streaming. Force the underlying Agent onto its
+      // streaming path even when a caller omitted `stream` (or accidentally passed false).
+      stream: true,
       onEvent: (event) => {
-        const streamEvent: AgentRunEvent = {
-          type: event.type as string,
-          message: event.message,
-          data: event.data,
-          timestamp: event.timestamp,
-        };
-        events.push(streamEvent);
-        // Synchronously yield event frame (cannot yield from callback, so queue it)
-        // Will be yielded after run completes
+        queue.push({
+          type: "event",
+          data: {
+            type: event.type as string,
+            message: event.message,
+            data: event.data,
+            timestamp: event.timestamp,
+          },
+        });
         originalOnEvent?.(event);
       },
       onChunk: (chunk) => {
-        chunks.push(chunk);
-        // Note: cannot yield from callback, so events are queued and yielded after
+        queue.push({ type: "chunk", data: { text: chunk } });
         originalOnChunk?.(chunk);
       },
     };
 
+    // Start execution before yielding the first frame. Callback frames that arrive
+    // immediately are safely buffered by the queue, while `start` remains the first
+    // frame a consumer observes.
+    const execution = this.agent
+      .run(userInput, runOptions)
+      .then((result) => {
+        settled = true;
+        queue.push({ type: "completion", data: result });
+      })
+      .catch((error: unknown) => {
+        settled = true;
+        const message = error instanceof Error ? error.message : String(error);
+        const stack = error instanceof Error ? error.stack : undefined;
+        queue.push({
+          type: "error",
+          data: stack ? { message, stack } : { message },
+        });
+      })
+      .finally(() => {
+        queue.close();
+      });
+
     try {
-      // Run agent (blocks until completion)
-      const result = await this.agent.run(userInput, newOptions);
-
-      // Emit captured chunks as frames
-      for (const chunk of chunks) {
-        yield { type: "chunk", data: { text: chunk } };
-      }
-
-      // Emit captured events as frames
-      for (const event of events) {
-        yield { type: "event", data: event };
-      }
-
-      // Emit completion frame
-      yield { type: "completion", data: result };
-    } catch (error) {
       yield {
-        type: "error",
+        type: "start",
         data: {
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
+          conversationId: undefined,
+          maxIterations: this.agent["maxIterations"] ?? 50,
         },
       };
+
+      while (true) {
+        const next = await queue.next();
+        if (next.done) break;
+        yield next.value;
+      }
+    } finally {
+      // A consumer breaking out of `for await` means nobody is listening anymore.
+      // Stop the underlying run so an in-flight model/tool call does not continue
+      // burning time/tokens invisibly. Agent.stop() aborts the active LLM request and
+      // causes the normal run loop to settle cleanly.
+      if (!settled) {
+        this.agent.stop();
+      }
+
+      // `execution` already has its own catch above; keep an explicit observer alive
+      // after consumer cancellation so a late settlement can never become unhandled.
+      void execution;
     }
   }
 

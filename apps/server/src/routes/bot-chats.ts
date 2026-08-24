@@ -177,13 +177,12 @@ botChatsRouter.delete("/:id/participants/:botId", async (req, res, next) => {
 });
 
 /**
- * Which conversations currently have a background exchange running, and which single bot (if
- * any) is actively generating right now - polled via GET /:id/status so the UI knows when to
- * stop polling for new messages and can show a specific "X schreibt..." indicator instead of a
- * generic one. Per-process, in-memory: fine for a single server instance, and it only ever gates
- * a polling UI, never correctness (a lost flag after a restart just means the client stops
- * polling a little early). Turns run strictly sequentially (see bot-chat-orchestrator.ts), so at
- * most one bot is ever active per conversation at a time.
+ * Which conversations currently have a background exchange running, and one representative bot
+ * that is actively generating right now. A parallel batch can have several active bots; the UI
+ * deliberately shows one of them as the typing indicator rather than exposing scheduler detail.
+ * Polled via GET /:id/status so the UI knows when to stop polling for new messages. Per-process,
+ * in-memory: fine for a single server instance, and it only gates polling/overlap protection,
+ * never durable conversation state (a restart clears any stale reservation automatically).
  */
 const activeGenerations = new Map<number, { slug: string; name: string } | null>();
 
@@ -201,11 +200,19 @@ botChatsRouter.get("/:id/status", (req, res) => {
  * finishes, independent of the others, so polling GET /:id/messages (+ /:id/status to know when
  * the whole exchange has settled) shows replies as they actually happen instead of the client
  * waiting for the slowest bot before seeing anything.
+ *
+ * Only ONE exchange may mutate a given bot-chat conversation at once. A second user message while
+ * the first exchange is still running is rejected with 409 before it is persisted. Without this
+ * reservation two orchestrators could overlap, invalidating the parallel round-snapshot barrier
+ * and making handoff/mention order depend on timing. The UI already knows the generating state;
+ * API clients get an explicit retryable conflict instead of silent history corruption.
  */
 botChatsRouter.post("/:id/messages", async (req, res, next) => {
+  const conversationId = parseInt(req.params["id"] ?? "0", 10);
+  let generationReserved = false;
+
   try {
     const db = getDb(req);
-    const conversationId = parseInt(req.params["id"] ?? "0", 10);
     const conversation = await db.getConversation(conversationId);
     if (!conversation || conversation.origin !== "bot_chat") {
       res.status(404).json(createApiError("Bot chat not found"));
@@ -218,12 +225,22 @@ botChatsRouter.post("/:id/messages", async (req, res, next) => {
       return;
     }
 
+    if (activeGenerations.has(conversationId)) {
+      res.status(409).json(createApiError("A bot-chat exchange is already running for this conversation"));
+      return;
+    }
+
+    // Reserve BEFORE the first awaited write below. Node can accept another HTTP request while
+    // addMessage/listBotChatParticipants are pending; setting the flag later leaves a window where
+    // two requests both pass the overlap check and start two orchestrators.
+    activeGenerations.set(conversationId, null);
+    generationReserved = true;
+
     const userMessage = await db.addMessage({ conversationId, role: "user", content: message });
     const participants = await db.listBotChatParticipants(conversationId);
     const botService = getBotService(req);
 
-    activeGenerations.set(conversationId, null);
-    void new BotChatOrchestrator(db, botService)
+    const exchange = new BotChatOrchestrator(db, botService)
       .handleUserMessage(conversationId, participants.map((p) => p.botId), message, (bot) => {
         activeGenerations.set(conversationId, bot);
       })
@@ -237,8 +254,13 @@ botChatsRouter.post("/:id/messages", async (req, res, next) => {
         activeGenerations.delete(conversationId);
       });
 
+    // From here the background exchange owns the reservation and clears it in finally().
+    generationReserved = false;
+    void exchange;
+
     res.json(createApiResponse({ started: true, userMessageId: userMessage.id }));
   } catch (error) {
+    if (generationReserved) activeGenerations.delete(conversationId);
     logger.error("Bot chat message failed", { error: error instanceof Error ? error.message : String(error) });
     next(error);
   }

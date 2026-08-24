@@ -28,6 +28,9 @@ import { BotAvatar } from "./BotAvatar";
 import { SkillMultiSelect } from "./SkillMultiSelect";
 import { ToolMultiSelect } from "./ToolMultiSelect";
 
+const UNRESTRICTED = "*";
+
+/** New bots deliberately start with no skills/tools. Full access must be selected explicitly. */
 const EMPTY_FORM: BotInput = {
   name: "",
   description: "",
@@ -39,6 +42,22 @@ const EMPTY_FORM: BotInput = {
   toolWhitelist: [],
 };
 
+/**
+ * Legacy NULL means unrestricted. A malformed persisted policy is treated as no access, matching
+ * BotService's fail-closed parser, instead of crashing the whole edit dialog on JSON.parse().
+ */
+function parseStoredAccessList(raw: string | null): string[] {
+  if (!raw) return [UNRESTRICTED];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const values = parsed.filter((value): value is string => typeof value === "string");
+    return values.includes(UNRESTRICTED) ? [UNRESTRICTED] : values;
+  } catch {
+    return [];
+  }
+}
+
 function botToForm(bot: BotInfo): BotInput {
   return {
     name: bot.name,
@@ -47,8 +66,10 @@ function botToForm(bot: BotInfo): BotInput {
     avatar: bot.avatar ?? "",
     providerId: bot.providerId ?? "",
     modelId: bot.modelId ?? "",
-    skillWhitelist: bot.skillWhitelist ? (JSON.parse(bot.skillWhitelist) as string[]) : [],
-    toolWhitelist: bot.toolWhitelist ? (JSON.parse(bot.toolWhitelist) as string[]) : [],
+    // Legacy custom bots used NULL to mean unrestricted. Convert that implicit state to an
+    // explicit wildcard so opening and saving an old bot does not unexpectedly revoke access.
+    skillWhitelist: parseStoredAccessList(bot.skillWhitelist),
+    toolWhitelist: parseStoredAccessList(bot.toolWhitelist),
   };
 }
 

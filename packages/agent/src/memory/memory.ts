@@ -4,9 +4,11 @@ import type { LLMMessage } from "@ducki/shared";
 import { extractKeywords, scoreKeywordRelevance, tokenizeText } from "@ducki/shared";
 import { jaccardSimilarity } from "../utils/text-similarity.js";
 
-/** When true (the default), memories the agent learns on its own become immediately
- *  recallable instead of waiting in a review queue. Set to "false" to keep every
- *  automatic learning behind manual approval in the Memory UI. */
+/**
+ * Automatic learnings requested as `pending` stay behind review by default. Set this setting to
+ * an explicit truthy value (true/1/yes/on) only when the operator intentionally accepts automatic
+ * promotion into recallable long-term memory. Explicit `approved` writes are never downgraded.
+ */
 const AUTO_APPROVE_SETTING = "MEMORY_AUTO_APPROVE";
 
 export interface MemoryEntry {
@@ -111,21 +113,21 @@ export class MemorySystem {
   }
 
   /**
-   * Every retrieval path filters on status "approved". Writing automatic learnings as
-   * "pending" therefore meant the agent could never read back anything it taught itself -
-   * it filled a review queue nobody had to empty for the agent to keep working, so from
-   * the agent's point of view it simply never learned. Auto-approval is on by default and
-   * can be turned off for setups that genuinely want a human in the loop.
+   * Retrieval only reads `approved` memories. An LLM-generated learning is therefore treated as a
+   * candidate, not as truth: requested `pending` remains pending unless the operator explicitly
+   * enables MEMORY_AUTO_APPROVE. This prevents a hallucinated reflection or inferred causal claim
+   * from poisoning future prompts. Direct/user-reviewed writes that request `approved` stay
+   * approved and are unaffected by this gate.
    */
   private async resolveLearningStatus(requested: "approved" | "pending"): Promise<"approved" | "pending"> {
     if (requested === "approved") return "approved";
     try {
       const raw = (await this.db.getSetting(AUTO_APPROVE_SETTING))?.trim().toLowerCase();
-      if (raw === "false" || raw === "0" || raw === "no" || raw === "off") return "pending";
+      if (raw === "true" || raw === "1" || raw === "yes" || raw === "on") return "approved";
     } catch {
-      // Setting unavailable - fall through to the default, which keeps learning working.
+      // Fail closed: inability to read a preference must never auto-promote an inferred memory.
     }
-    return "approved";
+    return "pending";
   }
 
   async rememberFromSuccessfulTask(

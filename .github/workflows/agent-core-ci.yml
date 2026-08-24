@@ -1,0 +1,160 @@
+name: Agent Core CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - "chore/p0-agent-safety-*"
+      - "feat/agent-*"
+      - "fix/agent-*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-core:
+    name: Agent core regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Workspace packages import their runtime entry from dist/. Build the Agent plus its
+      # dependency graph before Vitest; running root `pnpm test` from a clean checkout cannot
+      # resolve @ducki/* packages otherwise and creates hundreds of false failures.
+      - name: Build agent dependency graph
+        run: pnpm --filter "@ducki/agent..." run build
+
+      - name: Typecheck agent
+        run: pnpm --filter @ducki/agent run typecheck
+
+      - name: Run safety and small-model regression tests
+        run: >-
+          pnpm exec vitest run
+          packages/agent/test/tool-approval-policy.test.ts
+          packages/agent/test/load-runtime-controls-profile.test.ts
+          packages/agent/test/scoped-shell-tool.test.ts
+          packages/agent/test/memory-auto-approval.test.ts
+          packages/agent/test/coding-run-state.test.ts
+          packages/agent/test/coding-failure-reflection-integration.test.ts
+          packages/agent/test/agent-runner-v2-streaming.test.ts
+
+  compatibility:
+    name: Bots, plugins and skills compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build server dependency graph
+        run: pnpm --filter "@ducki/server..." run build
+
+      # These tests protect capability paths that must not regress while the agent controller
+      # and model profiles are tuned: MultiBot immutable round snapshots/concurrency/round order,
+      # exact synthetic-prompt ownership, bot permission compatibility, bot-to-bot handoffs,
+      # plugin hot-loading, skill behavior, plus an explicit assertion that profiles never alter
+      # capability/routing settings.
+      - name: Run capability compatibility tests
+        run: >-
+          pnpm exec vitest run
+          apps/server/src/lib/agent-model-profiles.test.ts
+          apps/server/src/lib/bot-service-access.test.ts
+          apps/server/src/lib/bot-service-concurrency.test.ts
+          apps/server/src/lib/bot-chat-orchestrator.test.ts
+          apps/server/src/lib/bot-handoff-service.test.ts
+          apps/server/src/lib/plugin-manager.test.ts
+          apps/server/src/lib/skill-install.test.ts
+          apps/server/src/lib/skill-runner.test.ts
+
+  webui:
+    name: Web UI build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web dependency graph
+        run: pnpm --filter "@ducki/web..." run build
+
+  skills:
+    name: Skill validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build agent validator
+        run: pnpm --filter "@ducki/agent..." run build
+
+      - name: Validate skills
+        run: pnpm skills:validate

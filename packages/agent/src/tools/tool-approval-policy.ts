@@ -40,41 +40,74 @@ export class ToolApprovalPolicy {
   ) {}
 
   /**
-   * Check if a tool call is approved by all rules.
+   * Check if a tool call is approved by the configured rules.
+   *
+   * Rules are evaluated against the effective input produced by the previous
+   * rule. This is important for normalisation/sanitisation rules: later rules
+   * must validate the value that would actually be executed, not the original
+   * uncorrected input.
+   *
+   * Denials are fail-closed for every strategy. `first_deny_wins` short-circuits
+   * immediately; the other strategies evaluate all rules and reject if any rule
+   * denied the call. Confirmation requirements are OR-combined and corrected
+   * input is preserved in the final result.
    */
   async check(toolName: string, input: Record<string, unknown>): Promise<ApprovalCheckResult> {
     if (this.rules.length === 0) {
       return { approved: true };
     }
 
-    let lastResult: ApprovalCheckResult = { approved: true };
-    const allResults: ApprovalCheckResult[] = [];
+    let effectiveInput = input;
+    let wasCorrected = false;
+    let requiresConfirmation = false;
+    let confirmationReason: string | undefined;
+    const deniedResults: ApprovalCheckResult[] = [];
 
     for (const rule of this.rules) {
+      let result: ApprovalCheckResult;
       try {
-        const result = await rule.check(toolName, input);
-        allResults.push(result);
-        lastResult = result;
-
-        // Short-circuit on first denial
-        if (!result.approved && this.strategy === "first_deny_wins") {
-          return result;
-        }
+        result = await rule.check(toolName, effectiveInput);
       } catch (error) {
         return {
           approved: false,
           reason: `Approval rule '${rule.name}' failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
+
+      if (!result.approved) {
+        if (this.strategy === "first_deny_wins") {
+          return result;
+        }
+        deniedResults.push(result);
+        continue;
+      }
+
+      if (result.corrected) {
+        effectiveInput = result.corrected;
+        wasCorrected = true;
+      }
+
+      if (result.requiresConfirmation) {
+        requiresConfirmation = true;
+        confirmationReason ??= result.reason;
+      }
     }
 
-    // Check strategy
-    if (this.strategy === "any_deny_blocks") {
-      const denied = allResults.find((r) => !r.approved);
-      if (denied) return denied;
+    // With the current boolean rule contract, both aggregate strategies are
+    // fail-closed when any rule denies. Keeping both names preserves the public
+    // API while `first_deny_wins` remains the only short-circuiting strategy.
+    if (
+      (this.strategy === "all_must_approve" || this.strategy === "any_deny_blocks") &&
+      deniedResults.length > 0
+    ) {
+      return deniedResults[0]!;
     }
 
-    return { approved: true };
+    return {
+      approved: true,
+      ...(wasCorrected ? { corrected: effectiveInput } : {}),
+      ...(requiresConfirmation ? { requiresConfirmation: true, ...(confirmationReason ? { reason: confirmationReason } : {}) } : {}),
+    };
   }
 
   /**

@@ -1,7 +1,13 @@
 /**
- * Skill whitelist picker for the bot builder. Reuses the same /api/skills listing
- * SkillManager.tsx already fetches (api.skills.list()); an empty selection means
- * "unrestricted" (all skills), matching BotService's skillWhitelist semantics.
+ * Skill whitelist picker for the bot builder, backed by api.skills.list().
+ *
+ * Access semantics are explicit:
+ * - []      = no skills (safe default for newly-created bots)
+ * - ["*"]   = unrestricted / every skill
+ * - [slugs] = only the selected skills
+ *
+ * Older bots stored `null` for unrestricted access; BotBuilderDialog maps that legacy value to
+ * ["*"] so simply editing/saving an existing bot does not silently change its permissions.
  */
 
 import { useMemo, useState } from "react";
@@ -10,6 +16,8 @@ import { Search } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { Badge } from "../ui/badge";
+
+const UNRESTRICTED = "*";
 
 export function SkillMultiSelect({ value, onChange }: { value: string[]; onChange: (slugs: string[]) => void }) {
   const { t } = useI18n();
@@ -25,14 +33,19 @@ export function SkillMultiSelect({ value, onChange }: { value: string[]; onChang
     );
   }, [skills, query]);
 
-  const selected = new Set(value);
-  const unrestricted = value.length === 0;
+  const unrestricted = value.includes(UNRESTRICTED);
+  const concreteValue = unrestricted ? [] : value;
+  const selected = new Set(concreteValue);
 
   function toggle(slug: string) {
+    if (unrestricted) {
+      onChange([slug]);
+      return;
+    }
     if (selected.has(slug)) {
-      onChange(value.filter((s) => s !== slug));
+      onChange(concreteValue.filter((s) => s !== slug));
     } else {
-      onChange([...value, slug]);
+      onChange([...concreteValue, slug]);
     }
   }
 
@@ -50,7 +63,9 @@ export function SkillMultiSelect({ value, onChange }: { value: string[]; onChang
           />
         </div>
         <Badge variant={unrestricted ? "secondary" : "default"}>
-          {unrestricted ? t("bots.builder.skills.unrestricted") : t("bots.builder.skills.selectedCount").replace("{count}", String(value.length))}
+          {unrestricted
+            ? t("bots.builder.skills.unrestricted")
+            : t("bots.builder.skills.selectedCount").replace("{count}", String(concreteValue.length))}
         </Badge>
       </div>
 
@@ -77,11 +92,27 @@ export function SkillMultiSelect({ value, onChange }: { value: string[]; onChang
           </label>
         ))}
       </div>
-      {value.length > 0 ? (
-        <button type="button" onClick={() => onChange([])} className="text-xs text-muted-foreground underline-offset-2 hover:underline">
-          {t("bots.builder.skills.clear")}
-        </button>
-      ) : null}
+
+      <div className="flex flex-wrap gap-3">
+        {!unrestricted ? (
+          <button
+            type="button"
+            onClick={() => onChange([UNRESTRICTED])}
+            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {t("bots.builder.skills.unrestricted")}
+          </button>
+        ) : null}
+        {value.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {t("bots.builder.skills.clear")}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

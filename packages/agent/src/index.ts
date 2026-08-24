@@ -123,8 +123,16 @@ export {
 
 // Performance Benchmarks
 export { AgentBenchmark, type BenchmarkResult } from "./performance/benchmarks.js";
-export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
+// Keep the public CodingAgent class unchanged for direct callers/tests, but route the factory used
+// by the server/workflows through the compatible subclass that adds bounded failure-only
+// reflection when deterministic verification repeats unchanged.
+export { CodingAgent } from "./coding/coding-agent.js";
+export { FailureAwareCodingAgent, createFailureAwareCodingAgent as createCodingAgent } from "./coding/failure-aware-coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
+export { CodingRunState } from "./coding/coding-run-state.js";
+export type { CodingFailureReflection, CodingFailureSnapshot, VerifyFailureUpdate } from "./coding/coding-run-state.js";
+export { CodingFailureReflector } from "./coding/failure-reflector.js";
+export type { CodingFailureReflectionInput } from "./coding/failure-reflector.js";
 export { createScopedFilesystemTool, sanitizeCodeContent } from "./coding/scoped-filesystem-tool.js";
 export { CODING_ALLOWED_SHELL_COMMANDS, condenseVerifyOutput } from "./coding/coding-agent.js";
 export {

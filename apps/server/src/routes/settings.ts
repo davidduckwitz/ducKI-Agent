@@ -3,8 +3,14 @@ import type { Request } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import type { DatabaseService } from "@ducki/database";
 import { testMysqlConnection } from "@ducki/database";
-import { createApiResponse } from "@ducki/shared";
+import { createApiError, createApiResponse } from "@ducki/shared";
 import { ProviderSettingsService } from "../lib/provider-settings-service.js";
+import {
+  AGENT_MODEL_PROFILES,
+  applyAgentModelProfile,
+  inferAgentModelProfile,
+  parseAgentModelProfile,
+} from "../lib/agent-model-profiles.js";
 import { broadcastSettingsChanged } from "../websocket/index.js";
 
 /**
@@ -40,6 +46,50 @@ const PROVIDER_SETTINGS = new Set([
 
 settingsRouter.get("/", async (req, res, next) => {
   try { res.json(createApiResponse(await (req.app.locals["db"] as DatabaseService).getAllSettings())); } catch (e) { next(e); }
+});
+
+// ============================================================
+// Agent model-size profiles
+// ============================================================
+
+/**
+ * Returns the centrally-defined presets plus the best-effort currently matching profile.
+ * No capability switches are part of these presets; see agent-model-profiles.ts and its CI test.
+ */
+settingsRouter.get("/model-profile/presets", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const rows = await db.getAllSettings();
+    const map = new Map(rows.map((row) => [row.key, row.value]));
+    res.json(createApiResponse({
+      currentProfile: inferAgentModelProfile(map),
+      profiles: Object.values(AGENT_MODEL_PROFILES),
+    }));
+  } catch (e) { next(e); }
+});
+
+/**
+ * Materialises one profile into the same DB settings Agent.loadRuntimeControls() reads at the
+ * start of every run. This makes the WebUI authoritative without relying on process.env or a
+ * server restart. Individual settings can still be fine-tuned afterwards; the UI then reports
+ * the state as "custom" until it exactly matches a preset again.
+ */
+settingsRouter.post("/model-profile/apply", async (req, res, next) => {
+  try {
+    const profile = parseAgentModelProfile((req.body as { profile?: unknown } | undefined)?.profile);
+    if (!profile) {
+      res.status(400).json(createApiError("Unknown agent model profile. Use legacy, small, balanced or large."));
+      return;
+    }
+
+    const db = req.app.locals["db"] as DatabaseService;
+    const result = await applyAgentModelProfile(db, profile);
+    notifySettingsChanged(req, result.appliedKeys);
+    res.json(createApiResponse({
+      ...result,
+      definition: AGENT_MODEL_PROFILES[profile],
+    }));
+  } catch (e) { next(e); }
 });
 
 settingsRouter.get("/:key", async (req, res, next) => {
@@ -196,4 +246,3 @@ settingsRouter.post("/agent-provider/import", async (req, res, next) => {
     res.json(createApiResponse({ data: imported, message: "Settings imported" }));
   } catch (e) { next(e); }
 });
-

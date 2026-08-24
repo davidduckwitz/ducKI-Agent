@@ -1,7 +1,13 @@
 /**
- * Tool whitelist picker for the bot builder, mirroring SkillMultiSelect but backed by
- * api.tools.list() (GET /tools). Empty selection = unrestricted, same semantics as
- * BotService's toolWhitelist.
+ * Tool whitelist picker for the bot builder, backed by api.tools.list() (GET /tools).
+ *
+ * Access semantics are explicit:
+ * - []      = no tools (safe default for newly-created bots)
+ * - ["*"]   = unrestricted / every tool
+ * - [names] = only the selected tools
+ *
+ * Older bots stored `null` for unrestricted access; BotBuilderDialog maps that legacy value to
+ * ["*"] so simply editing/saving an existing bot does not silently change its permissions.
  */
 
 import { useMemo, useState } from "react";
@@ -10,6 +16,8 @@ import { Search } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { Badge } from "../ui/badge";
+
+const UNRESTRICTED = "*";
 
 export function ToolMultiSelect({ value, onChange }: { value: string[]; onChange: (names: string[]) => void }) {
   const { t } = useI18n();
@@ -23,14 +31,21 @@ export function ToolMultiSelect({ value, onChange }: { value: string[]; onChange
     return tools.filter((tool) => tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q));
   }, [tools, query]);
 
-  const selected = new Set(value);
-  const unrestricted = value.length === 0;
+  const unrestricted = value.includes(UNRESTRICTED);
+  const concreteValue = unrestricted ? [] : value;
+  const selected = new Set(concreteValue);
 
   function toggle(name: string) {
+    // Selecting one concrete tool while in unrestricted mode intentionally narrows access to
+    // that tool. This avoids carrying the wildcard alongside a misleading concrete selection.
+    if (unrestricted) {
+      onChange([name]);
+      return;
+    }
     if (selected.has(name)) {
-      onChange(value.filter((n) => n !== name));
+      onChange(concreteValue.filter((n) => n !== name));
     } else {
-      onChange([...value, name]);
+      onChange([...concreteValue, name]);
     }
   }
 
@@ -48,7 +63,9 @@ export function ToolMultiSelect({ value, onChange }: { value: string[]; onChange
           />
         </div>
         <Badge variant={unrestricted ? "secondary" : "default"}>
-          {unrestricted ? t("bots.builder.tools.unrestricted") : t("bots.builder.tools.selectedCount").replace("{count}", String(value.length))}
+          {unrestricted
+            ? t("bots.builder.tools.unrestricted")
+            : t("bots.builder.tools.selectedCount").replace("{count}", String(concreteValue.length))}
         </Badge>
       </div>
 
@@ -72,11 +89,27 @@ export function ToolMultiSelect({ value, onChange }: { value: string[]; onChange
           </label>
         ))}
       </div>
-      {value.length > 0 ? (
-        <button type="button" onClick={() => onChange([])} className="text-xs text-muted-foreground underline-offset-2 hover:underline">
-          {t("bots.builder.tools.clear")}
-        </button>
-      ) : null}
+
+      <div className="flex flex-wrap gap-3">
+        {!unrestricted ? (
+          <button
+            type="button"
+            onClick={() => onChange([UNRESTRICTED])}
+            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {t("bots.builder.tools.unrestricted")}
+          </button>
+        ) : null}
+        {value.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {t("bots.builder.tools.clear")}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
