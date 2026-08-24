@@ -3,8 +3,9 @@ import type { BotInsert, BotSelect, DatabaseService } from "@ducki/database";
 import { createProvider, type LLMProvider, type ProviderName } from "@ducki/providers";
 import type { ToolExecutor } from "@ducki/shared";
 import { getRootLogger } from "@ducki/logger";
+import { randomUUID } from "node:crypto";
 import { wrapTools } from "./tool-wrapper.js";
-import { runAgentWithRepairRetry } from "./agent-retry.js";
+import { runAgentWithRepairRetry, shouldRetryAgentRun } from "./agent-retry.js";
 import { deriveConversationTitle } from "./conversation-title.js";
 
 /** Fixed slugs for the two agents that already exist in this app - seeded once so they show up
@@ -40,6 +41,26 @@ function parseAccessList(raw: string | null): string[] | undefined {
     // Malformed access policy must fail closed rather than silently grant every capability.
     return [];
   }
+}
+
+function parseMessageMetadata(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function metadataHasLocalMessageId(raw: string | null | undefined, localMessageId: string): boolean {
+  return parseMessageMetadata(raw)["localMessageId"] === localMessageId;
+}
+
+function markMetadataInternal(raw: string | null | undefined): string {
+  return JSON.stringify({ ...parseMessageMetadata(raw), internal: true });
 }
 
 /**
@@ -208,6 +229,23 @@ export class BotService {
   }
 
   /**
+   * Prepares one non-coding bot for a parallel group-chat batch by loading the shared
+   * conversation BEFORE any bot in that batch starts generating. The orchestrator awaits every
+   * preparation in the batch as a barrier, so all prepared Agents hold the same pre-round
+   * conversation snapshot in memory even though their replies are generated concurrently.
+   *
+   * CodingAgent intentionally returns undefined: it owns a deeper plan/verify run() wrapper that
+   * reloads the conversation itself. The orchestrator therefore isolates the coding bot into a
+   * sequential batch instead of pretending it is snapshot-safe.
+   */
+  async prepareAgentForGroupTurn(bot: BotSelect, conversationId: number): Promise<Agent | undefined> {
+    if (bot.slug === CODING_BOT_SLUG) return undefined;
+    const agent = await this.createAgentForBot(bot);
+    await agent.loadConversation(conversationId);
+    return agent;
+  }
+
+  /**
    * Sends one message to a bot and returns its reply, plus the DB row id of the persisted
    * assistant message.
    *
@@ -215,6 +253,10 @@ export class BotService {
    * conversation, exactly as before. With it, the bot runs against that conversation instead -
    * used for a shared "bot_chat" group conversation, where several bots take turns in the SAME
    * conversation rather than each having a private one.
+   *
+   * `opts.preparedAgent` is used only by the group-chat orchestrator after its pre-round barrier.
+   * That Agent has already loaded the conversation and must NOT reload it before generation, or
+   * same-round replies that happened to finish first would leak into slower peers' context.
    *
    * Every call tags its own resolved assistant row with `authorBotId: bot.slug` - not just for
    * the group-chat UI's avatar/name, but because it is the ONLY reliable "this is the real,
@@ -235,7 +277,7 @@ export class BotService {
   async chat(
     bot: BotSelect,
     message: string,
-    opts?: { conversationId?: number; tagPromptAsInternal?: boolean }
+    opts?: { conversationId?: number; tagPromptAsInternal?: boolean; preparedAgent?: Agent }
   ): Promise<{ response: string; conversationId: number; messageId?: number; stalled: boolean }> {
     const conversationId = opts?.conversationId ?? (await this.resolveConversationId(bot));
     if (!opts?.conversationId) {
@@ -246,8 +288,24 @@ export class BotService {
       }
     }
 
-    const beforeHistory = await this.deps.db.getMessages(conversationId);
-    const beforeMaxId = beforeHistory.length > 0 ? beforeHistory[beforeHistory.length - 1]!.id : 0;
+    // Non-coding Agent.run() already supports a localMessageId metadata field. Give every hidden
+    // bot-orchestrator prompt a unique id and later tag rows by that exact id instead of guessing
+    // "the first untagged user row after beforeMaxId". The latter is racy when several bots insert
+    // prompts at the same time and could hide another bot's prompt while leaving its own visible.
+    const internalPromptLocalId =
+      opts?.tagPromptAsInternal && bot.slug !== CODING_BOT_SLUG
+        ? `bot-internal-${bot.slug}-${randomUUID()}`
+        : undefined;
+    const agentRunOptions = internalPromptLocalId ? { localMessageId: internalPromptLocalId } : undefined;
+
+    // CodingAgent does not currently expose localMessageId through its macro run() wrapper.
+    // It is deliberately isolated into a sequential batch by BotChatOrchestrator, so the legacy
+    // beforeMaxId fallback is deterministic for this one path and no peer can race the lookup.
+    let beforeMaxId = 0;
+    if (opts?.tagPromptAsInternal && bot.slug === CODING_BOT_SLUG) {
+      const beforeHistory = await this.deps.db.getMessages(conversationId);
+      beforeMaxId = beforeHistory.length > 0 ? beforeHistory[beforeHistory.length - 1]!.id : 0;
+    }
 
     let response: string;
     if (bot.slug === CODING_BOT_SLUG) {
@@ -257,26 +315,52 @@ export class BotService {
     } else {
       let currentMessage = message;
       let candidate = "";
+      const preparedAgent = opts?.preparedAgent;
+
+      const runtimeRetryPrompt = (errorMessage: string, prompt: string) =>
+        [
+          "The previous run failed with a runtime error.",
+          `Error: ${errorMessage}`,
+          "Start over from scratch with a fresh solution path.",
+          prompt,
+        ].join("\n");
+
       // Bounded retry loop, not just one pass: a stall can recur (the model announces intent,
-      // gets nudged, announces intent again) - see STALLED_INTENT_RE's doc comment. Each attempt
-      // is a fresh Agent.run() call over the SAME conversation (loadConversation), so the model
-      // sees its own unfollowed-through announcement as prior context, not just the raw nudge text.
+      // gets nudged, announces intent again) - see STALLED_INTENT_RE's doc comment.
+      //
+      // Normal 1:1 bot runs preserve the existing fresh-Agent repair behavior. A prepared group
+      // turn deliberately reuses its already-loaded Agent across stall/runtime retries: that keeps
+      // the immutable pre-round history while still letting the bot see its OWN failed announcement
+      // and the recovery nudge. Creating/reloading a fresh Agent mid-round would re-introduce the
+      // exact same-round context race the preparation barrier exists to remove.
       for (let attempt = 0; attempt <= MAX_STALL_RECOVERY_ATTEMPTS; attempt++) {
-        const { result } = await runAgentWithRepairRetry(
-          () => this.createAgentForBot(bot),
-          currentMessage,
-          (errorMessage) =>
-            [
-              "The previous run failed with a runtime error.",
-              `Error: ${errorMessage}`,
-              "Start over from scratch with a fresh solution path.",
-              currentMessage,
-            ].join("\n"),
-          async (runAgent) => {
-            await runAgent.loadConversation(conversationId);
+        if (preparedAgent) {
+          try {
+            const result = await preparedAgent.run(currentMessage, agentRunOptions);
+            candidate = result.response;
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (!shouldRetryAgentRun(errorMessage)) throw error;
+            this.logger.warn("Prepared bot run hit a repairable runtime error; retrying on the frozen Agent", {
+              bot: bot.slug,
+              error: errorMessage,
+            });
+            const retryResult = await preparedAgent.run(runtimeRetryPrompt(errorMessage, currentMessage), agentRunOptions);
+            candidate = retryResult.response;
           }
-        );
-        candidate = result.response;
+        } else {
+          const { result } = await runAgentWithRepairRetry(
+            () => this.createAgentForBot(bot),
+            currentMessage,
+            (errorMessage) => runtimeRetryPrompt(errorMessage, currentMessage),
+            async (runAgent) => {
+              await runAgent.loadConversation(conversationId);
+            },
+            agentRunOptions
+          );
+          candidate = result.response;
+        }
+
         if (!looksLikeStalledIntent(candidate)) break;
         if (attempt < MAX_STALL_RECOVERY_ATTEMPTS) {
           this.logger.warn("Bot announced an action without performing it, nudging to continue", {
@@ -320,21 +404,26 @@ export class BotService {
 
     if (opts?.tagPromptAsInternal) {
       const history = await this.deps.db.getMessages(conversationId);
-      // When bots run in parallel in the same conversation (bot-chat orchestrator),
-      // several prompt rows from different bots may land after `beforeMaxId` in
-      // arbitrary order. Tag only the FIRST untagged user row — that is always
-      // this bot's own prompt, since each bot inserts its prompt BEFORE producing
-      // any output, and no other bot will have tagged it yet.
-      const promptRow = history.find((m) => {
-        if (m.id <= beforeMaxId) return false;
-        if (m.role !== "user") return false;
-        // Skip rows another bot already claimed (parallel-safety).
-        const metaRaw = m.metadata;
-        if (metaRaw && typeof metaRaw === "string" && metaRaw.includes('"internal"')) return false;
-        return true;
-      });
-      if (promptRow) {
-        await this.deps.db.tagMessage(promptRow.id, { metadata: JSON.stringify({ internal: true }) });
+
+      if (internalPromptLocalId) {
+        // A stall nudge or runtime retry can produce more than one synthetic user row for this
+        // bot turn. They intentionally share the same localMessageId, so hide ALL of them.
+        const promptRows = history.filter(
+          (m) => m.role === "user" && metadataHasLocalMessageId(m.metadata, internalPromptLocalId)
+        );
+        for (const promptRow of promptRows) {
+          await this.deps.db.tagMessage(promptRow.id, {
+            metadata: markMetadataInternal(promptRow.metadata),
+          });
+        }
+      } else if (bot.slug === CODING_BOT_SLUG) {
+        // Sequential-only fallback for CodingAgent until its macro run() exposes localMessageId.
+        const promptRow = history.find((m) => m.id > beforeMaxId && m.role === "user");
+        if (promptRow) {
+          await this.deps.db.tagMessage(promptRow.id, {
+            metadata: markMetadataInternal(promptRow.metadata),
+          });
+        }
       }
     }
 
