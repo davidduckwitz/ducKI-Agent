@@ -1,6 +1,6 @@
 import { createClient, type Client } from "@libsql/client";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
-import { eq, desc, and, lt, or, isNull, ne, gt, like, notInArray } from "drizzle-orm";
+import { eq, desc, and, lt, or, isNull, gt, like, notInArray } from "drizzle-orm";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
@@ -35,6 +35,9 @@ import type {
   SkillUsageSelect,
   ArtifactInsert,
   ArtifactSelect,
+  BotInsert,
+  BotSelect,
+  BotChatParticipantSelect,
 } from "./schema.js";
 
 export type { LibSQLDatabase };
@@ -155,6 +158,8 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS session_checklist (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), run_id TEXT, step_index INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance_criteria TEXT, constraint_kind TEXT, status TEXT NOT NULL DEFAULT 'pending', confidence TEXT, verify_state TEXT, attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS skill_usage (slug TEXT PRIMARY KEY, total_uses INTEGER NOT NULL DEFAULT 0, successful_uses INTEGER NOT NULL DEFAULT 0, avg_iterations REAL NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active')`,
       `CREATE TABLE IF NOT EXISTS artifacts (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL, mime_type TEXT, size_bytes INTEGER, path TEXT, source_url TEXT, platform TEXT, transcript TEXT, frames_json TEXT, thumbnail_data_url TEXT, duration_sec REAL, conversation_id INTEGER REFERENCES conversations(id), source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready', error TEXT, created_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS bots (slug TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, avatar TEXT, system_prompt TEXT, provider_id TEXT, model_id TEXT, skill_whitelist TEXT, tool_whitelist TEXT, is_built_in INTEGER NOT NULL DEFAULT 0, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS bot_chat_participants (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), bot_id TEXT NOT NULL, added_at TEXT NOT NULL)`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -218,6 +223,14 @@ export class DatabaseService {
     // One-shot trigger fields (point-in-time jobs, e.g. calendar appointments).
     await this.client.execute(`ALTER TABLE cron_jobs ADD COLUMN run_at TEXT`).catch(() => {});
     await this.client.execute(`ALTER TABLE cron_jobs ADD COLUMN run_once INTEGER NOT NULL DEFAULT 0`).catch(() => {});
+
+    await this.client.execute(`ALTER TABLE conversations ADD COLUMN bot_id TEXT`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+
+    await this.client.execute(`ALTER TABLE messages ADD COLUMN author_bot_id TEXT`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
   }
 
   // ============================================================
@@ -246,14 +259,19 @@ export class DatabaseService {
    * every internal agent run as if the user had started it as a chat. Callers that specifically
    * need those rows (an admin/debug view, a future coding-conversation browser) opt in explicitly.
    */
-  async listConversations(projectId?: number, includeCodingAgent = false): Promise<ConversationSelect[]> {
+  async listConversations(projectId?: number, includeCodingAgent = false, includeBotConversations = false): Promise<ConversationSelect[]> {
     const conditions = [];
     if (projectId !== undefined) conditions.push(eq(schema.conversations.projectId, projectId));
     // NULL-safe: `origin != 'coding_agent'` alone evaluates to NULL (excluded by WHERE) for
     // every normal conversation, since origin is NULL there - it would silently hide ALL
-    // regular chats, not just the coding ones. isNull(...) covers that case explicitly.
-    if (!includeCodingAgent) {
-      conditions.push(or(isNull(schema.conversations.origin), ne(schema.conversations.origin, "coding_agent")));
+    // regular chats, not just the coding ones. isNull(...) covers that case explicitly. Same
+    // reasoning applies to "bot" (a bot's own persistent home conversation, see BotService) -
+    // those are visible on the Bots page, not the general chat overview.
+    const excludedOrigins: string[] = [];
+    if (!includeCodingAgent) excludedOrigins.push("coding_agent");
+    if (!includeBotConversations) excludedOrigins.push("bot", "bot_chat");
+    if (excludedOrigins.length > 0) {
+      conditions.push(or(isNull(schema.conversations.origin), notInArray(schema.conversations.origin, excludedOrigins)));
     }
 
     if (conditions.length === 0) {
@@ -268,6 +286,8 @@ export class DatabaseService {
     beforeId?: number;
     /** See listConversations' doc comment - same default-excludes-coding_agent behavior. */
     includeCodingAgent?: boolean;
+    /** See listConversations' doc comment - same default-excludes-bot behavior. */
+    includeBotConversations?: boolean;
   }): Promise<ConversationSelect[]> {
     const limit = Math.max(1, Math.min(100, Number(args?.limit ?? 30)));
     const projectId = args?.projectId;
@@ -276,8 +296,11 @@ export class DatabaseService {
     if (projectId !== undefined) conditions.push(eq(schema.conversations.projectId, projectId));
     if (beforeId !== undefined) conditions.push(lt(schema.conversations.id, beforeId));
     // See listConversations' comment - NULL-safe exclusion, never hides normal (origin=NULL) chats.
-    if (!args?.includeCodingAgent) {
-      conditions.push(or(isNull(schema.conversations.origin), ne(schema.conversations.origin, "coding_agent")));
+    const excludedOrigins: string[] = [];
+    if (!args?.includeCodingAgent) excludedOrigins.push("coding_agent");
+    if (!args?.includeBotConversations) excludedOrigins.push("bot");
+    if (excludedOrigins.length > 0) {
+      conditions.push(or(isNull(schema.conversations.origin), notInArray(schema.conversations.origin, excludedOrigins)));
     }
 
     if (conditions.length === 0) {
@@ -322,6 +345,9 @@ export class DatabaseService {
     await this.forEachExistingTable("session_checklist", () =>
       this.db.delete(schema.sessionChecklist).where(eq(schema.sessionChecklist.conversationId, id)).run()
     );
+    await this.forEachExistingTable("bot_chat_participants", () =>
+      this.db.delete(schema.botChatParticipants).where(eq(schema.botChatParticipants.conversationId, id)).run()
+    );
 
     // Rows that outlive it: keep the row, drop the link.
     await this.forEachExistingTable("plans", () =>
@@ -329,6 +355,11 @@ export class DatabaseService {
     );
     await this.forEachExistingTable("cron_jobs", () =>
       this.db.update(schema.cronJobs).set({ conversationId: null }).where(eq(schema.cronJobs.conversationId, id)).run()
+    );
+    // A bot whose home conversation gets deleted just gets a fresh one lazily created on its
+    // next chat (see BotService.resolveConversationId) - never leave it pointing at a dead id.
+    await this.forEachExistingTable("bots", () =>
+      this.db.update(schema.bots).set({ conversationId: null }).where(eq(schema.bots.conversationId, id)).run()
     );
 
     await this.db.delete(schema.conversations).where(eq(schema.conversations.id, id)).run();
@@ -358,6 +389,17 @@ export class DatabaseService {
 
   async deleteMessages(conversationId: number): Promise<void> {
     await this.db.delete(schema.messages).where(eq(schema.messages.conversationId, conversationId)).run();
+  }
+
+  /** Deletes one message row. `conversationId` is required and checked so a caller can't delete
+   *  a message it doesn't own by guessing an id - see routes/bot-chats.ts for the intended use
+   *  (decluttering a single message out of a group chat). */
+  async deleteMessage(conversationId: number, messageId: number): Promise<boolean> {
+    const result = await this.db
+      .delete(schema.messages)
+      .where(and(eq(schema.messages.id, messageId), eq(schema.messages.conversationId, conversationId)))
+      .run();
+    return Number((result as { rowsAffected?: number } | undefined)?.rowsAffected ?? 0) > 0;
   }
 
   // ============================================================
@@ -392,6 +434,70 @@ export class DatabaseService {
 
   async deleteArtifact(id: number): Promise<void> {
     await this.db.delete(schema.artifacts).where(eq(schema.artifacts.id, id)).run();
+  }
+
+  // ============================================================
+  // Bots
+  // ============================================================
+  async createBot(data: Omit<BotInsert, "createdAt" | "updatedAt">): Promise<BotSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db.insert(schema.bots).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+    if (!result) throw new Error("Failed to create bot");
+    return result;
+  }
+
+  async getBot(slug: string): Promise<BotSelect | undefined> {
+    return this.db.select().from(schema.bots).where(eq(schema.bots.slug, slug)).get();
+  }
+
+  async listBots(): Promise<BotSelect[]> {
+    return this.db.select().from(schema.bots).orderBy(schema.bots.createdAt).all();
+  }
+
+  async updateBot(slug: string, data: Partial<Omit<BotInsert, "slug" | "createdAt">>): Promise<BotSelect | undefined> {
+    return this.db.update(schema.bots).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(schema.bots.slug, slug)).returning().get();
+  }
+
+  async deleteBot(slug: string): Promise<void> {
+    await this.db.delete(schema.bots).where(eq(schema.bots.slug, slug)).run();
+  }
+
+  // ============================================================
+  // Bot Chat Participants
+  // ============================================================
+  async addBotChatParticipant(conversationId: number, botId: string): Promise<BotChatParticipantSelect> {
+    const result = await this.db
+      .insert(schema.botChatParticipants)
+      .values({ conversationId, botId, addedAt: new Date().toISOString() })
+      .returning()
+      .get();
+    if (!result) throw new Error("Failed to add bot chat participant");
+    return result;
+  }
+
+  async removeBotChatParticipant(conversationId: number, botId: string): Promise<void> {
+    await this.db
+      .delete(schema.botChatParticipants)
+      .where(and(eq(schema.botChatParticipants.conversationId, conversationId), eq(schema.botChatParticipants.botId, botId)))
+      .run();
+  }
+
+  async listBotChatParticipants(conversationId: number): Promise<BotChatParticipantSelect[]> {
+    return this.db
+      .select()
+      .from(schema.botChatParticipants)
+      .where(eq(schema.botChatParticipants.conversationId, conversationId))
+      .all();
+  }
+
+  /** All "bot_chat" origin conversations, newest first - the group-chat equivalent of listConversations. */
+  async listBotChats(): Promise<ConversationSelect[]> {
+    return this.db
+      .select()
+      .from(schema.conversations)
+      .where(eq(schema.conversations.origin, "bot_chat"))
+      .orderBy(desc(schema.conversations.createdAt))
+      .all();
   }
 
   // ============================================================
@@ -434,6 +540,16 @@ export class DatabaseService {
       .all();
 
     return [...page].sort((a, b) => a.id - b.id);
+  }
+
+  /**
+   * Stamps a just-persisted assistant message with which bot authored it (and optionally extra
+   * metadata, e.g. a "needs a human decision" flag) - used by the bot-chat orchestrator right
+   * after a bot's Agent.run() call, since Agent.run() has no way to accept per-message authorship
+   * itself (it always persists a plain role="assistant" row).
+   */
+  async tagMessage(id: number, data: { authorBotId?: string; metadata?: string }): Promise<void> {
+    await this.db.update(schema.messages).set(data).where(eq(schema.messages.id, id)).run();
   }
 
   async deleteMessagesAfter(conversationId: number, afterId: number): Promise<void> {

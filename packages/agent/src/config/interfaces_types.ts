@@ -37,6 +37,29 @@ export interface AgentOptions {
   stickySkillSelection?: boolean;
   /** Hooks for intercepting agent lifecycle events (Phase 1) */
   hooks?: AgentHook[];
+  /**
+   * Restricts skill selection/loading to this exact set of slugs (by SkillManifest.slug). Used to
+   * scope a custom bot's persona to only the skills it was given - undefined means unrestricted,
+   * the existing default-agent behavior of considering every skill on disk.
+   */
+  allowedSkillSlugs?: string[];
+  /**
+   * Drops the "Keep it as short as the question needs (for a simple question, one sentence)"
+   * clause from the internal post-tool-call analysis prompt (see agent.ts's analyzePrompt). That
+   * clause is right for the default assistant persona but actively fights a bot whose own
+   * systemPrompt asks for a specific length/tone (e.g. "always write a thorough report") - the
+   * length instruction is the most recent turn in context, so the model tends to obey it over an
+   * earlier system prompt. Off by default: the default persona still benefits from steering
+   * short answers to be short.
+   */
+  respectPersonaLength?: boolean;
+  /**
+   * Confines memory retrieval to this agent's own conversation - no global (conversationId=null)
+   * "learned facts" pool, no cross-conversation keyword search. Meant for a custom bot: its
+   * knowledge should be its systemPrompt plus its own history, not whatever the default agent
+   * (or any other bot) has learned elsewhere. See MemorySystem's `isolated` option.
+   */
+  isolatedMemory?: boolean;
 }
 
 export type AgentStatus = "idle" | "running" | "paused" | "error" | "stopped";

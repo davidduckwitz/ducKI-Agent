@@ -15,13 +15,72 @@ export const conversations = sqliteTable("conversations", {
   /** Who created this conversation - null for a normal chat conversation, "coding_agent" for
    *  one CodingAgent.run() opened for itself (Plan execution from a normal chat, a fresh
    *  /api/coding-agent/run, or the plugin-authoring wizard - all funnel through the same
-   *  startConversation() call). Lets the chat overview exclude conversations that are already
-   *  visible in their own dedicated surface (Coding area / plugin wizard) instead of listing
-   *  every internal agent conversation as if it were a chat the user started. */
+   *  startConversation() call), "bot" for a custom bot's own persistent home conversation
+   *  (see `bots`/`botId` below). Lets the chat overview exclude conversations that are already
+   *  visible in their own dedicated surface (Coding area / plugin wizard / Bots page) instead of
+   *  listing every internal agent conversation as if it were a chat the user started. */
   origin: text("origin"),
+  /** Set when origin="bot" - the owning bot's slug (bots.slug). A bot's memory is scoped to this
+   *  conversation (see MemorySystem), so it persists across turns without a separate memory table. */
+  botId: text("bot_id"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
+
+// ============================================================
+// Bots (custom agent profiles, plus the two fixed built-in agents "main"/"coding")
+// ============================================================
+/**
+ * A bot is a configured persona for the existing `Agent`/`CodingAgent` classes - own name,
+ * avatar, system prompt, optional provider/model override, and optional skill/tool whitelist
+ * (null = unrestricted, same as today's default agent). No separate memory table: a bot's memory
+ * lives in `memories`, scoped to its one persistent `conversationId` (see conversations.botId),
+ * which reuses MemorySystem exactly as-is instead of duplicating it per bot.
+ *
+ * "main" and "coding" are seeded once at boot (see BotService.ensureBuiltinBots) so the existing
+ * default Agent and CodingAgent show up as ordinary bots in the same list/UI - `isBuiltIn` blocks
+ * edit/delete on those two rows, everything else about them (persona text, tool access) is not
+ * user-configurable since they route to the existing agent factories, not a freshly built Agent.
+ */
+export const bots = sqliteTable("bots", {
+  slug: text("slug").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  avatar: text("avatar"),
+  systemPrompt: text("system_prompt"),
+  /** Optional per-bot LLM override. Null means "use the system default provider/model" -
+   *  resolved at agent-creation time, same default every other agent in this app uses. */
+  providerId: text("provider_id"),
+  modelId: text("model_id"),
+  skillWhitelist: text("skill_whitelist"), // JSON array of skill slugs, null = all skills
+  toolWhitelist: text("tool_whitelist"), // JSON array of tool names, null = all tools
+  isBuiltIn: integer("is_built_in").notNull().default(0),
+  conversationId: integer("conversation_id").references(() => conversations.id),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export type BotInsert = typeof bots.$inferInsert;
+export type BotSelect = typeof bots.$inferSelect;
+
+// ============================================================
+// Bot Chat Participants (group chats where several bots take part)
+// ============================================================
+/**
+ * A "bot chat" is an ordinary conversation (origin="bot_chat") joined by several bots at once,
+ * instead of a bot's own 1:1 home conversation. This table is the membership list; each bot's
+ * turns in the chat still write to the same shared `messages` row set as everything else, tagged
+ * via `messages.authorBotId` - no separate per-participant message store.
+ */
+export const botChatParticipants = sqliteTable("bot_chat_participants", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  conversationId: integer("conversation_id").references(() => conversations.id).notNull(),
+  botId: text("bot_id").notNull(),
+  addedAt: text("added_at").notNull(),
+});
+
+export type BotChatParticipantInsert = typeof botChatParticipants.$inferInsert;
+export type BotChatParticipantSelect = typeof botChatParticipants.$inferSelect;
 
 // ============================================================
 // Artifacts
@@ -75,6 +134,9 @@ export const messages = sqliteTable("messages", {
   metadata: text("metadata"),
   toolCallId: text("tool_call_id"),
   toolResult: text("tool_result"),
+  /** Set only in a "bot_chat" group conversation (see botChatParticipants) - which bot authored
+   *  this assistant turn. Null for a user message or a normal 1:1 chat's assistant reply. */
+  authorBotId: text("author_bot_id"),
   createdAt: text("created_at").notNull(),
 });
 

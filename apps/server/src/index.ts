@@ -81,6 +81,10 @@ import { createCryptoPaymentRouter } from "./routes/crypto-payment.js";
 import { createToolStagingRouter } from "./routes/tool-staging.js";
 import { screenshotRouter } from "./routes/screenshots.js";
 import { createProviderModelsRouter } from "./routes/provider-models.js";
+import { botsRouter } from "./routes/bots.js";
+import { botChatsRouter } from "./routes/bot-chats.js";
+import { BotService } from "./lib/bot-service.js";
+import { createDelegateToBotTool } from "./lib/delegate-to-bot-tool.js";
 import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
 import { createTasksMcpTool } from "./tasks/mcp-tasks-server.js";
 import { createWorkflowMcpTool } from "./workflow/mcp-workflow-server.js";
@@ -271,7 +275,8 @@ function buildAgentFactory(
 	wikiServiceRef: { current?: LlmWikiService },
 	pluginManager: PluginManager,
 	connectorRegistryProxy: import("@ducki/agent").ConnectorRegistryLike,
-	promptManager: PromptManager
+	promptManager: PromptManager,
+	botServiceRef: { current?: BotService }
 ) {
 	return async () => {
 		// Load database settings for agent configuration
@@ -312,6 +317,10 @@ function buildAgentFactory(
 		agent.executor.registerTool(createCronjobManagementTool(db));
 		agent.executor.registerTool(createToolFactoryTool(db, agent.executor));
 		agent.executor.registerTool(createWikiTool(() => wikiServiceRef.current));
+		// Only the main agent gets this tool - a bot's own Agent instance (BotService.
+		// createAgentForBot) is never given it, so a bot cannot delegate again (no recursion guard
+		// needed). See lib/delegate-to-bot-tool.ts.
+		agent.executor.registerTool(createDelegateToBotTool(() => botServiceRef.current));
 		// Registered unwrapped on purpose: wrapTools would stage this tool's own chunks.
 		agent.executor.registerTool(createToolStagingTool(() => getToolStagingManager()));
 		for (const tool of createWorkflowTools(db, connectorRegistryProxy)) {
@@ -343,6 +352,8 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/credentials", credentialRouter);
 	app.use("/api/logs", logsRouter);
 	app.use("/api/agents", agentsRouter);
+	app.use("/api/bots", botsRouter);
+	app.use("/api/bot-chats", botChatsRouter);
 	app.use("/api/skills", skillsRouter);
 	app.use("/api/shared", sharedRouter);
 	app.use("/api/updates", updatesRouter);
@@ -535,10 +546,24 @@ async function bootstrap(): Promise<void> {
 	// Filled in a few lines below, once the wiki service exists - the agent factory only
 	// dereferences it when a run actually calls the wiki tool.
 	const wikiServiceRef: { current?: LlmWikiService } = {};
+	// Same lazy-ref pattern as wikiServiceRef: BotService is constructed after buildAgentFactory
+	// (it needs createAgent/createCodingAgentFactory), but the delegate_to_bot tool it wires only
+	// dereferences this when a run actually calls the tool.
+	const botServiceRef: { current?: BotService } = {};
 	const promptManager = new PromptManager(db, logger.child("PromptManager"));
 	await promptManager.initialize();
-	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager, connectorRegistryProxy, promptManager);
+	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager, connectorRegistryProxy, promptManager, botServiceRef);
 	const defaultAgent = await createAgent();
+	const botService = new BotService({
+		db,
+		providerRef,
+		runtimeTools,
+		pluginManager,
+		createAgent,
+		createCodingAgentFactory,
+	});
+	await botService.ensureBuiltinBots();
+	botServiceRef.current = botService;
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"), {
 		runWorkflow: (workflowId: string) => workflowEngineRef.current.runWorkflow(workflowId),
 		runCoding: (goal: string, options?: { verifyCommand?: string; sandboxRoot?: string }) =>
@@ -581,6 +606,7 @@ async function bootstrap(): Promise<void> {
 	app.locals["agent"] = defaultAgent;
 	app.locals["createAgent"] = createAgent;
 	app.locals["createCodingAgent"] = createCodingAgentFactory;
+	app.locals["botService"] = botService;
 	app.locals["reloadProvider"] = async () => {
 		const reloaded = await loadProviderFromSettings(db);
 		providerRef.current = reloaded.provider;

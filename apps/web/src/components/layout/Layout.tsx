@@ -19,6 +19,8 @@ import {
   Puzzle,
   Code2,
   Wallet,
+  Bot,
+  Users,
 } from "lucide-react";
 import { useAppStore } from "../../lib/store";
 import { useI18n } from "../../lib/i18n";
@@ -101,6 +103,8 @@ export function Layout() {
       items: [
         { to: "/dashboard", icon: LayoutDashboard, label: t("nav.dashboard") },
         { to: "/chat", icon: MessageSquare, label: t("nav.chat") },
+        { to: "/bots", icon: Bot, label: t("nav.bots") },
+        { to: "/bot-chats", icon: Users, label: t("nav.botChats") },
         ...(codingEnabled ? [{ to: "/coding", icon: Code2, label: "Agent Control" }] : []),
       ],
     },

@@ -36,11 +36,26 @@ export interface ToolMemoryDecision {
 export class MemorySystem {
   private shortTermBuffer: MemoryEntry[] = [];
   private readonly maxShortTerm = 20;
+  private readonly isolated: boolean;
 
+  /**
+   * `isolated: true` confines every retrieval to the given conversationId only - no global
+   * (conversationId=null) pool, no cross-conversation keyword search. Meant for a custom bot: its
+   * persona is its systemPrompt, its knowledge is its own home conversation, full stop. Without
+   * this, a bot silently inherited the main agent's global "learned facts" (including self-
+   * referential ones like its own name/behavior profile, tagged [profile:agent_behavior] and
+   * stored with conversationId=null specifically so the MAIN chat always sees them) AND, via
+   * buildDynamicContextWithKeywords's untargeted keyword search, memories from completely
+   * unrelated conversations - which is how a bot with its own systemPrompt still answered "Ich
+   * bin DucKI": that came from memory, not from its persona.
+   */
   constructor(
     private readonly db: DatabaseService,
-    private readonly logger: Logger
-  ) {}
+    private readonly logger: Logger,
+    options: { isolated?: boolean } = {}
+  ) {
+    this.isolated = options.isolated ?? false;
+  }
 
   async addShortTerm(content: string, importance = 1, conversationId?: number): Promise<void> {
     const entry: MemoryEntry = { content, importance, type: "short-term", conversationId };
@@ -290,7 +305,7 @@ export class MemorySystem {
 
   async buildSystemContext(conversationId?: number): Promise<string> {
     const scoped = await this.getKnowledgePool(conversationId, true);
-    const global = await this.getKnowledgePool(undefined, true);
+    const global = this.isolated ? [] : await this.getKnowledgePool(undefined, true);
     // Merge by importance (both pools already come importance-sorted from the DB, but a plain
     // concatenation loses that once combined) before capping at 8. Without this, an active
     // conversation with 8+ scoped auto-learned memories filled the cap and `break`d before the
@@ -316,7 +331,7 @@ export class MemorySystem {
     if (!signalText) return "";
 
     const scoped = await this.getKnowledgePool(conversationId, true);
-    const global = await this.getKnowledgePool(undefined, true);
+    const global = this.isolated ? [] : await this.getKnowledgePool(undefined, true);
     const scored = [...scoped, ...global]
       .map((item) => {
         const normalized = this.normalize(item.content);
@@ -344,7 +359,15 @@ export class MemorySystem {
   ): Promise<string> {
     if (keywords.length === 0) return "";
 
-    const results = await this.db.searchMemories(keywords, conversationId, "long-term", "approved", limit);
+    // searchMemories with no scopeToConversation searches every conversation in the database -
+    // deliberately, for the default agent's cross-chat recall. A bot must not get that: filter
+    // down to strictly its own conversation, dropping both global (conversationId=null) and every
+    // other conversation's memories after the fact rather than widening the DB query's contract.
+    const results = this.isolated
+      ? (await this.db.searchMemories(keywords, conversationId, "long-term", "approved", limit * 4)).filter(
+          (m) => m.conversationId === conversationId
+        ).slice(0, limit)
+      : await this.db.searchMemories(keywords, conversationId, "long-term", "approved", limit);
 
     if (results.length === 0) return "";
     return `\n\n## Retrieved Memory (Keywords: ${keywords.join(", ")})\n${results.map(r => `- ${r.content}`).join("\n")}`;

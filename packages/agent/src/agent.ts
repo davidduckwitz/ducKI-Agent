@@ -408,6 +408,10 @@ export class Agent {
    *  across run() calls on this same instance until resetSkillSelectionCache() clears it. */
   private stickySkillSelection: boolean;
   private skillSelectionCache: { activeSkills: SkillSummary[]; activeSkillSlugs: string[]; workflowOrchestratorActive: boolean } | undefined;
+  /** See AgentOptions.allowedSkillSlugs - undefined means unrestricted (every skill on disk). */
+  private readonly allowedSkillSlugs: Set<string> | undefined;
+  /** See AgentOptions.respectPersonaLength. */
+  private readonly respectPersonaLength: boolean;
   /** True when the caller passed an explicit per-run maxIterations to the constructor (see
    *  the constructor for why this is tracked separately from the value itself). */
   private hasExplicitMaxIterations: boolean;
@@ -511,6 +515,8 @@ export class Agent {
     this.enableAutoMemory = options.enableAutoMemory ?? (process.env["AGENT_AUTO_MEMORY"] ?? "true").toLowerCase() !== "false";
     this.disableQualityPasses = options.disableQualityPasses ?? false;
     this.stickySkillSelection = options.stickySkillSelection ?? false;
+    this.allowedSkillSlugs = options.allowedSkillSlugs ? new Set(options.allowedSkillSlugs) : undefined;
+    this.respectPersonaLength = options.respectPersonaLength ?? false;
 
     this.logger = getRootLogger().child(`Agent:${this.name}`);
     const configuredSkillsPath = process.env["SKILLS_PATH"]?.trim();
@@ -569,7 +575,7 @@ export class Agent {
     );
 
     this.conversation = new ConversationManager(db, this.logger);
-    this.memory = new MemorySystem(db, this.logger);
+    this.memory = new MemorySystem(db, this.logger, { isolated: options.isolatedMemory ?? false });
     this.planner = new Planner(provider, this.logger);
 
     // Initialize executor with event callbacks for real-time UI updates (WebSocket streaming)
@@ -1236,9 +1242,11 @@ export class Agent {
       ...listSkillMdFiles(this.skillsRoot),
       ...pluginSkillDirs.map((dir) => join(dir, "SKILL.md")),
     ];
-    return withManifestCache(`skills:${this.skillsRoot}`, watchedFiles, () =>
+    const manifests = withManifestCache(`skills:${this.skillsRoot}`, watchedFiles, () =>
       this.loadSkillManifestsUncached(pluginSkillDirs)
     );
+    if (!this.allowedSkillSlugs) return manifests;
+    return manifests.filter((skill) => this.allowedSkillSlugs!.has(skill.slug));
   }
 
   private loadSkillManifestsUncached(pluginSkillDirs: string[]): SkillManifest[] {
@@ -6833,6 +6841,15 @@ export class Agent {
     let truncatedEmptyResponseNudges = 0; // Bounded retries for the "ran out of tokens while reasoning, said nothing" guardrail
     let toolsJustExecuted = false; // Track if tools were executed in previous iteration
     let emptyResponseAfterTools = false; // Track if we got empty response after tool execution
+    // A tool_staging "read" result with hasMore:true means there is more of a large tool
+    // response still unread - the model is expected to call tool_staging again with
+    // nextOffset. A weak model sometimes narrates that it needs to do this ("I must extract
+    // the actual data from the JSON body...") instead of actually calling it, which ends the
+    // run with only that narration as the final answer. Tracked generically by result SHAPE
+    // (not by tool name correlation, which resultMap doesn't preserve) since only a
+    // tool_staging read produces exactly {hasMore,nextOffset,id}.
+    let pendingToolStagingContinuation: { id: string; nextOffset: number } | null = null;
+    let toolStagingContinuationNudges = 0;
 
     // Dynamic memory retrieval used to run a full memory scan on EVERY iteration even though the
     // keyword set barely changes within a run. Cache it by keyword signature so a multi-iteration run
@@ -7545,6 +7562,18 @@ export class Agent {
         toolsJustExecuted = true;
         emptyResponseAfterTools = false; // Reset recovery flag for this execution batch
 
+        // Any staged read this iteration replaces the previous pending one (whether it
+        // resolved it, moved to a new offset, or is unrelated) - only the MOST RECENT
+        // hasMore:true state should ever trigger a continuation nudge.
+        pendingToolStagingContinuation = null;
+        for (const result of toolResultsMap.values()) {
+          const data = result.data as { id?: unknown; hasMore?: unknown; nextOffset?: unknown } | null;
+          if (data && typeof data.id === "string" && data.hasMore === true && typeof data.nextOffset === "number") {
+            pendingToolStagingContinuation = { id: data.id, nextOffset: data.nextOffset };
+            break;
+          }
+        }
+
         // Track consecutive iterations where EVERY executed tool call failed - the real
         // signal that the agent is stuck retrying the same broken approach (e.g. the same
         // file write failing again and again), distinct from maxRepeatedToolCall which only
@@ -7767,7 +7796,8 @@ export class Agent {
           analyzePrompt = {
             role: "user",
             content:
-              "Answer my original question directly, using the screenshot and tool results above. Reply in the same language I used. Give only the answer I asked for — do not describe the tools, commands, or exit codes, and do not add headings like 'Analysis' or 'Summary'. Keep it as short as the question needs.",
+              "Answer my original question directly, using the screenshot and tool results above. Reply in the same language I used. Give only the answer I asked for — do not describe the tools, commands, or exit codes, and do not add headings like 'Analysis' or 'Summary'."
+              + (this.respectPersonaLength ? "" : " Keep it as short as the question needs."),
             metadata: { internal: true, kind: "screenshot_analysis" },
           };
         } else {
@@ -7781,7 +7811,8 @@ export class Agent {
               // Mid-checklist: a direct "answer the original question" prompt makes the model
               // finalize after one step and abandon the rest. Steer it to keep executing the plan.
               ? `The ${toolNames} tool(s) just returned results. Briefly use them for the current checklist step, then CONTINUE to the next open step — if it needs an action (write/send/fetch), call the tool now. Only give a final answer once every checklist step is done.`
-              : `Answer my original question directly, using the results from the ${toolNames} tool(s) that just executed. Reply in the same language I used. Give only the answer I asked for — do not describe the tool, the command run, or exit codes, and do not add headings like 'Analysis' or 'Summary'. Keep it as short as the question needs (for a simple question, one sentence).`,
+              : `Answer my original question directly, using the results from the ${toolNames} tool(s) that just executed. Reply in the same language I used. Give only the answer I asked for — do not describe the tool, the command run, or exit codes, and do not add headings like 'Analysis' or 'Summary'.`
+                + (this.respectPersonaLength ? "" : " Keep it as short as the question needs (for a simple question, one sentence)."),
             metadata: { internal: true, kind: "tool_analysis", toolNames },
           };
         }
@@ -7923,6 +7954,39 @@ export class Agent {
           this.history.add(nudgePrompt, "false_completion_claim_nudge");
           emit("internal_instruction", "Fordere echte Tool-Ausführung statt Behauptung an...", {
             kind: "false_completion_claim_nudge",
+          });
+          continue;
+        }
+
+        // Guardrail: a previous tool_staging read still has more of a large result unread
+        // (hasMore:true), but this response neither read the next chunk nor produced a real
+        // answer from what it already had - it just talked about needing to (e.g. "I must
+        // extract the actual articles from the JSON body"). Letting that narration stand as
+        // the final answer means the user never sees the actual result. Force the exact next
+        // call instead of hoping the model rereads its own system-prompt instructions.
+        if (pendingToolStagingContinuation && toolStagingContinuationNudges < 2) {
+          toolStagingContinuationNudges++;
+          const { id, nextOffset } = pendingToolStagingContinuation;
+          this.logger.warn("[TOOL-CALLS] Large tool result still has unread content, nudging model to continue reading it", {
+            attempt: toolStagingContinuationNudges,
+            id,
+            nextOffset,
+          });
+          emit("guardrail", "Ergebnis noch nicht vollständig gelesen — fordere Fortsetzung an", {
+            attempt: toolStagingContinuationNudges,
+          });
+          const nudgePrompt: LLMMessage = {
+            role: "user",
+            content:
+              `You have not finished reading the staged tool result - there is more content after what you already saw, and your last response only described what you still need to do instead of doing it. ` +
+              `Call it now:\n\n[TOOL:tool_staging({"action":"read","id":"${id}","offset":${nextOffset}})]\n\n` +
+              `Do this now — do not describe the need to read more, do not repeat your previous message.`,
+            metadata: { internal: true, kind: "tool_staging_continuation_nudge" },
+          };
+          await this.conversation.addMessage(nudgePrompt);
+          this.history.add(nudgePrompt, "tool_staging_continuation_nudge");
+          emit("internal_instruction", "Fordere Weiterlesen des großen Tool-Ergebnisses an...", {
+            kind: "tool_staging_continuation_nudge",
           });
           continue;
         }

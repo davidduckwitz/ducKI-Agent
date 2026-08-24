@@ -544,6 +544,12 @@ function atomicWrite(filePath: string, content: string): void {
 
 const ABSOLUTE_PATH_RE = /^[A-Za-z]:\\|^\\\\|^\//;
 
+/** A genuinely OS-absolute path on THIS platform - a drive letter or UNC path on Windows. A bare
+ *  leading "/" matches ABSOLUTE_PATH_RE too (POSIX absolute), but on Windows `path.resolve("/x")`
+ *  resolves against the CURRENT DRIVE ROOT, not any location the shared workspace lives under -
+ *  it is never what a model means by it (see resolvePath's "Normal agent" branch below). */
+const OS_ABSOLUTE_PATH_RE = /^[A-Za-z]:\\|^\\\\/;
+
 const REDUNDANT_LEADING_SEGMENT = "shared-workspace";
 
 /**
@@ -603,7 +609,15 @@ function resolvePath(inputPath: string, options: PathOptions): string {
   // Normal agent: no basePath. Rebase relative paths ONTO the workspace root (rather than resolving
   // them against process.cwd() and merely rejecting the result) so a path like "scripts/foo.js" — or
   // the "./shared-workspace/scripts" convention — always lands inside the workspace regardless of cwd.
-  const resolved = isAbsolute
+  //
+  // A POSIX-style leading slash ("/shared-workspace/report.md") is deliberately NOT treated as OS-
+  // absolute here, only OS_ABSOLUTE_PATH_RE (drive letter / UNC) is: a model told about "the shared
+  // workspace" naturally addresses it as "/shared-workspace/...", the same way it would in any other
+  // sandboxed-root convention. On Windows, resolve("/shared-workspace") silently resolves against
+  // the CURRENT DRIVE ROOT instead - nowhere near SHARED_BASE_PATH - so every such call was rejected
+  // as "outside the shared workspace" no matter how the model phrased it, with no way to recover.
+  const isOsAbsolute = OS_ABSOLUTE_PATH_RE.test(trimmed);
+  const resolved = isOsAbsolute
     ? resolve(trimmed)
     : resolve(SHARED_BASE_PATH, stripRedundantBaseSegment(trimmed, SHARED_BASE_PATH));
 

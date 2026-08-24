@@ -2,19 +2,12 @@ import { Router, type IRouter } from "express";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { createProvider } from "@ducki/providers";
+import { createApiResponse, createApiError } from "@ducki/shared";
 import { ProviderSettingsService } from "../lib/provider-settings-service.js";
 
 interface Model {
   id: string;
   name: string;
-}
-
-interface ProviderModelsResponse {
-  success: boolean;
-  provider: string;
-  models?: Model[];
-  error?: string;
-  timestamp: string;
 }
 
 const HARDCODED_MODELS: Record<string, Model[]> = {
@@ -56,12 +49,6 @@ export function createProviderModelsRouter(db: DatabaseService): IRouter {
     const { provider } = req.params;
 
     try {
-      const response: ProviderModelsResponse = {
-        success: false,
-        provider,
-        timestamp: new Date().toISOString(),
-      };
-
       // Get provider config from settings
       const settings = await settingsService.getSettingsFlat();
 
@@ -74,9 +61,7 @@ export function createProviderModelsRouter(db: DatabaseService): IRouter {
 
       // For hardcoded providers, return immediately
       if (HARDCODED_MODELS[provider]) {
-        response.models = HARDCODED_MODELS[provider];
-        response.success = true;
-        return res.json(response);
+        return res.json(createApiResponse({ models: HARDCODED_MODELS[provider] }));
       }
 
       // For local providers (LM Studio, Ollama), try to fetch models
@@ -87,47 +72,34 @@ export function createProviderModelsRouter(db: DatabaseService): IRouter {
           // Check if provider is available
           const isAvailable = await providerInstance.isAvailable();
           if (!isAvailable) {
-            response.error = `${provider} provider is not available`;
-            response.success = false;
-            return res.status(503).json(response);
+            return res.status(503).json(createApiError(`${provider} provider is not available`));
           }
 
           // Fetch models from provider
-          if (provider === "lmstudio" || provider === "ollama") {
-            const client = (providerInstance as any).client;
-            if (client && client.models && typeof client.models.list === 'function') {
-              const modelList = await client.models.list();
-              response.models = (modelList.data || []).map((m: any) => ({
-                id: m.id,
-                name: m.id,
-              }));
-              response.success = true;
-              return res.json(response);
-            }
+          const client = (providerInstance as any).client;
+          if (client && client.models && typeof client.models.list === 'function') {
+            const modelList = await client.models.list();
+            const models: Model[] = (modelList.data || []).map((m: any) => ({
+              id: m.id,
+              name: m.id,
+            }));
+            return res.json(createApiResponse({ models }));
           }
         } catch (error) {
           logger.error(`Failed to fetch models from ${provider}`, {
             error: error instanceof Error ? error.message : String(error),
           });
-          response.error = `Failed to connect to ${provider}`;
-          response.success = false;
-          return res.status(503).json(response);
+          return res.status(503).json(createApiError(`Failed to connect to ${provider}`));
         }
       }
 
-      response.error = `Unknown provider: ${provider}`;
-      return res.status(400).json(response);
+      return res.status(400).json(createApiError(`Unknown provider: ${provider}`));
     } catch (error) {
       logger.error("Provider models API error", {
         error: error instanceof Error ? error.message : String(error),
         provider: req.params.provider,
       });
-      res.status(500).json({
-        success: false,
-        provider: req.params.provider,
-        error: "Internal server error",
-        timestamp: new Date().toISOString(),
-      });
+      res.status(500).json(createApiError("Internal server error"));
     }
   });
 
@@ -146,20 +118,12 @@ export function createProviderModelsRouter(db: DatabaseService): IRouter {
         { id: "nous", name: "Nous Research" },
       ];
 
-      res.json({
-        success: true,
-        providers,
-        timestamp: new Date().toISOString(),
-      });
+      res.json(createApiResponse(providers));
     } catch (error) {
       logger.error("Failed to get providers list", {
         error: error instanceof Error ? error.message : String(error),
       });
-      res.status(500).json({
-        success: false,
-        error: "Failed to get providers list",
-        timestamp: new Date().toISOString(),
-      });
+      res.status(500).json(createApiError("Failed to get providers list"));
     }
   });
 

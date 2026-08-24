@@ -33,7 +33,7 @@ export function ProviderModelSelector({
       try {
         setError(undefined);
         const list = await api.providerModels.listProviders();
-        setProviders(list);
+        setProviders(list ?? []);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load providers");
       }
@@ -52,12 +52,7 @@ export function ProviderModelSelector({
         setLoading(true);
         setError(undefined);
         const response = await api.providerModels.getModels(selectedProvider);
-        if (response.success && response.models) {
-          setModels(response.models);
-        } else {
-          setError(response.error || "Failed to load models");
-          setModels([]);
-        }
+        setModels(response.models ?? []);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load models");
         setModels([]);

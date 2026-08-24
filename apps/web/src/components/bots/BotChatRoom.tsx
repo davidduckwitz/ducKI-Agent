@@ -1,0 +1,384 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useParams } from "react-router-dom";
+import { ArrowLeft, Send, UserPlus, AlertTriangle, Sparkles, Trash2, X } from "lucide-react";
+import { api, type BotChatMessage, type BotInfo } from "../../lib/api";
+import { Card, CardHeader, CardTitle } from "../ui/card";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { MarkdownMessage } from "../chat/MarkdownMessage";
+import { botAccentColor } from "./botAvatarColor";
+
+interface DisplayMessage {
+  key: string;
+  role: "user" | "bot";
+  authorBotId?: string;
+  authorName?: string;
+  content: string;
+  needsUserDecision?: boolean;
+  /** Real DB row id - only set for persisted messages, which is what makes them deletable
+   *  (an in-flight optimistic turn has no row yet, so there's nothing to delete server-side). */
+  dbId?: number;
+}
+
+function BotAvatarCircle({ slug, name }: { slug: string; name: string }) {
+  const color = botAccentColor(slug);
+  return (
+    <div
+      className={`flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${color.bg} ${color.text} ring-2 ${color.ring}`}
+      title={name}
+    >
+      {name.charAt(0).toUpperCase()}
+    </div>
+  );
+}
+
+function toDisplayMessages(rows: BotChatMessage[], botBySlug: Map<string, BotInfo>): DisplayMessage[] {
+  return rows
+    .filter((m) => {
+      // Positive signal, not a metadata-flag guess: BotService.chat() tags exactly the row it
+      // resolved as this bot's real, final reply with authorBotId - every OTHER assistant row is
+      // an intermediate tool-loop iteration (Agent.run() persists one per iteration, marked
+      // metadata.llmOnly, indistinguishable in content from a genuine short reply). A metadata
+      // filter alone can't tell those apart for a bot run: unlike the interactive main chat, a
+      // bot has no event emitter, so it never gets the separate "assistant_text" display row that
+      // main chat relies on there - llmOnly ends up on 100% of a bot's assistant rows, including
+      // the true final one, so filtering it out would hide every bot reply, not just scaffolding.
+      if (m.role === "assistant") {
+        if (!m.authorBotId) return false;
+        // A bot that had nothing to add replies with the literal "(pass)" token (see
+        // BotChatOrchestrator's PASS_RE) instead of padding out a reply - tagged
+        // metadata.pass by the orchestrator specifically so it never shows here, the whole
+        // point of the convention being a silent, cheap opt-out rather than visible filler.
+        if (m.metadata) {
+          try {
+            if ((JSON.parse(m.metadata) as { pass?: boolean }).pass) return false;
+          } catch {
+            // ignore malformed metadata
+          }
+        }
+        return true;
+      }
+      if (m.role !== "user") return false;
+      // A user-role row with no `internal` tag is the one real, once-only record of what the
+      // human typed (see BotChatOrchestrator.handleUserMessage's upfront db.addMessage) - every
+      // other user-role row is either our own synthetic "you were asked to respond" directive
+      // (tagPromptAsInternal, tagged internal by BotService.chat) or the core agent's own
+      // post-tool-call nudge (already tagged internal by agent.ts itself). Neither was ever meant
+      // for a human to read.
+      let internal = false;
+      if (m.metadata) {
+        try {
+          internal = Boolean((JSON.parse(m.metadata) as { internal?: boolean }).internal);
+        } catch {
+          // ignore malformed metadata
+        }
+      }
+      return !internal;
+    })
+    .filter((m) => m.content.trim().length > 0)
+    .map((m) => {
+      let needsUserDecision = false;
+      if (m.metadata) {
+        try {
+          needsUserDecision = Boolean((JSON.parse(m.metadata) as { needsUserDecision?: boolean }).needsUserDecision);
+        } catch {
+          // ignore malformed metadata
+        }
+      }
+      const bot = m.authorBotId ? botBySlug.get(m.authorBotId) : undefined;
+      return {
+        key: `db-${m.id}`,
+        role: m.role === "user" ? "user" : "bot",
+        authorBotId: m.authorBotId ?? undefined,
+        authorName: bot?.name ?? m.authorBotId ?? undefined,
+        content: m.content,
+        needsUserDecision,
+        dbId: m.id,
+      } satisfies DisplayMessage;
+    });
+}
+
+export function BotChatRoom() {
+  const { id } = useParams<{ id: string }>();
+  const conversationId = Number(id);
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState("");
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [pendingUserText, setPendingUserText] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  // While true, messages + status are polled every ~1.2s so a bot's reply shows up the moment
+  // it's actually persisted server-side, instead of the UI waiting for the whole multi-bot
+  // exchange to finish before revealing anything (see routes/bot-chats.ts: the POST responds as
+  // soon as the user's message is saved, then keeps running bots in the background).
+  const [polling, setPolling] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const chatQuery = useQuery({
+    queryKey: ["botChat", conversationId],
+    queryFn: () => api.botChats.get(conversationId),
+    enabled: Number.isFinite(conversationId),
+  });
+  const botsQuery = useQuery({ queryKey: ["bots"], queryFn: () => api.bots.list() });
+  const messagesQuery = useQuery({
+    queryKey: ["botChatMessages", conversationId],
+    queryFn: () => api.botChats.getMessages(conversationId),
+    enabled: Number.isFinite(conversationId),
+    refetchInterval: polling ? 1200 : false,
+  });
+  const statusQuery = useQuery({
+    queryKey: ["botChatStatus", conversationId],
+    queryFn: () => api.botChats.status(conversationId),
+    enabled: polling,
+    refetchInterval: polling ? 1200 : false,
+  });
+
+  // The exchange has settled server-side: do one last refetch to catch anything written between
+  // the last poll and the background run actually finishing, then stop polling.
+  useEffect(() => {
+    if (polling && statusQuery.data?.generating === false) {
+      messagesQuery.refetch();
+      setPolling(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polling, statusQuery.data?.generating]);
+
+  const bots = botsQuery.data ?? [];
+  const botBySlug = useMemo(() => new Map(bots.map((b) => [b.slug, b])), [bots]);
+  const participants = (chatQuery.data?.participants ?? [])
+    .map((slug) => botBySlug.get(slug))
+    .filter((b): b is BotInfo => Boolean(b));
+  const availableToAdd = bots.filter((b) => !chatQuery.data?.participants.includes(b.slug));
+
+  const persisted = useMemo(() => toDisplayMessages(messagesQuery.data ?? [], botBySlug), [messagesQuery.data, botBySlug]);
+  const display: DisplayMessage[] = [
+    ...persisted,
+    ...(pendingUserText ? [{ key: "pending-user", role: "user" as const, content: pendingUserText }] : []),
+  ];
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [display.length]);
+
+  const sendMutation = useMutation({
+    mutationFn: (message: string) => api.botChats.sendMessage(conversationId, message),
+    onMutate: (message) => {
+      setPendingUserText(message);
+      setSendError(null);
+    },
+    onSuccess: async () => {
+      // The user's own message is already persisted by the time this resolves (the route awaits
+      // that write before responding) - show it immediately, then start polling for bot replies.
+      await messagesQuery.refetch();
+      setPendingUserText(null);
+      setPolling(true);
+    },
+    onError: (error: Error) => {
+      setPendingUserText(null);
+      setSendError(error.message || "Nachricht konnte nicht gesendet werden.");
+    },
+  });
+
+  const addParticipantMutation = useMutation({
+    mutationFn: (slug: string) => api.botChats.addParticipant(conversationId, slug),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["botChat", conversationId] }),
+  });
+
+  const deleteMessageMutation = useMutation({
+    mutationFn: (messageId: number) => api.botChats.deleteMessage(conversationId, messageId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["botChatMessages", conversationId] }),
+  });
+
+  const deleteChatMutation = useMutation({
+    mutationFn: () => api.botChats.delete(conversationId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["botChats"] });
+      navigate("/bot-chats");
+    },
+  });
+
+  function handleDraftChange(value: string) {
+    setDraft(value);
+    const cursorWord = value.slice(0, value.length).split(/\s/).pop() ?? "";
+    if (cursorWord.startsWith("@") && cursorWord.length >= 1) {
+      setMentionQuery(cursorWord.slice(1).toLowerCase());
+    } else {
+      setMentionQuery(null);
+    }
+  }
+
+  function applyMention(slug: string) {
+    const parts = draft.split(/\s/);
+    parts[parts.length - 1] = `@${slug}`;
+    setDraft(parts.join(" ") + " ");
+    setMentionQuery(null);
+    inputRef.current?.focus();
+  }
+
+  function send() {
+    const text = draft.trim();
+    if (!text || sendMutation.isPending) return;
+    setDraft("");
+    setMentionQuery(null);
+    sendMutation.mutate(text);
+  }
+
+  const mentionMatches = mentionQuery !== null
+    ? participants.filter((b) => b.slug.includes(mentionQuery) || b.name.toLowerCase().includes(mentionQuery))
+    : [];
+
+  return (
+    <div className="flex h-full flex-col gap-3 p-4 md:p-6">
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="icon" onClick={() => navigate("/bot-chats")}>
+          <ArrowLeft className="size-4" />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-lg font-bold">{chatQuery.data?.name ?? "Gruppen-Chat"}</h1>
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            {participants.map((bot) => (
+              <span key={bot.slug} className="flex items-center gap-1 text-xs text-muted-foreground">
+                <BotAvatarCircle slug={bot.slug} name={bot.name} />
+                {bot.name}
+              </span>
+            ))}
+            {availableToAdd.length > 0 ? (
+              <select
+                className="ml-1 rounded-md border border-input bg-background px-2 py-1 text-xs text-muted-foreground"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) addParticipantMutation.mutate(e.target.value);
+                }}
+              >
+                <option value="">
+                  <UserPlus className="size-3" /> + Bot hinzufügen
+                </option>
+                {availableToAdd.map((bot) => (
+                  <option key={bot.slug} value={bot.slug}>
+                    {bot.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          disabled={deleteChatMutation.isPending}
+          onClick={() => {
+            if (confirm(`Gruppen-Chat "${chatQuery.data?.name ?? ""}" löschen? Der gesamte Verlauf geht verloren.`)) {
+              deleteChatMutation.mutate();
+            }
+          }}
+        >
+          <Trash2 className="size-4" />
+        </Button>
+      </div>
+
+      <Card className="flex flex-1 flex-col overflow-hidden">
+        <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+          {display.map((msg) => {
+            const deleteButton = msg.dbId !== undefined ? (
+              <button
+                type="button"
+                title="Nachricht löschen"
+                className="mt-0.5 shrink-0 self-start rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-destructive group-hover:opacity-100"
+                onClick={() => {
+                  if (confirm("Diese Nachricht löschen?")) deleteMessageMutation.mutate(msg.dbId!);
+                }}
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null;
+
+            if (msg.role === "user") {
+              return (
+                <div key={msg.key} className="group ml-auto flex max-w-[75%] items-start gap-1">
+                  <div className="rounded-2xl rounded-br-sm bg-primary px-4 py-2 text-sm text-primary-foreground shadow-sm">
+                    {msg.content}
+                  </div>
+                  {deleteButton}
+                </div>
+              );
+            }
+            const color = botAccentColor(msg.authorBotId ?? "bot");
+            return (
+              <div key={msg.key} className="group flex max-w-[90%] items-start gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <BotAvatarCircle slug={msg.authorBotId ?? "bot"} name={msg.authorName ?? "Bot"} />
+                <div className="min-w-0 flex-1">
+                  <div className="mb-0.5 text-xs font-semibold text-muted-foreground">{msg.authorName}</div>
+                  <div className={`rounded-2xl rounded-tl-sm px-4 py-2 text-sm shadow-sm ${color.bg} ring-1 ${color.ring}`}>
+                    <MarkdownMessage content={msg.content} />
+                  </div>
+                  {msg.needsUserDecision ? (
+                    <div className="mt-1 flex items-center gap-1 text-xs font-medium text-amber-500">
+                      <AlertTriangle className="size-3.5" /> Braucht deine Entscheidung
+                    </div>
+                  ) : null}
+                </div>
+                {deleteButton}
+              </div>
+            );
+          })}
+
+          {polling || sendMutation.isPending ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Sparkles className="size-3.5 animate-pulse" />
+              {statusQuery.data?.activeBot ? `${statusQuery.data.activeBot.name} schreibt…` : "Bots antworten…"}
+            </div>
+          ) : null}
+
+          {display.length === 0 && !polling && !sendMutation.isPending ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              Schreib eine Nachricht - relevante Bots antworten automatisch, oder sprich einen gezielt mit @name an.
+            </p>
+          ) : null}
+        </div>
+
+        <div className="relative border-t border-border p-3">
+          {sendError ? (
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-destructive">
+              <AlertTriangle className="size-3.5" /> {sendError}
+            </div>
+          ) : null}
+          {mentionMatches.length > 0 ? (
+            <div className="absolute bottom-full left-3 mb-2 w-64 rounded-lg border border-border bg-popover p-1 shadow-lg">
+              {mentionMatches.map((bot) => (
+                <button
+                  key={bot.slug}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+                  onClick={() => applyMention(bot.slug)}
+                >
+                  <BotAvatarCircle slug={bot.slug} name={bot.name} />
+                  <span className="font-medium">{bot.name}</span>
+                  <span className="text-xs text-muted-foreground">@{bot.slug}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          <div className="flex gap-2">
+            <Input
+              ref={inputRef}
+              placeholder="Nachricht schreiben, @ für gezielte Erwähnung…"
+              value={draft}
+              onChange={(e) => handleDraftChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+                if (e.key === "Escape") setMentionQuery(null);
+              }}
+            />
+            <Button size="icon" onClick={send} disabled={!draft.trim() || sendMutation.isPending}>
+              <Send className="size-4" />
+            </Button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}

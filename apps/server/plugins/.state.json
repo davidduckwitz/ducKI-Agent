@@ -1,7 +1,15 @@
 {
   "disabled": [
+    "bitcoin-puzzle",
     "btc-preis-tes",
+    "docs-generator",
     "github-connector",
-    "telegram-connector"
+    "invoicing",
+    "meal-planner",
+    "shopping-list",
+    "task-sync",
+    "telegram-connector",
+    "time-tracking",
+    "video-editor"
   ]
 }

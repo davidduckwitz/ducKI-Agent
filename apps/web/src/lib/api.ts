@@ -55,6 +55,61 @@ export interface ArtifactInfo {
   hasFrames?: boolean;
 }
 
+export interface BotInfo {
+  slug: string;
+  name: string;
+  description: string | null;
+  avatar: string | null;
+  systemPrompt: string | null;
+  providerId: string | null;
+  modelId: string | null;
+  skillWhitelist: string | null; // JSON array of skill slugs, null = all
+  toolWhitelist: string | null; // JSON array of tool names, null = all
+  isBuiltIn: number;
+  conversationId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BotInput {
+  name: string;
+  description?: string;
+  avatar?: string;
+  systemPrompt?: string;
+  providerId?: string;
+  modelId?: string;
+  skillWhitelist?: string[];
+  toolWhitelist?: string[];
+}
+
+export interface BotChatInfo {
+  id: number;
+  name: string;
+  origin: string | null;
+  participants: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BotChatMessage {
+  id: number;
+  conversationId: number | null;
+  role: string;
+  content: string;
+  metadata: string | null;
+  authorBotId: string | null;
+  createdAt: string;
+}
+
+export interface BotChatTurn {
+  round: number;
+  botId: string;
+  botName: string;
+  content: string;
+  messageId?: number;
+  needsUserDecision: boolean;
+}
+
 export interface PluginInfo {
   name: string;
   version: string;
@@ -888,18 +943,12 @@ export const api = {
         }>
       >("/provider-models"),
     getModels: (provider: string) =>
-      request<
-        {
-          success: boolean;
-          provider: string;
-          models?: Array<{
-            id: string;
-            name: string;
-          }>;
-          error?: string;
-          timestamp: string;
-        }
-      >(`/provider-models/${provider}`),
+      request<{
+        models: Array<{
+          id: string;
+          name: string;
+        }>;
+      }>(`/provider-models/${provider}`),
   },
 
   artifacts: {
@@ -913,5 +962,41 @@ export const api = {
     },
     get: (id: number) => request<ArtifactInfo & { hasFrames: boolean }>(`/artifacts/${id}`),
     delete: (id: number) => request<{ deleted: boolean; id: number }>(`/artifacts/${id}`, { method: "DELETE" }),
+  },
+
+  bots: {
+    list: () => request<BotInfo[]>("/bots"),
+    get: (slug: string) => request<BotInfo>(`/bots/${slug}`),
+    create: (data: BotInput) => request<BotInfo>("/bots", { method: "POST", body: JSON.stringify(data) }),
+    update: (slug: string, data: Partial<BotInput>) =>
+      request<BotInfo>(`/bots/${slug}`, { method: "PATCH", body: JSON.stringify(data) }),
+    delete: (slug: string) => request<{ deleted: boolean }>(`/bots/${slug}`, { method: "DELETE" }),
+    chat: (slug: string, message: string) =>
+      request<{ response: string; conversationId?: number; stalled?: boolean }>(`/bots/${slug}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      }),
+  },
+
+  botChats: {
+    list: () => request<BotChatInfo[]>("/bot-chats"),
+    get: (id: number) => request<BotChatInfo>(`/bot-chats/${id}`),
+    create: (data: { name?: string; botSlugs: string[] }) =>
+      request<BotChatInfo>("/bot-chats", { method: "POST", body: JSON.stringify(data) }),
+    getMessages: (id: number) => request<BotChatMessage[]>(`/bot-chats/${id}/messages`),
+    status: (id: number) =>
+      request<{ generating: boolean; activeBot: { slug: string; name: string } | null }>(`/bot-chats/${id}/status`),
+    sendMessage: (id: number, message: string) =>
+      request<{ started: boolean; userMessageId: number }>(`/bot-chats/${id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      }),
+    addParticipant: (id: number, botId: string) =>
+      request<{ added: boolean }>(`/bot-chats/${id}/participants`, { method: "POST", body: JSON.stringify({ botId }) }),
+    removeParticipant: (id: number, botId: string) =>
+      request<{ removed: boolean }>(`/bot-chats/${id}/participants/${botId}`, { method: "DELETE" }),
+    delete: (id: number) => request<{ deleted: boolean }>(`/bot-chats/${id}`, { method: "DELETE" }),
+    deleteMessage: (id: number, messageId: number) =>
+      request<{ deleted: boolean }>(`/bot-chats/${id}/messages/${messageId}`, { method: "DELETE" }),
   },
 };

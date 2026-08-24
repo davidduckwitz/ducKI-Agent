@@ -24,6 +24,21 @@ const SkillManager = lazy(async () => {
   return { default: module.SkillManager };
 });
 
+const BotManager = lazy(async () => {
+  const module = await import("./components/bots/BotManager");
+  return { default: module.BotManager };
+});
+
+const BotChatList = lazy(async () => {
+  const module = await import("./components/bots/BotChatList");
+  return { default: module.BotChatList };
+});
+
+const BotChatRoom = lazy(async () => {
+  const module = await import("./components/bots/BotChatRoom");
+  return { default: module.BotChatRoom };
+});
+
 const SharedWorkspace = lazy(async () => {
   const module = await import("./components/shared/SharedWorkspace");
   return { default: module.SharedWorkspace };
@@ -135,6 +150,9 @@ function AppContent() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="chat" element={<ChatContainer />} />
+          <Route path="bots" element={<LazyRoute><BotManager /></LazyRoute>} />
+          <Route path="bot-chats" element={<LazyRoute><BotChatList /></LazyRoute>} />
+          <Route path="bot-chats/:id" element={<LazyRoute><BotChatRoom /></LazyRoute>} />
           <Route path="coding" element={<CodingGate />} />
           <Route path="projects" element={<ProjectManager />} />
           <Route path="tasks" element={<TaskManager />} />
