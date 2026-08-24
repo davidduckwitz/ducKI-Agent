@@ -39,14 +39,18 @@ export function createScopedShellTool(sandboxRoot: string): ToolExecutor {
       } catch {
         return {
           success: false,
+          data: null,
           error: `Shell cwd does not exist or cannot be resolved: ${requestedPath}`,
+          disposition: "error",
         };
       }
 
       if (!isPathInside(canonicalRoot, canonicalCwd)) {
         return {
           success: false,
+          data: null,
           error: `Shell cwd is outside the coding sandbox: ${canonicalCwd}`,
+          disposition: "error",
         };
       }
 
