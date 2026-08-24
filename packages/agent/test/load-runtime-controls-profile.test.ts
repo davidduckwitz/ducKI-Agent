@@ -16,9 +16,12 @@ const KEYS = [
   "AGENT_CODING_ENABLE_VERIFY",
   "AGENT_CHECKLIST_ENABLED",
   "AGENT_CHECKLIST_MAX_ITEM_ATTEMPTS",
+  "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
   "AGENT_REASONER_MIN_CONFIDENCE",
   "AGENT_MAX_REPEATED_TOOL_CALL",
   "AGENT_STALE_READ_STREAK",
+  "AGENT_SELF_REPAIR",
+  "AGENT_SELF_REPAIR_ENABLED",
   "AGENT_SELF_REPAIR_MAX_ATTEMPTS",
 ] as const;
 
@@ -70,6 +73,8 @@ describe("agent model profiles", () => {
     process.env["AGENT_ENABLE_REFLECTION"] = "true";
     process.env["AGENT_CODING_ENABLE_VERIFY"] = "false";
     process.env["AGENT_CHECKLIST_ENABLED"] = "false";
+    process.env["AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"] = "0.91";
+    process.env["AGENT_SELF_REPAIR"] = "false";
 
     const controls = loadAgentRuntimeControls();
 
@@ -77,9 +82,35 @@ describe("agent model profiles", () => {
     expect(controls.enableReflection).toBe(true);
     expect(controls.codingEnableVerify).toBe(false);
     expect(controls.checklistEnabled).toBe(false);
+    expect(controls.reasonerUseToolMinConfidence).toBe(0.91);
+    expect(controls.selfRepairEnabled).toBe(false);
   });
 
-  it("preserves the old defaults when no profile is selected", () => {
+  it("keeps legacy environment aliases working when the canonical key is absent", () => {
+    for (const key of KEYS) delete process.env[key];
+    process.env["AGENT_REASONER_MIN_CONFIDENCE"] = "0.83";
+    process.env["AGENT_SELF_REPAIR_ENABLED"] = "false";
+
+    const controls = loadAgentRuntimeControls();
+
+    expect(controls.reasonerUseToolMinConfidence).toBe(0.83);
+    expect(controls.selfRepairEnabled).toBe(false);
+  });
+
+  it("prefers canonical environment keys over legacy aliases", () => {
+    for (const key of KEYS) delete process.env[key];
+    process.env["AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"] = "0.77";
+    process.env["AGENT_REASONER_MIN_CONFIDENCE"] = "0.22";
+    process.env["AGENT_SELF_REPAIR"] = "true";
+    process.env["AGENT_SELF_REPAIR_ENABLED"] = "false";
+
+    const controls = loadAgentRuntimeControls();
+
+    expect(controls.reasonerUseToolMinConfidence).toBe(0.77);
+    expect(controls.selfRepairEnabled).toBe(true);
+  });
+
+  it("preserves the actual Agent defaults when no profile is selected", () => {
     for (const key of KEYS) delete process.env[key];
 
     const controls = loadAgentRuntimeControls();
@@ -87,9 +118,13 @@ describe("agent model profiles", () => {
     expect(controls.maxIterations).toBe(50);
     expect(controls.maxOutputTokens).toBe(16384);
     expect(controls.enableReflection).toBe(true);
-    expect(controls.reflectionMaxRetries).toBe(3);
+    expect(controls.reflectionMaxRetries).toBe(1);
+    expect(controls.reflectionStoreMemory).toBe(false);
+    expect(controls.reflectionMetaReview).toBe(false);
     expect(controls.codingMaxIterations).toBe(60);
     expect(controls.codingEnableVerify).toBe(false);
     expect(controls.checklistEnabled).toBe(false);
+    expect(controls.reasonerUseToolMinConfidence).toBe(0.65);
+    expect(controls.selfRepairMaxAttempts).toBe(2);
   });
 });
