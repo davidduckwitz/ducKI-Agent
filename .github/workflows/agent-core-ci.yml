@@ -58,6 +58,7 @@ jobs:
           packages/agent/test/scoped-shell-tool.test.ts
           packages/agent/test/memory-auto-approval.test.ts
           packages/agent/test/coding-run-state.test.ts
+          packages/agent/test/coding-failure-reflection-integration.test.ts
 
   compatibility:
     name: Bots, plugins and skills compatibility
