@@ -57,6 +57,7 @@ jobs:
           packages/agent/test/load-runtime-controls-profile.test.ts
           packages/agent/test/scoped-shell-tool.test.ts
           packages/agent/test/memory-auto-approval.test.ts
+          packages/agent/test/coding-run-state.test.ts
 
   compatibility:
     name: Bots, plugins and skills compatibility
