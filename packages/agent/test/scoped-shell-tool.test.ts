@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { shellTool } from "@ducki/tools";
 import { createScopedShellTool } from "../src/coding/scoped-shell-tool";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, realpathSync } from "node:path";
+import { join } from "node:path";
 
 const tempRoots: string[] = [];
 
