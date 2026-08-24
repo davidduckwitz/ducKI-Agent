@@ -80,6 +80,42 @@ describe("BotChatOrchestrator", () => {
     expect(peak).toBeGreaterThan(1);
   });
 
+  it("prepares the entire parallel batch before the first bot starts, including later concurrency chunks", async () => {
+    const slugs = Array.from({ length: 8 }, (_, index) => `bot-${index + 1}`);
+    let generationStarted = false;
+    const preparedBySlug = new Map<string, object>();
+
+    const prepareAgentForGroupTurn = vi.fn(async (current: BotSelect) => {
+      // The immutable-snapshot contract: no peer may start generating until every Agent in the
+      // logical batch has finished loading its conversation snapshot.
+      expect(generationStarted).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, current.slug === "bot-8" ? 6 : 1));
+      const prepared = { preparedFor: current.slug };
+      preparedBySlug.set(current.slug, prepared);
+      return prepared;
+    });
+    const chat = vi.fn(async (current: BotSelect, _prompt: string, opts: any) => {
+      generationStarted = true;
+      expect(opts.preparedAgent).toBe(preparedBySlug.get(current.slug));
+      return { response: `${current.slug} result`, conversationId: 1, stalled: false };
+    });
+    const botService = {
+      getBot: vi.fn(async (slug: string) => bot(slug)),
+      prepareAgentForGroupTurn,
+      chat,
+    } as any;
+    const orchestrator = new BotChatOrchestrator(
+      makeDb({ BOT_CHAT_PARALLEL_MAX_CONCURRENT: "4" }),
+      botService,
+      makeHandoff()
+    );
+
+    await orchestrator.handleUserMessage(1, slugs, "Bitte bewertet die Aufgabe.");
+
+    expect(prepareAgentForGroupTurn).toHaveBeenCalledTimes(8);
+    expect(chat).toHaveBeenCalledTimes(8);
+  });
+
   it("runs only explicitly mentioned participants in the initial round", async () => {
     const slugs = ["research", "coding", "docs"];
     const chat = vi.fn(async (current: BotSelect) => ({
@@ -182,5 +218,60 @@ describe("BotChatOrchestrator", () => {
 
     expect(chat).toHaveBeenCalledTimes(3);
     expect(peak).toBe(1);
+  });
+
+  it("never overlaps CodingAgent with another participant, while keeping safe peers parallel", async () => {
+    const slugs = ["a", "b", "coding", "c", "d"];
+    const active = new Set<string>();
+    let codingOverlap = false;
+    let nonCodingPeak = 0;
+
+    const chat = vi.fn(async (current: BotSelect) => {
+      active.add(current.slug);
+      if (current.slug === "coding" && active.size > 1) codingOverlap = true;
+      if (current.slug !== "coding" && active.has("coding")) codingOverlap = true;
+      if (!active.has("coding")) nonCodingPeak = Math.max(nonCodingPeak, active.size);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active.delete(current.slug);
+      return { response: `${current.slug} result`, conversationId: 1, stalled: false };
+    });
+    const botService = {
+      getBot: vi.fn(async (slug: string) => bot(slug)),
+      chat,
+    } as any;
+    const orchestrator = new BotChatOrchestrator(makeDb(), botService, makeHandoff());
+
+    await orchestrator.handleUserMessage(1, slugs, "Bitte arbeitet an der Aufgabe.");
+
+    expect(codingOverlap).toBe(false);
+    expect(nonCodingPeak).toBeGreaterThan(1);
+  });
+
+  it("resolves competing parallel mentions deterministically by speaking order, not completion timing", async () => {
+    let cPrompt = "";
+    const chat = vi.fn(async (current: BotSelect, prompt: string) => {
+      if (current.slug === "a") {
+        await new Promise((resolve) => setTimeout(resolve, 8));
+        return { response: "@c übernimm den nächsten Schritt", conversationId: 1, stalled: false };
+      }
+      if (current.slug === "b") {
+        // B finishes first on purpose. The old shared Map.set() race would therefore make B the
+        // source of C's next trigger on some runs even though A is first in deterministic order.
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return { response: "@c prüfe das ebenfalls", conversationId: 1, stalled: false };
+      }
+      cPrompt = prompt;
+      return { response: "fertig", conversationId: 1, stalled: false };
+    });
+    const botService = {
+      getBot: vi.fn(async (slug: string) => bot(slug)),
+      chat,
+    } as any;
+    const orchestrator = new BotChatOrchestrator(makeDb(), botService, makeHandoff());
+
+    await orchestrator.handleUserMessage(1, ["a", "b", "c"], "@a @b bitte parallel prüfen");
+
+    expect(cPrompt).toContain("A hat dich (@C)");
+    expect(cPrompt).not.toContain("B hat dich (@C)");
   });
 });
