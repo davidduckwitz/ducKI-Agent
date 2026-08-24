@@ -118,27 +118,13 @@ export class BotChatOrchestrator {
     private readonly botService: BotService,
     handoffService?: BotHandoffService
   ) {
-    // Default-construct a handoff service if none is injected, so every
-    // orchestrator always has one. The handoff service only reads/writes
-    // tasks — it never makes LLM calls on its own, so a default instance
-    // is safe even when the caller didn't wire one in explicitly.
     this.handoffService = handoffService ?? new BotHandoffService(db);
   }
 
-  /** Whether the user message contains cues that the mentioned bots should run
-   *  sequentially (e.g. "@a do X, then @b do Y") rather than in parallel. */
   private hasSequentialCues(userMessage: string): boolean {
     return SEQUENTIAL_CUE_RE.test(userMessage);
   }
 
-  /** Splits round responders into batches that can run in parallel. Bots in the same
-   *  batch have no dependency on each other and can execute concurrently. Sequential
-   *  cues in the user message force single-bot batches (full sequential fallback).
-   *  Bot-mention triggers (subsequent rounds) always stay sequential - a bot that
-   *  @mentions another has an implied ordering.
-   *
-   *  Returns an array of batches; each batch is an array of [slug, trigger] pairs.
-   *  The caller should run batches sequentially but bots within a batch in parallel. */
   private buildExecutionBatches(
     round: number,
     responders: Map<string, Trigger>,
@@ -152,36 +138,14 @@ export class BotChatOrchestrator {
       .slice(0, maxMessagesPerRound)
       .map((slug) => [slug, responders.get(slug)!]);
 
-    // Subsequent rounds (bot mentions) always stay sequential - the mentioning
-    // bot's reply was the trigger, so the ordering is implied.
     const hasBotMentions = entries.some(([, trigger]) => trigger.kind === "bot_mention");
     if (hasBotMentions || this.hasSequentialCues(userMessage)) {
       return entries.map((entry) => [entry]);
     }
 
-    // Round 1 with no sequential cues: all independent bots run as one parallel batch.
     return [entries];
   }
 
-  /**
-   * Runs the whole multi-round exchange. The caller (routes/bot-chats.ts) does NOT await this on
-   * the request path - it persists the user's message itself, responds immediately, and lets this
-   * keep running in the background so bot replies land in `messages` (and become visible via
-   * polling) as soon as each one finishes, not all at once when the entire exchange is done.
-   *
-   * Round-1 independent responders run in PARALLEL batches (see buildExecutionBatches).
-   * Subsequent rounds (bot @mentions) and rounds with sequential-ordering cues stay sequential.
-   *
-   * Handoff tracking: the user message and every bot reply are scanned for handoff
-   * patterns ("@botB übernimm X") — matching patterns create tracked tasks. Open handoffs
-   * from previous turns are injected into each bot's delegated prompt so they see what
-   * tasks are assigned to them.
-   *
-   * `onActiveBotChange` is called with a SET of currently-active slugs (not a single value)
-   * since multiple bots can now run concurrently within a parallel batch. Called with
-   * `{slug, name}` before each bot starts and with just the slug on completion; when the
-   * set becomes empty (all bots in the batch finished), called with null.
-   */
   async handleUserMessage(
     conversationId: number,
     participantSlugs: string[],
@@ -194,16 +158,11 @@ export class BotChatOrchestrator {
       if (bot) participants.set(slug, bot);
     }
 
-    // Ensure the shared workspace directory exists for this group chat.
-    // Does NOT re-inject the context message into the transcript (that happens
-    // once at chat creation via the POST /api/bot-chats route). Creating the
-    // directory here is idempotent and cheap (existsSync guard).
     sharedWorkspace.resolveGroupWorkspace(conversationId);
 
-    // Scan the user's own message for handoff patterns ("@botB übernimm X").
-    // Fire-and-forget: we don't need the result for the first round's prompts,
-    // since the handoff was just created and the bots haven't processed it yet.
-    void this.handoffService.processMessageForHandoffs(userMessage, "user", conversationId, participantSlugs);
+    // A handoff created directly by the user must be visible to round 1. Await it before
+    // fetching the round context so the first delegated prompt cannot race the DB write.
+    await this.handoffService.processMessageForHandoffs(userMessage, "user", conversationId, participantSlugs);
 
     const [maxRoundsSetting, maxMessagesPerRoundSetting, parallelEnabledSetting, parallelMaxConcurrentSetting] = await Promise.all([
       this.db.getSetting(BOT_CHAT_MAX_ROUNDS_SETTING),
@@ -219,12 +178,8 @@ export class BotChatOrchestrator {
     const turns: BotChatTurn[] = [];
     let round = 1;
     let responders = this.pickInitialResponders(userMessage, participants);
-    // Workspace context is static per chat — build it once.
     const workspaceContext = sharedWorkspace.getWorkspaceContext(conversationId);
-    // Pre-fetch handoff context once per round (it only changes when a handoff is
-    // created, which happens after bot replies complete).
     let handoffContext = await this.handoffService.getHandoffContext(conversationId);
-    // Combined header prepended to every bot's delegated prompt.
     const buildContextHeader = () => [workspaceContext, handoffContext].filter(Boolean).join("\n\n");
 
     while (round <= maxRounds && responders.size > 0) {
@@ -234,105 +189,103 @@ export class BotChatOrchestrator {
       const nextTriggers = new Map<string, Trigger>();
 
       for (const batch of batches) {
-        const capped = batch.slice(0, parallelMaxConcurrent);
+        // A large parallel batch is processed in bounded chunks instead of being
+        // truncated. The previous slice(0, maxConcurrent) silently dropped every
+        // responder after the first chunk.
+        for (let offset = 0; offset < batch.length; offset += parallelMaxConcurrent) {
+          const chunk = batch.slice(offset, offset + parallelMaxConcurrent);
+          const activeBots = new Set<string>();
+          const notifyActive = () => {
+            const active = [...activeBots];
+            if (active.length === 0) {
+              onActiveBotChange?.(null);
+              return;
+            }
+            const first = chunk.find(([s]) => activeBots.has(s));
+            if (first) {
+              const bot = participants.get(first[0]);
+              if (bot) onActiveBotChange?.({ slug: bot.slug, name: bot.name });
+            }
+          };
 
-        const activeBots = new Set<string>();
-        const notifyActive = () => {
-          const active = [...activeBots];
-          if (active.length === 0) { onActiveBotChange?.(null); return; }
-          const first = capped.find(([s]) => activeBots.has(s));
-          if (first) {
-            const bot = participants.get(first[0]);
-            if (bot) onActiveBotChange?.({ slug: bot.slug, name: bot.name });
-          }
-        };
+          const chunkResults = await Promise.allSettled(
+            chunk.map(async ([slug, trigger]) => {
+              const bot = participants.get(slug);
+              if (!bot) return;
 
-        const batchResults = await Promise.allSettled(
-          capped.map(async ([slug, trigger]) => {
-            const bot = participants.get(slug);
-            if (!bot) return;
+              activeBots.add(slug);
+              notifyActive();
 
-            activeBots.add(slug);
-            notifyActive();
+              const prompt = this.buildDelegatedPrompt(bot, trigger, buildContextHeader());
 
-            const prompt = this.buildDelegatedPrompt(bot, trigger, buildContextHeader());
+              let result: { response: string; messageId?: number; stalled: boolean };
+              try {
+                result = await this.botService.chat(bot, prompt, { conversationId, tagPromptAsInternal: true });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                logger.warn("Bot chat turn failed, skipping this bot for this round", { bot: slug, error: message });
+                const errorMessage = await this.db.addMessage({
+                  conversationId,
+                  role: "assistant",
+                  content: `⚠️ ${bot.name} konnte nicht antworten (technischer Fehler): ${message}`,
+                  authorBotId: slug,
+                });
+                activeBots.delete(slug);
+                notifyActive();
+                return { round, botId: slug, botName: bot.name, content: errorMessage.content, messageId: errorMessage.id, needsUserDecision: false, passed: false } satisfies BotChatTurn;
+              }
 
-            let result: { response: string; messageId?: number; stalled: boolean };
-            try {
-              result = await this.botService.chat(bot, prompt, { conversationId, tagPromptAsInternal: true });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error);
-              logger.warn("Bot chat turn failed, skipping this bot for this round", { bot: slug, error: message });
-              const errorMessage = await this.db.addMessage({
-                conversationId,
-                role: "assistant",
-                content: `⚠️ ${bot.name} konnte nicht antworten (technischer Fehler): ${message}`,
-                authorBotId: slug,
-              });
+              const passed = isPassResponse(result.response) || result.stalled;
+              if (result.stalled) {
+                logger.warn("Bot never followed through on its announced action after recovery attempts - hiding as a pass", {
+                  bot: slug,
+                  announced: result.response,
+                });
+              }
+              const needsUserDecision = !passed && mentionsUser(result.response);
+              if (result.messageId !== undefined && (passed || needsUserDecision)) {
+                await this.db.tagMessage(result.messageId, {
+                  metadata: JSON.stringify({ ...(passed ? { pass: true } : {}), ...(needsUserDecision ? { needsUserDecision: true } : {}) }),
+                });
+              }
+
               activeBots.delete(slug);
               notifyActive();
-              return { round, botId: slug, botName: bot.name, content: errorMessage.content, messageId: errorMessage.id, needsUserDecision: false, passed: false } satisfies BotChatTurn;
-            }
 
-            const passed = isPassResponse(result.response) || result.stalled;
-            if (result.stalled) {
-              logger.warn("Bot never followed through on its announced action after recovery attempts - hiding as a pass", {
-                bot: slug,
-                announced: result.response,
-              });
-            }
-            const needsUserDecision = !passed && mentionsUser(result.response);
-            if (result.messageId !== undefined && (passed || needsUserDecision)) {
-              await this.db.tagMessage(result.messageId, {
-                metadata: JSON.stringify({ ...(passed ? { pass: true } : {}), ...(needsUserDecision ? { needsUserDecision: true } : {}) }),
-              });
-            }
+              if (!passed) {
+                // Handoffs generated by this response must be committed before the next
+                // round reads its handoff context. Awaiting here removes a timing race.
+                await this.handoffService.processMessageForHandoffs(result.response, slug, conversationId, participantSlugs);
 
-            activeBots.delete(slug);
-            notifyActive();
-
-            // Scan the bot's reply for handoff patterns.
-            if (!passed) {
-              void this.handoffService.processMessageForHandoffs(result.response, slug, conversationId, participantSlugs);
-
-              for (const mentioned of extractMentionedSlugs(result.response)) {
-                if (mentioned === slug || !participants.has(mentioned)) continue;
-                nextTriggers.set(mentioned, { kind: "bot_mention", sourceBotName: bot.name });
+                for (const mentioned of extractMentionedSlugs(result.response)) {
+                  if (mentioned === slug || !participants.has(mentioned)) continue;
+                  nextTriggers.set(mentioned, { kind: "bot_mention", sourceBotName: bot.name });
+                }
               }
+
+              return {
+                round, botId: slug, botName: bot.name, content: result.response,
+                messageId: result.messageId, needsUserDecision, passed,
+              } satisfies BotChatTurn;
+            })
+          );
+
+          for (const outcome of chunkResults) {
+            if (outcome.status === "fulfilled" && outcome.value) {
+              turns.push(outcome.value);
             }
-
-            return {
-              round, botId: slug, botName: bot.name, content: result.response,
-              messageId: result.messageId, needsUserDecision, passed,
-            } satisfies BotChatTurn;
-          })
-        );
-
-        for (const outcome of batchResults) {
-          if (outcome.status === "fulfilled" && outcome.value) {
-            turns.push(outcome.value);
           }
         }
       }
 
       responders = nextTriggers;
       round++;
-      // Re-fetch handoff context for the next round — new handoffs may have
-      // been created by this round's bot replies.
       handoffContext = await this.handoffService.getHandoffContext(conversationId);
     }
 
     return turns;
   }
 
-  /** Round 1 responder pick: explicit @mentions win; with none, EVERY participant gets a turn -
-   *  no relevance heuristic pre-filters who's "allowed" to answer. Matches Hermes "Bot Mode"'s
-   *  own rule exactly ("@mentioned bots respond, everyone when nobody is mentioned") and its
-   *  explicit design choice of no LLM router: an irrelevant bot is expected to reply "(pass)"
-   *  itself (see PASS_RE) rather than being excluded by a keyword-overlap guess beforehand -
-   *  the model's own judgment of relevance is more accurate than a Jaccard/keyword score ever
-   *  was, and unlike that heuristic it costs nothing extra when everyone would have passed
-   *  anyway (a pass is short and never displayed). */
   private pickInitialResponders(userMessage: string, participants: Map<string, BotSelect>): Map<string, Trigger> {
     const mentioned = [...extractMentionedSlugs(userMessage)].filter((slug) => participants.has(slug));
     if (mentioned.length > 0) {
@@ -341,15 +294,6 @@ export class BotChatOrchestrator {
     return new Map([...participants.keys()].map((slug) => [slug, { kind: "user_broadcast" as const }]));
   }
 
-  /**
-   * Tells a bot WHY it's being asked to respond - never HOW (no length/tone/brevity wording
-   * here). The real user message is already in the transcript this bot's Agent.run() loads
-   * (see handleUserMessage's upfront db.addMessage), so this only needs to point at it.
-   *
-   * Every variant ends with the same reminders about content-in-message and the (pass)
-   * convention. When `handoffContext` is non-empty, it is prepended so the bot sees open
-   * tasks assigned to it (or other bots) at the top of the prompt.
-   */
   private buildDelegatedPrompt(bot: BotSelect, trigger: Trigger, handoffContext?: string): string {
     const handoffHeader = handoffContext
       ? [`[Offene Aufgaben für diesen Chat:]", ${handoffContext}`, ""].join("\n")
