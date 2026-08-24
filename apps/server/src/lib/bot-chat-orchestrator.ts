@@ -1,6 +1,7 @@
+import type { Agent } from "@ducki/agent";
 import type { BotSelect, DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
-import type { BotService } from "./bot-service.js";
+import { CODING_BOT_SLUG, type BotService } from "./bot-service.js";
 import { BotHandoffService } from "./bot-handoff-service.js";
 import { sharedWorkspace } from "./shared-workspace-service.js";
 
@@ -74,6 +75,11 @@ export interface BotChatTurn {
  *  "keep it short" post-tool-call nudge from overriding that persona. */
 type Trigger = { kind: "user_mention" } | { kind: "user_broadcast" } | { kind: "bot_mention"; sourceBotName: string };
 
+type BatchTurnResult = {
+  turn: BotChatTurn;
+  mentions: Array<{ slug: string; trigger: Trigger }>;
+};
+
 function extractMentionedSlugs(text: string): Set<string> {
   const found = new Set<string>();
   for (const match of text.matchAll(MENTION_RE)) {
@@ -98,14 +104,25 @@ function mentionsUser(text: string): boolean {
  * non-sequential multi-mention); sequential-ordering cue words in the user message ("dann",
  * "danach", "once that's done", etc.) force single-bot batches for back-compat with
  * ordered-mention prompts. Subsequent rounds triggered by bot @mentions always stay sequential
- * (a bot that @mentions another has an implied ordering). Speaking order is still rotated each
- * round for fairness. A bot's own @mention of another participant opens a further round, capped
- * by MAX_ROUNDS/MAX_MESSAGES_PER_ROUND so a mention chain cannot run forever; a round where every
- * responder passes ends the whole exchange (mirrors Hermes: "a round where zero members posted a
- * real reply ends the drive"), which falls out naturally here since a pass never contains a
- * mention to seed a next round. A bot can also write "@user" to flag that a message needs the
- * human's decision (surfaced via BotChatTurn.needsUserDecision, stored in messages.metadata for
- * the UI to badge on reload).
+ * (a bot that @mentions another has an implied ordering). The CodingAgent is also always isolated
+ * into a single-bot batch because it is a mutating worker whose macro run() reloads the shared
+ * conversation internally; running it concurrently with other speakers would make both context
+ * and filesystem side effects order-dependent.
+ *
+ * Before any multi-bot batch begins, every non-coding Agent is constructed and loads the shared
+ * conversation. The orchestrator awaits ALL of those loads before the first generation starts.
+ * This is the immutable round-snapshot barrier: peers in one parallel batch cannot see messages
+ * another peer happened to persist milliseconds earlier. A batch larger than maxConcurrent is
+ * still fully prepared up front, then executed in bounded chunks, so chunk 2 does not accidentally
+ * see chunk 1 even though both belong to the same logical round.
+ *
+ * Speaking order is still rotated each round for fairness. A bot's own @mention of another
+ * participant opens a further round, capped by MAX_ROUNDS/MAX_MESSAGES_PER_ROUND so a mention
+ * chain cannot run forever; a round where every responder passes ends the whole exchange
+ * (mirrors Hermes: "a round where zero members posted a real reply ends the drive"), which falls
+ * out naturally here since a pass never contains a mention to seed a next round. A bot can also
+ * write "@user" to flag that a message needs the human's decision (surfaced via
+ * BotChatTurn.needsUserDecision, stored in messages.metadata for the UI to badge on reload).
  *
  * Parallel execution is controlled by the BOT_CHAT_PARALLEL_ENABLED and
  * BOT_CHAT_PARALLEL_MAX_CONCURRENT settings (defaults: on, max 4 concurrent).
@@ -143,7 +160,29 @@ export class BotChatOrchestrator {
       return entries.map((entry) => [entry]);
     }
 
-    return [entries];
+    // CodingAgent is a mutating worker and its CodingAgent.run() wrapper reloads the shared
+    // conversation itself. Keep it deterministic and side-effect-safe by splitting the otherwise
+    // parallel round around it while still allowing contiguous non-coding peers to run in parallel.
+    const batches: Array<Array<[string, Trigger]>> = [];
+    let parallelBatch: Array<[string, Trigger]> = [];
+    const flushParallel = () => {
+      if (parallelBatch.length > 0) {
+        batches.push(parallelBatch);
+        parallelBatch = [];
+      }
+    };
+
+    for (const entry of entries) {
+      if (entry[0] === CODING_BOT_SLUG) {
+        flushParallel();
+        batches.push([entry]);
+      } else {
+        parallelBatch.push(entry);
+      }
+    }
+    flushParallel();
+
+    return batches;
   }
 
   async handleUserMessage(
@@ -189,9 +228,37 @@ export class BotChatOrchestrator {
       const nextTriggers = new Map<string, Trigger>();
 
       for (const batch of batches) {
+        // A previous sequential batch may have created/closed a handoff. Refresh before building
+        // this batch's prompts; for a parallel batch the value then remains fixed until every peer
+        // in that batch has completed, matching the conversation snapshot semantics below.
+        handoffContext = await this.handoffService.getHandoffContext(conversationId);
+
+        // Immutable parallel-round barrier. The concrete BotService has this method; the runtime
+        // feature check keeps lightweight test doubles/back-compat mocks working. Prepare the
+        // ENTIRE batch before chunking so maxConcurrent is only a scheduler limit, never a context
+        // boundary. If preparation throws, no bot in this batch has started generating yet.
+        const preparedAgents = new Map<string, Agent>();
+        const prepareFn = (this.botService as unknown as {
+          prepareAgentForGroupTurn?: (bot: BotSelect, conversationId: number) => Promise<Agent | undefined>;
+        }).prepareAgentForGroupTurn;
+        if (batch.length > 1 && typeof prepareFn === "function") {
+          const prepared = await Promise.all(
+            batch.map(async ([slug]) => {
+              const bot = participants.get(slug);
+              if (!bot) return undefined;
+              const agent = await prepareFn.call(this.botService, bot, conversationId);
+              return agent ? ([slug, agent] as const) : undefined;
+            })
+          );
+          for (const item of prepared) {
+            if (item) preparedAgents.set(item[0], item[1]);
+          }
+        }
+
         // A large parallel batch is processed in bounded chunks instead of being
         // truncated. The previous slice(0, maxConcurrent) silently dropped every
-        // responder after the first chunk.
+        // responder after the first chunk. All chunks use Agents prepared above, so later chunks
+        // still see the same immutable pre-batch history as the first chunk.
         for (let offset = 0; offset < batch.length; offset += parallelMaxConcurrent) {
           const chunk = batch.slice(offset, offset + parallelMaxConcurrent);
           const activeBots = new Set<string>();
@@ -209,9 +276,9 @@ export class BotChatOrchestrator {
           };
 
           const chunkResults = await Promise.allSettled(
-            chunk.map(async ([slug, trigger]) => {
+            chunk.map(async ([slug, trigger]): Promise<BatchTurnResult | undefined> => {
               const bot = participants.get(slug);
-              if (!bot) return;
+              if (!bot) return undefined;
 
               activeBots.add(slug);
               notifyActive();
@@ -220,7 +287,11 @@ export class BotChatOrchestrator {
 
               let result: { response: string; messageId?: number; stalled: boolean };
               try {
-                result = await this.botService.chat(bot, prompt, { conversationId, tagPromptAsInternal: true });
+                result = await this.botService.chat(bot, prompt, {
+                  conversationId,
+                  tagPromptAsInternal: true,
+                  ...(preparedAgents.has(slug) ? { preparedAgent: preparedAgents.get(slug)! } : {}),
+                });
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 logger.warn("Bot chat turn failed, skipping this bot for this round", { bot: slug, error: message });
@@ -232,7 +303,18 @@ export class BotChatOrchestrator {
                 });
                 activeBots.delete(slug);
                 notifyActive();
-                return { round, botId: slug, botName: bot.name, content: errorMessage.content, messageId: errorMessage.id, needsUserDecision: false, passed: false } satisfies BotChatTurn;
+                return {
+                  turn: {
+                    round,
+                    botId: slug,
+                    botName: bot.name,
+                    content: errorMessage.content,
+                    messageId: errorMessage.id,
+                    needsUserDecision: false,
+                    passed: false,
+                  },
+                  mentions: [],
+                };
               }
 
               const passed = isPassResponse(result.response) || result.stalled;
@@ -252,27 +334,47 @@ export class BotChatOrchestrator {
               activeBots.delete(slug);
               notifyActive();
 
+              const mentions: BatchTurnResult["mentions"] = [];
               if (!passed) {
-                // Handoffs generated by this response must be committed before the next
+                // Handoffs generated by this response must be committed before any later batch/
                 // round reads its handoff context. Awaiting here removes a timing race.
                 await this.handoffService.processMessageForHandoffs(result.response, slug, conversationId, participantSlugs);
 
                 for (const mentioned of extractMentionedSlugs(result.response)) {
                   if (mentioned === slug || !participants.has(mentioned)) continue;
-                  nextTriggers.set(mentioned, { kind: "bot_mention", sourceBotName: bot.name });
+                  mentions.push({
+                    slug: mentioned,
+                    trigger: { kind: "bot_mention", sourceBotName: bot.name },
+                  });
                 }
               }
 
               return {
-                round, botId: slug, botName: bot.name, content: result.response,
-                messageId: result.messageId, needsUserDecision, passed,
-              } satisfies BotChatTurn;
+                turn: {
+                  round,
+                  botId: slug,
+                  botName: bot.name,
+                  content: result.response,
+                  messageId: result.messageId,
+                  needsUserDecision,
+                  passed,
+                },
+                mentions,
+              };
             })
           );
 
+          // Promise completion order is nondeterministic; Promise.allSettled RESULTS are in INPUT
+          // order. Build nextTriggers only here so two parallel bots mentioning the same target
+          // cannot race a shared Map.set(). The first speaker in deterministic rotated order wins
+          // the sourceBotName used for the next delegated prompt.
           for (const outcome of chunkResults) {
-            if (outcome.status === "fulfilled" && outcome.value) {
-              turns.push(outcome.value);
+            if (outcome.status !== "fulfilled" || !outcome.value) continue;
+            turns.push(outcome.value.turn);
+            for (const mention of outcome.value.mentions) {
+              if (!nextTriggers.has(mention.slug)) {
+                nextTriggers.set(mention.slug, mention.trigger);
+              }
             }
           }
         }
