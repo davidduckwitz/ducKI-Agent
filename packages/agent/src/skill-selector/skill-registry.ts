@@ -65,6 +65,11 @@ function loadSkillsFromDirectory(): SkillManifest[] {
         allowedTools: fm.allowedTools,
         version: fm.version,
         metadata: Object.keys(fm.metadata).length ? fm.metadata : undefined,
+        // Hermes pattern: conditional activation
+        fallbackForToolsets: fm.fallbackForToolsets,
+        requiresToolsets: fm.requiresToolsets,
+        fallbackForTools: fm.fallbackForTools,
+        requiresTools: fm.requiresTools,
       });
     }
   } catch (error) {

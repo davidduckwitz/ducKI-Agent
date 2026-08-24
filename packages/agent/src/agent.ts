@@ -412,6 +412,9 @@ export class Agent {
   private readonly allowedSkillSlugs: Set<string> | undefined;
   /** See AgentOptions.respectPersonaLength. */
   private readonly respectPersonaLength: boolean;
+  /** Project-local skill manifests (discovered by the server); merged into loadSkillManifests()
+   *  with precedence over same-slug built-in skills. */
+  private readonly projectSkillManifests: SkillManifest[];
   /** True when the caller passed an explicit per-run maxIterations to the constructor (see
    *  the constructor for why this is tracked separately from the value itself). */
   private hasExplicitMaxIterations: boolean;
@@ -517,6 +520,7 @@ export class Agent {
     this.stickySkillSelection = options.stickySkillSelection ?? false;
     this.allowedSkillSlugs = options.allowedSkillSlugs ? new Set(options.allowedSkillSlugs) : undefined;
     this.respectPersonaLength = options.respectPersonaLength ?? false;
+    this.projectSkillManifests = options.projectSkillManifests ?? [];
 
     this.logger = getRootLogger().child(`Agent:${this.name}`);
     const configuredSkillsPath = process.env["SKILLS_PATH"]?.trim();
@@ -540,6 +544,11 @@ export class Agent {
       // which stayed empty, so every hook passed this way was silently never invoked.
       for (const hook of options.hooks) {
         this.hookRegistry.register(AGENT_HOOK_NAMES.BEFORE_TOOL, hook);
+      }
+    }
+    if (options.afterToolHooks) {
+      for (const hook of options.afterToolHooks) {
+        this.hookRegistry.register(AGENT_HOOK_NAMES.AFTER_TOOL, hook);
       }
     }
 
@@ -1130,6 +1139,10 @@ export class Agent {
     primarySkills?: string[];
     relatedSkills?: string[];
     fallbackSkills?: string[];
+    fallbackForToolsets?: string[];
+    requiresToolsets?: string[];
+    fallbackForTools?: string[];
+    requiresTools?: string[];
   } {
     if (!content.startsWith("---")) return {};
     const end = content.indexOf("\n---", 3);
@@ -1151,6 +1164,10 @@ export class Agent {
       primarySkills?: string[];
       relatedSkills?: string[];
       fallbackSkills?: string[];
+      fallbackForToolsets?: string[];
+      requiresToolsets?: string[];
+      fallbackForTools?: string[];
+      requiresTools?: string[];
     } = {};
     for (const line of block.split(/\r?\n/)) {
       const idx = line.indexOf(":");
@@ -1167,6 +1184,18 @@ export class Agent {
       }
       if (key === "fallback_skills") {
         result.fallbackSkills = parseSkillList(value);
+      }
+      if (key === "fallback_for_toolsets") {
+        result.fallbackForToolsets = parseSkillList(value);
+      }
+      if (key === "requires_toolsets") {
+        result.requiresToolsets = parseSkillList(value);
+      }
+      if (key === "fallback_for_tools") {
+        result.fallbackForTools = parseSkillList(value);
+      }
+      if (key === "requires_tools") {
+        result.requiresTools = parseSkillList(value);
       }
     }
     return result;
@@ -1242,11 +1271,89 @@ export class Agent {
       ...listSkillMdFiles(this.skillsRoot),
       ...pluginSkillDirs.map((dir) => join(dir, "SKILL.md")),
     ];
-    const manifests = withManifestCache(`skills:${this.skillsRoot}`, watchedFiles, () =>
+    let manifests = withManifestCache(`skills:${this.skillsRoot}`, watchedFiles, () =>
       this.loadSkillManifestsUncached(pluginSkillDirs)
     );
-    if (!this.allowedSkillSlugs) return manifests;
-    return manifests.filter((skill) => this.allowedSkillSlugs!.has(skill.slug));
+    if (this.allowedSkillSlugs) {
+      manifests = manifests.filter((skill) => this.allowedSkillSlugs!.has(skill.slug));
+    }
+    // Conditional activation: hide skills whose tool/toolset requirements
+    // aren't met by the currently available tools.
+    manifests = this.filterSkillsByConditionalActivation(manifests);
+    // Merge project-local skills with precedence: project skills win over
+    // same-slug built-in skills (project > local > external).
+    manifests = this.mergeProjectSkills(manifests);
+    return manifests;
+  }
+
+  /** Merges project-local skills into the manifest list. Project skills
+   *  take precedence over same-slug built-in skills. */
+  private mergeProjectSkills(builtinManifests: SkillManifest[]): SkillManifest[] {
+    if (this.projectSkillManifests.length === 0) return builtinManifests;
+
+    const projectSlugs = new Set(this.projectSkillManifests.map((s) => s.slug));
+    // Drop built-in skills that share a slug with a project skill (project wins).
+    const kept = builtinManifests.filter((s) => !projectSlugs.has(s.slug));
+    // Project skills come first (higher priority in the index).
+    return [...this.projectSkillManifests, ...kept];
+  }
+
+  /**
+   * Filters skills based on Hermes-style conditional activation rules.
+   * A skill with `requiresToolsets: ["web"]` is hidden when the web toolset
+   * is unavailable. A skill with `fallbackForToolsets: ["web"]` is hidden when
+   * the web toolset IS available (it's a fallback for when the premium tool
+   * is missing). Same pattern for `requiresTools` and `fallbackForTools`.
+   */
+  private filterSkillsByConditionalActivation(manifests: SkillManifest[]): SkillManifest[] {
+    // Gather available tool names (executor tools + built-in tools).
+    const availableToolNames = new Set<string>();
+    if (this.executor) {
+      for (const tool of this.executor.listTools()) {
+        availableToolNames.add(tool.name);
+      }
+    }
+    // Also consider the built-in tool manifests (tools that the executor
+    // can register at runtime, even if not yet registered).
+    for (const entry of this.getToolManifests()) {
+      if (entry.core) availableToolNames.add(entry.name);
+    }
+
+    return manifests.filter((skill) => {
+      // requiresToolsets: skill is hidden when any required toolset is missing.
+      if (skill.requiresToolsets?.length) {
+        for (const ts of skill.requiresToolsets) {
+          // A toolset is "available" if at least one tool from that set is present.
+          // For now, treat the toolset name as a prefix check (e.g., "web" matches
+          // "web_search", "web_extract").
+          const hasToolset = [...availableToolNames].some((t) => t.startsWith(ts) || t === ts);
+          if (!hasToolset) return false;
+        }
+      }
+
+      // requiresTools: skill is hidden when any required tool is missing.
+      if (skill.requiresTools?.length) {
+        for (const t of skill.requiresTools) {
+          if (!availableToolNames.has(t)) return false;
+        }
+      }
+
+      // fallbackForToolsets: skill is hidden when all listed toolsets ARE available.
+      if (skill.fallbackForToolsets?.length) {
+        const allAvailable = skill.fallbackForToolsets.every((ts) =>
+          [...availableToolNames].some((t) => t.startsWith(ts) || t === ts)
+        );
+        if (allAvailable) return false;
+      }
+
+      // fallbackForTools: skill is hidden when all listed tools ARE available.
+      if (skill.fallbackForTools?.length) {
+        const allAvailable = skill.fallbackForTools.every((t) => availableToolNames.has(t));
+        if (allAvailable) return false;
+      }
+
+      return true;
+    });
   }
 
   private loadSkillManifestsUncached(pluginSkillDirs: string[]): SkillManifest[] {
@@ -1268,6 +1375,10 @@ export class Agent {
         primarySkills: fm.primarySkills ?? [],
         relatedSkills: fm.relatedSkills ?? [],
         fallbackSkills: fm.fallbackSkills ?? [],
+        fallbackForToolsets: fm.fallbackForToolsets,
+        requiresToolsets: fm.requiresToolsets,
+        fallbackForTools: fm.fallbackForTools,
+        requiresTools: fm.requiresTools,
       });
     }
 
@@ -1288,6 +1399,10 @@ export class Agent {
         primarySkills: fm.primarySkills ?? [],
         relatedSkills: fm.relatedSkills ?? [],
         fallbackSkills: fm.fallbackSkills ?? [],
+        fallbackForToolsets: fm.fallbackForToolsets,
+        requiresToolsets: fm.requiresToolsets,
+        fallbackForTools: fm.fallbackForTools,
+        requiresTools: fm.requiresTools,
       });
     }
 
@@ -3289,6 +3404,58 @@ export class Agent {
       /\b(dateien?)\b[\s\S]{0,40}\b(wurden?|wurde)\s+(übermittelt|geschrieben|erstellt|gespeichert)\b/i,
     ];
     return patterns.some((re) => re.test(response));
+  }
+
+  /**
+   * Detects the "announced future work, then stopped" failure mode: the model writes prose
+   * COMMITTING to an action ("I will now create X", "I'll edit Y", "als Nächstes schreibe ich
+   * Z") but emits no [TOOL:...] marker and no native tool_call, so the promise simply becomes
+   * the final answer. Distinct from detectFalseCompletionClaim (which matches PAST-tense fake
+   * success) - this one matches FUTURE/INTENT wording. A model that says "I will do X" and
+   * then emits the marker is fine (the marker is the execution); this only fires when the
+   * intention stands alone with nothing after it.
+   *
+   * Deliberately narrow so it never nags a legitimate final summary: it requires an intent
+   * verb PLUS a concrete target (file/code/command/step/tool), and skips responses that are
+   * mostly a final report to the user ("Here is what I changed", "Das Ergebnis ist...").
+   * Only ever checked when toolResultsMap.size === 0 for this iteration.
+   */
+  private detectForwardIntentClaim(response: string): boolean {
+    if (response.includes("[TOOL:")) return false; // a real marker is present, handled elsewhere
+
+    // A response that is a pure report/summary is the legitimate end of a run - do not nag it.
+    const reportOpeners =
+      /^\s*(here is|here's|das ergebnis|das ist|das hier ist|ergebnis|fertig|abgeschlossen|zusammenfassung|done|the result|the final)\b/i;
+    if (reportOpeners.test(response)) return false;
+
+    // The response must reference SOMETHING concrete to act on. This is what separates
+    // "I will create the README" (a promise to act) from "I will keep that in mind" (a reply).
+    // Two layers: (1) a generic artifact noun (file/code/command/...), and (2) a concrete
+    // filename/path with a recognisable extension or a well-known source-file name. The second
+    // layer catches "I will create src/index.tsx" even when no generic noun is present.
+    const target =
+      /(file|datei|code|script|folder|ordner|command|befehl|test|component|komponente|module|modul|config|readme|function|funktion|class|klasse|endpoint|route|package|refactor|datei(en)?|verzeichnis(se)?|ordner|projekt|seite|page|website|site|interface|api|schema|migration|seed|fixture|middleware|plugin|extension|library|dependency|import|export|style|layout|template|view|model|controller|service|repository|handler|router|middleware|validator|serializer|adapter|wrapper|proxy|factory|builder|singleton|observer|strategy|decorator|utility|helper|constant|enum|type|interface|struct|trait|mixin)/i;
+    const filenameTarget =
+      /(?:^|[\s\"'`(])(?:[A-Za-z0-9_./-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|vue|svelte|py|go|rs|java|c|h|cpp|hpp|cs|php|rb|swift|kt|kts|scala|sh|bash|zsh|ps1|sql|yaml|yml|toml|json|md|css|scss|less|html|htm|xml|astro|svg|png|jpg|jpeg|gif|webp|ico|woff2?|ttf|eot|wasm|env|ini|cfg|conf|lock|gradle|sbt|cmake|make|dockerfile|nginx\.conf)|\b(?:README|package\.json|tsconfig\.json|vite\.config|webpack\.config|Dockerfile|Makefile|docker-compose\.ya?ml|eslint\.config|prettier\.config|tailwind\.config|postcss\.config|babel\.config|jest\.config|vitest\.config|\.gitignore|\.env|\.editorconfig|\.prettierrc|\.eslintrc)\b)/i;
+    const intent =
+      /\b(i will|i'll|i am going to|i\s*'?m going to|im going to|let me|let's|let us|i need to|i should|i must|i have to|i can|i could|i would|i shall|i want to|i plan to|i intend to|i aim to|next i('ll)?|now i('ll)?|first i('ll)?|then i('ll)?|finally i('ll)?)\b[\s\S]{0,80}\b(create|write|edit|update|change|modify|fix|add|remove|delete|run|execute|call|open|read|build|generate|install|move|copy|send|post|emit|start|refactor|check|verify|examine|inspect|review|test|compile|deploy|configure|validate|structure|optimize|format|debug|analyze|analyse|search|find|show|display|print|save|load|import|export|convert|transform|compute|calculate|connect|disconnect|merge|push|commit|publish|document|comment|explain|describe|define|implement|integrate|migrate|upgrade|downgrade|patch|rollback|restore|backup|back up|archive|extract|compress|decompress|encrypt|decrypt|sign|monitor|watch|track|prepare|set up|configure|clean|tidy|organize|organise|rename|duplicate|clone|look into|look at|look over|go through|walk through|check out|scan|parse|process|handle|respond|reply|answer|summarize|summarise|outline|sketch|draft|design|architect|plan|schedule|coordinate|orchestrate|automate|script|code|program|develop|engineer|craft|author|compose|assemble|piece together|put together|wire up|hook up|connect up|spin up|stand up|bring up|tear down|shut down|kill|terminate|stop|halt|pause|resume|continue|proceed|advance|move on|go ahead|plough on|carry on|get started|kick off|begin|commence|initiate|launch|roll out|ship|release|stage|prep|bootstrap|scaffold|initialise|initialize|populate|seed|hydrate|fill|inject|register|deregister|unregister|subscribe|unsubscribe|listen|watch|observe|notify|alert|warn|log|trace|profile|benchmark|measure|time|count|tally|total|sum|aggregate|collect|gather|fetch|retrieve|get|pull|push|upload|download|sync|replicate|mirror|backup|restore|snapshot|checkpoint|tag|label|mark|flag|toggle|switch|flip|enable|disable|activate|deactivate|turn on|turn off|power|boot|reboot|restart|reload|refresh|invalidate|purge|flush|clear|wipe|reset|nuke|destroy|obliterate|rewrite|overwrite|replace|substitute|swap|exchange|trade|map|translate|localize|localise|internationalize|internationalise|pluralize|singularize|inflect|decline|conjugate|stem|lemmatize|tokenize|parse|lex|compile|transpile|bundle|minify|uglify|beautify|prettify|lint|typecheck|type-check|type check|check|ensure|assert|confirm|guarantee|verify|validate|audit|review|inspect|examine|scrutinize|scrutinise|analyse|dissect|probe|explore|investigate|research|study|learn|understand|grok|grasp|figure out|work out|sort out|iron out|straighten out|smooth out|clean up|tidy up|polish|refine|improve|enhance|upgrade|augment|extend|expand|grow|scale|shrink|reduce|minimise|minimize|maximize|maximise|optimise|tune|tweak|adjust|calibrate|align|realign|centre|center|left|right|justify|pad|trim|strip|chomp|chop|split|join|concat|concatenate|interpolate|embed|nest|wrap|unwrap|flatten|unroll|zip|unzip|tar|untar|gzip|gunzip|bundle|unbundle|pack|unpack|serialize|deserialize|marshal|unmarshal|encode|decode|encrypt|decrypt|hash|sign|verify|authenticate|authorize|authorise|permit|allow|deny|block|filter|screen|gate|throttle|rate-limit|rate limit|queue|dequeue|enqueue|schedule|dispatch|route|forward|redirect|proxy|tunnel|bridge|relay|broker|mediate|negotiate|handshake|connect|disconnect|open|close|read|write|seek|tell|flush|sync|fsync|fdatasync|mmap|munmap|malloc|free|allocate|deallocate|acquire|release|lock|unlock|mutex|semaphore|signal|wait|notify|broadcast|multicast|unicast|stream|pipe|tee|split|join|multiplex|demultiplex|mux|demux|encode|transcode|resample|upsample|downsample|interpolate|extrapolate|smooth|sharpen|blur|filter|convolve|deconvolve|fft|ifft|dct|idct|quantize|dequantize|compress|decompress)/i;
+    const intentGerman =
+      /\b(ich werde|ich moechte|ich muss|ich sollte|ich will|ich|als nächstes|als naechstes|jetzt|nun|als erstes|zuerst|danach|anschließend|anschliessend|dann|schließlich|schliesslich|zuletzt|erstmal|erst einmal|zunächst|zunaechst|im nächsten schritt|im naechsten schritt|im anschluss|nun)\b[\s\S]{0,80}\b(erstelle|erstellen|schreibe|schreiben|ändere|aendere|ändern|aendern|bearbeite|bearbeiten|aktualisiere|aktualisieren|fixe|fixen|behebe|beheben|repariere|reparieren|korrigiere|korrigieren|hinzufüge|hinzufuege|hinzufügen|hinzufuegen|ergänze|ergaenze|ergänzen|ergaenzen|entferne|entfernen|lösche|loesche|löschen|loeschen|ausführe|ausfuehre|ausführen|ausfuehren|aufrufe|aufrufen|rufe auf|rufen auf|öffne|oeffne|öffnen|oeffnen|lese|lesen|einlesen|durchlese|durchlesen|überfliege|ueberfliege|baue|bauen|generiere|generieren|installiere|installieren|verschiebe|verschieben|kopiere|kopieren|sende|senden|starte|starten|beginne|beginnen|lege an|legen an|lege los|fang an|fange an|fangen an|mach|mache|machen|prüfe|pruefe|prüfen|pruefen|checke|checken|überprüfe|ueberpruefe|kontrolliere|kontrollieren|teste|testen|validiere|validieren|verifiziere|verifizieren|schaue|schauen|gucke|gucken|sehe nach|sehen nach|sieh nach|schaue mir an|gucke mir an|sehe mir an|analysiere|analysieren|untersuche|untersuchen|durchsuche|durchsuchen|finde|finden|suche|suchen|zeige|zeigen|gebe aus|ausgeben|speichere|speichern|sichere|sichern|lade|laden|hochlade|hochladen|downloade|downloaden|importiere|importieren|exportiere|exportieren|konvertiere|konvertieren|transformiere|transformieren|berechne|berechnen|verbinde|verbinden|trenne|trennen|merge|mergen|pushe|pushen|committe|committen|publiziere|publizieren|veröffentliche|veroeffentliche|dokumentiere|dokumentieren|kommentiere|kommentieren|erkläre|erklaere|beschreibe|beschreiben|definiere|definieren|implementiere|implementieren|integriere|integrieren|migriere|migrieren|aktualisiere|updaten|patche|patchen|restore|wiederherstelle|wiederherstellen|backup|sichere|archiviere|archivieren|extrahiere|extrahieren|entpacke|entpacken|packe|packen|komprimiere|komprimieren|dekomprimiere|dekomprimieren|verschlüssele|verschluessele|entschlüssele|entschluessele|signiere|signieren|kompiliere|kompilieren|deploye|deployen|konfiguriere|konfigurieren|optimiere|optimieren|formatiere|formatieren|debugge|debuggen|strukturiere|strukturieren|organisiere|organisieren|bereinige|bereinigen|aufräume|aufraeume|umschreibe|umschreiben|überschreibe|ueberschreibe|ersetze|ersetzen|tausche|tauschen|umbenenne|umbenennen|dupliziere|duplizieren|klone|klonen|erstelle neu|lege neu an|schreibe neu|baue neu|setze auf|aufsetzen|richte ein|einrichten|konfiguriere|mache|tue|tu|erledige|erledigen|führe durch|durchführen|fuehre aus|stoße an|anstossen|triggere|triggern|aktiviere|aktivieren|deaktiviere|deaktivieren|schalte ein|einschalten|schalte aus|ausschalten|starte neu|neustarten|boote|booten|lade neu|neu laden|aktualisiere|bringe auf den neuesten stand)\b/i;
+
+    // Phase commitment: "I'll start the PLAN phase", "beginne mit Phase 2", etc. These are
+    // explicit work promises in the phase-based coding workflow and must never become the
+    // final answer without an actual phase marker or tool call. Skip the target check here
+    // because the phase IS the target — no file/command noun is needed.
+    const phaseCommitment =
+      /\b(phase|plan|explore|edit|verify|report)\b/i.test(response) &&
+      /\b(start|begin|move|beginne|starte|fahre fort|fortsetzen|gehe zu|gehe jetzt|gehe über|gehe ueber|mache weiter|begin with|beginne mit|starte mit|fortfahren|weitermachen|prüfe|pruefe|check|checke|look at|schaue|gucke|sehe nach|schaue nach|gucke nach|analysiere|untersuche|erkunde|exploriere|evaluiere|bewerte|plane|plane jetzt|entwerfe|designe|editiere|bearbeite jetzt|verifiziere|teste jetzt|reporte|berichte|fasse zusammen|dokumentiere|protokolliere|mache den|mach den|fang den|beginne den|starte den|fahre mit|mache beim|mach beim|jetzt kommt|nun kommt|kommt jetzt|kommt nun|geht los|geht's los|los geht|fangen wir an|legen wir los|packen wir|machen wir|lasst uns|lass uns|lasst mal|lass mal)\b/i.test(response);
+
+    // Intent verb AND (a concrete target (generic noun OR filename) OR a phase commitment).
+    // The target check keeps this from firing on a plain conversational "I will answer your
+    // question". Phase commitment overrides it because committing to a phase IS an explicit
+    // work promise that the run loop must not silently accept as a final answer.
+    const hasTarget = target.test(response) || filenameTarget.test(response) || phaseCommitment;
+    return hasTarget && (intent.test(response) || intentGerman.test(response));
   }
 
   /**
@@ -5549,6 +5716,22 @@ export class Agent {
           );
         }
 
+        // Execute AFTER_TOOL hooks so listeners (e.g. live diagnostics tracking, side-effect
+        // monitors) see the final post-repair result. This fires after self-repair and error
+        // tracking so hooks always see the definitive outcome, not a transient failure that was
+        // immediately corrected.
+        if (toolCall) {
+          await this.executeHookSafely(AGENT_HOOK_NAMES.AFTER_TOOL, {
+            toolName: toolCall.toolName,
+            input: toolCall.input as Record<string, unknown>,
+            result: executed.result,
+            executionMetadata: {
+              durationMs: batchExecutionTime,
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+
         // A successful browser screenshot carries the actual image as base64 in
         // data.screenshot. Remove it from the tool result to save tokens (the actual
         // screenshot is added to the conversation as a separate vision message by
@@ -6473,7 +6656,39 @@ export class Agent {
 
     let memoryContext = "";
     try {
+      // Importance-sorted pool: the top-8 memories from scoped + global, the same set
+      // that has always fed the system prompt.
       memoryContext = await this.memory.buildSystemContext(this.conversation.id);
+
+      // Query-relevant overlay: pull memories whose content matches the user's actual
+      // question, not just high-importance ones. This catches learnings from past runs
+      // that had a different importance score but are semantically relevant to this task —
+      // without it, a Reflection Learning with importance 4 about a similar problem is
+      // invisible until the dynamic per-iteration keyword search picks it up later.
+      if (effectiveInput.trim().length > 0) {
+        const relevant = await this.memory.getRelevantContext(effectiveInput, 4);
+        if (relevant.length > 0) {
+          // Merge without duplicating: the system context block already carries a
+          // `## Relevant Memory` header with lines starting "- ". Extract the plain
+          // content of each, deduplicate against the relevance hits, and append the
+          // new entries under a separate header so the model can distinguish the two
+          // sources.
+          const existingContents = new Set(
+            memoryContext
+              .split("\n")
+              .filter((line) => line.startsWith("- "))
+              .map((line) => line.slice(2).trim())
+          );
+          const newEntries = relevant
+            .map((content) => content.trim())
+            .filter((content) => content.length > 0 && !existingContents.has(content));
+          if (newEntries.length > 0) {
+            memoryContext =
+              memoryContext +
+              `\n\n## Task-Relevant Memory\n${newEntries.map((content) => `- ${content}`).join("\n")}`;
+          }
+        }
+      }
     } catch (memoryError) {
       this.logger.warn("Failed to build system memory context", {
         error: memoryError instanceof Error ? memoryError.message : String(memoryError),
@@ -6838,6 +7053,7 @@ export class Agent {
     let malformedToolCallAttempts = 0;
     let unexecutedCodeFenceNudges = 0; // Bounded retries for the "showed code instead of writing it" guardrail
     let falseCompletionClaimNudges = 0; // Bounded retries for the "narrated a fake success" guardrail
+    let forwardIntentClaimNudges = 0; // Bounded retries for the "announced future work but emitted no tool call" guardrail
     let truncatedEmptyResponseNudges = 0; // Bounded retries for the "ran out of tokens while reasoning, said nothing" guardrail
     let toolsJustExecuted = false; // Track if tools were executed in previous iteration
     let emptyResponseAfterTools = false; // Track if we got empty response after tool execution
@@ -7958,6 +8174,57 @@ export class Agent {
           continue;
         }
 
+        // Guardrail: the model announced FUTURE work ("I will now create X", "ich erstelle
+        // jetzt Y") but emitted no tool call - the intention became the final answer and the
+        // work never happened. Nudge it to actually emit the call instead of narrating it.
+        const forwardIntentClaim = this.detectForwardIntentClaim(response);
+        if (forwardIntentClaim && forwardIntentClaimNudges < 3) {
+          forwardIntentClaimNudges++;
+          this.logger.warn("[TOOL-CALLS] Detected announced-but-unexecuted action, nudging model to emit the call", {
+            attempt: forwardIntentClaimNudges,
+          });
+          emit("guardrail", "Aktion wurde angekündigt aber kein Tool-Call gesendet — fordere echte Ausführung an", {
+            attempt: forwardIntentClaimNudges,
+          });
+          const phaseMarkerPresent = />>\s*PHASE\s*:\s*(explore|plan|edit|verify|report)/i.test(response);
+          const phaseMatch = response.match(/>>\s*PHASE\s*:\s*(explore|plan|edit|verify|report)/i);
+          const declaredPhase = phaseMatch?.[1]?.toLowerCase();
+
+          const baseNudge =
+            `Your last response announced an intention to act but you emitted NO tool call — ` +
+            `no action was actually performed, so nothing happened. ` +
+            `Do not describe what you are about to do — just DO it. `;
+
+          const phaseNudge =
+            phaseMarkerPresent && declaredPhase
+              ? `You declared the ${declaredPhase.toUpperCase()} phase but did not perform a single ${declaredPhase === "explore" ? "read/exploration (filesystem:list, filesystem:grep, filesystem:read, or status)" : declaredPhase === "edit" ? "file edit (filesystem:edit or filesystem:write)" : declaredPhase === "verify" ? "verification (shell command, filesystem:read to review, or diagnostics)" : "action"} — the phase marker alone does nothing. `
+              : ``;
+
+          const howTo =
+            `If you need to read or list files:\n` +
+            `[TOOL:filesystem action=list path="."]\n[/TOOL]\n` +
+            `or:\n` +
+            `[TOOL:filesystem action=read path=<the file path>]\n[/TOOL]\n\n` +
+            `If you need to edit a file:\n` +
+            `[TOOL:filesystem action=edit path=<the file path>]\n<<<\n<the exact oldString to replace>\n>>>\n<the newString replacement>\n[/TOOL]\n\n` +
+            `If you need to check your status:\n` +
+            `[TOOL:status]\n[/TOOL]\n\n` +
+            `Do not announce, do not preview, do not promise — EXECUTE now.`;
+
+          const nudgeContent = baseNudge + phaseNudge + howTo;
+          const nudgePrompt: LLMMessage = {
+            role: "user",
+            content: nudgeContent,
+            metadata: { internal: true, kind: "forward_intent_claim_nudge" },
+          };
+          await this.conversation.addMessage(nudgePrompt);
+          this.history.add(nudgePrompt, "forward_intent_claim_nudge");
+          emit("internal_instruction", "Fordere echte Ausführung statt Ankündigung an...", {
+            kind: "forward_intent_claim_nudge",
+          });
+          continue;
+        }
+
         // Guardrail: a previous tool_staging read still has more of a large result unread
         // (hasMore:true), but this response neither read the next chunk nor produced a real
         // answer from what it already had - it just talked about needing to (e.g. "I must
@@ -8464,11 +8731,16 @@ export class Agent {
       const actualQualityRanking = qualityRanking[postIterationQuality as keyof typeof qualityRanking] ?? 1;
 
       if (adjustedControls.reflectionStoreMemory && actualQualityRanking <= minQualityRanking && postIterationIssues.length > 0) {
+        // Include the user's request so future retrievals can match this learning against
+        // similar tasks — without it, "Boundary Assessment | Quality: poor | Issues: ..." is
+        // meaningless telemetry with no task context to make it actionable.
+        const taskSummary = effectiveInput.slice(0, 120).replace(/\n/g, " ").trim();
         const postIterationLearning = [
           "Post-Iteration Learning (Boundary Assessment)",
+          `Task: ${taskSummary}`,
           `Quality: ${postIterationQuality}`,
-          postIterationIssues.length > 0 ? `Issues at Boundary: ${postIterationIssues.slice(0, 3).join("; ")}` : "",
-          postIterationSuggestions.length > 0 ? `For Future: ${postIterationSuggestions.slice(0, 2).join("; ")}` : "",
+          postIterationIssues.length > 0 ? `What failed: ${postIterationIssues.slice(0, 3).join("; ")}` : "",
+          postIterationSuggestions.length > 0 ? `Strategy for next time: ${postIterationSuggestions.slice(0, 2).join("; ")}` : "",
         ]
           .filter((part) => part.trim().length > 0)
           .join(" | ");
@@ -8486,11 +8758,16 @@ export class Agent {
     // Helps agent learn from its own quality evaluations
     // Note: Always use the BEST quality info (prefer meta if it ran and found fewer issues)
     if (adjustedControls.enableReflection && adjustedControls.reflectionStoreMemory && reflectionIssues.length > 0) {
+      // Anchor the learning to what was asked so it is retrievable when a similar task
+      // comes up — without the task context, "Self-Reflection | Quality: poor | Issues: ..."
+      // is context-free and never matches a future query.
+      const taskSummary = effectiveInput.slice(0, 120).replace(/\n/g, " ").trim();
       const reflectionLearning = [
         "Self-Reflection Learning",
+        `Task: ${taskSummary}`,
         reflectionQuality ? `Quality: ${reflectionQuality}` : "",
-        reflectionIssues.length > 0 ? `Issues: ${reflectionIssues.slice(0, 3).join("; ")}` : "",
-        reflectionSuggestions.length > 0 ? `Improvements: ${reflectionSuggestions.slice(0, 2).join("; ")}` : "",
+        reflectionIssues.length > 0 ? `What to avoid: ${reflectionIssues.slice(0, 3).join("; ")}` : "",
+        reflectionSuggestions.length > 0 ? `What to do instead: ${reflectionSuggestions.slice(0, 2).join("; ")}` : "",
       ]
         .filter((part) => part.trim().length > 0)
         .join(" | ");

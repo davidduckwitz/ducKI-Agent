@@ -83,6 +83,11 @@ import { screenshotRouter } from "./routes/screenshots.js";
 import { createProviderModelsRouter } from "./routes/provider-models.js";
 import { botsRouter } from "./routes/bots.js";
 import { botChatsRouter } from "./routes/bot-chats.js";
+import { pendingWritesRouter } from "./routes/pending-writes.js";
+import { projectSkillsRouter } from "./routes/project-skills.js";
+import { BackgroundReviewFork } from "./lib/background-review.js";
+import { projectSkills } from "./lib/project-skills-service.js";
+import { createSessionSearchTool } from "./lib/session-search-tool.js";
 import { BotService } from "./lib/bot-service.js";
 import { createDelegateToBotTool } from "./lib/delegate-to-bot-tool.js";
 import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
@@ -297,9 +302,14 @@ function buildAgentFactory(
 			(agentBehavior.trim() ? `\n\n## Agent Persona\n${agentBehavior.trim()}` : "") +
 			(humanInfo.trim() ? `\n\n## About the User\n${humanInfo.trim()}` : "");
 		const combinedSystemPrompt = (customSystemPrompt.trim() || DEFAULT_SYSTEM_PROMPT) + profileSections;
+		// Discover project-local skills from the current working directory's git repo.
+		// Project skills win over same-slug built-in skills (project > local > external).
+		const projectSkillManifests = projectSkills.discoverProjectSkills();
+
 		const agentOptions = {
 			...(maxIterationsSetting ? { maxIterations: parseInt(maxIterationsSetting) } : {}),
 			...(customSystemPrompt.trim() || profileSections ? { systemPrompt: combinedSystemPrompt } : {}),
+			...(projectSkillManifests.length > 0 ? { projectSkillManifests } : {}),
 		};
 
 		const agent = new Agent(providerRef.current, db, undefined, agentOptions);
@@ -354,6 +364,8 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/agents", agentsRouter);
 	app.use("/api/bots", botsRouter);
 	app.use("/api/bot-chats", botChatsRouter);
+	app.use("/api/pending-writes", pendingWritesRouter);
+	app.use("/api/project-skills", projectSkillsRouter);
 	app.use("/api/skills", skillsRouter);
 	app.use("/api/shared", sharedRouter);
 	app.use("/api/updates", updatesRouter);
@@ -454,6 +466,7 @@ async function bootstrap(): Promise<void> {
 		...allTools,
 		createMcpTool(mcpRegistry),
 		createCryptoPaymentMcpTool(db),
+		createSessionSearchTool(db),
 		// Browser automation is handled by the real `browser` tool (in allTools, Puppeteer in an
 		// isolated worker) plus the browser-control SKILL. A former `browser-control` MCP stub was
 		// removed: it returned a 1x1 mock screenshot yet reported success, so the model picked it
@@ -564,6 +577,11 @@ async function bootstrap(): Promise<void> {
 	});
 	await botService.ensureBuiltinBots();
 	botServiceRef.current = botService;
+
+	// Background Review Fork: fire-and-forget post-turn learning analysis.
+	// Runs on a cheap model, proposes memory/skill updates through the write-approval gate.
+	const bgReview = new BackgroundReviewFork(db, providerRef.current);
+
 	const cronjobManager = new CronjobManager(db, createAgent, logger.child("CronjobManager"), {
 		runWorkflow: (workflowId: string) => workflowEngineRef.current.runWorkflow(workflowId),
 		runCoding: (goal: string, options?: { verifyCommand?: string; sandboxRoot?: string }) =>
@@ -607,6 +625,7 @@ async function bootstrap(): Promise<void> {
 	app.locals["createAgent"] = createAgent;
 	app.locals["createCodingAgent"] = createCodingAgentFactory;
 	app.locals["botService"] = botService;
+	app.locals["bgReview"] = bgReview;
 	app.locals["reloadProvider"] = async () => {
 		const reloaded = await loadProviderFromSettings(db);
 		providerRef.current = reloaded.provider;

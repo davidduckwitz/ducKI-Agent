@@ -111,7 +111,12 @@ export function CodingAgentPanel({
     }
     return out;
   }, [messages]);
-  const events = useMemo(() => messages.filter((msg) => msg.role === "event"), [messages]);
+  // Activity tab events: exclude checklist-update events whose todo_items are already shown
+  // in the pinned CodingTodoStrip above. They carry no other information worth an inline bubble.
+  const events = useMemo(
+    () => messages.filter((msg) => msg.role === "event" && !Array.isArray(msg.eventData?.["todo_items"])),
+    [messages]
+  );
 
   // The latest part-write decision (part_warning / part_healed / part_heal_error) emitted by
   // the CodingAgent at run end. The chat tab otherwise filters event messages out entirely,
@@ -274,7 +279,7 @@ export function CodingAgentPanel({
         </div>
       </div>
 
-      {(codingAgentTab === "chat" || codingAgentTab === "activity") && <CodingTodoStrip items={todoItems} />}
+      {(codingAgentTab === "chat" || codingAgentTab === "activity" || codingAgentTab === "plan") && <CodingTodoStrip items={todoItems} />}
 
       {codingAgentTab === "chat" && (
         <div

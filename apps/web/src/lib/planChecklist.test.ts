@@ -128,7 +128,8 @@ describe("findLatestChecklist - CodingAgent TodoList fallback", () => {
   it("maps 'blocked' to 'failed' and keeps 'in_progress' out of CLOSED_STATUSES", () => {
     const snapshot = findLatestChecklist([todoDecisionEvent(["done", "blocked", "in_progress", "pending"])]);
     expect(resolveStepStatus(snapshot, steps[1]!, 1)).toBe("failed");
-    // "in_progress" (index 2) is the first non-closed step - "blocked" (index 1) is terminal.
+    // "in_progress" (index 2) is where the agent is working, so it is the running step even
+    // though "blocked" (index 1) is terminal and would otherwise be skipped over.
     expect(firstOpenStepIndex(snapshot, steps)).toBe(2);
   });
 
@@ -199,6 +200,19 @@ describe("firstOpenStepIndex", () => {
   it("treats an unverified step as still open", () => {
     // "unverified" means the agent could not prove it - not that it is finished.
     const snapshot = findLatestChecklist([checklistEvent(["done", "unverified", "pending", "pending"], "done")]);
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(1);
+  });
+
+  it("prefers the in_progress step over the first merely-open step", () => {
+    // The bug this fixes: in_progress used to be flattened to "pending", so the running marker
+    // sat on the first open step (index 1) while the agent actually worked on index 2.
+    const snapshot = findLatestChecklist([todoDecisionEvent(["done", "pending", "in_progress", "pending"])]);
+    expect(resolveStepStatus(snapshot, steps[2]!, 2)).toBe("in_progress");
+    expect(firstOpenStepIndex(snapshot, steps)).toBe(2);
+  });
+
+  it("falls back to the first open step when nothing is in_progress", () => {
+    const snapshot = findLatestChecklist([todoDecisionEvent(["done", "pending", "pending", "pending"])]);
     expect(firstOpenStepIndex(snapshot, steps)).toBe(1);
   });
 });

@@ -4,7 +4,8 @@ import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
 import { findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "../../lib/planChecklist";
-import { useSettings, readFlag } from "../../lib/useSettings";
+import { findLatestPhaseProgress, CODING_PHASES, CODING_PHASE_LABEL, type CodingPhase } from "../../lib/planPhase";
+import { useSettings, readFlag, readNumber } from "../../lib/useSettings";
 import type { Plan } from "../chat/PlanExecutionPanel";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import { PanelEmpty } from "../ui/panel";
@@ -43,6 +44,7 @@ export function CodingPlanPanel({
   const [refinedPlan, setRefinedPlan] = useState<Plan | null>(null);
   const settingsQuery = useSettings();
   const autoExecuteEnabled = readFlag(settingsQuery.data, "PLAN_MODE_AUTO_EXECUTE");
+  const codingTimeoutMs = readNumber(settingsQuery.data, "CODING_AGENT_TIMEOUT_MS", 300000);
 
   const { plan: derivedPlan } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -68,10 +70,35 @@ export function CodingPlanPanel({
   // replaced a tool-call counter, and why the logic lives in a testable module).
   const checklist = useMemo(() => findLatestChecklist(messages), [messages]);
 
+  // The phase the agent declares it is in (see lib/planPhase). This is the same state the
+  // phase-lock hook steers by, surfaced so the user can see whether the agent is exploring,
+  // planning, editing, verifying or reporting - not just "a spinner somewhere".
+  const phaseProgress = useMemo(() => findLatestPhaseProgress(messages), [messages]);
+
+  // Attempt / budget context from the latest iteration event, so a long run shows
+  // "Versuch 2/3" instead of an unqualified "Wird ausgeführt" while it is retrying.
+  const latestIteration = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i]?.eventType === "iteration") return messages[i];
+    }
+    return undefined;
+  }, [messages]);
+  const attempt = typeof latestIteration?.eventData?.["attempt"] === "number"
+    ? (latestIteration.eventData["attempt"] as number)
+    : undefined;
+  const maxAttempts = typeof latestIteration?.eventData?.["maxAttempts"] === "number"
+    ? (latestIteration.eventData["maxAttempts"] as number)
+    : undefined;
+
   const steps = plan?.steps ?? [];
   const statusOf = (step: { title: string }, index: number) => resolveStepStatus(checklist, step, index);
   const runningIndex = useMemo(() => firstOpenStepIndex(checklist, steps), [checklist, steps]);
   const doneCount = checklist?.doneCount ?? 0;
+
+  const formatBudget = (ms: number): string => {
+    const minutes = Math.round(ms / 60000);
+    return minutes >= 1 ? `${minutes} Min` : `${Math.round(ms / 1000)} s`;
+  };
 
   const execute = async (planToExecute: Plan | null = plan) => {
     if (!planToExecute) return;
@@ -129,7 +156,47 @@ export function CodingPlanPanel({
               {t("codingPage.planExecuting")}
             </span>
           )}
+          {isLoading && typeof attempt === "number" && (
+            <span className="chip">
+              {t("codingPage.planAttempt")}: {attempt}/{maxAttempts ?? attempt}
+            </span>
+          )}
+          <span className="chip" title={t("codingPage.planTimeoutHint")}>
+            {formatBudget(codingTimeoutMs)}
+          </span>
         </div>
+
+        {/* Phase bar: Explore → Plan → Edit → Verify → Report. Only rendered once a phase
+            event exists, so a fresh plan without a run shows no phases instead of a fake one. */}
+        {(phaseProgress.current !== undefined || phaseProgress.completed.size > 0 || phaseProgress.failed.size > 0) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            {CODING_PHASES.map((phase: CodingPhase, index) => {
+              const isCurrent = phaseProgress.current === phase;
+              const isDone = phaseProgress.completed.has(phase);
+              const isFailed = phaseProgress.failed.has(phase);
+              return (
+                <span key={phase} className="flex items-center gap-1">
+                  {index > 0 && <span className="text-[10px] text-muted-foreground">›</span>}
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                      isCurrent
+                        ? "bg-primary/15 text-primary ring-1 ring-primary/40"
+                        : isDone
+                          ? "bg-emerald-500/10 text-emerald-600"
+                          : isFailed
+                            ? "bg-destructive/10 text-destructive"
+                            : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {isCurrent && <Loader2 className="mr-0.5 inline h-2.5 w-2.5 animate-spin" />}
+                    {isDone && <CheckCircle2 className="mr-0.5 inline h-2.5 w-2.5" />}
+                    {CODING_PHASE_LABEL[phase]}
+                  </span>
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
@@ -139,7 +206,11 @@ export function CodingPlanPanel({
           const failed = status === "failed";
           const unverified = status === "unverified";
           const skipped = status === "skipped";
-          const running = isLoading && !done && !failed && !skipped && index === runningIndex;
+          // "in_progress" is the agent's own "I am working on this NOW" signal (the todo tool
+          // says to mark a step in_progress before starting it). Prefer it; fall back to the
+          // positional guess only when the model never marks in_progress.
+          const inProgress = status === "in_progress";
+          const running = isLoading && !done && !failed && !skipped && (inProgress || index === runningIndex);
 
           return (
             <div

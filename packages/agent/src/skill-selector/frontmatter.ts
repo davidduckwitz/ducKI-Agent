@@ -45,6 +45,11 @@ export interface NormalizedSkillFrontmatter {
   version?: string;
   /** The raw metadata map, always present (possibly empty). */
   metadata: Record<string, string>;
+  // Hermes pattern: conditional activation (metadata.hermes namespace)
+  fallbackForToolsets?: string[];
+  requiresToolsets?: string[];
+  fallbackForTools?: string[];
+  requiresTools?: string[];
 }
 
 export interface ParsedFrontmatter {
@@ -225,6 +230,15 @@ export function normalizeFrontmatter(data: Record<string, unknown>): NormalizedS
         ) as Record<string, string>)
       : undefined;
 
+  // Read Hermes-pattern conditional activation fields from metadata.hermes
+  const hermesRaw = metadata.hermes;
+  const hermesMeta: Record<string, string> =
+    hermesRaw && typeof hermesRaw === "string"
+      ? (() => { try { const parsed = JSON.parse(hermesRaw); return parsed && typeof parsed === "object" ? parsed : {}; } catch { return {}; } })()
+      : (hermesRaw && typeof hermesRaw === "object" && !Array.isArray(hermesRaw)
+        ? (hermesRaw as Record<string, string>)
+        : {});
+
   return {
     name: toStr(data.name),
     description: toStr(data.description),
@@ -242,6 +256,10 @@ export function normalizeFrontmatter(data: Record<string, unknown>): NormalizedS
     scripts,
     version: toStr(pick("version")),
     metadata,
+    fallbackForToolsets: toStringArray(hermesMeta["fallback_for_toolsets"]),
+    requiresToolsets: toStringArray(hermesMeta["requires_toolsets"]),
+    fallbackForTools: toStringArray(hermesMeta["fallback_for_tools"]),
+    requiresTools: toStringArray(hermesMeta["requires_tools"]),
   };
 }
 

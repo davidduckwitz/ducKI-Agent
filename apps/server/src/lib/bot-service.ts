@@ -305,9 +305,19 @@ export class BotService {
 
     if (opts?.tagPromptAsInternal) {
       const history = await this.deps.db.getMessages(conversationId);
-      // The first row created after beforeMaxId is always this call's own `message` - Agent.run()
-      // persists it before doing anything else.
-      const promptRow = history.find((m) => m.id > beforeMaxId && m.role === "user");
+      // When bots run in parallel in the same conversation (bot-chat orchestrator),
+      // several prompt rows from different bots may land after `beforeMaxId` in
+      // arbitrary order. Tag only the FIRST untagged user row — that is always
+      // this bot's own prompt, since each bot inserts its prompt BEFORE producing
+      // any output, and no other bot will have tagged it yet.
+      const promptRow = history.find((m) => {
+        if (m.id <= beforeMaxId) return false;
+        if (m.role !== "user") return false;
+        // Skip rows another bot already claimed (parallel-safety).
+        const metaRaw = m.metadata;
+        if (metaRaw && typeof metaRaw === "string" && metaRaw.includes('"internal"')) return false;
+        return true;
+      });
       if (promptRow) {
         await this.deps.db.tagMessage(promptRow.id, { metadata: JSON.stringify({ internal: true }) });
       }

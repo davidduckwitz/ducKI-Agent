@@ -301,6 +301,12 @@ chatRouter.post("/", async (req, res, next) => {
       }
     );
     res.json(createApiResponse(result.result));
+
+    // Background review fork: analyze the turn for learnings (fire-and-forget).
+    const bgReview = req.app.locals["bgReview"] as { runAfterTurn: (userInput: string, finalResponse: string, conversationId: number) => Promise<void> } | undefined;
+    if (bgReview && activeConversationId) {
+      void bgReview.runAfterTurn(message, result.result.response, activeConversationId);
+    }
   } catch (error) {
     next(error);
   } finally {

@@ -26,6 +26,7 @@ import { TodoList, createTodoTool, type TodoItem, type TodoStatus } from "./todo
 import { createCheckpoint, diffCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
 import { withPerEditCheckpoints } from "./checkpoint-on-write.js";
 import { createExploreTool } from "./explore-tool.js";
+import { createStatusTool, type StatusProvider } from "./status-tool.js";
 import { Planner, type Plan, type PlanStep } from "../planner/planner.js";
 import { formatPlanAsMarkdown, toPlanEventPayload } from "../planner/plan-tool.js";
 
@@ -89,6 +90,13 @@ const MUTATING_FILESYSTEM_ACTIONS = new Set(["write", "append", "edit", "edit_li
  * phaseLockRefusals, but still worse than just recognizing the marker loosely).
  */
 const PHASE_MARKER_RE = />>\s*PHASE:\s*(EXPLORE|PLAN|EDIT|VERIFY|REPORT)\b/gi;
+
+/**
+ * Matches a "<< X COMPLETE" completion marker. Same loose-matching rationale as
+ * PHASE_MARKER_RE above: weaker models add stray whitespace/punctuation, and a strict match
+ * would silently never fire, leaving the phase bar stuck on the last started phase forever.
+ */
+const PHASE_COMPLETE_MARKER_RE = /<<\s*(EXPLORE|PLAN|EDIT|VERIFY|REPORT)\s+COMPLETE\b/gi;
 
 /**
  * Shell commands a sandboxed CodingAgent may run. Read-only inspection, the JS/TS toolchain
@@ -316,6 +324,25 @@ export class CodingAgent {
    *  readBeforeEditRefusals (see that hook): an unbounded refusal on a model that never emits
    *  the phase marker would deadlock the run instead of ever letting it edit anything. */
   private phaseLockRefusals = 0;
+  /**
+   * The most advanced phase-event already emitted per phase this run, used to deduplicate the
+   * live emission path (updatePhaseFromResponse) against the end-of-attempt backfill
+   * (extractAndEmitPhaseEvents). Ranks: started=1, completed=2. A lower rank is never emitted
+   * over a higher one, so the backfill cannot regress a phase the live path already completed.
+   * Also tracks whether the emitted payload already carried the `result`/`error` text so a
+   * duplicate completed event with richer info can merge that text in (see emitPhase).
+   */
+  private livePhaseEmitted = new Map<string, { rank: number; hasResult: boolean; hasError: boolean }>();
+  /**
+   * Files whose last edit left live (from auto-diagnostics) diagnostic errors, mapped to the
+   * error count and a sample of what the errors look like. Updated by the afterTool hook below
+   * whenever a filesystem write/edit/append completes; cleared for a file when it is re-edited
+   * and comes back clean (or edited again at all, since a second edit replaces the first).
+   */
+  private pendingDiagnosticErrors = new Map<string, { count: number; errors: string[] }>();
+  /** Bounded like phaseLockRefusals/readBeforeEditRefusals: one warning per file pair, then the
+   *  guard gets out of the way rather than deadlocking a run that insists on editing anyway. */
+  private diagnosticGuardRefusals = 0;
   /** Read by withPerEditCheckpoints' label closure - kept as instance state because tools are
    *  registered ONCE in the constructor, before any attempt number exists yet. */
   private currentAttempt = 0;
@@ -515,6 +542,118 @@ export class CodingAgent {
       },
     });
 
+    // Live diagnostics guard: warn when the model edits a new file while a previous file still
+    // has diagnostic errors from the auto-diagnostics layer (withAutoDiagnostics). The guard
+    // runs BEFORE the next edit, so unlike cross-turn feedback (which needs another LLM
+    // round-trip), this fires in the tool-execution path that would be the NEXT turn — the model
+    // already SAW the diagnostic errors in the previous turn's tool result, and is now choosing
+    // to edit something else instead. Bounded like the other guards: one warning, then out.
+    disciplineHooks.push({
+      name: "coding-diagnostics-cross-file-guard",
+      priority: 40,
+      handler: async (context: any) => {
+        const toolName = context.toolName as string;
+        if (toolName !== "filesystem") return { proceed: true };
+        const input = context.input as Record<string, unknown>;
+        const action = String(input.action ?? "").toLowerCase();
+        if (!MUTATING_FILESYSTEM_ACTIONS.has(action)) return { proceed: true };
+
+        const rawPath = String(input.path ?? "");
+        if (!rawPath) return { proceed: true };
+
+        // Gather every path this action touches. Move/copy have a destination field too —
+        // if the destination is in pendingDiagnosticErrors (e.g. a previous edit left errors
+        // there), this action replaces/overwrites it, so clear the pending state.
+        const touchedKeys: string[] = [this.fileKey(rawPath)];
+        if (action === "move" || action === "copy") {
+          const dest = typeof input["destination"] === "string" ? input["destination"] : "";
+          if (dest) touchedKeys.push(this.fileKey(dest));
+        }
+
+        // Editing the same file the diagnostic error is for: that IS the fix — clear it.
+        let clearsExisting = false;
+        for (const key of touchedKeys) {
+          if (this.pendingDiagnosticErrors.has(key)) {
+            this.pendingDiagnosticErrors.delete(key);
+            clearsExisting = true;
+          }
+        }
+        if (clearsExisting) return { proceed: true };
+
+        // Editing a DIFFERENT file while another file still has pending errors — warn once.
+        if (this.pendingDiagnosticErrors.size > 0 && this.diagnosticGuardRefusals < 1) {
+          this.diagnosticGuardRefusals++;
+          const badFiles = [...this.pendingDiagnosticErrors.entries()]
+            .map(([path, info]) => `- ${path} (${info.count} error(s): ${info.errors.slice(0, 3).join("; ")})`)
+            .join("\n");
+          this.emit("decision", `Erneuter Edit auf anderer Datei trotz pending diagnostic errors.`, {
+            currentFile: rawPath,
+            filesWithErrors: [...this.pendingDiagnosticErrors.keys()],
+          });
+          return {
+            proceed: false,
+            reason:
+              `Live diagnostics show these file(s) still have errors from your last edit, but you are now ` +
+              `trying to edit '${rawPath}' instead of fixing them:\n${badFiles}\n\n` +
+              `Fix the errors in those files first — do not move to another file until the previous one ` +
+              `is clean. (If you genuinely need to edit this file first, repeat this call and it will go through.)`,
+          };
+        }
+        return { proceed: true };
+      },
+    });
+
+    // After every tool call, track diagnostic errors from the auto-diagnostics layer
+    // (withAutoDiagnostics) so the cross-file guard above knows which files need fixing.
+    const afterToolHooks: AgentHook[] = [
+      {
+        name: "coding-live-diagnostics-tracker",
+        priority: 50,
+        handler: async (context: any) => {
+          const toolName = context.toolName as string;
+          if (toolName !== "filesystem") return { proceed: true };
+          const result = context.result as { success: boolean; data?: Record<string, unknown> } | undefined;
+          if (!result?.success) return { proceed: true };
+
+          const data = result.data as Record<string, unknown> | undefined;
+          const diag = data?.["diagnostics"] as {
+            ok: boolean;
+            errorCount: number;
+            errors?: string[];
+            checkedFiles?: string[];
+          } | undefined;
+          if (!diag) return { proceed: true };
+
+          // The diagnostics layer now reports which files it checked (checkedFiles). For
+          // write/edit/append it is one file; for move/copy it is both source and destination.
+          // Clear or set the pending state for EVERY file that was checked, not only the one
+          // in input.path — otherwise a copy's destination file silently stays in the pending
+          // set even after a clean check.
+          const checkedFiles: string[] = Array.isArray(diag.checkedFiles) && diag.checkedFiles.length > 0
+            ? diag.checkedFiles
+            : (() => {
+                // Fallback for diagnostics results that predate this change: use input.path.
+                const input = context.input as Record<string, unknown>;
+                const p = String(input["path"] ?? "");
+                return p ? [p] : [];
+              })();
+
+          for (const file of checkedFiles) {
+            const key = this.fileKey(file);
+            if (diag.ok || diag.errorCount === 0) {
+              this.pendingDiagnosticErrors.delete(key);
+            } else {
+              this.pendingDiagnosticErrors.set(key, {
+                count: diag.errorCount,
+                errors: Array.isArray(diag.errors) ? diag.errors.slice(0, 5) : [String(diag.errorCount)],
+              });
+            }
+          }
+          return { proceed: true };
+        },
+      },
+    ];
+
     this.agent = new Agent(provider, db, eventEmitter, {
       name: options.name ?? "CodingAgent",
       systemPrompt: basePrompt,
@@ -524,6 +663,7 @@ export class CodingAgent {
       // path, not a longer inner loop.
       maxIterations: options.maxIterations ?? 40,
       hooks: disciplineHooks,
+      afterToolHooks,
       // Code responses are long and slow to re-evaluate; the reflection/verify
       // passes repeatedly hit their timeout with a local model. Skip them here.
       disableQualityPasses: true,
@@ -555,24 +695,79 @@ export class CodingAgent {
       ...(options.sandboxRoot ? { sandboxRoot: options.sandboxRoot } : {}),
       timeoutMs: options.exploreTimeoutMs ?? parseInt(process.env["DUCKI_EXPLORE_TIMEOUT_MS"] ?? "180000", 10),
     });
-    for (const tool of [fsTool, shTool, dxTool, gitTool, skillsTool, createTodoTool(this.todos), exploreTool, ...(options.extraTools ?? [])]) {
+
+    // Run-scoped status snapshot: phase, checklist, open diagnostics, and checkpoint diff -
+    // the one ground-truth source the agent can query when conversation context is trimmed and
+    // earlier tool results ("I created file X") are no longer visible. Closure through proxy so
+    // the tool always reads live state, not a snapshot-at-construction-time.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this;
+    const statusTool = createStatusTool({
+      sandboxRoot: self.sandboxRoot,
+      get currentAttempt(): number { return self.currentAttempt; },
+      get currentPhase(): string { return self.currentPhase; },
+      checklistSnapshot: () => self.todos.snapshot(),
+      pendingDiagnosticErrorsSnapshot: () =>
+        [...self.pendingDiagnosticErrors.entries()].map(([file, info]) => ({
+          file,
+          count: info.count,
+          errors: info.errors,
+        })),
+    });
+
+    for (const tool of [fsTool, shTool, dxTool, gitTool, skillsTool, createTodoTool(this.todos), exploreTool, statusTool, ...(options.extraTools ?? [])]) {
       this.agent.executor.registerTool(tool);
     }
   }
 
   /**
-   * Scans a model response for its LATEST ">> PHASE: X" marker and updates currentPhase, which
-   * the phase-lock hook (see the constructor) reads for every tool call in this same response.
+   * Scans a model response for phase markers and (a) updates currentPhase - which the phase-lock
+   * hook (see the constructor) reads for every tool call in this same response - and (b) emits
+   * live phase events so the UI's phase bar advances in real time instead of only when the whole
+   * attempt finishes.
+   *
    * Called via AgentRunOptions.onModelResponse, i.e. before this response's own tool calls are
    * validated - a response that says ">> PHASE: EDIT" and then immediately writes a file in the
    * same turn is exactly the intended flow, not a race.
+   *
+   * Handles BOTH start markers (">> PHASE: X") and completion markers ("<< X COMPLETE"), and
+   * processes them in source order so a response that contains two full phases still emits both
+   * transitions in the right sequence. currentPhase becomes the LAST started phase, matching the
+   * previous behaviour (the phase-lock only ever needed the latest declared phase).
    */
   private updatePhaseFromResponse(response: string): void {
-    let lastMatch: RegExpExecArray | null = null;
-    for (const match of response.matchAll(PHASE_MARKER_RE)) lastMatch = match;
-    const declared = lastMatch?.[1]?.toLowerCase();
-    if (declared === "explore" || declared === "plan" || declared === "edit" || declared === "verify" || declared === "report") {
-      this.currentPhase = declared;
+    const transitions: Array<{ index: number; phase: string; event: "phase_started" | "phase_completed" }> = [];
+
+    for (const match of response.matchAll(PHASE_MARKER_RE)) {
+      const phase = match[1]?.toLowerCase();
+      if (!phase || match.index === undefined) continue;
+      transitions.push({ index: match.index, phase, event: "phase_started" });
+    }
+    for (const match of response.matchAll(PHASE_COMPLETE_MARKER_RE)) {
+      const phase = match[1]?.toLowerCase();
+      if (!phase || match.index === undefined) continue;
+      transitions.push({ index: match.index, phase, event: "phase_completed" });
+    }
+    transitions.sort((a, b) => a.index - b.index);
+
+    // The phase-lock reads the LAST started phase (unchanged from before).
+    let lastStarted: string | undefined;
+    for (const transition of transitions) {
+      if (transition.event === "phase_started") lastStarted = transition.phase;
+    }
+    if (lastStarted && ["explore", "plan", "edit", "verify", "report"].includes(lastStarted)) {
+      this.currentPhase = lastStarted as "explore" | "plan" | "edit" | "verify" | "report";
+    }
+
+    // Emit live phase events (deduplicated in emitPhase against prior/backfill emissions).
+    for (const transition of transitions) {
+      this.emitPhase({
+        type: transition.event,
+        phase: transition.phase as CodingPhaseEvent["phase"],
+        title: transition.phase.charAt(0).toUpperCase() + transition.phase.slice(1),
+        timestamp: new Date().toISOString(),
+        attempt: this.currentAttempt,
+      });
     }
   }
 
@@ -669,6 +864,9 @@ export class CodingAgent {
     this.readBeforeEditRefusals = new Map<string, number>();
     this.currentPhase = "unstarted";
     this.phaseLockRefusals = 0;
+    this.livePhaseEmitted = new Map<string, { rank: number; hasResult: boolean; hasError: boolean }>();
+    this.pendingDiagnosticErrors = new Map<string, { count: number; errors: string[] }>();
+    this.diagnosticGuardRefusals = 0;
     this.currentPlan = undefined;
     this.suppressPlanSync = false;
     this.todos.reset();
@@ -768,19 +966,23 @@ export class CodingAgent {
       verifyCommand = this.detectDefaultVerifyCommand();
     }
 
-    // Resuming an existing conversation (e.g. after a Stop) without a caller-supplied plan:
-    // try to recover the EXACT plan + checklist state this conversation already had, instead of
-    // planning from scratch and starting the checklist back at step 1. A caller-supplied
-    // existingPlan always wins - it represents a decision made just now (e.g. a user-reviewed
-    // plan from the Plan panel) and must not be second-guessed by older persisted state.
+    // When resuming an existing conversation with a new goal (the user typed follow-up
+    // instructions in the coding chat), the persisted plan from a previous run describes a
+    // DIFFERENT task — reusing it would tell the agent to "create a landing page" when the
+    // user just asked "add a contact form." Only rehydrate when there is genuinely NO new
+    // goal (recover from crash/stop with the SAME conversation). A new goal always gets a
+    // fresh plan; the old plan + checklist are still loaded below for hydration, but only
+    // the checklist status (what was already done) carries over — not the plan steps.
     const persisted = isResuming && !opts.existingPlan ? await this.loadPersistedState(conversationId) : undefined;
 
     // Real planning subagent: a structured, detailed plan from the Planner instead of letting
     // the model invent one in free text during the PLAN phase (see buildInitialPrompt). A
     // caller-supplied plan (already reviewed/refined by the user, e.g. via the Plan panel) is
     // used as-is - re-deriving it here would throw away exactly the decision the caller made.
+    // When resuming, we still call the Planner for the NEW goal — the old plan was for a
+    // different task (or the same task's previous attempt, now stale).
     const toolNames = this.agent.executor.listTools().map((tool) => tool.name);
-    const plan = opts.existingPlan ?? persisted?.plan ?? (await this.planner.createPlan(goal, toolNames));
+    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames));
     this.currentPlan = plan;
     this.emitPlanEvent(plan);
     // Pre-seeds the checklist with the planner's steps so the UI shows real progress from the
@@ -799,11 +1001,10 @@ export class CodingAgent {
     // should trigger that.
     this.suppressPlanSync = true;
     try {
-      if (plan === persisted?.plan && persisted.todoItems && persisted.todoItems.length > 0) {
-        this.todos.replace(persisted.todoItems);
-      } else {
-        this.todos.replace(plan.steps.map((step) => ({ title: step.title })));
-      }
+      // Always seed from the fresh plan. The old checklist (persisted.todoItems) was for a
+      // different goal — carrying those statuses onto new, unrelated steps would show a fake
+      // "already done" checklist for what is actually a brand-new task.
+      this.todos.replace(plan.steps.map((step) => ({ title: step.title })));
     } finally {
       this.suppressPlanSync = false;
     }
@@ -869,7 +1070,7 @@ export class CodingAgent {
 
       const prompt =
         attempt === 1
-          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan)
+          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan, isResuming)
           : this.buildFollowUpPrompt(goal, lastSummary);
       // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
       // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
@@ -1160,17 +1361,17 @@ export class CodingAgent {
     // lock would otherwise refuse its very first (and only) write.
     this.currentPhase = "edit";
     const lines = incomplete.map(
-      (g) => `- ${g.path}: Teil ${g.received} von ${g.totalParts} geschrieben, Teil ${g.next} fehlt`
+      (g) => `- ${g.path}: received ${g.received} of ${g.totalParts} parts, part ${g.next} is missing`
     );
     const prompt =
-      `Einige Datei-Schreibsequenzen aus dem vorherigen Lauf sind unvollstaendig. Schreibe NUR die fehlenden Teile nach:\n\n` +
+      `Some file-write sequences from the previous run are incomplete. Write ONLY the missing parts:\n\n` +
       lines.join("\n") +
-      `\n\nRegeln:\n` +
-      `1. Lese jede Datei kurz, um zu sehen, was bereits geschrieben wurde.\n` +
-      `2. Schreibe NUR die fehlenden Teile mit action:append partNumber:<n> totalParts:<m> in der Block-Form - <n> und <m> sind exakt die oben genannten Werte. Die laufende Sequenz prueft die Reihenfolge und lehnt Luecken oder Duplikate ab.\n` +
-      `3. Veraendere KEINE anderen Dateien, schreibe KEINE bereits geschriebenen Teile neu und wiederhole nichts.\n` +
-      `4. Wenn eine Datei schon vollstaendig ist, lasse sie unveraendert.\n` +
-      `5. Bestaetige am Ende kurz, welche Dateien du vervollstaendigt hast.`;
+      `\n\nRules:\n` +
+      `1. Briefly read each file to see what was already written.\n` +
+      `2. Write ONLY the missing parts using action:append partNumber:<n> totalParts:<m> in block form - <n> and <m> are exactly the values above. The active sequence checks ordering and rejects gaps or duplicates.\n` +
+      `3. Do NOT modify any other files, do NOT re-write parts that were already written, and do not repeat anything.\n` +
+      `4. If a file is already complete, leave it untouched.\n` +
+      `5. After finishing, briefly confirm which files you completed.`;
 
     try {
       // The healing run ideally continues the same conversation so the fix-up is visible in
@@ -1186,7 +1387,7 @@ export class CodingAgent {
       // already states exactly what to do) and caps iterations for this bounded fix-up.
       const healResult = await this.agent.run(prompt, { agentMode: "lightweight" });
       const detail = healResult.response?.trim().slice(0, 300) ?? "";
-      return detail.length > 0 ? `Folge-Versuch: ${detail}` : "Folge-Versuch ausgefuehrt.";
+      return detail.length > 0 ? `Follow-up attempt: ${detail}` : "Follow-up attempt completed.";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.emit("decision", "Self-Healing fehlgeschlagen - nur Warnung.", {
@@ -1372,6 +1573,28 @@ export class CodingAgent {
   }
 
   private emitPhase(event: CodingPhaseEvent): void {
+    // Deduplicate: started=1, completed=2 (failed=2). A phase must never regress - the live
+    // emission path (updatePhaseFromResponse) and the end-of-attempt backfill
+    // (extractAndEmitPhaseEvents) both call this, and without this guard the backfill would
+    // re-emit "started" after the live path already emitted "completed", rewinding the phase
+    // bar. A duplicate also costs an extra DB row + WS event for no information.
+    const rank = event.type === "phase_started" ? 1 : 2;
+    const previous = this.livePhaseEmitted.get(event.phase);
+    if (previous !== undefined && previous.rank >= rank) {
+      // A duplicate COMPLETED event from the end-of-attempt backfill can carry the text the
+      // model wrote between the phase markers - which the live path (updatePhaseFromResponse)
+      // did not extract, so the previously-emitted row lacks it. Merge that text in as a
+      // supplementary result row instead of dropping it (and instead of emitting a confusing
+      // second "phase completed" in the activity log).
+      this.mergePhaseResultIfRicher(event, previous);
+      return;
+    }
+    this.livePhaseEmitted.set(event.phase, {
+      rank,
+      hasResult: typeof event.result === "string" && event.result.trim().length > 0,
+      hasError: typeof event.error === "string" && event.error.trim().length > 0,
+    });
+
     const message = `${event.title}${event.description ? ': ' + event.description : ''}`;
     const data = {
       phase_event: event.type,
@@ -1380,6 +1603,55 @@ export class CodingAgent {
       description: event.description,
       result: event.result,
       error: event.error,
+      attempt: event.attempt,
+    };
+    try {
+      this.eventEmitter?.emitEvent({ type: "internal_instruction" as const, message, data, timestamp: event.timestamp });
+    } catch {
+      // Event delivery is best-effort telemetry - never let it abort a coding run.
+    }
+    this.persistEvent("internal_instruction", message, data, event.timestamp);
+  }
+
+  /**
+   * Persists the `result`/`error` text of a duplicate completed phase event that the already
+   * emitted row lacked, without re-emitting the "phase completed" transition itself.
+   *
+   * `phase_event: "phase_result"` is deliberately NOT in the phase bar's known set
+   * (started/completed/failed - see findLatestPhaseProgress), so the bar ignores it; the
+   * Activity tab renders it as a normal internal_instruction row whose data carries the text.
+   * Bounded by the tracking map: a second backfill with the same text is a no-op.
+   */
+  private mergePhaseResultIfRicher(
+    event: CodingPhaseEvent,
+    previous: { rank: number; hasResult: boolean; hasError: boolean }
+  ): void {
+    // A started event carries no result/error worth merging, and a failed event is not the
+    // "content between markers" case this exists for.
+    if (event.type !== "phase_completed") return;
+
+    const result = typeof event.result === "string" && event.result.trim().length > 0 ? event.result.trim() : undefined;
+    const error = typeof event.error === "string" && event.error.trim().length > 0 ? event.error.trim() : undefined;
+    if (!result && !error) return;
+
+    // Nothing new worth persisting if the already-emitted row carried all of this.
+    const newResult = result !== undefined && !previous.hasResult;
+    const newError = error !== undefined && !previous.hasError;
+    if (!newResult && !newError) return;
+
+    this.livePhaseEmitted.set(event.phase, {
+      rank: previous.rank,
+      hasResult: previous.hasResult || newResult,
+      hasError: previous.hasError || newError,
+    });
+
+    const message = `${event.title} - Ergebnis`;
+    const data = {
+      phase_event: "phase_result",
+      phase: event.phase,
+      title: event.title,
+      ...(result !== undefined ? { result } : {}),
+      ...(error !== undefined ? { error } : {}),
       attempt: event.attempt,
     };
     try {
@@ -1480,15 +1752,36 @@ export class CodingAgent {
     goal: string,
     verifyCommand: string | undefined,
     detectedSkill: string | undefined,
-    plan: Plan
+    plan: Plan,
+    isResuming: boolean
   ): string {
     const parts: string[] = [`Goal: ${goal}`, "", ...this.pathHandlingBlock()];
+
+    if (isResuming) {
+      parts.push(
+        "",
+        "CONTINUATION IN AN EXISTING PROJECT - this conversation and project already exist.",
+        "Before you edit anything, use EXPLORE to understand what is already here: list the",
+        "root directory, read key files (package.json, index.html, main entry points), and",
+        "check existing stylesheets. Do NOT create new files that duplicate existing ones.",
+        "Do NOT overwrite files blindly - read them first in the EXPLORE phase. The plan",
+        "below was drafted WITHOUT knowledge of the current project state, so you MUST",
+        "validate and adjust it in the PLAN phase after exploration. Skip steps that are",
+        "already done (e.g. if there is already a CSS file, do not create another one).",
+        "The status tool can tell you what files your previous runs changed - use it.",
+        "",
+      );
+    }
 
     parts.push(
       "Track your progress with the todo tool: it already contains the plan below as pending steps.",
       "Mark a step in_progress before starting it and done once it is verified. That checklist is what",
       "the user sees, so keep it truthful - never mark a step done on the strength of an edit alone,",
       "only once diagnostics or the verification command confirmed it.",
+      "",
+      "The status tool gives you a one-call snapshot of your current phase, checklist, open diagnostic",
+      "errors, and what files have actually changed this attempt. Use it after a few edits when you need",
+      "to confirm what still needs work - it is faster than re-reading files or recounting from history.",
       "",
       "A planning subagent already analyzed this goal and drafted the following plan:",
       "",
@@ -1543,6 +1836,8 @@ export class CodingAgent {
     const checklist = this.todos.render();
     return [
       "Your previous attempt did not pass verification. Diagnose the ACTUAL failure below and fix it - do not repeat the same approach blindly.",
+      "",
+      "BEFORE YOU ACT, call the status tool. It tells you in one call what normally takes several reads: which steps are already done (from the checklist), what files you actually changed (from the checkpoint diff - not your memory), and whether any diagnostics are still failing. Your conversation context may have been trimmed and earlier results may no longer be visible, so do NOT rely on what you remember - ask the status tool for ground truth.",
       this.pathHandlingBlock().join("\n"),
       `Original goal: ${goal}`,
       checklist ? `Your checklist so far (keep updating it, do not start it over):\n${checklist}` : "",

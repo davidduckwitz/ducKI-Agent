@@ -32,7 +32,8 @@ import { CodingEditorTabs } from "./CodingEditorTabs";
 import { CodingAgentPanel } from "./CodingAgentPanel";
 import { PlanExecutionPanel, type Plan, type StepStatus } from "../chat/PlanExecutionPanel";
 import type { CodingFileItem } from "./CodingFileTree";
-import type { AgentEventType, RenderedChatMessage } from "../chat/chatTypes";
+import type { RenderedChatMessage } from "../chat/chatTypes";
+import { parsePersistedEvent } from "../../lib/persistedEventTypes";
 
 interface PersistedMessage {
   id: number;
@@ -385,42 +386,7 @@ export function CodingWorkspace() {
     const mapped: RenderedChatMessage[] = persisted.map((msg) => {
       const metadata = parseMessageMetadata(msg.metadata);
       if (msg.role === "event") {
-        let eventType: AgentEventType | undefined;
-        let eventData: Record<string, unknown> | undefined;
-
-        if (msg.toolResult) {
-          try {
-            const parsed = JSON.parse(msg.toolResult) as { eventType?: string; data?: Record<string, unknown> };
-            const type = parsed.eventType;
-            // Must stay in sync with the chat page's identical list (ChatContainer). This copy
-            // had drifted and was missing "checklist" and "assistant_text": a reloaded coding
-            // session therefore lost the per-step checklist state entirely, which is exactly
-            // the data the plan panel needs to tick steps off.
-            if (
-              type === "plan" ||
-              type === "checklist" ||
-              type === "iteration" ||
-              type === "tool_call" ||
-              type === "tool_result" ||
-              type === "reasoning" ||
-              type === "decision" ||
-              type === "guardrail" ||
-              type === "skill_selection" ||
-              type === "tool_retry" ||
-              type === "mode_selected" ||
-              type === "browser_preview" ||
-              type === "thinking" ||
-              type === "internal_instruction" ||
-              type === "assistant_text"
-            ) {
-              eventType = type;
-            }
-            eventData = parsed.data;
-          } catch {
-            // ignore malformed payload
-          }
-        }
-
+        const { eventType, eventData } = parsePersistedEvent(msg.toolResult);
         return {
           id: `db-${msg.id}`,
           role: "event",
@@ -747,19 +713,40 @@ export function CodingWorkspace() {
       return;
     }
 
-    const contextPrefix = [
-      "[CODING_CONTEXT]",
-      `project=${selectedProject || "none"}`,
-      "Your working directory IS this project's root. Use file paths RELATIVE to it,",
-      "e.g. \"index.html\" or \"src/app.js\". Do NOT prefix paths with the project name,",
-      "\"coding/\", \"shared-workspace/\", or an absolute path.",
-      ...(options.includeFile ? [`activeFile=${options.includeFile}`] : []),
-      "Use files only inside this coding project.",
-      "",
-      text,
-    ].join("\n");
+    const messageId = crypto.randomUUID();
 
-    void sendMessage(contextPrefix, undefined, options.planMode ? "plan" : undefined, text);
+    // Add user message to the chat store so it appears immediately.
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: messageId,
+        role: "user" as const,
+        content: text,
+        timestamp: new Date().toISOString(),
+        metadata: { localMessageId: messageId },
+      },
+    ]);
+
+    // Join the WebSocket room so live events (checklist, phases, assistant_text) arrive.
+    const socket = useAppStore.getState().socket;
+    if (socket) {
+      socket.emit("chat:join", { conversationId: ensuredConversationId });
+    }
+
+    // Route through the CodingAgent HTTP endpoint — NOT the generic WebSocket agent. This
+    // ensures the full CodingAgent discipline (phases, read-before-edit, diagnostics, verify
+    // retry) applies to follow-up chat messages, just like the initial coding run.
+    //
+    // Fire-and-forget: the server emits chat:start → chat:event* → chat:complete through the
+    // WebSocket channel we just joined, so isLoading and message rendering work automatically.
+    void api.coding
+      .runFollowUp(selectedProject, text, ensuredConversationId, {
+        includeFile: options.includeFile,
+      })
+      .catch((error) => {
+        console.error("[sendCodingPrompt] Follow-up failed:", error);
+      });
+
     setIsEnsuringConversation(false);
   };
 

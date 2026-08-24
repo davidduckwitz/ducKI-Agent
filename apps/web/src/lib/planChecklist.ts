@@ -66,14 +66,19 @@ export function findLatestChecklist(messages: RenderedChatMessage[]): ChecklistS
   return findLatestTodoSnapshot(messages);
 }
 
-/** Maps CodingAgent's TodoList status vocabulary onto the one this module (and the panel) was
- *  originally built against (see the "checklist" event parsing above). "in_progress" has no
- *  distinct visual here - the panel's spinner comes from firstOpenStepIndex, not from the status
- *  string - so it only needs to stay OUT of CLOSED_STATUSES; "blocked" reads as "failed" since
- *  both mean "the agent stopped making progress on this step without help". */
+/**
+ * Maps CodingAgent's TodoList status vocabulary onto the one this module (and the panel) was
+ * originally built against (see the "checklist" event parsing above).
+ *
+ * "in_progress" is now PRESERVED as its own status instead of being flattened to "pending":
+ * it is the single most informative signal in the plan view - it tells the user exactly which
+ * step the agent is working on right now. The panel renders it as a spinner and
+ * firstOpenStepIndex prefers it (see below). "blocked" still reads as "failed" since both mean
+ * "the agent stopped making progress on this step without help".
+ */
 const TODO_STATUS_MAP: Record<string, string> = {
   pending: "pending",
-  in_progress: "pending",
+  in_progress: "in_progress",
   done: "done",
   blocked: "failed",
 };
@@ -130,15 +135,32 @@ export function resolveStepStatus(
 }
 
 /**
- * Index of the step currently being worked on: the first one that is not in a terminal state.
+ * Index of the step currently being worked on.
  *
- * Derived from the statuses themselves rather than from a "completed count", so a step the
- * agent failed or skipped does not push the running marker onto the wrong row - which a
- * counter-based approach does as soon as anything goes other than perfectly.
+ * Preference order:
+ * 1. The step the agent itself marked "in_progress" (the authoritative signal - the todo tool
+ *    says "mark a step in_progress before you start it").
+ * 2. The first step that is not in a terminal state (fallback for runs where the model never
+ *    marks in_progress but still makes progress).
+ *
+ * Deriving it from "first open step" alone is wrong whenever a step is skipped/blocked or the
+ * model marks steps done out of order: the spinner then sits on the wrong row while the agent
+ * works elsewhere. The in_progress status is the direct answer to "what is the agent doing NOW".
  */
 export function firstOpenStepIndex(
   snapshot: ChecklistSnapshot | null,
   steps: Array<{ title: string }>
 ): number {
-  return steps.findIndex((step, index) => !CLOSED_STATUSES.has(resolveStepStatus(snapshot, step, index) ?? "pending"));
+  if (!snapshot) return -1;
+
+  // Prefer the step the agent itself flagged as in_progress.
+  const runningIndex = steps.findIndex(
+    (step, index) => resolveStepStatus(snapshot, step, index) === "in_progress"
+  );
+  if (runningIndex >= 0) return runningIndex;
+
+  // Fallback: first non-terminal step.
+  return steps.findIndex(
+    (step, index) => !CLOSED_STATUSES.has(resolveStepStatus(snapshot, step, index) ?? "pending")
+  );
 }

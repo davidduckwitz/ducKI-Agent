@@ -16,10 +16,12 @@ import { ChatComposer } from "./ChatComposer";
 import { ChatWelcome } from "./ChatWelcome";
 import { type Plan } from "./PlanExecutionPanel";
 import { BrowserPreviewModal } from "./BrowserPreview";
+import { ProjectSkillsBanner } from "./ProjectSkillsBanner";
 import { ToolEventsDisplay } from "./ToolEventsDisplay";
 import { ToolEventSummary } from "./ToolEventSummary";
 import { IterationMetrics } from "./IterationMetrics";
 import type { AgentEventType, RenderedChatMessage } from "./chatTypes";
+import { parsePersistedEvent } from "../../lib/persistedEventTypes";
 import {
   buildEventDedupKey,
   buildPersistedIndex,
@@ -492,37 +494,7 @@ export function ChatContainer() {
         const metadata = parseMessageMetadata(msg.metadata);
 
         if (msg.role === "event") {
-          let eventType: AgentEventType | undefined;
-          let eventData: Record<string, unknown> | undefined;
-
-          if (msg.toolResult) {
-            try {
-              const parsed = JSON.parse(msg.toolResult) as { eventType?: string; data?: Record<string, unknown> };
-              const type = parsed.eventType;
-              if (
-                type === "plan" ||
-                type === "checklist" ||
-                type === "iteration" ||
-                type === "tool_call" ||
-                type === "tool_result" ||
-                type === "reasoning" ||
-                type === "decision" ||
-                type === "guardrail" ||
-                type === "skill_selection" ||
-                type === "tool_retry" ||
-                type === "mode_selected" ||
-                type === "browser_preview" ||
-                type === "thinking" ||
-                type === "internal_instruction" ||
-                type === "assistant_text"
-              ) {
-                eventType = type;
-              }
-              eventData = parsed.data;
-            } catch {
-              // Ignore malformed event metadata and render fallback event entry.
-            }
-          }
+          const { eventType, eventData } = parsePersistedEvent(msg.toolResult);
 
           // A block of the agent's own text. Stored as an "event" row only so it stays out of
           // the LLM context on reload - to the reader it is simply the agent talking, at the
@@ -954,6 +926,8 @@ export function ChatContainer() {
           isLoading={isLoading}
           connected={connected}
         />
+
+        <ProjectSkillsBanner />
 
         {showSettings && (
           <div className="shrink-0 border-b border-border bg-card/50 px-4 py-3">

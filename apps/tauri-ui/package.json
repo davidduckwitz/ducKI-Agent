@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
+    "prebuild": "pnpm -w build:web",
     "build": "tauri build",
     "build:prep": "node build.js",
     "dist": "pnpm -w build:web && pnpm build:prep && tauri build"

@@ -118,11 +118,11 @@ describe("CodingAgent plan/checklist persistence", () => {
     expect(last.todo_items.find((i: any) => i.id === 1)?.status).toBe("done");
   });
 
-  it("resuming the same conversation rehydrates the plan and checklist instead of starting over", async () => {
+  it("on resume, creates a fresh plan via the Planner instead of reusing the stale one", async () => {
     const { db } = makeMemoryDb();
 
     // Run 1: plans, marks step 1 done, then the process/instance "goes away" (a fresh
-    // CodingAgent is created for run 2, exactly like a new HTTP request would in production -
+    // CodingAgent is created for run 2, exactly like a new HTTP request would in production —
     // no in-memory state survives, only what is in the DB).
     const provider1 = scriptedProvider([
       PLAN_JSON,
@@ -135,19 +135,22 @@ describe("CodingAgent plan/checklist persistence", () => {
     const conversationId = result1.conversationId!;
     expect(conversationId).toBeGreaterThan(0);
 
-    // Run 2: a BRAND NEW instance, same conversationId, no existingPlan supplied. If rehydration
-    // works, this must recover the plan (2 steps, "Step A"/"Step B") and the checklist (step 1
-    // already done) WITHOUT calling the Planner again - the scripted provider below has no plan
-    // JSON at all, so a Planner call here would produce a fallback/garbage plan instead.
-    const provider2 = scriptedProvider(["Fertig."]);
+    // Run 2: a BRAND NEW instance, same conversationId. The old plan (2 steps, "Step A"/"Step B") 
+    // and checklist (step 1 done) are still in the DB, but the agent now creates a FRESH plan
+    // instead of rehydrating — the Planner runs again with the CURRENT goal. Rehydrating a stale
+    // plan from a previous task is exactly what caused "setup project structure" steps in a
+    // project that already had one.
+    const provider2 = scriptedProvider([PLAN_JSON, "Fertig."]);
     const agent2 = new CodingAgent(provider2, db, undefined, {});
     (agent2 as any).agent.enablePlanning = false;
 
     await agent2.run("build the thing", { conversationId, maxAttempts: 1 });
 
+    // The fresh plan produces new steps — NOT the stale persisted ones.
     const todos = (agent2 as any).todos.snapshot();
     expect(todos).toHaveLength(2);
-    expect(todos.find((t: any) => t.title === "Step A")?.status).toBe("done");
+    // All steps from the fresh plan start as "pending" — no stale "done" status carried over.
+    expect(todos.find((t: any) => t.title === "Step A")?.status).toBe("pending");
     expect(todos.find((t: any) => t.title === "Step B")?.status).toBe("pending");
   });
 

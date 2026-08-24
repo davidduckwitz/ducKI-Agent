@@ -80,6 +80,9 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       goal?: string;
       verifyCommand?: string;
       sandboxRoot?: string;
+      /** Project slug from the frontend coding workspace — resolved to sandboxRoot when
+       *  sandboxRoot is not explicitly set (e.g. follow-up chat messages). */
+      project?: string;
       maxAttempts?: number;
       maxIterations?: number;
       stepCount?: number;
@@ -118,7 +121,11 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       reuseConversationId = requestedConversationId;
     }
 
-    // Create an event emitter that broadcasts phase events over WebSocket
+    // Create an event emitter that broadcasts phase events over WebSocket.
+    // Uses a mutable ref so the conversationId – set asynchronously in
+    // onConversationStarted – is always the live value when emitEvent fires.
+    let emitConversationId: number | undefined = reuseConversationId;
+
     const phaseEventEmitter: AgentEventEmitter = {
       emitChunk(chunk: string) {
         // Broadcast streaming chunks to all connected clients
@@ -127,21 +134,31 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         }
       },
       emitEvent(event: any) {
-        // Broadcast phase events to all connected clients
-        if (io) {
-          io.emit("coding_agent_event", {
+        // Bridge into the same chat:event channel the frontend store already
+        // listens to, so todo_items / phase / iteration events arrive live
+        // instead of only after a page reload (the coding_agent_event channel
+        // was never handled by the store). When the conversationId is not yet
+        // known (first todos.reset() in CodingAgent.run happens before the
+        // conversation is opened), the event is silently dropped – it will
+        // still land in the DB via persistEvent and appear on reload.
+        const cid = emitConversationId;
+        if (io && cid !== undefined) {
+          io.to(`chat:${cid}`).emit("chat:event", {
             type: event.type,
             message: event.message,
             data: event.data,
             timestamp: event.timestamp,
-            ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),
+            conversationId: cid,
           });
         }
       },
     };
 
     const codingAgent = createCodingAgent({
-      sandboxRoot: body.sandboxRoot,
+      // When only the project slug is provided (follow-up chat), use it as sandboxRoot;
+      // the factory resolves it against CODING_ROOT. An explicit sandboxRoot from a plan
+      // execution or initial run still wins.
+      sandboxRoot: body.sandboxRoot ?? body.project,
       maxIterations: maxIterationsPerAttempt,
       eventEmitter: phaseEventEmitter,
     });
@@ -159,6 +176,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),
         ...(timeoutMs > 0 ? { timeoutMs } : {}),
         onConversationStarted: (conversationId) => {
+          emitConversationId = conversationId;
           runConversationId = conversationId;
           registerCodingRun(conversationId, codingAgent);
           agentRegistryRunId = agentRegistry.register({
@@ -166,9 +184,25 @@ codingAgentRouter.post("/run", async (req, res, next) => {
             conversationId,
             label: "CodingAgent (HTTP)",
           });
-          if (io) io.emit("coding_agent_started", { conversationId });
+          // Emit chat:start so the frontend store's isLoading flips to true.
+          if (io) {
+            io.to(`chat:${conversationId}`).emit("coding_agent_started", { conversationId });
+            io.to(`chat:${conversationId}`).emit("chat:start", {
+              timestamp: new Date().toISOString(),
+              conversationId,
+            });
+          }
         },
       });
+
+      // Emit chat:complete so the frontend store's isLoading flips back to false.
+      if (io && emitConversationId !== undefined) {
+        io.to(`chat:${emitConversationId}`).emit("chat:complete", {
+          response: result.summary,
+          conversationId: emitConversationId,
+        });
+      }
+
       res.json(createApiResponse(result));
       notifyCodingRunFinished(db, req.app.locals["logger"] || console, body.sandboxRoot || goal.slice(0, 60), result);
     } catch (error) {

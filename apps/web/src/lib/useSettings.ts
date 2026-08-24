@@ -27,6 +27,14 @@ export function readFlag(settings: SettingEntry[] | undefined, key: string): boo
   return String(settings?.find((s) => s.key === key)?.value ?? "false").trim().toLowerCase() === "true";
 }
 
+/** Parses a numeric setting; falls back to `fallback` when unset, blank or not a positive number. */
+export function readNumber(settings: SettingEntry[] | undefined, key: string, fallback: number): number {
+  const raw = settings?.find((s) => s.key === key)?.value;
+  if (raw == null || raw.trim() === "") return fallback;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 /** True once the settings have actually been loaded, so callers can avoid acting on defaults. */
 export function settingsReady(query: ReturnType<typeof useSettings>): boolean {
   return !query.isLoading && Boolean(query.data);

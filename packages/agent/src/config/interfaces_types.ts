@@ -38,6 +38,13 @@ export interface AgentOptions {
   /** Hooks for intercepting agent lifecycle events (Phase 1) */
   hooks?: AgentHook[];
   /**
+   * Hooks that fire AFTER each tool call completes (including after self-repair).
+   * These are separate from `hooks` (which fire BEFORE tool execution) because they
+   * have a different context shape (see AgentHookContexts.AFTER_TOOL) and the call site
+   * in agent.ts is different (after self-repair, before result formatting for the LLM).
+   */
+  afterToolHooks?: AgentHook[];
+  /**
    * Restricts skill selection/loading to this exact set of slugs (by SkillManifest.slug). Used to
    * scope a custom bot's persona to only the skills it was given - undefined means unrestricted,
    * the existing default-agent behavior of considering every skill on disk.
@@ -60,6 +67,13 @@ export interface AgentOptions {
    * (or any other bot) has learned elsewhere. See MemorySystem's `isolated` option.
    */
   isolatedMemory?: boolean;
+  /**
+   * Project-local skill manifests discovered from `.agents/skills/` or
+   * `.hermes/skills/` in the git repo root. These take precedence over
+   * same-slug built-in skills (project > local > external). Passed by the
+   * server's buildAgentFactory; the Agent's loadSkillManifests() merges them.
+   */
+  projectSkillManifests?: SkillManifest[];
 }
 
 export type AgentStatus = "idle" | "running" | "paused" | "error" | "stopped";
@@ -197,6 +211,11 @@ export interface SkillManifest {
   allowedTools?: string[];
   version?: string;
   metadata?: Record<string, string>;
+  // Hermes pattern: conditional activation based on available tools/toolsets
+  fallbackForToolsets?: string[];
+  requiresToolsets?: string[];
+  fallbackForTools?: string[];
+  requiresTools?: string[];
 }
 
 export interface SkillSummary extends SkillManifest {

@@ -577,6 +577,35 @@ export const api = {
         `/coding/projects/${encodeURIComponent(project)}/checkpoints/${encodeURIComponent(sha)}/restore`,
         { method: "POST" }
       ),
+    /**
+     * Sends a follow-up message to an existing coding conversation, routing through
+     * the CodingAgent endpoint with its full discipline (phases, read-before-edit,
+     * diagnostics, verify retry). This is the same endpoint as the initial run — only
+     * with a conversationId to reuse the existing session.
+     */
+    runFollowUp: (
+      project: string,
+      goal: string,
+      conversationId: number,
+      options?: { includeFile?: string | null; maxAttempts?: number; timeoutMs?: number }
+    ) =>
+      request<{
+        success: boolean;
+        verified: boolean;
+        summary: string;
+        attempts: number;
+        conversationId: number;
+        verifyCommand?: string;
+      }>("/coding-agent/run", {
+        method: "POST",
+        body: JSON.stringify({
+          goal,
+          project,
+          conversationId,
+          maxAttempts: options?.maxAttempts,
+          timeoutMs: options?.timeoutMs,
+        }),
+      }),
   },
 
   skills: {
@@ -998,5 +1027,26 @@ export const api = {
     delete: (id: number) => request<{ deleted: boolean }>(`/bot-chats/${id}`, { method: "DELETE" }),
     deleteMessage: (id: number, messageId: number) =>
       request<{ deleted: boolean }>(`/bot-chats/${id}/messages/${messageId}`, { method: "DELETE" }),
+  },
+
+  projectSkills: {
+    /** Returns discovered skills + trust status for the current git repo. */
+    get: () =>
+      request<{
+        projectRoot: string | null;
+        trusted: boolean;
+        skills: Array<{ slug: string; name: string; description?: string; path: string }>;
+        error?: string;
+      }>("/project-skills"),
+    trust: () =>
+      request<{
+        trusted: boolean;
+        projectRoot: string;
+        skills: Array<{ slug: string; name: string; description?: string }>;
+      }>("/project-skills/trust", { method: "POST" }),
+    untrust: () =>
+      request<{ untrusted: boolean; projectRoot: string }>("/project-skills/untrust", {
+        method: "POST",
+      }),
   },
 };

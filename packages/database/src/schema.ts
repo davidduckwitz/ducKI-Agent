@@ -83,6 +83,26 @@ export type BotChatParticipantInsert = typeof botChatParticipants.$inferInsert;
 export type BotChatParticipantSelect = typeof botChatParticipants.$inferSelect;
 
 // ============================================================
+// Pending Writes (write-approval gate for memory & skills)
+// ============================================================
+export const pendingWrites = sqliteTable("pending_writes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  type: text("type").notNull(),
+  target: text("target").notNull(),
+  content: text("content"),
+  oldText: text("old_text"),
+  filePath: text("file_path"),
+  conversationId: integer("conversation_id").references(() => conversations.id),
+  metadata: text("metadata"),
+  createdAt: text("created_at").notNull(),
+  approvedAt: text("approved_at"),
+  rejectedAt: text("rejected_at"),
+});
+
+export type PendingWriteInsert = typeof pendingWrites.$inferInsert;
+export type PendingWriteSelect = typeof pendingWrites.$inferSelect;
+
+// ============================================================
 // Artifacts
 // ============================================================
 /**

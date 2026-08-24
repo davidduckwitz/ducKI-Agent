@@ -1,6 +1,6 @@
 import { createClient, type Client } from "@libsql/client";
 import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
-import { eq, desc, and, lt, or, isNull, gt, like, notInArray } from "drizzle-orm";
+import { eq, desc, and, lt, or, isNull, isNotNull, gt, like, notInArray } from "drizzle-orm";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Logger } from "@ducki/logger";
@@ -38,6 +38,8 @@ import type {
   BotInsert,
   BotSelect,
   BotChatParticipantSelect,
+  PendingWriteInsert,
+  PendingWriteSelect,
 } from "./schema.js";
 
 export type { LibSQLDatabase };
@@ -160,6 +162,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS artifacts (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL, mime_type TEXT, size_bytes INTEGER, path TEXT, source_url TEXT, platform TEXT, transcript TEXT, frames_json TEXT, thumbnail_data_url TEXT, duration_sec REAL, conversation_id INTEGER REFERENCES conversations(id), source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready', error TEXT, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS bots (slug TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, avatar TEXT, system_prompt TEXT, provider_id TEXT, model_id TEXT, skill_whitelist TEXT, tool_whitelist TEXT, is_built_in INTEGER NOT NULL DEFAULT 0, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS bot_chat_participants (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), bot_id TEXT NOT NULL, added_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS pending_writes (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL CHECK(type IN ('memory_add','memory_replace','memory_remove','skill_create','skill_patch','skill_delete','skill_write_file','skill_remove_file')), target TEXT NOT NULL, content TEXT, old_text TEXT, file_path TEXT, conversation_id INTEGER REFERENCES conversations(id), metadata TEXT, created_at TEXT NOT NULL, approved_at TEXT, rejected_at TEXT)`,
     ];
     for (const sql of tables) {
       await this.client.execute(sql);
@@ -231,6 +234,94 @@ export class DatabaseService {
     await this.client.execute(`ALTER TABLE messages ADD COLUMN author_bot_id TEXT`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
     });
+
+    // FTS5 full-text search over messages for session_search tool.
+    // External-content table: content lives in `messages`, FTS only holds the index.
+    // Triggers keep the FTS index in sync on insert/delete; no update trigger needed
+    // since message content is immutable once written.
+    await this.client.execute(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=id)`
+    ).catch(() => {
+      // FTS5 may not be available in some builds - degrade gracefully.
+    });
+    // Triggers to auto-sync the FTS index when messages are added or deleted.
+    await this.client.execute(
+      `CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+         INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+       END`
+    ).catch(() => {});
+    await this.client.execute(
+      `CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+         INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.id, old.content);
+       END`
+    ).catch(() => {});
+    // Backfill existing messages into the FTS index (idempotent via 'rebuild').
+    await this.client.execute(
+      `INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`
+    ).catch(() => {});
+  }
+
+  // ============================================================
+  // Session Search (FTS5 full-text search across all conversations)
+  // ============================================================
+
+  /**
+   * Full-text search across all messages using FTS5. Falls back to LIKE-based
+   * search when FTS5 is unavailable. Returns matches with conversation context.
+   */
+  async searchSessions(query: string, limit = 10): Promise<Array<{
+    messageId: number;
+    conversationId: number;
+    conversationName: string;
+    role: string;
+    content: string;
+    createdAt: string;
+  }>> {
+    // Try FTS5 first
+    try {
+      const ftsResult = await this.client.execute({
+        sql: `SELECT m.id, m.conversation_id, m.role, m.content, m.created_at,
+                     c.name as conversation_name
+              FROM messages_fts f
+              JOIN messages m ON f.rowid = m.id
+              JOIN conversations c ON m.conversation_id = c.id
+              WHERE messages_fts MATCH ?
+              ORDER BY rank
+              LIMIT ?`,
+        args: [query, limit],
+      });
+      return ftsResult.rows.map((row: any) => ({
+        messageId: Number(row["id"]),
+        conversationId: Number(row["conversation_id"]),
+        conversationName: String(row["conversation_name"] ?? "Unbekannt"),
+        role: String(row["role"] ?? "user"),
+        content: String(row["content"] ?? ""),
+        createdAt: String(row["created_at"] ?? ""),
+      }));
+    } catch {
+      // FTS5 not available - fall back to LIKE search
+    }
+
+    // LIKE-based fallback
+    const likePattern = `%${query}%`;
+    const result = await this.client.execute({
+      sql: `SELECT m.id, m.conversation_id, m.role, m.content, m.created_at,
+                   c.name as conversation_name
+            FROM messages m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE m.content LIKE ?
+            ORDER BY m.created_at DESC
+            LIMIT ?`,
+      args: [likePattern, limit],
+    });
+    return result.rows.map((row: any) => ({
+      messageId: Number(row["id"]),
+      conversationId: Number(row["conversation_id"]),
+      conversationName: String(row["conversation_name"] ?? "Unbekannt"),
+      role: String(row["role"] ?? "user"),
+      content: String(row["content"] ?? ""),
+      createdAt: String(row["created_at"] ?? ""),
+    }));
   }
 
   // ============================================================
@@ -498,6 +589,60 @@ export class DatabaseService {
       .where(eq(schema.conversations.origin, "bot_chat"))
       .orderBy(desc(schema.conversations.createdAt))
       .all();
+  }
+
+  // ============================================================
+  // Pending Writes (write-approval gate)
+  // ============================================================
+
+  async addPendingWrite(input: Omit<PendingWriteInsert, "createdAt">): Promise<PendingWriteSelect> {
+    const result = await this.db
+      .insert(schema.pendingWrites)
+      .values({ ...input, createdAt: new Date().toISOString() })
+      .returning()
+      .get();
+    if (!result) throw new Error("Failed to add pending write");
+    return result;
+  }
+
+  async listPendingWrites(args?: { type?: string; status?: "pending" | "approved" | "rejected" }): Promise<PendingWriteSelect[]> {
+    const conditions = [];
+
+    if (args?.type) {
+      conditions.push(eq(schema.pendingWrites.type, args.type));
+    }
+    if (args?.status === "approved") {
+      conditions.push(isNotNull(schema.pendingWrites.approvedAt));
+    } else if (args?.status === "rejected") {
+      conditions.push(isNotNull(schema.pendingWrites.rejectedAt));
+    } else {
+      // Default: only show unapproved, unrejected (pending)
+      conditions.push(isNull(schema.pendingWrites.approvedAt));
+      conditions.push(isNull(schema.pendingWrites.rejectedAt));
+    }
+
+    return this.db
+      .select()
+      .from(schema.pendingWrites)
+      .where(and(...conditions))
+      .orderBy(desc(schema.pendingWrites.createdAt))
+      .all();
+  }
+
+  async approvePendingWrite(id: number): Promise<void> {
+    await this.db
+      .update(schema.pendingWrites)
+      .set({ approvedAt: new Date().toISOString() })
+      .where(eq(schema.pendingWrites.id, id))
+      .run();
+  }
+
+  async rejectPendingWrite(id: number): Promise<void> {
+    await this.db
+      .update(schema.pendingWrites)
+      .set({ rejectedAt: new Date().toISOString() })
+      .where(eq(schema.pendingWrites.id, id))
+      .run();
   }
 
   // ============================================================

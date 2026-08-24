@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, HelpCircle, Save, AlertCircle } from "lucide-react";
+import { Bot, HelpCircle, Save, AlertCircle, Zap } from "lucide-react";
 import { api } from "../../lib/api";
 
 interface BotsSettingsProps {
@@ -18,6 +18,7 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
   const qc = useQueryClient();
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [toggleAnimating, setToggleAnimating] = useState(false);
 
   const save = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) => api.settings.set(key, value),
@@ -35,6 +36,8 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
   const defaults: Record<string, string> = {
     BOT_CHAT_MAX_ROUNDS: "6",
     BOT_CHAT_MAX_MESSAGES_PER_ROUND: "20",
+    BOT_CHAT_PARALLEL_ENABLED: "true",
+    BOT_CHAT_PARALLEL_MAX_CONCURRENT: "4",
     BOT_AGENT_MAX_ITERATIONS: "50",
     BOT_AGENT_TIMEOUT_MS: "600000",
   };
@@ -42,6 +45,8 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
   const labels: Record<string, string> = {
     BOT_CHAT_MAX_ROUNDS: "Max. Runden pro Gruppen-Chat-Nachricht",
     BOT_CHAT_MAX_MESSAGES_PER_ROUND: "Max. Bots pro Runde",
+    BOT_CHAT_PARALLEL_ENABLED: "Parallele Bot-Ausführung",
+    BOT_CHAT_PARALLEL_MAX_CONCURRENT: "Max. gleichzeitige Bots",
     BOT_AGENT_MAX_ITERATIONS: "Max. Iterationen pro Bot-Zug",
     BOT_AGENT_TIMEOUT_MS: "Timeout pro Bot-Zug (ms)",
   };
@@ -51,6 +56,10 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
       "Wie oft ein Gruppen-Chat nach der ersten Nutzer-Nachricht noch weiterlaufen darf, wenn Bots sich gegenseitig @erwähnen (z.B. \"@eddy recherchiere, @main ergänze danach\" braucht mehrere Runden). Zu niedrig = der Austausch bricht ab, bevor die Aufgabe fertig ist.",
     BOT_CHAT_MAX_MESSAGES_PER_ROUND:
       "Wie viele Bots innerhalb einer einzelnen Runde gleichzeitig antworten dürfen. Nur relevant bei vielen Teilnehmern in einem Chat.",
+    BOT_CHAT_PARALLEL_ENABLED:
+      "Bots in der ersten Runde parallel statt nacheinander ausführen — Broadcast-Nachrichten (ohne sequenzielle \"dann\"/\"danach\" Cues) werden 3-4x schneller. Bot-@Erwähnungen in Folgerunden bleiben immer sequenziell.",
+    BOT_CHAT_PARALLEL_MAX_CONCURRENT:
+      "Wie viele Bots MAXIMAL gleichzeitig laufen dürfen (begrenzt API-Rate-Limits). Unabhängige Bots in einem Parallel-Batch werden auf dieses Limit gedeckelt.",
     BOT_AGENT_MAX_ITERATIONS:
       "Wie viele Werkzeug-Aufrufe/Denkschritte ein einzelner Bot innerhalb EINES Zuges (einer Antwort) durchführen darf, bevor er abbrechen muss. Zu niedrig = der Bot bricht mitten in einer mehrstufigen Aufgabe (z.B. Recherche + Bericht) ab.",
     BOT_AGENT_TIMEOUT_MS:
@@ -62,6 +71,14 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
   const handleSaveField = (key: string) => {
     const value = getDisplayValue(key);
     if (value) save.mutate({ key, value });
+  };
+
+  const handleToggle = (key: string) => {
+    const current = getDisplayValue(key).toLowerCase() !== "false";
+    setEdits((prev) => ({ ...prev, [key]: String(!current) }));
+    handleSaveField(key);
+    setToggleAnimating(true);
+    setTimeout(() => setToggleAnimating(false), 400);
   };
 
   const formatMs = (ms: number): string => {
@@ -131,6 +148,115 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
           <div className="space-y-3 pl-4">
             {renderField("BOT_CHAT_MAX_ROUNDS", { min: 1, max: 20, step: 1 })}
             {renderField("BOT_CHAT_MAX_MESSAGES_PER_ROUND", { min: 1, max: 50, step: 1 })}
+          </div>
+        </div>
+
+        {/* Parallel Execution */}
+        <div className="space-y-3 border-t border-border pt-4">
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-medium">Parallele Ausführung</h4>
+            <div className="group relative cursor-help">
+              <HelpCircle className="h-4 w-4 text-muted-foreground" />
+              <div className="absolute bottom-full left-0 hidden group-hover:block rounded bg-black/80 text-white text-xs p-2 mb-2 w-80 z-10">
+                Wenn aktiviert, laufen unabhängige Bots (Broadcast, nicht-sequenzielle @Erwähnungen)
+                in der ersten Runde parallel statt nacheinander — 3-4x schneller. Sequenzielle
+                Cue-Words ("dann", "danach", "once that's done") erzwingen weiterhin sequenzielle
+                Ausführung.
+              </div>
+            </div>
+          </div>
+          <div className="space-y-3 pl-4">
+            {/* Toggle for parallel enabled */}
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="space-y-1">
+                <span className="text-sm font-medium text-foreground">
+                  {labels["BOT_CHAT_PARALLEL_ENABLED"]}
+                </span>
+                <p className="text-xs text-muted-foreground">
+                  {descriptions["BOT_CHAT_PARALLEL_ENABLED"]}
+                </p>
+              </div>
+              <button
+                onClick={() => handleToggle("BOT_CHAT_PARALLEL_ENABLED")}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                  toggleAnimating ? "animate-toggle-flash" : ""
+                } ${
+                  getDisplayValue("BOT_CHAT_PARALLEL_ENABLED").toLowerCase() !== "false"
+                    ? "bg-emerald-600"
+                    : "bg-muted"
+                }`}
+                title={
+                  getDisplayValue("BOT_CHAT_PARALLEL_ENABLED").toLowerCase() !== "false"
+                    ? "Deaktivieren"
+                    : "Aktivieren"
+                }
+              >
+                <span
+                  className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                    toggleAnimating ? "animate-toggle-pop" : ""
+                  } ${
+                    getDisplayValue("BOT_CHAT_PARALLEL_ENABLED").toLowerCase() !== "false"
+                      ? "translate-x-6"
+                      : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+
+            {/* Slider for max concurrent */}
+            <div
+              className={`space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0 transition-opacity ${
+                getDisplayValue("BOT_CHAT_PARALLEL_ENABLED").toLowerCase() === "false"
+                  ? "pointer-events-none opacity-40"
+                  : ""
+              }`}
+            >
+              <label className="flex items-center justify-between text-sm">
+                <span className="font-medium text-foreground">
+                  {labels["BOT_CHAT_PARALLEL_MAX_CONCURRENT"]}
+                </span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Zap className="h-3 w-3 text-emerald-400" />
+                  <span>{getDisplayValue("BOT_CHAT_PARALLEL_MAX_CONCURRENT")} Bots gleichzeitig</span>
+                </span>
+              </label>
+              <p className="text-xs text-muted-foreground">
+                {descriptions["BOT_CHAT_PARALLEL_MAX_CONCURRENT"]}
+              </p>
+              <div className="flex items-start gap-2">
+                <input
+                  type="range"
+                  min={1}
+                  max={8}
+                  step={1}
+                  value={getDisplayValue("BOT_CHAT_PARALLEL_MAX_CONCURRENT")}
+                  onChange={(e) =>
+                    setEdits((prev) => ({
+                      ...prev,
+                      ["BOT_CHAT_PARALLEL_MAX_CONCURRENT"]: e.target.value,
+                    }))
+                  }
+                  disabled={
+                    getDisplayValue("BOT_CHAT_PARALLEL_ENABLED").toLowerCase() === "false"
+                  }
+                  className="flex-1"
+                />
+                <button
+                  onClick={() => handleSaveField("BOT_CHAT_PARALLEL_MAX_CONCURRENT")}
+                  className="btn-primary flex items-center gap-1"
+                  disabled={
+                    save.isPending ||
+                    getDisplayValue("BOT_CHAT_PARALLEL_ENABLED").toLowerCase() === "false"
+                  }
+                >
+                  <Save className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>1 (langsam)</span>
+                <span>8 (schnell, viele API-Calls)</span>
+              </div>
+            </div>
           </div>
         </div>
 

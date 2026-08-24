@@ -4,6 +4,7 @@ import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import type { BotService } from "../lib/bot-service.js";
 import { BotChatOrchestrator } from "../lib/bot-chat-orchestrator.js";
+import { sharedWorkspace } from "../lib/shared-workspace-service.js";
 
 const logger = getRootLogger().child("BotChatsRoute");
 
@@ -64,6 +65,11 @@ botChatsRouter.post("/", async (req, res, next) => {
     for (const bot of resolvedBots) {
       await db.addBotChatParticipant(conversation.id, bot.slug);
     }
+
+    // Create the shared workspace on disk and inject its context into the
+    // transcript so every bot in this chat sees the shared filesystem from
+    // the very first exchange. Tagged internal so it doesn't clutter the UI.
+    await sharedWorkspace.injectWorkspaceContext(db, conversation.id, conversation.id);
 
     res.json(createApiResponse({ ...conversation, participants: resolvedBots.map((b) => b.slug) }));
   } catch (error) {

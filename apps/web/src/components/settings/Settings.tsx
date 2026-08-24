@@ -17,6 +17,7 @@ import { CloudBackupSettings } from "./CloudBackupSettings";
 import { VoiceSettings } from "./VoiceSettings";
 import { CodingAgentSettings } from "./CodingAgentSettings";
 import { BotsSettings } from "./BotsSettings";
+import { BackgroundReviewSettings } from "./BackgroundReviewSettings";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -1542,8 +1543,13 @@ export function Settings() {
       )}
 
       {activeTab === "Bots" && (
-        <div className="card space-y-3">
-          <BotsSettings settingsMap={settingsMap} />
+        <div className="space-y-6">
+          <div className="card space-y-3">
+            <BotsSettings settingsMap={settingsMap} />
+          </div>
+          <div className="card space-y-3">
+            <BackgroundReviewSettings settingsMap={settingsMap} />
+          </div>
         </div>
       )}
 

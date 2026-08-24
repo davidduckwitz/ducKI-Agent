@@ -99,17 +99,47 @@ export class Executor {
 
     const startTime = Date.now();
 
-    // For browser tool: inject the last known session ID if not provided
+    // For browser tool: auto-launch if needed, then inject session ID
     let executionInput = input;
-    if (toolName === "browser" && this.lastBrowserSessionId) {
+    if (toolName === "browser") {
       const action = String(input["action"] ?? "").trim().toLowerCase();
-      // Don't override sessionId for launch action, but use it for other actions if missing
       if (action !== "launch" && !input["sessionId"]) {
-        this.logger.info("Browser tool: injecting last session ID", {
-          sessionId: this.lastBrowserSessionId,
-          action
-        });
-        executionInput = { ...input, sessionId: this.lastBrowserSessionId };
+        if (!this.lastBrowserSessionId) {
+          // No session exists yet - auto-launch a browser before this action
+          this.logger.info("Browser tool: auto-launching before action", { action });
+          const launchResult = await tool.execute({ action: "launch" });
+          if (launchResult.success) {
+            const data = launchResult.data as Record<string, unknown> | undefined;
+            const newSessionId = data?.sessionId as string | undefined;
+            if (newSessionId) {
+              this.lastBrowserSessionId = newSessionId;
+              this.registerBrowserSession(newSessionId, { launchedAt: new Date().toISOString() });
+              this.logger.info("Browser auto-launched for action", { sessionId: newSessionId, action });
+            } else {
+              this.logger.error("Browser auto-launch succeeded but returned no sessionId");
+              return {
+                success: false,
+                data: null,
+                error: "Browser launched but no sessionId was returned – cannot proceed with " + action,
+              };
+            }
+          } else {
+            this.logger.error("Browser auto-launch failed", { error: launchResult.error });
+            return {
+              success: false,
+              data: null,
+              error: `Cannot ${action}: browser auto-launch failed – ${launchResult.error || "unknown error"}. Try calling browser action:"launch" explicitly first.`,
+            };
+          }
+        }
+        // Inject the session ID (either from a prior launch or the auto-launch above)
+        if (this.lastBrowserSessionId) {
+          executionInput = { ...input, sessionId: this.lastBrowserSessionId };
+          this.logger.info("Browser tool: injecting session ID", {
+            sessionId: this.lastBrowserSessionId,
+            action,
+          });
+        }
       }
     }
 
