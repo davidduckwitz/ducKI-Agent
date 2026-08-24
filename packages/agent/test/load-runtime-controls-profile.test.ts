@@ -4,6 +4,8 @@ import { getAgentModelProfile, loadAgentRuntimeControls } from "../src/config/lo
 const KEYS = [
   "AGENT_MODEL_PROFILE",
   "AGENT_MAX_ITERATIONS",
+  "AGENT_LIGHTWEIGHT_MAX_ITERATIONS",
+  "AGENT_CHATBOT_MAX_ITERATIONS",
   "AGENT_MAX_OUTPUT_TOKENS",
   "AGENT_TIMEOUT_MS",
   "AGENT_ENABLE_REFLECTION",
@@ -48,6 +50,8 @@ describe("agent model profiles", () => {
     const controls = loadAgentRuntimeControls();
 
     expect(controls.maxIterations).toBe(18);
+    expect(controls.lightweightMaxIterations).toBe(8);
+    expect(controls.chatbotMaxIterations).toBe(5);
     expect(controls.maxOutputTokens).toBe(6144);
     expect(controls.timeoutMs).toBe(480000);
     expect(controls.enableReflection).toBe(false);
@@ -70,6 +74,7 @@ describe("agent model profiles", () => {
     for (const key of KEYS) delete process.env[key];
     process.env["AGENT_MODEL_PROFILE"] = "small";
     process.env["AGENT_MAX_ITERATIONS"] = "31";
+    process.env["AGENT_LIGHTWEIGHT_MAX_ITERATIONS"] = "12";
     process.env["AGENT_ENABLE_REFLECTION"] = "true";
     process.env["AGENT_CODING_ENABLE_VERIFY"] = "false";
     process.env["AGENT_CHECKLIST_ENABLED"] = "false";
@@ -79,6 +84,7 @@ describe("agent model profiles", () => {
     const controls = loadAgentRuntimeControls();
 
     expect(controls.maxIterations).toBe(31);
+    expect(controls.lightweightMaxIterations).toBe(12);
     expect(controls.enableReflection).toBe(true);
     expect(controls.codingEnableVerify).toBe(false);
     expect(controls.checklistEnabled).toBe(false);
@@ -116,6 +122,8 @@ describe("agent model profiles", () => {
     const controls = loadAgentRuntimeControls();
 
     expect(controls.maxIterations).toBe(50);
+    expect(controls.lightweightMaxIterations).toBe(10);
+    expect(controls.chatbotMaxIterations).toBe(5);
     expect(controls.maxOutputTokens).toBe(16384);
     expect(controls.enableReflection).toBe(true);
     expect(controls.reflectionMaxRetries).toBe(1);
