@@ -46,8 +46,14 @@ describe("agent model profiles", () => {
       "AGENT_ENABLE_VISION",
       "AGENT_AUTO_SKILL_SELECTION",
       "AGENT_SKILL_BEHAVIOR",
+      // Current DB-backed runtime keys:
+      "ENABLED_SKILLS",
+      "ALWAYS_LOAD_SKILLS",
+      "ENABLED_OPTIONAL_TOOLS",
+      // Historical/env-oriented aliases stay protected too:
       "AGENT_ENABLED_SKILL_ALLOWLIST",
       "AGENT_ENABLED_OPTIONAL_TOOLS",
+      "AGENT_ALWAYS_LOAD_SKILLS",
       "CODING_ENABLED",
       "PLUGIN_CREATION_ENABLED",
       "PLUGIN_SOMETHING_FUTURE",
@@ -61,6 +67,8 @@ describe("agent model profiles", () => {
 
     for (const key of forbiddenExamples) expect(isModelProfileProtectedKey(key)).toBe(true);
     expect(MODEL_PROFILE_PROTECTED_KEYS.has("AGENT_ENABLE_VISION")).toBe(true);
+    expect(MODEL_PROFILE_PROTECTED_KEYS.has("ENABLED_SKILLS")).toBe(true);
+    expect(MODEL_PROFILE_PROTECTED_KEYS.has("ENABLED_OPTIONAL_TOOLS")).toBe(true);
 
     for (const profile of Object.values(AGENT_MODEL_PROFILES)) {
       expect(() => assertProfileIsCapabilityNeutral(profile)).not.toThrow();
@@ -80,6 +88,16 @@ describe("agent model profiles", () => {
         settings: { AGENT_ENABLE_VISION: "false" },
       })
     ).toThrow(/protected capability settings/i);
+
+    expect(() =>
+      assertProfileIsCapabilityNeutral({
+        id: "small",
+        label: "bad",
+        modelHint: "test",
+        description: "test",
+        settings: { ENABLED_SKILLS: "research" },
+      })
+    ).toThrow(/protected capability settings/i);
   });
 
   it("applies only the selected tuning settings", async () => {
@@ -94,6 +112,8 @@ describe("agent model profiles", () => {
     expect(setSetting).toHaveBeenCalledWith("AGENT_CODING_ENABLE_VERIFY", "true");
     expect(setSetting).not.toHaveBeenCalledWith("AGENT_ENABLE_VISION", expect.anything());
     expect(setSetting).not.toHaveBeenCalledWith("AGENT_AUTO_SKILL_SELECTION", expect.anything());
+    expect(setSetting).not.toHaveBeenCalledWith("ENABLED_SKILLS", expect.anything());
+    expect(setSetting).not.toHaveBeenCalledWith("ENABLED_OPTIONAL_TOOLS", expect.anything());
   });
 
   it("infers legacy for untouched installs and custom after a manual override", () => {
