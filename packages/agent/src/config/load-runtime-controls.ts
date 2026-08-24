@@ -24,9 +24,10 @@ type ProfileDefaults = {
 };
 
 /**
- * Model-size oriented defaults. `legacy` intentionally reproduces the pre-profile behaviour so
- * upgrading DucKI never changes an existing installation unless the operator opts in with
- * AGENT_MODEL_PROFILE. Explicit AGENT_* variables always override the selected profile below.
+ * Model-size oriented defaults. `legacy` intentionally reproduces the effective defaults used by
+ * the core Agent before model profiles were introduced, so opting into profile infrastructure does
+ * not silently change an installation. Explicit AGENT_* variables always override the selected
+ * profile below.
  *
  * `small` is tuned for capable 7B-14B tool-calling models (for example Qwen-class local models):
  * fewer opportunities to loop, smaller output budgets, deterministic verification enabled, and
@@ -39,19 +40,19 @@ const PROFILE_DEFAULTS: Record<AgentModelProfile, ProfileDefaults> = {
     maxOutputTokens: 16384,
     timeoutMs: 600000,
     enableReflection: true,
-    reflectionMaxRetries: 3,
-    reflectionStoreMemory: true,
-    reflectionMetaReview: true,
+    reflectionMaxRetries: 1,
+    reflectionStoreMemory: false,
+    reflectionMetaReview: false,
     reflectionPostIteration: true,
     codingMaxIterations: 60,
     codingEnableReflection: false,
     codingEnableVerify: false,
     checklistEnabled: false,
     checklistMaxItemAttempts: 3,
-    reasonerUseToolMinConfidence: 0.7,
+    reasonerUseToolMinConfidence: 0.65,
     maxRepeatedToolCall: 3,
     staleReadLoopThreshold: 4,
-    selfRepairMaxAttempts: 3,
+    selfRepairMaxAttempts: 2,
   },
   small: {
     maxIterations: 18,
@@ -119,6 +120,12 @@ export function getAgentModelProfile(value = process.env["AGENT_MODEL_PROFILE"])
     : "legacy";
 }
 
+function envValue(primary: string, legacyAlias?: string): string | undefined {
+  const canonical = process.env[primary];
+  if (canonical !== undefined) return canonical;
+  return legacyAlias ? process.env[legacyAlias] : undefined;
+}
+
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
@@ -126,15 +133,15 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function envFloat(name: string, fallback: number): number {
-  const raw = process.env[name];
+function envFloat(name: string, fallback: number, legacyAlias?: string): number {
+  const raw = envValue(name, legacyAlias);
   if (raw === undefined) return fallback;
   const parsed = Number.parseFloat(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function envBool(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
+function envBool(name: string, fallback: boolean, legacyAlias?: string): boolean {
+  const raw = envValue(name, legacyAlias);
   if (raw === undefined) return fallback;
   return raw.toLowerCase() !== "false";
 }
@@ -149,6 +156,10 @@ function envBoolTrueOnly(name: string, fallback: boolean): boolean {
  * Load AgentRuntimeControls from environment variables and defaults.
  * Combines existing Agent settings with Provider settings. AGENT_MODEL_PROFILE supplies only
  * defaults; every specific AGENT_* variable below remains authoritative when present.
+ *
+ * Canonical environment keys mirror the DB-backed settings consumed by Agent.loadRuntimeControls().
+ * Two historical aliases are still accepted when their canonical counterpart is absent:
+ * AGENT_REASONER_MIN_CONFIDENCE and AGENT_SELF_REPAIR_ENABLED.
  */
 export function loadAgentRuntimeControls(): AgentRuntimeControls {
   const providerSettings = createProviderSettings();
@@ -198,12 +209,16 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
 
     enableVision: (process.env["AGENT_ENABLE_VISION"] ?? "true").toLowerCase() !== "false",
 
-    reasonerUseToolMinConfidence: envFloat("AGENT_REASONER_MIN_CONFIDENCE", profile.reasonerUseToolMinConfidence),
+    reasonerUseToolMinConfidence: envFloat(
+      "AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE",
+      profile.reasonerUseToolMinConfidence,
+      "AGENT_REASONER_MIN_CONFIDENCE"
+    ),
     maxConsecutiveToolFailures: parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3"),
     maxRepeatedToolCall: envInt("AGENT_MAX_REPEATED_TOOL_CALL", profile.maxRepeatedToolCall),
     staleReadLoopThreshold: envInt("AGENT_STALE_READ_STREAK", profile.staleReadLoopThreshold),
 
-    selfRepairEnabled: (process.env["AGENT_SELF_REPAIR_ENABLED"] ?? "true").toLowerCase() !== "false",
+    selfRepairEnabled: envBool("AGENT_SELF_REPAIR", true, "AGENT_SELF_REPAIR_ENABLED"),
     selfRepairMaxAttempts: envInt("AGENT_SELF_REPAIR_MAX_ATTEMPTS", profile.selfRepairMaxAttempts),
 
     enableAutoSkillSelection: (process.env["AGENT_AUTO_SKILL_SELECTION"] ?? "true").toLowerCase() !== "false",
