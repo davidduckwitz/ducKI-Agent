@@ -3,6 +3,7 @@ import { Terminal, AlertCircle, HelpCircle, Save } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { AgentModelProfileSettings } from "./AgentModelProfileSettings";
 
 interface CodingAgentSettingsProps {
   settingsMap: Map<string, string>;
@@ -31,6 +32,8 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["settings"] });
       void qc.refetchQueries({ queryKey: ["settings"] });
+      // A manual field edit may mean the active preset is now "custom".
+      void qc.invalidateQueries({ queryKey: ["agent-model-profiles"] });
       setMessage({ type: "success", text: "Einstellungen gespeichert" });
       setTimeout(() => setMessage(null), 3000);
     },
@@ -140,6 +143,10 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
 
   return (
     <div className="space-y-6">
+      {/* One centrally-applied profile for main Agent + Coding runtime budgets. Capability switches
+          (vision/plugins/skill discovery/bot permissions/handoffs) are intentionally excluded. */}
+      <AgentModelProfileSettings />
+
       {/* Header */}
       <div className="flex items-center gap-3">
         <Terminal className="h-5 w-5 text-blue-500" />
