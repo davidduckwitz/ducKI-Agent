@@ -59,6 +59,7 @@ jobs:
           packages/agent/test/memory-auto-approval.test.ts
           packages/agent/test/coding-run-state.test.ts
           packages/agent/test/coding-failure-reflection-integration.test.ts
+          packages/agent/test/agent-runner-v2-streaming.test.ts
 
   compatibility:
     name: Bots, plugins and skills compatibility
