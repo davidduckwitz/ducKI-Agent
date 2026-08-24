@@ -106,6 +106,8 @@ describe("CodingFailureReflector", () => {
     });
     expect(generate).toHaveBeenCalledTimes(1);
     expect(generate.mock.calls[0]?.[1]).toMatchObject({ temperature: 0.1, maxTokens: 500 });
+    expect(generate.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(generate.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
   });
 
   it("degrades to undefined instead of creating a new failure mode on malformed output", async () => {
@@ -130,13 +132,16 @@ describe("CodingFailureReflector", () => {
     expect(log.debug).toHaveBeenCalled();
   });
 
-  it("times out quickly and returns undefined when the reflection provider stalls", async () => {
+  it("aborts the provider request on timeout and returns undefined", async () => {
     vi.useFakeTimers();
     try {
       const log = logger();
-      const reflector = new CodingFailureReflector({
-        generate: vi.fn(() => new Promise(() => undefined)),
-      } as any, log, 25);
+      let seenSignal: AbortSignal | undefined;
+      const generate = vi.fn((_messages: unknown, options?: { signal?: AbortSignal }) => {
+        seenSignal = options?.signal;
+        return new Promise(() => undefined);
+      });
+      const reflector = new CodingFailureReflector({ generate } as any, log, 25);
 
       const pending = reflector.reflect({
         goal: "fix",
@@ -148,6 +153,8 @@ describe("CodingFailureReflector", () => {
       await vi.advanceTimersByTimeAsync(30);
 
       await expect(pending).resolves.toBeUndefined();
+      expect(seenSignal).toBeDefined();
+      expect(seenSignal?.aborted).toBe(true);
       expect(log.warn).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
