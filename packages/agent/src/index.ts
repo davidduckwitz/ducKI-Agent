@@ -125,6 +125,10 @@ export {
 export { AgentBenchmark, type BenchmarkResult } from "./performance/benchmarks.js";
 export { CodingAgent, createCodingAgent } from "./coding/coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
+export { CodingRunState } from "./coding/coding-run-state.js";
+export type { CodingFailureReflection, CodingFailureSnapshot, VerifyFailureUpdate } from "./coding/coding-run-state.js";
+export { CodingFailureReflector } from "./coding/failure-reflector.js";
+export type { CodingFailureReflectionInput } from "./coding/failure-reflector.js";
 export { createScopedFilesystemTool, sanitizeCodeContent } from "./coding/scoped-filesystem-tool.js";
 export { CODING_ALLOWED_SHELL_COMMANDS, condenseVerifyOutput } from "./coding/coding-agent.js";
 export {
