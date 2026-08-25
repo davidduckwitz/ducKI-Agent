@@ -1,7 +1,7 @@
 {
   "name": "vision-analyzer",
-  "version": "0.1.0",
-  "description": "Realtime browser vision for DucKI: live frames, QR detection and agent-backed visual analysis.",
+  "version": "0.2.0",
+  "description": "Realtime browser vision for DucKI with zero-dependency local mode, optional OCR/ONNX packs and opt-in agent vision.",
   "author": "DucKI",
   "license": "MIT",
   "icon": "👁️",
@@ -27,8 +27,9 @@
       }
     ],
     "settings": [
-      { "key": "VISION_AUTO_ANALYZE", "type": "boolean", "default": false, "description": "Run LLM vision periodically while a stream is active." },
-      { "key": "VISION_ANALYZE_INTERVAL_MS", "type": "number", "default": 5000, "description": "Minimum interval between automatic vision analyses." }
+      { "key": "VISION_LOCAL_ONLY", "type": "boolean", "default": true, "description": "Local-only mode: never call an LLM for vision. Zero-dependency QR/motion and installed local packs remain available." },
+      { "key": "VISION_AUTO_ANALYZE", "type": "boolean", "default": false, "description": "Run LLM vision periodically while a stream is active. Ignored while local-only mode is enabled." },
+      { "key": "VISION_ANALYZE_INTERVAL_MS", "type": "number", "default": 5000, "description": "Minimum interval between automatic LLM vision analyses." }
     ]
   }
 }
