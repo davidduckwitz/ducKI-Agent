@@ -15,6 +15,7 @@ export function PluginFrontendView() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const subscribedSession = useRef<string | undefined>(undefined);
   const [browserBridgeAllowed, setBrowserBridgeAllowed] = useState(false);
+  const [cameraAllowed, setCameraAllowed] = useState(false);
   const socket = useAppStore((s) => s.socket);
   const refreshBrowserSessions = useAppStore((s) => s.refreshBrowserSessions);
 
@@ -32,6 +33,7 @@ export function PluginFrontendView() {
   useEffect(() => {
     let cancelled = false;
     setBrowserBridgeAllowed(false);
+    setCameraAllowed(false);
     if (!name || !plugin?.enabled || !frontendOrigin) return () => { cancelled = true; };
 
     void (async () => {
@@ -48,10 +50,12 @@ export function PluginFrontendView() {
           ? json.data.manifest.permissions.map(String)
           : [];
         if (!cancelled) {
-          setBrowserBridgeAllowed(json.data?.trust === "node" && permissions.includes("browser.frames"));
+          const trusted = json.data?.trust === "node";
+          setBrowserBridgeAllowed(trusted && permissions.includes("browser.frames"));
+          setCameraAllowed(trusted && permissions.includes("media.camera"));
         }
       } catch {
-        // Fail closed: a plugin without a verifiable permission never receives browser frames.
+        // Fail closed: unverifiable permissions grant nothing.
       }
     })();
 
@@ -158,6 +162,7 @@ export function PluginFrontendView() {
         title={`${name} Frontend`}
         src={frontendSrc}
         sandbox="allow-scripts allow-forms allow-same-origin"
+        allow={cameraAllowed ? "camera" : undefined}
         className="min-h-0 flex-1 w-full border-0 bg-background"
       />
     </div>
