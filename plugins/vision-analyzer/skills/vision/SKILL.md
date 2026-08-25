@@ -1,11 +1,11 @@
 ---
 name: vision-analyzer
-description: Nutze die lokale visuelle Wahrnehmung des integrierten DucKI-Browsers oder einer explizit freigegebenen Kamera für sichtbare Inhalte, Personen, Objekte, Text, QR-Codes, Bewegung und Umgebung.
+description: Nutze die lokale visuelle Wahrnehmung des integrierten DucKI-Browsers, einer explizit freigegebenen Kamera oder einer vom Benutzer ausgewählten Videodatei für sichtbare Inhalte, Personen, Objekte, Text, QR-Codes, Bewegung und Umgebung.
 ---
 
 # Vision Analyzer
 
-Verwende das Tool `vision_analyzer` für visuelle Fragen zum integrierten Browser und für den letzten bekannten lokalen Kamera-Zustand.
+Verwende das Tool `vision_analyzer` für visuelle Fragen zum integrierten Browser und zum letzten bekannten lokalen Kamera-/Video-Zustand.
 
 ## Local-first Reihenfolge
 
@@ -17,10 +17,11 @@ Für Browser-Sessions:
 5. `scan` oder `query` nur dann verwenden, wenn der Benutzer ausdrücklich Smart/Vision-LLM-Analyse möchte und `VISION_LOCAL_ONLY=false` ist.
 6. `stop`: Beobachtung stoppen, wenn sie nicht mehr benötigt wird.
 
-Für Kamera:
+Für Kamera und lokale Videodatei:
 - Die Kamera wird ausschließlich vom Benutzer im Plugin-Frontend gestartet.
-- `state` mit `sessionId="camera:local"` kann den letzten bekannten lokalen Zustand lesen.
-- `local_frame_detect` und `local_frame_scan` sind Transportaktionen des Plugin-Frontends für explizit bereitgestellte Kameraframes; der Agent soll keine Base64-Frames selbst erzeugen oder erfinden.
+- Eine Videodatei wird ausschließlich durch eine lokale Dateiauswahl des Benutzers geöffnet.
+- `state` mit `sessionId="camera:local"` bzw. `sessionId="video:local"` liest den letzten bekannten lokalen Zustand.
+- `local_frame_detect` und `local_frame_scan` sind Transportaktionen des Plugin-Frontends für explizit bereitgestellte Frames; der Agent soll keine Base64-Frames selbst erzeugen oder erfinden.
 - `local_source_stop` entfernt den flüchtigen Zustand einer lokalen Quelle.
 
 ## Lokale Fähigkeiten
@@ -28,6 +29,7 @@ Für Kamera:
 Ohne Zusatzinstallation:
 - Browser-Live-Frames
 - explizit gestartete Kamera-Live-Vorschau
+- lokale Videodatei-Wiedergabe
 - QR-Code-Erkennung im Plugin-Frontend
 - Bewegungserkennung
 
@@ -36,7 +38,7 @@ Optional installierbar:
 - `onnx`: ONNX Runtime + Sharp als lokale Vision Runtime.
 - `yolo26n-coco`: lokales YOLO26n-ONNX-Modell für Person + COCO-80-Objekte.
 
-Wenn ONNX Runtime und ein Objektmodell installiert sind, läuft die Person-/Objekterkennung während einer aktiven Browser-Session automatisch im Worker Thread. Bei aktiver Kamera sendet das Plugin gedrosselt einzelne komprimierte Frames an dieselbe lokale ONNX-Pipeline. Die Kamera wird nicht aufgezeichnet.
+Wenn ONNX Runtime und ein Objektmodell installiert sind, läuft die Person-/Objekterkennung während einer aktiven Browser-Session automatisch im Worker Thread. Bei Kamera oder Videodatei sendet das Plugin gedrosselt einzelne komprimierte Frames an dieselbe lokale ONNX-Pipeline. Die Kamera wird nicht aufgezeichnet und eine ausgewählte Videodatei wird nicht als komplette Datei an den Server übertragen.
 
 `state` enthält die neuesten Ergebnisse unter `detections`.
 
@@ -56,6 +58,6 @@ Das Plugin benötigt:
 - `browser.frames` für den kontrollierten Zugriff auf Browser-Sessions und Browser-Frames.
 - `media.camera` damit der Host dem Plugin-iframe überhaupt die Browser-Kamera-Permission freigeben darf.
 
-Die Kamera wird nie automatisch beim DucKI-Start aktiviert. `getUserMedia()` wird erst ausgelöst, wenn der Benutzer im Vision-Frontend auf die Kamera-Quelle wechselt bzw. sie startet.
+Die Kamera wird nie automatisch beim DucKI-Start aktiviert. `getUserMedia()` wird erst ausgelöst, wenn der Benutzer im Vision-Frontend auf die Kamera-Quelle wechselt bzw. sie startet. Lokale Videodateien werden nur über einen expliziten File-Picker geöffnet.
 
-Bevorzuge lokale Ergebnisse. Ein Vision-LLM ist eine optionale Eskalationsstufe für komplexe Browser-Fragen, die aus QR/OCR/Objekterkennung/Tracking/Bewegung/Szenen-Heuristik nicht zuverlässig beantwortet werden können. Smart/LLM-Kameraanalyse ist derzeit bewusst nicht automatisch aktiviert.
+Bevorzuge lokale Ergebnisse. Ein Vision-LLM ist eine optionale Eskalationsstufe für komplexe Browser-Fragen, die aus QR/OCR/Objekterkennung/Tracking/Bewegung/Szenen-Heuristik nicht zuverlässig beantwortet werden können. Smart/LLM-Kamera- und Videoanalyse ist derzeit bewusst nicht automatisch aktiviert.
