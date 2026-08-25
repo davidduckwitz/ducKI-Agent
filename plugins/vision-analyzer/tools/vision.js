@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
@@ -48,6 +48,17 @@ const MODEL_CATALOG = {
     inputSize: 640,
   },
 };
+
+const LOCAL_SCENE_RULES = [
+  { label: "office", strong: ["laptop", "keyboard", "mouse"], hints: ["chair", "book", "tv", "cell phone"] },
+  { label: "kitchen", strong: ["refrigerator", "oven", "microwave"], hints: ["sink", "toaster", "bowl", "fork", "knife", "spoon", "cup"] },
+  { label: "bedroom", strong: ["bed"], hints: ["book", "clock", "cell phone", "chair"] },
+  { label: "living room", strong: ["couch"], hints: ["tv", "chair", "potted plant", "book", "remote"] },
+  { label: "bathroom", strong: ["toilet"], hints: ["sink", "toothbrush", "hair drier"] },
+  { label: "dining area", strong: ["dining table"], hints: ["chair", "bowl", "cup", "fork", "knife", "spoon"] },
+  { label: "street / traffic", strong: ["traffic light", "stop sign", "bus", "truck"], hints: ["car", "motorcycle", "bicycle", "parking meter"] },
+  { label: "outdoor / park", strong: ["bench"], hints: ["bird", "dog", "frisbee", "sports ball", "bicycle"] },
+];
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -295,7 +306,7 @@ function stateFor(sessionId) {
       analysis: null,
       qrCodes: [],
       motion: { score: 0, active: false },
-      detections: { people: [], objects: [], inferenceMs: null, model: null, frameAt: null },
+      detections: { people: [], objects: [], inferenceMs: null, model: null, frameAt: null, scene: null },
       updatedAt: null,
       unsubscribe: null,
       timer: null,
@@ -328,16 +339,42 @@ function parseJson(text) {
   try { return JSON.parse(cleaned); } catch { return { description: String(text ?? ""), raw: String(text ?? "") }; }
 }
 
+function resolveOcrLanguagePath() {
+  const languageData = require("@tesseract.js-data/deu");
+  const exported = languageData?.langPath ?? languageData?.default?.langPath;
+  if (typeof exported === "string" && exported.trim()) return exported;
+  return dirname(require.resolve("@tesseract.js-data/deu"));
+}
+
+function resolveOcrWorkerPath() {
+  try {
+    return require.resolve("tesseract.js/src/worker-script/node/index.js");
+  } catch {
+    return undefined;
+  }
+}
+
 async function getOcrWorker() {
   if (!isInstalled("tesseract.js") || !isInstalled("@tesseract.js-data/deu")) {
     throw new Error("Local OCR pack is not installed");
   }
   if (!ocrWorkerPromise) {
     ocrWorkerPromise = (async () => {
-      const { createWorker } = await import("tesseract.js");
-      const languageData = require("@tesseract.js-data/deu");
-      return createWorker("deu", undefined, { langPath: languageData.langPath });
-    })();
+      const tesseract = await import("tesseract.js");
+      const createWorker = tesseract.createWorker;
+      const oem = tesseract.OEM?.LSTM_ONLY ?? 1;
+      const workerPath = resolveOcrWorkerPath();
+      const options = {
+        langPath: resolveOcrLanguagePath(),
+        cacheMethod: "none",
+        gzip: true,
+        ...(workerPath ? { workerPath } : {}),
+      };
+      return createWorker("deu", oem, options);
+    })().catch((error) => {
+      ocrWorkerPromise = null;
+      throw error;
+    });
   }
   return ocrWorkerPromise;
 }
@@ -355,6 +392,35 @@ async function runLocalOcr(frame) {
   }];
 }
 
+function inferLocalScene(people = [], objects = []) {
+  const types = new Set(objects.map((entry) => String(entry?.type ?? "").toLowerCase()).filter(Boolean));
+  if (people.length > 0) types.add("person");
+
+  let best = null;
+  for (const rule of LOCAL_SCENE_RULES) {
+    const strongMatches = rule.strong.filter((type) => types.has(type)).length;
+    const hintMatches = rule.hints.filter((type) => types.has(type)).length;
+    const score = strongMatches * 3 + hintMatches;
+    if (score <= 0) continue;
+    if (!best || score > best.score) {
+      best = { rule, score, strongMatches, hintMatches };
+    }
+  }
+
+  if (!best) {
+    if (people.length > 0) return { label: "people / unknown environment", confidence: 0.35, source: "object-heuristic" };
+    return null;
+  }
+
+  const confidence = clamp(0.42 + best.strongMatches * 0.18 + best.hintMatches * 0.07, 0.42, 0.92);
+  return {
+    label: best.rule.label,
+    confidence: Math.round(confidence * 100) / 100,
+    source: "object-heuristic",
+    evidence: [...best.rule.strong, ...best.rule.hints].filter((type) => types.has(type)).slice(0, 8),
+  };
+}
+
 function selectedModel(context) {
   const requested = String(context.settings?.VISION_OBJECT_MODEL ?? "yolo26n-coco");
   const model = MODEL_CATALOG[requested] ?? MODEL_CATALOG["yolo26n-coco"];
@@ -370,11 +436,12 @@ async function runLocalObjects(context, frame) {
       objects: [],
       inferenceMs: null,
       model: model?.id ?? null,
+      scene: null,
       skipped: !runtimeReady ? "Local Vision Runtime not installed" : "Object detection model not installed",
     };
   }
   const result = await runDetector(frame, model, context.settings);
-  return { ...result, model: model.id };
+  return { ...result, model: model.id, scene: inferLocalScene(result.people, result.objects) };
 }
 
 async function updateBackgroundDetections(context, state) {
@@ -387,6 +454,7 @@ async function updateBackgroundDetections(context, state) {
     state.detections = {
       people: detection.people ?? [],
       objects: detection.objects ?? [],
+      scene: detection.scene ?? null,
       inferenceMs: detection.inferenceMs ?? null,
       model: detection.model ?? null,
       outputShape: detection.outputShape,
@@ -396,6 +464,7 @@ async function updateBackgroundDetections(context, state) {
     state.lastDetectedFrameAt = frame.timestamp;
     state.updatedAt = new Date().toISOString();
     if (state.analysis?.source === "local") {
+      state.analysis.scene = state.detections.scene;
       state.analysis.people = state.detections.people;
       state.analysis.objects = state.detections.objects;
       state.analysis.objectDetection = state.detections;
@@ -438,12 +507,13 @@ async function localScan(context, state) {
 
   const detection = detectionResult.status === "fulfilled"
     ? detectionResult.value
-    : { people: [], objects: [], inferenceMs: null, model: null };
+    : { people: [], objects: [], scene: null, inferenceMs: null, model: null };
   if (detectionResult.status === "rejected") warnings.push(`Objects: ${detectionResult.reason?.message ?? String(detectionResult.reason)}`);
 
   state.detections = {
     people: detection.people ?? [],
     objects: detection.objects ?? [],
+    scene: detection.scene ?? inferLocalScene(detection.people ?? [], detection.objects ?? []),
     inferenceMs: detection.inferenceMs ?? null,
     model: detection.model ?? null,
     outputShape: detection.outputShape,
@@ -454,16 +524,17 @@ async function localScan(context, state) {
 
   const peopleCount = state.detections.people.length;
   const objectCount = state.detections.objects.length;
+  const sceneLabel = state.detections.scene?.label ?? "unbekannt";
   state.analysis = {
     source: "local",
-    scene: null,
+    scene: state.detections.scene,
     people: state.detections.people,
     objects: state.detections.objects,
     text,
     qrCodes: state.qrCodes,
     motion: state.motion,
     objectDetection: state.detections,
-    description: `Lokaler Scan: ${peopleCount} Person(en), ${objectCount} Objekt(e), ${text.length} OCR-Block/Blöcke, ${state.qrCodes.length} QR-Code(s).`,
+    description: `Lokaler Scan: Szene ${sceneLabel}; ${peopleCount} Person(en), ${objectCount} Objekt(e), ${text.length} OCR-Block/Blöcke, ${state.qrCodes.length} QR-Code(s).`,
     warnings,
     available: {
       dependencies: dependencyStatus(),
@@ -539,7 +610,7 @@ async function stop(context, sessionId) {
 
 export const definition = {
   name: "vision_analyzer",
-  description: "Observe DucKI browser sessions with zero-dependency local vision, optional local OCR/ONNX object detection, and opt-in LLM vision.",
+  description: "Observe DucKI browser sessions with zero-dependency local vision, optional local OCR/ONNX object detection, local scene inference, and opt-in LLM vision.",
   parameters: {
     type: "object",
     properties: {
@@ -573,7 +644,7 @@ export async function execute(input, context) {
   if (action === "model_remove") return removeModel(String(input.model ?? ""));
 
   if (!context.agent?.browser && action !== "state" && action !== "report_observation") {
-    throw new Error("DucKI browser capability unavailable");
+    throw new Error("DucKI browser capability unavailable. The plugin requires permission 'browser.frames'.");
   }
   if (action === "sessions") return { sessions: await context.agent.browser.listSessions() };
 
