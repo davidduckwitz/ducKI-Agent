@@ -1,28 +1,39 @@
 ---
 name: vision-analyzer
-description: Nutze die visuelle Wahrnehmung des integrierten DucKI-Browsers, wenn der Benutzer nach sichtbaren Inhalten, Personen, Objekten, Text, QR-Codes oder dem Zustand einer Browser-Seite fragt.
+description: Nutze die lokale visuelle Wahrnehmung des integrierten DucKI-Browsers für sichtbare Inhalte, Personen, Objekte, Text, QR-Codes, Bewegung und den Zustand einer Browser-Seite.
 ---
 
 # Vision Analyzer
 
-Verwende das Tool `vision_analyzer` für visuelle Fragen zum integrierten Browser. Arbeite standardmäßig local-first und vermeide unnötige Vision-LLM-Aufrufe.
-
-- `sessions`: verfügbare Browser-Sessions auflisten.
-- `start`: kontinuierliche Frame-Beobachtung einer Session starten.
-- `state`: letzten bekannten Vision-Zustand lesen, ohne neue Analyse anzustoßen.
-- `local_scan`: aktuelles Frame ausschließlich mit lokalen Fähigkeiten analysieren. Funktioniert ohne Zusatzpakete; mit installiertem OCR-Pack kommt lokale Texterkennung hinzu.
-- `scan`: aktuelles Frame mit dem konfigurierten Vision-Modell analysieren. Im Local-only-Modus absichtlich gesperrt.
-- `query`: konkrete visuelle Frage an das Vision-Modell stellen. Im Local-only-Modus absichtlich gesperrt.
-- `dependency_status`: Status der optionalen lokalen Pakete lesen.
-- `dependency_install`: nur die fest definierten Packs `ocr` oder `onnx` installieren. Nicht selbstständig installieren, außer der Benutzer fordert das ausdrücklich an.
-- `dependency_remove`: optionales lokales Pack wieder entfernen.
-- `stop`: Beobachtung stoppen.
+Verwende das Tool `vision_analyzer` für visuelle Fragen zum integrierten Browser.
 
 ## Local-first Reihenfolge
 
-1. Nutze `state`, wenn die Information bereits frisch genug ist.
-2. Nutze `local_scan` für QR, Bewegung und lokal verfügbare Texterkennung.
-3. Nur wenn lokale Daten die Frage nicht beantworten und Local-only deaktiviert ist, nutze `scan` oder `query`.
-4. Installiere optionale Abhängigkeiten nur nach expliziter Benutzerentscheidung; das Plugin muss ohne sie funktionsfähig bleiben.
+1. `sessions`: verfügbare Browser-Sessions auflisten.
+2. `start`: Frame-Beobachtung einer Session starten.
+3. `state`: zuerst den vorhandenen Zustand lesen. Das ist billig und löst keine neue Analyse aus.
+4. `local_scan`: wenn aktuelle lokale Wahrnehmung nötig ist.
+5. `scan` oder `query` nur dann verwenden, wenn der Benutzer ausdrücklich Smart/Vision-LLM-Analyse möchte und `VISION_LOCAL_ONLY=false` ist.
+6. `stop`: Beobachtung stoppen, wenn sie nicht mehr benötigt wird.
 
-Das Zero-Dependency-Profil benötigt keine zusätzlichen Node-Pakete und kein LLM. QR-Codes werden im Plugin-Frontend über die Browser-`BarcodeDetector`-API erkannt, Bewegung über Frame-Differenzen im Canvas. Das optionale OCR-Pack nutzt Tesseract.js mit lokal installiertem deutschen Sprachmodell. Das optionale ONNX-Pack stellt `onnxruntime-node` und `sharp` als Basis für spätere lokale Object Detection bereit.
+## Lokale Fähigkeiten
+
+Ohne Zusatzinstallation:
+- Browser-Live-Frames
+- QR-Code-Erkennung im Plugin-Frontend
+- Bewegungserkennung
+
+Optional installierbar:
+- `ocr`: Tesseract.js + deutsches Sprachmodell für lokale Texterkennung.
+- `onnx`: ONNX Runtime + Sharp als lokale Vision Runtime.
+- `yolo26n-coco`: lokales YOLO26n-ONNX-Modell für Person + COCO-80-Objekte.
+
+Wenn ONNX Runtime und ein Objektmodell installiert sind, läuft die Person-/Objekterkennung während einer aktiven Browser-Session automatisch im Worker Thread. `state` enthält die neuesten Ergebnisse unter `detections`.
+
+## Installation und Sicherheit
+
+`dependency_install`, `dependency_remove`, `model_install` und `model_remove` verändern die lokale Installation. Diese Aktionen niemals eigenständig ausführen. Nur ausführen, wenn der Benutzer dies ausdrücklich verlangt oder den entsprechenden Button im Plugin-Frontend betätigt.
+
+Modelle werden erst nach ausdrücklicher Installation heruntergeladen. Der Model Manager prüft den Download mit einem fest hinterlegten SHA-256-Hash und zeigt die Modell-Lizenz an.
+
+Bevorzuge lokale Ergebnisse. Ein Vision-LLM ist eine optionale Eskalationsstufe für komplexe Fragen, die aus QR/OCR/Objekterkennung/Bewegung nicht zuverlässig beantwortet werden können.

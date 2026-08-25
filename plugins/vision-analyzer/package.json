@@ -1,6 +1,6 @@
 {
   "name": "@ducki-plugin/vision-analyzer-runtime",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Optional local runtime dependencies for the DucKI vision-analyzer plugin. The plugin itself has zero mandatory external dependencies.",
