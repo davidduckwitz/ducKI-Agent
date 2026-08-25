@@ -26,6 +26,11 @@ describe("plugin registry (real plugins/ dir)", () => {
     expect(names).toContain("exchange-rates");
     expect(names).toContain("notes");
     expect(loaded.plugins.find((p) => p.name === "notes")?.hasStorage).toBe(true);
+    expect(loaded.plugins.find((p) => p.name === "nous-provider")?.llmProviders[0]?.id).toBe("nous");
+    expect(loaded.llmProviders.some((provider) => provider.id === "nous")).toBe(true);
+    const clockWidgets = loaded.plugins.find((p) => p.name === "clock")?.widgets ?? [];
+    expect(clockWidgets.map((widget) => widget.id)).toEqual(["top-clock", "footer-clock", "dashboard-clock"]);
+    expect(clockWidgets.map((widget) => widget.placement)).toEqual(["topbar", "footer", "dashboard"]);
     expect(loaded.plugins.every((p) => !p.error)).toBe(true);
 
     // Plugins with storage.sqlite auto-expose a generic <name>_storage tool for the agent.

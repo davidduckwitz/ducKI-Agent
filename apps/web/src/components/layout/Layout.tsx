@@ -30,8 +30,10 @@ import { useSettingsChangeListener } from "../../lib/useServerQuery";
 import { SetupWizardModal } from "../setup/SetupWizardModal";
 import { PetLayer } from "../pet/PetLayer";
 import { PluginOverlays } from "../plugins/PluginOverlays";
+import { PluginWidgets } from "../plugins/PluginWidgets";
 import { Sidebar } from "./Sidebar";
 import { MobileTopBar } from "./MobileTopBar";
+import { AppToolSidebar } from "./AppToolSidebar";
 import { UpdateStatusBar } from "./UpdateStatusBar";
 import { useUiStore } from "../../lib/uiStore";
 import type { NavGroup } from "./MoreNavSection";
@@ -181,11 +183,15 @@ export function Layout() {
       {/* min-w-0 keeps wide children (editor, tables) from stretching the shell. */}
       <div className="flex min-w-0 flex-1 flex-col">
         <MobileTopBar navGroups={navGroups} connected={connected} busy={busy} />
+        <PluginWidgets placement="topbar" className="border-b border-border bg-card/95" />
         <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           <Outlet />
         </main>
+        <PluginWidgets placement="footer" className="border-t border-border bg-card/95" />
         <UpdateStatusBar />
       </div>
+
+      {location.pathname !== "/coding" && <AppToolSidebar />}
 
       <SetupWizardModal
         open={setupModalOpen}

@@ -18,7 +18,6 @@ serde = { version = "1", features = ["derive"] }
 tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-notification = "2.0"
 tauri-plugin-shell = "2.0"
-winreg = "0.52"
 
 [features]
 default = [ "custom-protocol" ]

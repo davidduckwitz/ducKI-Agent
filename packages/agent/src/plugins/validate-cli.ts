@@ -15,7 +15,13 @@ import { parsePluginManifest } from "./plugin-manifest.js";
  * browser-rendered surface (settingsPage/frontendPage/widgetPage/overlayPage/oauth) - see the
  * plugin-manage skill and the Run Journal/plugin-creation plan for the full rationale.
  */
-export function validatePluginDir(pluginsRoot: string, name: string): { ok: boolean; errors: string[] } {
+export interface PluginValidationOptions {
+  /** Only for a server-generated, integrity-locked LLM-provider scaffold. */
+  allowBuilderLLMProvider?: boolean;
+  allowBuilderWidgets?: boolean;
+}
+
+export function validatePluginDir(pluginsRoot: string, name: string, options: PluginValidationOptions = {}): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
   const pluginDir = join(pluginsRoot, name);
   const manifestPath = join(pluginDir, "plugin.json");
@@ -34,8 +40,17 @@ export function validatePluginDir(pluginsRoot: string, name: string): { ok: bool
   if (manifest.name !== name) {
     errors.push(`manifest name "${manifest.name}" must match the plugin directory name "${name}"`);
   }
-  if (manifest.trust === "node") {
+  const builderLLMProviders = manifest.provides.llmProviders ?? [];
+  const allowedBuilderLLM = options.allowBuilderLLMProvider
+    && builderLLMProviders.length === 1
+    && builderLLMProviders[0]?.module === "provider.js"
+    && !(manifest.provides.moduleTools?.length)
+    && !manifest.provides.connector;
+  if (manifest.trust === "node" && !allowedBuilderLLM) {
     errors.push('trust: "node" is not allowed for agent-authored plugins - use the default "sandboxed"');
+  }
+  if (builderLLMProviders.length > 0 && !allowedBuilderLLM) {
+    errors.push("provides.llmProviders is only allowed for an integrity-locked LLM-provider builder scaffold");
   }
   if (manifest.provides.moduleTools && manifest.provides.moduleTools.length > 0) {
     errors.push("provides.moduleTools is not allowed for agent-authored plugins (runs real Node code)");
@@ -49,6 +64,7 @@ export function validatePluginDir(pluginsRoot: string, name: string): { ok: bool
     ["provides.frontendPage", manifest.provides.frontendPage],
     ["provides.widgetPage", manifest.provides.widgetPage],
     ["provides.overlayPage", manifest.provides.overlayPage],
+    ...(!options.allowBuilderWidgets ? [["provides.widgets", manifest.provides.widgets] as [string, unknown]] : []),
   ];
   for (const [field, value] of bannedSurfaces) {
     const present = Array.isArray(value) ? value.length > 0 : value !== undefined;
@@ -81,6 +97,9 @@ export function validatePluginDir(pluginsRoot: string, name: string): { ok: bool
       errors.push(`dataSourceTools entry "${rel}" is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  for (const widget of manifest.provides.widgets ?? []) {
+    if (!existsSync(join(pluginDir, widget.page))) errors.push(`widgets entry "${widget.id}" page does not exist: ${widget.page}`);
+  }
 
   return { ok: errors.length === 0, errors };
 }
@@ -91,12 +110,15 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
-  const [pluginsRootArg, nameArg] = process.argv.slice(2);
+  const [pluginsRootArg, nameArg, ...flags] = process.argv.slice(2);
   if (!pluginsRootArg || !nameArg) {
     console.error("Usage: validate-cli.js <pluginsRoot> <name>");
     process.exit(1);
   }
-  const result = validatePluginDir(pluginsRootArg, nameArg);
+  const result = validatePluginDir(pluginsRootArg, nameArg, {
+    allowBuilderLLMProvider: flags.includes("--allow-builder-llm-provider"),
+    allowBuilderWidgets: flags.includes("--allow-builder-widgets"),
+  });
   if (result.ok) {
     console.log("PLUGIN_VALID");
     process.exit(0);

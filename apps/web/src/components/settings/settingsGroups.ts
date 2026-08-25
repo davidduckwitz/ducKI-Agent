@@ -67,13 +67,6 @@ export const PROVIDER_META: ProviderMeta[] = [
     description: "Claude 3.5 Sonnet und andere Modelle via Anthropic API",
     color: "purple",
   },
-  {
-    id: "nous",
-    label: "Nous Research",
-    emoji: "🎯",
-    description: "Nous Hermes und weitere Modelle via Nous API",
-    color: "blue",
-  },
 ];
 
 export const PROVIDER_FIELD_MAP: Record<string, string> = {
@@ -88,9 +81,6 @@ export const PROVIDER_FIELD_MAP: Record<string, string> = {
   OLLAMA_MODEL: "ollama",
   CLAUDE_MODEL: "claude",
   CLAUDE_API_KEY: "claude",
-  NOUS_MODEL: "nous",
-  NOUS_API_KEY: "nous",
-  NOUS_BASE_URL: "nous",
 };
 
 export const PROVIDER_BORDER_CLASS: Record<ProviderMeta["color"], string> = {

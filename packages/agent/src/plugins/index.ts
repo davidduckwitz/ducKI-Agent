@@ -10,6 +10,8 @@ export {
   type PluginLoadResult,
   type LoadedPluginInfo,
   type PluginToolContext,
+  type LoadedPluginLLMProvider,
+  type PluginLLMProviderConfig,
 } from "./plugin-registry.js";
 export {
   createAgentCapabilities,
@@ -25,6 +27,8 @@ export {
   type PluginManifest,
   type PluginToolMapping,
   type PluginSettingSpec,
+  type PluginLLMProviderSpec,
+  type PluginWidgetSpec,
   type OAuthConfig,
 } from "./plugin-manifest.js";
 export { validatePluginDir } from "./validate-cli.js";

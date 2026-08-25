@@ -6,19 +6,74 @@
   "license": "Proprietary",
   "icon": "📅",
   "category": "knowledge",
-  "storage": { "sqlite": true },
   "provides": {
-    "scriptTools": ["tools/calendar.tool.json"],
-    "skills": ["skills/calendar-usage"],
-    "frontendPage": "app/index.html",
-    "widgetPage": "widget/index.html",
-    "widgetPlacement": "both",
-    "settingsPage": "settings/index.html",
+    "scriptTools": [
+      "tools/calendar.tool.json"
+    ],
+    "skills": [
+      "skills/calendar-usage"
+    ],
     "settings": [
-      { "key": "default_view", "type": "select", "options": ["dayGridMonth", "timeGridWeek", "timeGridDay", "listWeek", "multiMonthYear"], "default": "dayGridMonth", "description": "Standard-Ansicht beim Öffnen des Kalenders" },
-      { "key": "default_category", "type": "select", "options": ["work", "private", "important"], "default": "work", "description": "Vorausgewählte Kategorie für neue Termine" },
-      { "key": "week_starts_monday", "type": "boolean", "default": true, "description": "Woche beginnt am Montag (statt Sonntag)" }
+      {
+        "key": "default_view",
+        "default": "dayGridMonth",
+        "type": "select",
+        "description": "Standard-Ansicht beim Öffnen des Kalenders",
+        "options": [
+          "dayGridMonth",
+          "timeGridWeek",
+          "timeGridDay",
+          "listWeek",
+          "multiMonthYear"
+        ]
+      },
+      {
+        "key": "default_category",
+        "default": "work",
+        "type": "select",
+        "description": "Vorausgewählte Kategorie für neue Termine",
+        "options": [
+          "work",
+          "private",
+          "important"
+        ]
+      },
+      {
+        "key": "week_starts_monday",
+        "default": true,
+        "type": "boolean",
+        "description": "Woche beginnt am Montag (statt Sonntag)"
+      }
+    ],
+    "settingsPage": "settings/index.html",
+    "frontendPage": "app/index.html",
+    "widgets": [
+      {
+        "id": "sidebar-upcoming",
+        "page": "widget/index.html",
+        "placement": "sidebar-after-mode",
+        "align": "full",
+        "frame": "borderless",
+        "background": "transparent",
+        "height": 150,
+        "width": "full"
+      },
+      {
+        "id": "dashboard-calendar",
+        "page": "widget/index.html",
+        "placement": "dashboard",
+        "align": "full",
+        "frame": "borderless",
+        "background": "transparent",
+        "height": 180,
+        "width": "full",
+        "title": "Nächste Termine"
+      }
     ]
   },
+  "storage": {
+    "sqlite": true
+  },
+  "trust": "sandboxed",
   "enabled": true
 }

@@ -16,6 +16,9 @@
         "height": 800,
         "minWidth": 800,
         "minHeight": 600,
+        "visible": false,
+        "theme": "Dark",
+        "backgroundColor": "#080b14",
         "resizable": true,
         "fullscreen": false
       }

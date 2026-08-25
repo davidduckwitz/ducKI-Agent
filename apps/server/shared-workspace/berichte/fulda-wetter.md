@@ -1,22 +1,22 @@
-# Wetterbericht Fulda
+# Wetterbericht: Fulda
 
-## Aktuelle Bedingungen
+**Datum:** 11. August 2026
+**Ort:** Fulda, Hessen, Deutschland
 
-**Ort:** Fulda  
-**Aktuelle Temperatur:** `{{temp_c}}`°C / `{{temp_f}}`°F  
-**Bedingung:** `{{weather_desc}}`  
-**Wind:** `{{wind_speed_kmph}}` km/h (`{{wind_dir}}`)  
-**Sichtweite:** `{{visibility}}` m  
-**Luftdruck:** `{{pressure_mb}}` hPa
+## Aktuelle Wetterlage
 
-## Vorhersage
+- **Temperatur:** 20,7°C (gefühlt 18,5°C)
+- **Bedingungen:** Klar
+- **Wind:** 12,1 km/h
+- **Niederschlag:** 0 mm
+- **Luftfeuchtigkeit:** 36%
 
-| Zeit | Bedingung | Temperatur | Wind |
-|------|-----------|------------|------|
-| Heute Morgen | {{hour0_weather}} | {{hour0_temp_c}}°C | {{hour0_wind_dir}} |
-| Vormittag | {{hour6_weather}} | {{hour6_temp_c}}°C | {{hour6_wind_dir}} |
-| Mittag | {{hour12_weather}} | {{hour12_temp_c}}°C | {{hour12_wind_dir}} |
-| Nachmittag | {{hour18_weather}} | {{hour18_temp_c}}°C | {{hour18_wind_dir}} |
+## Ausblick
 
-**Quelle:** wttr.in  
-**Generiert:** `{{current_date}}`
+| Datum | Bedingungen | Max | Min | Niederschlag |
+|-------|-------------|-----|-----|--------------|
+| 11.08.2026 | Bewölkt | 25,9°C | 14°C | 0 mm |
+| 12.08.2026 | Klar | 28,9°C | 10°C | 0 mm |
+
+---
+*Bericht generiert am 11.08.2026*

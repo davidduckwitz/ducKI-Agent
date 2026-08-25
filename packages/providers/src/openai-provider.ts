@@ -588,6 +588,14 @@ export class OpenAIProvider implements LLMProvider {
     return true;
   }
 
+  async listModels(): Promise<Array<{ id: string; name: string }>> {
+    const page = await this.client.models.list();
+    return page.data.flatMap((model) => {
+      const id = model.id?.trim();
+      return id ? [{ id, name: id }] : [];
+    });
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       await this.client.models.list();

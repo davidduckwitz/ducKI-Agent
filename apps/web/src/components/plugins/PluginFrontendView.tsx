@@ -31,6 +31,7 @@ export function PluginFrontendView() {
       <iframe
         title={`${name} Frontend`}
         src={pluginUiUrl(name, "frontend")}
+        sandbox="allow-scripts allow-forms allow-same-origin"
         className="min-h-0 flex-1 w-full border-0 bg-background"
       />
     </div>

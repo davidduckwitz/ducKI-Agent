@@ -130,6 +130,7 @@ export interface PluginInfo {
   widgetPage?: string;
   /** Widget placement: "sidebar" | "dashboard" | "both". */
   widgetPlacement?: string;
+  widgets: PluginWidgetSpec[];
   /** Relative path to a full-window overlay page mounted globally by the host. */
   overlayPage?: string;
   /** Declarative pet definitions the plugin ships (rendered by the host pet runtime). */
@@ -151,6 +152,57 @@ export interface PluginInfo {
    *  background connection (e.g. a messaging platform bridge like Discord). */
   connector?: { module: string; portal: string };
   error?: string;
+}
+
+export type PluginWidgetPlacement = "dashboard" | "sidebar-above-logo" | "sidebar-before-mode" | "sidebar-after-mode" | "sidebar-content" | "topbar" | "footer";
+export interface PluginWidgetSpec {
+  id: string;
+  page: string;
+  placement: PluginWidgetPlacement;
+  align: "left" | "center" | "right" | "full";
+  frame: "card" | "borderless";
+  background: "card" | "transparent" | "inherit";
+  height: number;
+  width: "auto" | "sm" | "md" | "lg" | "full" | number;
+  title?: string;
+}
+
+export type PluginBuilderArchetype = "data-source" | "storage-tool" | "llm-provider" | "widget";
+export interface PluginBuilderSpec {
+  name: string;
+  displayName: string;
+  description: string;
+  icon?: string;
+  category: "overview" | "workspace" | "automation" | "knowledge" | "system";
+  archetype: PluginBuilderArchetype;
+  userRequest: string;
+  targetHint?: string;
+  allowedHosts: string[];
+  api?: { baseUrl?: string; authentication: "none" | "api-key" | "bearer" };
+  llmProvider?: {
+    protocol: "openai-compatible";
+    defaultBaseUrl: string;
+    defaultModel: string;
+    apiKeyRequired: boolean;
+    supportsStreaming: boolean;
+    supportsTools: boolean;
+    supportsVision: boolean;
+  };
+  widgets?: Array<{
+    id: string;
+    title?: string;
+    placement: PluginWidgetPlacement;
+    align: "left" | "center" | "right" | "full";
+    frame: "card" | "borderless";
+    background: "card" | "transparent" | "inherit";
+    height: number;
+    width: "auto" | "sm" | "md" | "lg" | "full" | number;
+  }>;
+}
+
+export interface PluginScaffoldPreview {
+  spec: PluginBuilderSpec;
+  files: Array<{ path: string; owner: "system" | "agent"; purpose: string }>;
 }
 
 export type PluginSettingSpec = PluginInfo["settings"][number];
@@ -492,7 +544,14 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ values }),
       }),
-    createRun: (payload: { prompt: string; name: string; category?: string; needsStorage?: boolean; targetHint?: string }) =>
+    saveWidgets: (name: string, widgets: PluginWidgetSpec[]) =>
+      request<{ name: string; widgets: PluginWidgetSpec[]; reload: PluginReload }>(`/plugins/${encodeURIComponent(name)}/widgets`, {
+        method: "PUT",
+        body: JSON.stringify({ widgets }),
+      }),
+    previewScaffold: (payload: PluginBuilderSpec) =>
+      request<PluginScaffoldPreview>("/plugins/builder/preview", { method: "POST", body: JSON.stringify(payload) }),
+    createRun: (payload: PluginBuilderSpec) =>
       request<{ runId: string }>("/plugins/create-run", { method: "POST", body: JSON.stringify(payload) }),
   },
 
@@ -969,6 +1028,14 @@ export const api = {
         Array<{
           id: string;
           name: string;
+          description?: string;
+          icon?: string;
+          pluginName?: string;
+          modelSetting: string;
+          baseUrlSetting?: string;
+          apiKeySetting?: string;
+          defaultModel?: string;
+          defaultBaseUrl?: string;
         }>
       >("/provider-models"),
     getModels: (provider: string) =>

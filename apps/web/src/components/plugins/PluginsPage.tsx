@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, type PluginInfo } from "../../lib/api";
+import { api, type PluginInfo, type PluginWidgetSpec } from "../../lib/api";
+import { pluginUiUrl } from "../../lib/backendUrl";
 import { toastManager as toast } from "../../lib/toast";
 import { CreatePluginWizardModal } from "./CreatePluginWizardModal";
 
@@ -27,6 +28,8 @@ export function PluginsPage() {
   const [search, setSearch] = useState("");
   // Name of the plugin whose iframe settings page is currently expanded (Phase 3), or null.
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
+  const [widgetsFor, setWidgetsFor] = useState<string | null>(null);
+  const [widgetDrafts, setWidgetDrafts] = useState<Record<string, PluginWidgetSpec[]>>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [reloading, setReloading] = useState(false);
   const navigate = useNavigate();
@@ -106,6 +109,31 @@ export function PluginsPage() {
       await queryClient.invalidateQueries({ queryKey: ["plugins"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Aktion fehlgeschlagen");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const openWidgets = (plugin: PluginInfo) => {
+    setWidgetDrafts((current) => ({ ...current, [plugin.name]: current[plugin.name] ?? plugin.widgets.map((widget) => ({ ...widget })) }));
+    setWidgetsFor((current) => current === plugin.name ? null : plugin.name);
+  };
+
+  const saveWidgets = async (plugin: PluginInfo) => {
+    setBusy(plugin.name);
+    try {
+      const result = await api.plugins.saveWidgets(plugin.name, widgetDrafts[plugin.name] ?? plugin.widgets);
+      setWidgetDrafts((current) => ({ ...current, [plugin.name]: result.widgets }));
+      // Apply the server-validated representation synchronously to both consumers. A plain
+      // invalidation can leave the old placement visible until its async refetch completes
+      // (or until a deferred PluginManager reload is applied), which looked like Save failed.
+      setPlugins((current) => current.map((entry) => entry.name === plugin.name ? { ...entry, widgets: result.widgets } : entry));
+      queryClient.setQueryData<PluginInfo[]>(["plugins"], (current) =>
+        current?.map((entry) => entry.name === plugin.name ? { ...entry, widgets: result.widgets } : entry)
+      );
+      toast.success("Widget-Darstellung gespeichert");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Widget-Einstellungen konnten nicht gespeichert werden");
     } finally {
       setBusy(null);
     }
@@ -223,6 +251,11 @@ export function PluginsPage() {
                       {settingsFor === p.name ? "Schließen" : "⚙️ Einstellungen"}
                     </button>
                   )}
+                  {p.widgets.length > 0 && !p.error && (
+                    <button onClick={() => openWidgets(p)} className="rounded border border-border px-3 py-1.5 text-sm">
+                      {widgetsFor === p.name ? "Schließen" : `🧩 Widgets (${p.widgets.length})`}
+                    </button>
+                  )}
                   <button
                     onClick={() => void toggle(p)}
                     disabled={busy === p.name || !!p.error}
@@ -236,9 +269,18 @@ export function PluginsPage() {
               {p.settingsPage && settingsFor === p.name && (
                 <iframe
                   title={`${p.name} Einstellungen`}
-                  src={`/api/plugins/${p.name}/ui/settings`}
+                  src={pluginUiUrl(p.name, "settings")}
+                  sandbox="allow-scripts allow-forms allow-same-origin"
                   className="mt-3 w-full rounded-md border border-border bg-background"
                   style={{ height: 520 }}
+                />
+              )}
+              {p.widgets.length > 0 && widgetsFor === p.name && (
+                <WidgetStyleEditor
+                  widgets={widgetDrafts[p.name] ?? p.widgets}
+                  busy={busy === p.name}
+                  onChange={(widgets) => setWidgetDrafts((current) => ({ ...current, [p.name]: widgets }))}
+                  onSave={() => void saveWidgets(p)}
                 />
               )}
             </div>
@@ -290,6 +332,37 @@ export function PluginsPage() {
       )}
     </div>
   );
+}
+
+const WIDGET_PLACEMENTS: PluginWidgetSpec["placement"][] = [
+  "dashboard", "topbar", "footer", "sidebar-above-logo", "sidebar-before-mode", "sidebar-after-mode", "sidebar-content",
+];
+
+function WidgetStyleEditor({ widgets, busy, onChange, onSave }: {
+  widgets: PluginWidgetSpec[];
+  busy: boolean;
+  onChange: (widgets: PluginWidgetSpec[]) => void;
+  onSave: () => void;
+}) {
+  const update = (index: number, change: Partial<PluginWidgetSpec>) => onChange(widgets.map((widget, itemIndex) => itemIndex === index ? { ...widget, ...change } : widget));
+  const fieldClass = "rounded border border-border bg-background px-2 py-1 text-xs";
+  return <div className="mt-3 rounded-md border border-border bg-muted/20 p-3">
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <div><div className="text-sm font-medium">Widget-Darstellung</div><div className="text-xs text-muted-foreground">Position und Stil ändern; Inhalt und Widget-ID bleiben unverändert.</div></div>
+      <button onClick={onSave} disabled={busy} className="rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-50">{busy ? "Speichere…" : "Speichern"}</button>
+    </div>
+    <div className="space-y-2">
+      {widgets.map((widget, index) => <div key={widget.id} className="grid gap-2 rounded border border-border bg-background/60 p-2 md:grid-cols-2 xl:grid-cols-7">
+        <label className="text-[11px] text-muted-foreground"><span className="block pb-1 font-medium text-foreground">{widget.title || widget.id}</span><span className="font-mono">{widget.id}</span></label>
+        <label className="text-[11px] text-muted-foreground">Position<select value={widget.placement} onChange={(event) => update(index, { placement: event.target.value as PluginWidgetSpec["placement"] })} className={`${fieldClass} mt-1 block w-full`}>{WIDGET_PLACEMENTS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+        <label className="text-[11px] text-muted-foreground">Ausrichtung<select value={widget.align} onChange={(event) => update(index, { align: event.target.value as PluginWidgetSpec["align"] })} className={`${fieldClass} mt-1 block w-full`}>{["left", "center", "right", "full"].map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label className="text-[11px] text-muted-foreground">Rahmen<select value={widget.frame} onChange={(event) => update(index, { frame: event.target.value as PluginWidgetSpec["frame"] })} className={`${fieldClass} mt-1 block w-full`}><option value="card">card</option><option value="borderless">ohne Rahmen</option></select></label>
+        <label className="text-[11px] text-muted-foreground">Hintergrund<select value={widget.background} onChange={(event) => update(index, { background: event.target.value as PluginWidgetSpec["background"] })} className={`${fieldClass} mt-1 block w-full`}>{["card", "transparent", "inherit"].map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label className="text-[11px] text-muted-foreground">Breite<select value={widget.width} onChange={(event) => update(index, { width: event.target.value as PluginWidgetSpec["width"] })} className={`${fieldClass} mt-1 block w-full`}>{["auto", "sm", "md", "lg", "full"].map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label className="text-[11px] text-muted-foreground">Höhe (px)<input type="number" min={20} max={800} value={widget.height} onChange={(event) => update(index, { height: Number(event.target.value) })} className={`${fieldClass} mt-1 block w-full`} /></label>
+      </div>)}
+    </div>
+  </div>;
 }
 
 export default PluginsPage;

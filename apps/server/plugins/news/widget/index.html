@@ -4,9 +4,14 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>News</title>
+<script>const themeParams=new URLSearchParams(location.search);document.documentElement.dataset.theme=themeParams.get("theme")==="light"?"light":"dark";document.documentElement.dataset.accent=themeParams.get("accent")||"blue";</script>
 <style>
-  :root { color-scheme: light dark; --text: #14161b; --muted: #6b7280; --accent: #2563eb; --line: #0000001a; }
-  @media (prefers-color-scheme: dark) { :root { --text: #eef0f5; --muted: #9aa3b2; --accent: #8b93ff; --line: #ffffff1f; } }
+  :root { color-scheme: light; --text: #14161b; --muted: #6b7280; --accent: #2563eb; --line: #0000001a; }
+  :root[data-theme="dark"] { color-scheme: dark; --text: #eef0f5; --muted: #9aa3b2; --line: #ffffff1f; }
+  :root[data-theme="dark"][data-accent="blue"] { --accent: #60a5fa; }
+  :root[data-accent="violet"] { --accent: #8b5cf6; } :root[data-accent="green"] { --accent: #16a34a; }
+  :root[data-accent="orange"] { --accent: #ea580c; } :root[data-accent="rose"] { --accent: #e11d48; }
+  :root[data-accent="zinc"] { --accent: #71717a; }
   html, body { margin: 0; height: 100%; }
   body { font-family: system-ui, sans-serif; color: var(--text); background: transparent; padding: 0.55rem 0.65rem; box-sizing: border-box; display: flex; flex-direction: column; gap: 0.45rem; overflow: hidden; }
   .head { display: flex; align-items: center; justify-content: space-between; }
@@ -33,6 +38,11 @@
   .ticker .sep { color: var(--muted); opacity: 0.5; }
   @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
   .empty { font-size: 0.82rem; color: var(--muted); }
+  @media (max-height: 70px) {
+    body { padding: 0.25rem 0.5rem; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.5rem; }
+    .head .dt, .feature { display: none; }
+    .tickerwrap { border-top: 0; padding-top: 0; min-width: 0; }
+  }
 </style>
 </head>
 <body>

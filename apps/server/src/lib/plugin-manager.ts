@@ -1,9 +1,9 @@
 import type { ToolExecutor } from "@ducki/shared";
-import { loadPlugins, createAgentCapabilities, type LoadedPluginInfo, type AgentCapabilities } from "@ducki/agent";
+import { loadPlugins, createAgentCapabilities, type LoadedPluginInfo, type AgentCapabilities, type LoadedPluginLLMProvider } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { agentRegistry } from "./agent-registry.js";
-import { loadProviderFromSettings } from "./provider-settings.js";
+import { loadProviderFromSettings, setPluginLLMProviders } from "./provider-settings.js";
 
 /**
  * Holds the current set of plugin tools and reloads them on enable/disable/install.
@@ -17,6 +17,7 @@ import { loadProviderFromSettings } from "./provider-settings.js";
 export class PluginManager {
   private tools: ToolExecutor[] = [];
   private plugins: LoadedPluginInfo[] = [];
+  private llmProviders: LoadedPluginLLMProvider[] = [];
   private pending = false;
   private debounceTimer: NodeJS.Timeout | undefined;
   private readonly debounceMs = Number.parseInt(process.env["PLUGIN_RELOAD_DEBOUNCE_MS"] ?? "300", 10);
@@ -41,6 +42,8 @@ export class PluginManager {
     const loaded = await loadPlugins(undefined, mgr.capabilities);
     mgr.tools = loaded.tools;
     mgr.plugins = loaded.plugins;
+    mgr.llmProviders = loaded.llmProviders;
+    setPluginLLMProviders(mgr.llmProviders);
     return mgr;
   }
 
@@ -51,6 +54,10 @@ export class PluginManager {
 
   getPlugins(): LoadedPluginInfo[] {
     return this.plugins;
+  }
+
+  getLLMProviders(): LoadedPluginLLMProvider[] {
+    return this.llmProviders;
   }
 
   /**
@@ -86,6 +93,8 @@ export class PluginManager {
     const loaded = await loadPlugins(undefined, this.capabilities);
     this.tools = loaded.tools;
     this.plugins = loaded.plugins;
+    this.llmProviders = loaded.llmProviders;
+    setPluginLLMProviders(this.llmProviders);
     this.pending = false;
     this.logger.info("Plugins reloaded", { reason, tools: this.tools.length, plugins: this.plugins.length });
   }

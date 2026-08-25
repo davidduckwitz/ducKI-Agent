@@ -41,7 +41,6 @@ const PROVIDER_OPTIONS = [
   { label: "Claude (Anthropic)", value: "claude" },
   { label: "Ollama (lokal)", value: "ollama" },
   { label: "LM Studio (lokal)", value: "lmstudio" },
-  { label: "Nous Research", value: "nous" },
 ];
 
 export function BackgroundReviewSettings({ settingsMap }: BackgroundReviewSettingsProps) {

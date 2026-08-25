@@ -11,7 +11,7 @@ import { diagnosticsTool } from "./diagnostics.js";
 export { filesystemTool, httpTool, gitTool, browserTool, shellTool, skillsTool, weatherTool, diagnosticsTool };
 export { runDiagnostics, invalidateDiagnosticsCache } from "./diagnostics.js";
 export type { Diagnostic } from "./diagnostics.js";
-export { browserFrameEvents } from "./browser.js";
+export { browserActivityEvents, browserFrameEvents } from "./browser.js";
 export {
   createDataSourceTool,
   fetchJson,

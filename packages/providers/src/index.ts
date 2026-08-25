@@ -4,7 +4,6 @@ import { OpenRouterProvider } from "./openrouter-provider.js";
 import { LMStudioProvider } from "./lmstudio-provider.js";
 import { OllamaProvider } from "./ollama-provider.js";
 import { ClaudeProvider } from "./claude-provider.js";
-import { NousProvider } from "./nous-provider.js";
 // Import new multi-provider adapters
 import { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter } from "./adapters/index.js";
 import { CredentialManager } from "./credential-manager.js";
@@ -18,7 +17,7 @@ import { SileroSpeechToTextProvider } from "./silero-speech-to-text-provider.js"
 import { LocalCommandSpeechToTextProvider } from "./local-command-speech-to-text-provider.js";
 import { NodejsWhisperSpeechToTextProvider } from "./nodejs-whisper-speech-to-text-provider.js";
 
-export type ProviderName = "openai" | "openrouter" | "lmstudio" | "ollama" | "claude" | "nous";
+export type ProviderName = "openai" | "openrouter" | "lmstudio" | "ollama" | "claude";
 
 export interface ProviderFactoryConfig {
   name: ProviderName;
@@ -58,12 +57,6 @@ export function createProvider(config: ProviderFactoryConfig): LLMProvider {
         apiKey: config.apiKey ?? process.env["CLAUDE_API_KEY"],
         model: config.model ?? process.env["CLAUDE_MODEL"] ?? "claude-3-5-sonnet-20241022",
       });
-    case "nous":
-      return new NousProvider({
-        baseUrl: config.baseUrl,
-        apiKey: config.apiKey,
-        model: config.model,
-      });
     default:
       throw new Error(`Unknown provider: ${String(config.name)}`);
   }
@@ -74,7 +67,7 @@ export function createDefaultProvider(): LLMProvider {
   return createProvider({ name: providerName });
 }
 
-export { OpenAIProvider, OpenRouterProvider, LMStudioProvider, OllamaProvider, ClaudeProvider, NousProvider };
+export { OpenAIProvider, OpenRouterProvider, LMStudioProvider, OllamaProvider, ClaudeProvider };
 // Export new multi-provider adapters and credential management
 export { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter, CredentialManager, CredentialAwareRouter };
 export type { LLMProvider };

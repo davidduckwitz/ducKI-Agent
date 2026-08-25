@@ -85,6 +85,25 @@ describe.skipIf(!browserAvailable)("browser tool - snapshot / text-based targeti
     expect(String((ev.data as { result?: unknown }).result ?? "")).toBe("Max Mustermann");
   }, 30000);
 
+  it("forwards normalized pointer and raw keyboard input for the shared UI browser", async () => {
+    // The button sits near the top of the default viewport. This verifies the coordinate
+    // path used by the live sidebar without relying on semantic selectors.
+    const click = await executeInWorker({ action: "mouse_click", sessionId, xRatio: 0.08, yRatio: 0.16 });
+    expect(click.success).toBe(true);
+
+    await executeInWorker({ action: "click", sessionId, selector: "#name" });
+    const typed = await executeInWorker({ action: "keyboard_type", sessionId, text: " via UI" });
+    expect(typed.success).toBe(true);
+    const ev = await executeInWorker({ action: "evaluate", sessionId, script: "document.querySelector('#name').value" });
+    expect(String((ev.data as { result?: unknown }).result ?? "")).toContain("via UI");
+  }, 30000);
+
+  it("supports shared history, reload and scrolling controls", async () => {
+    expect((await executeInWorker({ action: "scroll_by", sessionId, deltaY: 120 })).success).toBe(true);
+    expect((await executeInWorker({ action: "reload", sessionId })).success).toBe(true);
+    expect((await executeInWorker({ action: "keyboard_press", sessionId, key: "Tab" })).success).toBe(true);
+  }, 30000);
+
   it("selects a dropdown option by its visible label", async () => {
     const r = await executeInWorker({
       action: "select",

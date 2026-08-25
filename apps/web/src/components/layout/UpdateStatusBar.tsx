@@ -40,6 +40,11 @@ export function UpdateStatusBar() {
   const remoteCommitShort = updateStatus.data?.remoteCommit?.slice(0, 8) ?? "-";
   const updateError = updateStatus.data?.lastUpdateError ?? updateStatus.data?.lastCheckError;
 
+  // The footer is an exceptional action surface, not permanent status chrome. Plugin footer
+  // widgets can occupy this area normally; only show the update bar for an actionable update
+  // and suppress it while the status itself is erroneous.
+  if (!updateAvailable || updateError) return null;
+
   return (
     <>
       <footer className="z-30 flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border bg-card/95 px-3 text-[11px] text-muted-foreground">

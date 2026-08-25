@@ -234,15 +234,22 @@ export class WorkflowEngine {
    */
   private resolveTemplateTokens(value: unknown, workflow: WorkflowGraph): unknown {
     if (typeof value === "string") {
-      const exactMatch = value.trim().match(/^\{\{\s*([A-Za-z0-9_-]+)\.result\s*\}\}$/);
+      const readOutput = (nodeId: string, path?: string): unknown => {
+        const target = workflow.nodes.find((node) => node.id === nodeId);
+        let current: unknown = target ? target.resultData ?? target.result : undefined;
+        for (const part of (path ?? "").split(".").filter(Boolean)) {
+          if (!current || typeof current !== "object") return undefined;
+          current = (current as Record<string, unknown>)[part];
+        }
+        return current;
+      };
+      const exactMatch = value.trim().match(/^\{\{\s*([A-Za-z0-9_-]+)\.result((?:\.[A-Za-z0-9_-]+)*)\s*\}\}$/);
       if (exactMatch) {
-        const targetId = exactMatch[1];
-        const target = workflow.nodes.find((n) => n.id === targetId);
-        return target ? target.resultData ?? target.result : undefined;
+        return readOutput(exactMatch[1] ?? "", exactMatch[2]);
       }
-      return value.replace(/\{\{\s*([A-Za-z0-9_-]+)\.result\s*\}\}/g, (_match, targetId: string) => {
-        const target = workflow.nodes.find((n) => n.id === targetId);
-        return target ? String(target.result ?? "") : "";
+      return value.replace(/\{\{\s*([A-Za-z0-9_-]+)\.result((?:\.[A-Za-z0-9_-]+)*)\s*\}\}/g, (_match, targetId: string, path: string) => {
+        const resolved = readOutput(targetId, path);
+        return resolved === undefined ? "" : typeof resolved === "string" ? resolved : JSON.stringify(resolved);
       });
     }
     if (Array.isArray(value)) {
@@ -379,6 +386,7 @@ export class WorkflowEngine {
         ...node,
         status: "pending",
         result: undefined,
+        resultData: undefined,
       }));
       workflow.status = "draft";
       workflow.updatedAt = nowIso();

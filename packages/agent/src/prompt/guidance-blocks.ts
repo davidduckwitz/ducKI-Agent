@@ -17,6 +17,7 @@ export function taskRulesGuidance(): string {
     "- Never repeat the exact same tool call more than once without changing input or strategy.\n" +
     "- If a tool fails, correct parameters based on the error before retrying.\n" +
     "- If /workflow-orchestrator is loaded, first drive the workflow lifecycle (list/get/create/update/run/resume) before unrelated tools.\n" +
+    "- When editing a workflow board, always get the current graph first, preserve untouched nodes/edges and stable ids, keep it acyclic, connect dependencies explicitly, and use tool_call nodes for deterministic operations. Browser recordings become sequential browser tool_call nodes; launch once and pass {{launch.result.sessionId}} to every later browser node. Run only after validating the complete graph.\n" +
     "- For stable user or workflow facts, use memory tool actions to recall or curate durable memory.\n" +
     "- Treat only explicit requests to send, post, answer, or reply on Discord as outbound gateway operations, not normal chat replies.\n" +
     "- For Discord/gateway outbound send requests, always run gateway action=list_configs before gateway action=send in the same run.\n" +

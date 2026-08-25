@@ -6,6 +6,7 @@ import { createApiError, createApiResponse } from "@ducki/shared";
 import { skillRegistry, parseFrontmatter, normalizeFrontmatter, validateSkillContent } from "@ducki/agent";
 import { installSkillFromSource } from "../lib/skill-install.js";
 import { runSkillCommand, SkillRunnerError } from "../lib/skill-runner.js";
+import { SkillBuilderSpecSchema, createValidatedSkill, previewSkill } from "../lib/skill-builder.js";
 
 export const skillsRouter: IRouter = Router();
 
@@ -40,6 +41,27 @@ function resolveSkillsRoot(): string {
 }
 
 const skillsRoot = resolveSkillsRoot();
+
+skillsRouter.post("/builder/preview", (req, res) => {
+  const parsed = SkillBuilderSpecSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json(createApiError(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "))); return; }
+  res.json(createApiResponse(previewSkill(parsed.data)));
+});
+
+skillsRouter.post("/builder/create", async (req, res) => {
+  try {
+    const db = req.app.locals["db"] as { getSetting(key: string): Promise<string | null | undefined> } | undefined;
+    const enabled = (await db?.getSetting("SKILL_CREATION_ENABLED"))?.trim().toLowerCase() === "true";
+    if (!enabled) { res.status(403).json(createApiError("Skill creation is disabled")); return; }
+    const parsed = SkillBuilderSpecSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json(createApiError(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "))); return; }
+    const result = createValidatedSkill(skillsRoot, parsed.data);
+    res.status(201).json(createApiResponse(result));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(message.includes("already exists") ? 409 : 400).json(createApiError(message));
+  }
+});
 
 function ensureSkillsRoot(): void {
   if (!existsSync(skillsRoot)) {

@@ -67,6 +67,14 @@ export const DEFAULT_PET_SETTINGS: PetSettings = {
   groundOffset: 28,
 };
 
+function syncPetWithAgent(petId: string): void {
+  void fetch(`/api/settings/ERPEL_PET_ID`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value: petId }),
+  }).catch(() => undefined);
+}
+
 export const usePetStore = create<PetStoreState>()(
   persist(
     (set, get) => ({
@@ -76,7 +84,10 @@ export const usePetStore = create<PetStoreState>()(
       command: { nonce: 0, action: "idle" },
 
       setEnabled: (enabled) => set({ enabled }),
-      setPetId: (petId) => set({ petId }),
+      setPetId: (petId) => {
+        set({ petId });
+        syncPetWithAgent(petId);
+      },
       patchSettings: (patch) => set(patch),
       setPosition: (position) => set({ position }),
 
@@ -121,6 +132,9 @@ export const usePetStore = create<PetStoreState>()(
         position: state.position,
         customPets: state.customPets,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state?.petId) syncPetWithAgent(state.petId);
+      },
     }
   )
 );

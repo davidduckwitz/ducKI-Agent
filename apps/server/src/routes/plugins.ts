@@ -12,6 +12,14 @@ import type { DatabaseService } from "@ducki/database";
 import { getPluginSettings, setPluginSetting } from "@ducki/database";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { registerCodingRun, unregisterCodingRun } from "../lib/coding-run-registry.js";
+import {
+  PluginBuilderSpecSchema,
+  createPluginScaffold,
+  describePluginScaffold,
+  validateScaffoldIntegrity,
+  type PluginBuilderSpec,
+  type PluginScaffoldResult,
+} from "../lib/plugin-builder.js";
 
 /** Minimal shape of the PluginManager we read off app.locals (avoids a hard type import). */
 interface PluginManagerLike {
@@ -55,7 +63,40 @@ function reloadPlugins(req: import("express").Request): { applied: boolean; defe
  */
 export const pluginsRouter: IRouter = Router();
 
+type PluginBuilderRunStatus = { runId: string; name: string; status: "running" | "completed" | "failed" | "stopped"; error?: string; conversationId?: number; updatedAt: string };
+const pluginBuilderRuns = new Map<string, PluginBuilderRunStatus>();
+
 const SAFE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+pluginsRouter.post("/builder/preview", async (req, res, next) => {
+  try {
+    const parsed = PluginBuilderSpecSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json(createApiError(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")));
+      return;
+    }
+    const scaffold = describePluginScaffold(parsed.data);
+    if (scaffold.spec.archetype === "llm-provider") {
+      const providerId = scaffold.spec.name.replace(/-provider$/, "");
+      const collision = (await currentPlugins(req)).find((plugin) =>
+        plugin.llmProviders.some((provider) => provider.id === providerId) && plugin.name !== scaffold.spec.name
+      );
+      if (collision) {
+        res.status(409).json(createApiError(`LLM provider id '${providerId}' is already provided by plugin '${collision.name}'`));
+        return;
+      }
+    }
+    res.json(createApiResponse({ spec: scaffold.spec, files: scaffold.files }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+pluginsRouter.get("/builder/runs/:runId", (req, res) => {
+  const run = pluginBuilderRuns.get(String(req.params.runId ?? ""));
+  if (!run) { res.status(404).json(createApiError("Plugin builder run not found")); return; }
+  res.json(createApiResponse(run));
+});
 
 /** GET /api/plugins - list all plugins with their resolved tools/skills/status. */
 pluginsRouter.get("/", async (req, res, next) => {
@@ -293,18 +334,25 @@ async function servePluginPage(
   res: import("express").Response,
   page: "settings" | "frontend" | "widget" | "overlay",
   rel: string,
+  overridePageRel?: string,
 ): Promise<void> {
   const name = String(req.params.name ?? "");
   if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
   const info = (await currentPlugins(req)).find((p) => p.name === name);
-  const pageRel =
+  const pageRel = overridePageRel ?? (
     page === "settings" ? info?.settingsPage
     : page === "frontend" ? info?.frontendPage
     : page === "overlay" ? info?.overlayPage
-    : info?.widgetPage;
+    : info?.widgetPage);
   if (!pageRel) { res.status(404).json(createApiError(`Plugin has no ${page} page`)); return; }
 
-  const pageAbs = resolve(pluginsRoot(), name, pageRel);
+  const pluginRoot = resolve(pluginsRoot(), name);
+  const pageAbs = resolve(pluginRoot, pageRel);
+  const pageWithinPlugin = relative(pluginRoot, pageAbs);
+  if (pageWithinPlugin.startsWith("..") || isAbsolute(pageWithinPlugin)) {
+    res.status(400).json(createApiError("Plugin page escapes the plugin folder"));
+    return;
+  }
   const uiRoot = dirname(pageAbs);
   const target = rel ? resolve(uiRoot, rel) : pageAbs;
 
@@ -350,6 +398,16 @@ async function servePluginPage(
 function isPageKind(value: string): value is "settings" | "frontend" | "widget" | "overlay" {
   return value === "settings" || value === "frontend" || value === "widget" || value === "overlay";
 }
+
+// These routes must precede /:name/ui/:page/*; otherwise Express interprets "widgets" as
+// a page kind and the iframe receives the generic "Unknown page kind" JSON response.
+pluginsRouter.get("/:name/ui/widgets/:widgetId", async (req, res, next) => {
+  try { await servePluginWidget(req, res, ""); } catch (error) { next(error); }
+});
+
+pluginsRouter.get("/:name/ui/widgets/:widgetId/*", async (req, res, next) => {
+  try { await servePluginWidget(req, res, String((req.params as Record<string, string>)[0] ?? "")); } catch (error) { next(error); }
+});
 
 /** GET /api/plugins/:name/ui/:page  - the page's index (settings|frontend). */
 pluginsRouter.get("/:name/ui/:page", async (req, res, next) => {
@@ -548,34 +606,69 @@ function cleanupStalePluginStaging(): void {
   }
 }
 
-function loadPluginManageSkill(): string {
-  const path = join(process.cwd(), "skills", "plugin-manage", "SKILL.md");
-  if (!existsSync(path)) {
-    throw new Error(`plugin-manage skill not found at ${path}`);
-  }
-  return readFileSync(path, "utf8");
-}
-
-function buildPluginCreationGoal(opts: {
-  name: string;
-  prompt: string;
-  category?: string;
-  needsStorage?: boolean;
-  targetHint?: string;
-}): string {
-  const skill = loadPluginManageSkill();
+function buildPluginCreationGoal(spec: PluginBuilderSpec, scaffold: PluginScaffoldResult): string {
   return [
-    skill,
-    "---",
-    `You must create a new plugin named exactly "${opts.name}" in the current directory (which IS the plugin's own folder - write plugin.json directly here, not in a subfolder).`,
-    `User request: ${opts.prompt}`,
-    opts.category ? `Requested category: ${opts.category}` : "",
-    opts.needsStorage ? "The plugin should use its own SQLite storage (storage.sqlite: true)." : "The plugin does not need persistent storage - prefer a stateless data-source tool.",
-    opts.targetHint ? `Target API / data source hint: ${opts.targetHint}` : "",
+    `A valid ${spec.archetype} plugin scaffold named "${spec.name}" already exists in the current directory.`,
+    `User request: ${spec.userRequest}`,
+    spec.targetHint ? `Target API / data source hint: ${spec.targetHint}` : "",
     "",
-    "Reminder of the hard rules from the skill above: sandboxed trust only, no moduleTools/connector, no oauth/settingsPage/frontendPage/widgetPage/overlayPage. Run the verify command after writing files and fix exactly what it reports.",
+    `You may edit ONLY these files:\n${scaffold.editableFiles.map((file) => `- ${file}`).join("\n")}`,
+    `Never edit these system-owned files:\n${scaffold.lockedFiles.map((file) => `- ${file}`).join("\n")}`,
+    "Do not create, rename, or delete files. Read the existing scaffold before editing it.",
+    "Fill the TODO placeholders with a concise, working implementation that matches the user request.",
+    "Run the provided verify command and fix only editable files when it reports an error.",
   ].filter(Boolean).join("\n");
 }
+
+async function servePluginWidget(req: import("express").Request, res: import("express").Response, rel: string): Promise<void> {
+  const name = String(req.params.name ?? "");
+  const widgetId = String(req.params.widgetId ?? "");
+  const info = (await currentPlugins(req)).find((plugin) => plugin.name === name);
+  const widget = info?.widgets.find((entry) => entry.id === widgetId);
+  if (!widget) { res.status(404).json(createApiError("Plugin widget not found")); return; }
+  await servePluginPage(req, res, "widget", rel, widget.page);
+}
+
+/** Update only presentation fields of existing widgets; ids and file paths remain manifest-owned. */
+pluginsRouter.put("/:name/widgets", async (req, res, next) => {
+  try {
+    const name = String(req.params.name ?? "");
+    if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
+    const pluginDir = resolve(pluginsRoot(), name);
+    const manifestPath = join(pluginDir, "plugin.json");
+    if (!existsSync(manifestPath)) { res.status(404).json(createApiError("Plugin not found")); return; }
+
+    const requested = Array.isArray(req.body?.widgets) ? req.body.widgets as Array<Record<string, unknown>> : null;
+    if (!requested) { res.status(400).json(createApiError("widgets must be an array")); return; }
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, any>;
+    const current = Array.isArray(manifest.provides?.widgets) ? manifest.provides.widgets as Array<Record<string, unknown>> : [];
+    if (requested.length !== current.length) { res.status(400).json(createApiError("Widget count cannot be changed here")); return; }
+    const requestedById = new Map(requested.map((widget) => [String(widget.id ?? ""), widget]));
+    const editable = ["title", "placement", "align", "frame", "background", "height", "width"] as const;
+    const updated = current.map((widget) => {
+      const change = requestedById.get(String(widget.id ?? ""));
+      if (!change) throw new Error(`Missing widget '${String(widget.id ?? "")}'`);
+      const next = { ...widget };
+      for (const key of editable) if (key in change) next[key] = change[key];
+      return next;
+    });
+    manifest.provides = { ...manifest.provides, widgets: updated };
+    const parsed = parsePluginManifest(JSON.stringify(manifest));
+    if (!parsed.ok || !parsed.manifest) { res.status(400).json(createApiError(parsed.error ?? "Invalid plugin manifest")); return; }
+    const validated = parsed.manifest;
+    const tempPath = `${manifestPath}.${randomUUID()}.tmp`;
+    writeFileSync(tempPath, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
+    renameSync(tempPath, manifestPath);
+    const reload = reloadPlugins(req);
+    res.json(createApiResponse({ name, widgets: validated.provides.widgets ?? [], reload }));
+  } catch (error) {
+    if (error instanceof Error && (/Missing widget|Invalid plugin manifest/.test(error.message))) {
+      res.status(400).json(createApiError(error.message));
+      return;
+    }
+    next(error);
+  }
+});
 
 pluginsRouter.post("/create-run", async (req, res, next) => {
   try {
@@ -595,22 +688,22 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
       return;
     }
 
-    const body = (req.body ?? {}) as {
-      prompt?: string;
-      name?: string;
-      category?: string;
-      needsStorage?: boolean;
-      targetHint?: string;
-    };
-    const name = String(body.name ?? "");
-    const prompt = String(body.prompt ?? "").trim();
-    if (!SAFE_NAME.test(name)) {
-      res.status(400).json(createApiError("'name' must be lowercase-kebab"));
+    const parsedSpec = PluginBuilderSpecSchema.safeParse(req.body);
+    if (!parsedSpec.success) {
+      res.status(400).json(createApiError(parsedSpec.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")));
       return;
     }
-    if (!prompt) {
-      res.status(400).json(createApiError("'prompt' is required"));
-      return;
+    const spec = parsedSpec.data;
+    const name = spec.name;
+    if (spec.archetype === "llm-provider") {
+      const providerId = name.replace(/-provider$/, "");
+      const collision = (await currentPlugins(req)).find((plugin) =>
+        plugin.llmProviders.some((provider) => provider.id === providerId) && plugin.name !== name
+      );
+      if (collision) {
+        res.status(409).json(createApiError(`LLM provider id '${providerId}' is already provided by plugin '${collision.name}'`));
+        return;
+      }
     }
     const finalDir = resolve(pluginsRoot(), name);
     if (existsSync(finalDir)) {
@@ -626,7 +719,8 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
     }
 
     const runId = randomUUID();
-    mkdirSync(stagingDir, { recursive: true });
+    const scaffold = createPluginScaffold(stagingDir, spec);
+    pluginBuilderRuns.set(runId, { runId, name, status: "running", updatedAt: new Date().toISOString() });
     res.json(createApiResponse({ runId }));
 
     const io = req.app.locals["io"];
@@ -650,17 +744,11 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
         };
 
         const codingAgent = createCodingAgent({ sandboxRoot: stagingDir, maxIterations: 40, eventEmitter });
-        const goal = buildPluginCreationGoal({
-          name,
-          prompt,
-          category: body.category,
-          needsStorage: body.needsStorage,
-          targetHint: body.targetHint,
-        });
+        const goal = buildPluginCreationGoal(spec, scaffold);
         // Points validate-cli at the STAGING root, not pluginsRoot() - it resolves
         // join(pluginsRoot, name) internally, so passing stagingRoot here makes it check
         // stagingDir (= stagingRoot/name), matching where the agent is actually writing.
-        const verifyCommand = `node "${resolveValidateCliPath()}" "${stagingRoot}" "${name}"`;
+        const verifyCommand = `node "${resolveValidateCliPath()}" "${stagingRoot}" "${name}"${spec.archetype === "llm-provider" ? " --allow-builder-llm-provider" : ""}${spec.archetype === "widget" ? " --allow-builder-widgets" : ""}`;
 
         const runResult = await codingAgent.run(goal, {
           verifyCommand,
@@ -683,12 +771,20 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
         });
 
         // Authoritative re-check, in-process - never trust the agent's own reported "verified".
-        const finalCheck = validatePluginDir(stagingRoot, name);
+        const integrityErrors = validateScaffoldIntegrity(stagingDir, scaffold);
+        const finalCheck = validatePluginDir(stagingRoot, name, {
+          allowBuilderLLMProvider: spec.archetype === "llm-provider",
+          allowBuilderWidgets: spec.archetype === "widget",
+        });
+        if (integrityErrors.length > 0) finalCheck.errors.push(...integrityErrors);
+        finalCheck.ok = finalCheck.errors.length === 0;
         if (!finalCheck.ok) {
           // Left in staging (never moved into plugins/), so it's invisible to loadPlugins() -
           // nothing broken ever reaches the general plugin list. Stays on disk for manual
           // inspection until cleanupStalePluginStaging() reclaims it after 24h.
-          emit("plugin_create_complete", { success: false, name, error: finalCheck.errors.join("; ") });
+          const error = finalCheck.errors.join("; ");
+          pluginBuilderRuns.set(runId, { runId, name, status: "failed", error, conversationId: runResult.conversationId, updatedAt: new Date().toISOString() });
+          emit("plugin_create_complete", { success: false, name, error });
           return;
         }
 
@@ -705,12 +801,16 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
           await db.updateConversation(runResult.conversationId, { pluginContext: name });
         }
 
+        pluginBuilderRuns.set(runId, { runId, name, status: "completed", conversationId: runResult.conversationId, updatedAt: new Date().toISOString() });
         emit("plugin_create_complete", { success: true, name, conversationId: runResult.conversationId, reload });
       } catch (error) {
         if (isAbortError(error)) {
+          pluginBuilderRuns.set(runId, { runId, name, status: "stopped", error: "Vom Nutzer gestoppt", updatedAt: new Date().toISOString() });
           emit("plugin_create_complete", { success: false, stopped: true, name, error: "Vom Nutzer gestoppt" });
         } else {
-          emit("plugin_create_complete", { success: false, name, error: error instanceof Error ? error.message : String(error) });
+          const message = error instanceof Error ? error.message : String(error);
+          pluginBuilderRuns.set(runId, { runId, name, status: "failed", error: message, updatedAt: new Date().toISOString() });
+          emit("plugin_create_complete", { success: false, name, error: message });
         }
       } finally {
         if (runConversationId !== undefined) unregisterCodingRun(runConversationId);

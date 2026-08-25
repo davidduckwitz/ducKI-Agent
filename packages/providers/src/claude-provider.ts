@@ -125,14 +125,18 @@ export class ClaudeProvider implements LLMProvider {
   readonly model: string;
   private client: Anthropic;
   private defaultOptions: GenerateOptions;
+  private readonly baseUrl: string;
+  private readonly apiKey: string;
 
   constructor(options: ProviderOptions) {
     this.model = options.model;
     this.defaultOptions = options.defaultOptions ?? {};
+    this.baseUrl = options.baseUrl || "https://api.anthropic.com/v1";
+    this.apiKey = options.apiKey ?? "";
 
     this.client = new Anthropic({
-      apiKey: options.apiKey,
-      baseURL: "https://api.anthropic.com/v1",
+      apiKey: this.apiKey,
+      baseURL: this.baseUrl,
     });
   }
 
@@ -272,5 +276,17 @@ export class ClaudeProvider implements LLMProvider {
     } catch {
       return false;
     }
+  }
+
+  async listModels(): Promise<Array<{ id: string; name: string }>> {
+    const response = await fetch(`${this.baseUrl.replace(/\/+$/, "")}/models`, {
+      headers: { "x-api-key": this.apiKey ?? "", "anthropic-version": "2023-06-01" },
+    });
+    if (!response.ok) throw new Error(`Anthropic models API error: ${response.status} ${response.statusText}`);
+    const body = await response.json() as { data?: Array<{ id?: string; display_name?: string }> };
+    return (body.data ?? []).flatMap((model) => {
+      const id = model.id?.trim();
+      return id ? [{ id, name: model.display_name?.trim() || id }] : [];
+    });
   }
 }

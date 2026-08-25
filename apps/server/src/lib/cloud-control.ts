@@ -23,6 +23,7 @@ import { setPluginEnabled, isKnownVideoPlatform, fetchVideoFromUrl, analyzeVideo
 import { SHARED_WORKSPACE_ROOT, browserTool } from "@ducki/tools";
 import { installSkillFromSource } from "./skill-install.js";
 import { transcribeAudioBuffer } from "./audio-transcription.js";
+import { listActiveProviderModels } from "./provider-settings.js";
 
 export const SETTING_CLOUD_CONTROL_ENABLED = "CLOUD_CONTROL_ENABLED";
 
@@ -205,7 +206,9 @@ export interface CloudControlDeps {
   logger: Logger;
   getPlugins: () => LoadedPluginInfo[];
   requestPluginReload: () => void;
-  createAgent: () => Promise<Agent>;
+  createAgent: (override?: { model?: string }) => Promise<Agent>;
+  runMainBot?: (message: string) => Promise<{ response: string; conversationId: number; stalled: boolean }>;
+  listBots?: () => Promise<Array<Record<string, unknown>>>;
 }
 
 /**
@@ -250,10 +253,10 @@ const MODEL_SETTING_BY_PROVIDER: Record<string, string> = {
  * genauso auflösen wie loadProviderFromSettings() in index.ts, sonst zeigt die Fusszeile den
  * falschen Provider an.
  */
-async function describeActiveProvider(db: DatabaseService): Promise<{ providerName: string; model: string }> {
+async function describeActiveProvider(db: DatabaseService, modelOverride?: string): Promise<{ providerName: string; model: string }> {
   const providerName = ((await db.getSetting("DEFAULT_PROVIDER")) || "lmstudio").trim().toLowerCase();
   const modelSettingKey = MODEL_SETTING_BY_PROVIDER[providerName];
-  const model = (modelSettingKey ? await db.getSetting(modelSettingKey) : undefined) || "unbekannt";
+  const model = modelOverride?.trim() || (modelSettingKey ? await db.getSetting(modelSettingKey) : undefined) || "unbekannt";
   return { providerName, model };
 }
 
@@ -334,6 +337,15 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
   const payload = command.payload ?? {};
   try {
     switch (command.type) {
+      case "voice.models": {
+        return { status: "done", result: await listActiveProviderModels(deps.db) };
+      }
+
+      case "voice.bots": {
+        if (!deps.listBots) throw new Error("voice.bots: BotService ist nicht verfuegbar");
+        return { status: "done", result: { bots: await deps.listBots() } };
+      }
+
       case "cronjob.delete": {
         const id = Number(payload["id"]);
         if (!Number.isFinite(id)) throw new Error("cronjob.delete: 'id' fehlt oder ungueltig");
@@ -387,7 +399,8 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
       case "chat.send": {
         const message = String(payload["message"] ?? "").trim();
         if (!message) throw new Error("chat.send: 'message' fehlt");
-        const agent = await deps.createAgent();
+        const requestedModel = String(payload["model"] ?? "").trim();
+        const agent = await deps.createAgent(requestedModel ? { model: requestedModel } : undefined);
         const conversationId = await resolveVoiceConversation(deps, agent, payload, `Cloud Control: ${message.slice(0, 40)}`);
 
         const attachmentBase64 = typeof payload["attachment"] === "string" ? payload["attachment"].trim() : "";
@@ -417,7 +430,7 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
               visionOnly: true,
             });
             const mediaAttachments = await findNewMediaFiles(runStartedAt);
-            const { providerName, model } = await describeActiveProvider(deps.db);
+            const { providerName, model } = await describeActiveProvider(deps.db, requestedModel);
             const contextMessageCount = await deps.db.getMessageCount(conversationId);
             return { status: "done", result: { reply: runResult.response, conversationId, mediaAttachments, providerName, model, contextMessageCount } };
           } finally {
@@ -428,7 +441,7 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
         if (!attachmentBase64) {
           const runResult = await agent.run(message);
           const mediaAttachments = await findNewMediaFiles(runStartedAt);
-          const { providerName, model } = await describeActiveProvider(deps.db);
+          const { providerName, model } = await describeActiveProvider(deps.db, requestedModel);
           const contextMessageCount = await deps.db.getMessageCount(conversationId);
           return { status: "done", result: { reply: runResult.response, conversationId, mediaAttachments, providerName, model, contextMessageCount } };
         }
@@ -445,12 +458,32 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
             visionOnly: isImageMimeType(attachmentMimeType) || isVideoMimeType(attachmentMimeType),
           });
           const mediaAttachments = await findNewMediaFiles(runStartedAt);
-          const { providerName, model } = await describeActiveProvider(deps.db);
+          const { providerName, model } = await describeActiveProvider(deps.db, requestedModel);
           const contextMessageCount = await deps.db.getMessageCount(conversationId);
           return { status: "done", result: { reply: runResult.response, conversationId, mediaAttachments, providerName, model, contextMessageCount } };
         } finally {
           await removeTempWorkspaceFile(attachmentPath);
         }
+      }
+
+      case "bot.chat.send": {
+        const message = String(payload["message"] ?? "").trim();
+        if (!message) throw new Error("bot.chat.send: 'message' fehlt");
+        if (!deps.runMainBot) throw new Error("bot.chat.send: BotService ist nicht verfuegbar");
+        const runResult = await deps.runMainBot(message);
+        const { providerName, model } = await describeActiveProvider(deps.db);
+        const contextMessageCount = await deps.db.getMessageCount(runResult.conversationId);
+        return {
+          status: "done",
+          result: {
+            reply: runResult.response,
+            botConversationId: runResult.conversationId,
+            providerName,
+            model,
+            contextMessageCount,
+            stalled: runResult.stalled,
+          },
+        };
       }
 
       case "voice.transcribe": {
@@ -465,12 +498,32 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
         const transcript = await transcribeAudioBuffer(deps.db, audioBuffer);
         if (!transcript) throw new Error("voice.transcribe: Keine Sprache erkannt");
 
-        const agent = await deps.createAgent();
+        if (payload["mode"] === "team") {
+          if (!deps.runMainBot) throw new Error("voice.transcribe: BotService ist nicht verfuegbar");
+          const runResult = await deps.runMainBot(transcript);
+          const { providerName, model } = await describeActiveProvider(deps.db);
+          const contextMessageCount = await deps.db.getMessageCount(runResult.conversationId);
+          return {
+            status: "done",
+            result: {
+              transcript,
+              reply: runResult.response,
+              botConversationId: runResult.conversationId,
+              providerName,
+              model,
+              contextMessageCount,
+              stalled: runResult.stalled,
+            },
+          };
+        }
+
+        const requestedModel = String(payload["model"] ?? "").trim();
+        const agent = await deps.createAgent(requestedModel ? { model: requestedModel } : undefined);
         const conversationId = await resolveVoiceConversation(deps, agent, payload, `Voice: ${transcript.slice(0, 40)}`);
         const runStartedAt = Date.now();
         const runResult = await agent.run(transcript);
         const mediaAttachments = await findNewMediaFiles(runStartedAt);
-        const { providerName, model } = await describeActiveProvider(deps.db);
+        const { providerName, model } = await describeActiveProvider(deps.db, requestedModel);
         const contextMessageCount = await deps.db.getMessageCount(conversationId);
         return { status: "done", result: { transcript, reply: runResult.response, conversationId, mediaAttachments, providerName, model, contextMessageCount } };
       }

@@ -4,18 +4,26 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Uhr</title>
+<script>const themeParams=new URLSearchParams(location.search);document.documentElement.dataset.theme=themeParams.get("theme")==="light"?"light":"dark";document.documentElement.dataset.accent=themeParams.get("accent")||"blue";</script>
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light; --text: #111827; --muted: #4b5563; }
+  :root[data-theme="dark"] { color-scheme: dark; --text: #f3f4f6; --muted: #9ca3af; }
   html, body { margin: 0; height: 100%; }
   body {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 0.15rem; font-family: system-ui, sans-serif; text-align: center;
-    color: #111; background: transparent;
+    color: var(--text); background: transparent;
   }
-  @media (prefers-color-scheme: dark) { body { color: #f3f4f6; } }
   #time { font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; line-height: 1.1; }
   #day { font-size: 0.9rem; font-weight: 600; opacity: 0.9; }
   #date { font-size: 0.8rem; opacity: 0.65; }
+  @media (max-height: 60px) {
+    body { flex-direction: row; gap: 0.45rem; white-space: nowrap; }
+    #time { font-size: 0.9rem; }
+    #day { font-size: 0.72rem; }
+    #date { display: none; }
+  }
+  @media (max-height: 32px) { #day { display: none; } #time { font-size: 0.75rem; } }
 </style>
 </head>
 <body>

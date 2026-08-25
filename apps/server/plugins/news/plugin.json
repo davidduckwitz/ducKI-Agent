@@ -12,8 +12,10 @@
     "scriptTools": ["tools/news.tool.json"],
     "skills": ["skills/news-usage"],
     "frontendPage": "app/index.html",
-    "widgetPage": "widget/index.html",
-    "widgetPlacement": "both",
+    "widgets": [
+      { "id": "top-ticker", "page": "widget/index.html", "placement": "topbar", "align": "full", "frame": "borderless", "background": "transparent", "height": 44, "width": "full" },
+      { "id": "dashboard-news", "page": "widget/index.html", "placement": "dashboard", "align": "full", "frame": "card", "background": "card", "height": 180, "width": "full", "title": "Aktuelle Nachrichten" }
+    ],
     "settingsPage": "settings/index.html",
     "settings": [
       { "key": "default_source", "type": "string", "default": "tagesschau", "description": "Standard-Quelle (Schlüssel einer eingebauten oder eigenen Quelle), wenn keine angegeben ist" },

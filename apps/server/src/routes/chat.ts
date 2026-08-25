@@ -242,10 +242,12 @@ chatRouter.get("/search", async (req, res, next) => {
 chatRouter.post("/", async (req, res, next) => {
   let runId: string | undefined;
   try {
-    const createAgent = req.app.locals["createAgent"] as (() => Promise<Agent>) | undefined;
-    const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
+    const createAgent = req.app.locals["createAgent"] as ((override?: { model?: string }) => Promise<Agent>) | undefined;
+    const requestedModel = typeof req.body?.model === "string" && req.body.model.trim() ? req.body.model.trim() : undefined;
+    const createRequestAgent = createAgent ? () => createAgent(requestedModel ? { model: requestedModel } : undefined) : undefined;
+    const agent = createRequestAgent ? await createRequestAgent() : (req.app.locals["agent"] as Agent);
     const agentRegistry = req.app.locals["agentRegistry"] as {
-      register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }) => string;
+      register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }, controls?: { stop?: () => void }) => string;
       unregister: (id: string) => void;
     };
     const { message, conversationId, stream, provider, model } = req.body as {
@@ -269,11 +271,12 @@ chatRouter.post("/", async (req, res, next) => {
       activeConversationId = await agent.startConversation({ name: deriveConversationTitle(message) });
     }
 
+    const clientRunId = typeof req.body?.clientRunId === "string" ? req.body.clientRunId.trim().slice(0, 100) : "";
     runId = agentRegistry.register({
       source: "chat_http",
       conversationId: activeConversationId,
-      label: "HTTP Chat",
-    });
+      label: clientRunId ? `Erpel:${clientRunId}` : "HTTP Chat",
+    }, { stop: () => agent.stop() });
 
     const wantsDiscordDelivery = /(?:\b(?:auf|an|zu|to)\s+discord\b|\bdiscord\b.*\b(?:antwort|reply|post|poste|sende|send|schick|schreibe)\b|\b(?:antwort|reply|post|poste|sende|send|schick|schreibe)\b.*\bdiscord\b)/i.test(message);
     const routedMessage = wantsDiscordDelivery
@@ -284,7 +287,7 @@ chatRouter.post("/", async (req, res, next) => {
       : message;
 
     const result = await runAgentWithRepairRetry(
-      createAgent ?? (async () => agent),
+      createRequestAgent ?? (async () => agent),
       routedMessage,
       (errorMessage) => [
         "The previous chat run failed with a runtime error.",

@@ -54,7 +54,6 @@ const PREDEFINED_FIELDS: SettingField[] = [
       { label: "OpenRouter", value: "openrouter" },
       { label: "Ollama", value: "ollama" },
       { label: "Claude (Anthropic)", value: "claude" },
-      { label: "Nous Research", value: "nous" },
     ],
   },
   {
@@ -144,30 +143,6 @@ const PREDEFINED_FIELDS: SettingField[] = [
     type: "text",
     section: "Provider",
     defaultValue: "claude-3-5-sonnet-20241022",
-  },
-  {
-    key: "NOUS_API_KEY",
-    label: "Nous API Key",
-    description: "API Key fuer Nous Research",
-    type: "password",
-    section: "Provider",
-    defaultValue: "",
-  },
-  {
-    key: "NOUS_BASE_URL",
-    label: "Nous Base URL",
-    description: "HTTP Endpoint fuer Nous API",
-    type: "text",
-    section: "Provider",
-    defaultValue: "https://api.nousresearch.com/v1",
-  },
-  {
-    key: "NOUS_MODEL",
-    label: "Nous Model",
-    description: "Modelname fuer Nous",
-    type: "text",
-    section: "Provider",
-    defaultValue: "nous-hermes-2-mixtral-8x7b-dpo",
   },
   {
     key: "AUTO_UPDATE_ENABLED",
@@ -825,13 +800,38 @@ const PREDEFINED_FIELDS: SettingField[] = [
   {
     key: "PLUGIN_CREATION_ENABLED",
     label: "Plugin-Erstellung durch Agent",
-    description: "Erlaubt dem Coding-Agenten, auf Anfrage eigene Plugins zu erstellen (nur sandboxed, ohne moduleTools/oauth/UI-Seiten, immer deaktiviert zur manuellen Freigabe erzeugt). Benoetigt zusaetzlich 'Coding Area Enabled'.",
+    description: "Erlaubt dem Plugin-Builder, sandboxed Plugins zu erzeugen. Widget-Plugins erhalten eine feste Systemstruktur; der Agent fuellt nur die freigegebenen Widget-Dateien. Neue Plugins bleiben bis zur manuellen Freigabe deaktiviert. Benoetigt zusaetzlich 'Coding Area Enabled'.",
     type: "select",
     section: "Agent",
     defaultValue: "false",
     options: [
       { label: "Aktiv", value: "true" },
       { label: "Aus", value: "false" },
+    ],
+  },
+  {
+    key: "SKILL_CREATION_ENABLED",
+    label: "Skill-Erstellung durch Agent",
+    description: "Erlaubt dem internen Builder, Skills atomar nach dem Skill-Loader-Format zu erstellen. Frontmatter und Struktur werden vom System erzeugt und vor der Installation mit dem echten Loader-Validator geprüft.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus", value: "false" },
+    ],
+  },
+  {
+    key: "BUILDER_AGENT_MODE",
+    label: "Agent-Builder Modus",
+    description: "Legt fest, ob der Agent Builder nur auf Befehl verwenden, selbst passende Plugins oder Skills vorschlagen oder sie autonom bauen und testen darf. Aktivierung bleibt bei Plugins immer manuell.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "manual",
+    options: [
+      { label: "Nur auf Befehl", value: "manual" },
+      { label: "Vorschlagen", value: "suggest" },
+      { label: "Autonom bauen", value: "autonomous" },
     ],
   },
   {
@@ -1347,6 +1347,10 @@ export function Settings() {
     refetchOnMount: true,
     gcTime: 0,
   });
+  const { data: providerCatalog = [] } = useQuery({
+    queryKey: ["provider-models", "providers"],
+    queryFn: api.providerModels.listProviders,
+  });
 
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>("Provider");
@@ -1362,7 +1366,31 @@ export function Settings() {
   });
 
   const settingsMap = new Map((settings as Setting[]).map((entry) => [entry.key, entry.value]));
-  const predefinedKeys = new Set(PREDEFINED_FIELDS.map((field) => field.key));
+  const selectedProvider = edits.DEFAULT_PROVIDER ?? settingsMap.get("DEFAULT_PROVIDER") ?? "lmstudio";
+  const selectedProviderMeta = providerCatalog.find((provider) => provider.id === selectedProvider);
+  const { data: selectedModels } = useQuery({
+    queryKey: ["provider-models", selectedProvider],
+    queryFn: () => api.providerModels.getModels(selectedProvider),
+    enabled: Boolean(selectedProvider),
+    retry: false,
+  });
+  const pluginFields: SettingField[] = providerCatalog
+    .filter((provider) => provider.pluginName)
+    .flatMap((provider) => [
+      ...(provider.baseUrlSetting ? [{ key: provider.baseUrlSetting, label: `${provider.name} Base URL`, description: "API endpoint", type: "text" as const, section: "Provider" as const, defaultValue: provider.defaultBaseUrl ?? "" }] : []),
+      ...(provider.apiKeySetting ? [{ key: provider.apiKeySetting, label: `${provider.name} API Key`, description: "API credential", type: "password" as const, section: "Provider" as const, defaultValue: "" }] : []),
+      { key: provider.modelSetting, label: `${provider.name} Model`, description: "Vom Provider gemeldetes Modell", type: "text" as const, section: "Provider" as const, defaultValue: provider.defaultModel ?? "" },
+    ]);
+  const allFields = [...PREDEFINED_FIELDS, ...pluginFields];
+  const providerMetas = [
+    ...PROVIDER_META,
+    ...providerCatalog.filter((provider) => provider.pluginName).map((provider) => ({
+      id: provider.id, label: provider.name, emoji: provider.icon ?? "🔌",
+      description: provider.description ?? `LLM-Provider aus Plugin ${provider.pluginName}`,
+      color: "blue" as const,
+    })),
+  ];
+  const predefinedKeys = new Set(allFields.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
   const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "Bots", "Voice", "Backend", "Cloud-Backup", "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "Bots", "Voice", "Backend", "Cloud-Backup", "LLM Provider Config", "Credentials", "Chat Cleanup"];
 
@@ -1371,6 +1399,14 @@ export function Settings() {
 
   const renderField = (field: SettingField) => {
     const value = getDisplayValue(field);
+    const providerOptions = providerCatalog.map((provider) => ({ label: provider.name, value: provider.id }));
+    const isSelectedModel = selectedProviderMeta?.modelSetting === field.key;
+    const effectiveType: SettingFieldType = isSelectedModel && (selectedModels?.models.length ?? 0) > 0 ? "select" : field.type;
+    const effectiveOptions = field.key === "DEFAULT_PROVIDER" && providerOptions.length > 0
+      ? providerOptions
+      : isSelectedModel
+        ? selectedModels?.models.map((model) => ({ label: model.name, value: model.id }))
+        : field.options;
 
     return (
       <div key={field.key} className="space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
@@ -1379,7 +1415,7 @@ export function Settings() {
         <p className="text-xs text-muted-foreground/70 font-mono">{field.key}</p>
 
         <div className="flex gap-2 items-start">
-          {field.type === "textarea" && (
+          {effectiveType === "textarea" && (
             <textarea
               className="input flex-1 min-h-28"
               value={value}
@@ -1389,7 +1425,7 @@ export function Settings() {
             />
           )}
 
-          {field.type === "select" && (
+          {effectiveType === "select" && (
             <select
               className="input flex-1"
               value={value}
@@ -1397,7 +1433,7 @@ export function Settings() {
                 setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
               }
             >
-              {field.options?.map((option) => (
+              {effectiveOptions?.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -1405,10 +1441,10 @@ export function Settings() {
             </select>
           )}
 
-          {(field.type === "text" || field.type === "password" || field.type === "number") && (
+          {(effectiveType === "text" || effectiveType === "password" || effectiveType === "number") && (
             <input
               className="input flex-1"
-              type={field.type}
+              type={effectiveType}
               value={value}
               onChange={(e) =>
                 setEdits((ed) => ({ ...ed, [field.key]: e.target.value }))
@@ -1433,7 +1469,7 @@ export function Settings() {
   };
 
   const saveAll = (): void => {
-    for (const field of PREDEFINED_FIELDS) {
+    for (const field of allFields) {
       save.mutate({ key: field.key, value: getDisplayValue(field) });
     }
   };
@@ -1568,14 +1604,20 @@ export function Settings() {
               <Cpu className="w-5 h-5 text-primary" />
               <h2 className="text-lg font-semibold">Aktiver Provider</h2>
             </div>
-            {renderField(PREDEFINED_FIELDS.find((f) => f.key === "DEFAULT_PROVIDER") as SettingField)}
+            {renderField(allFields.find((f) => f.key === "DEFAULT_PROVIDER") as SettingField)}
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            {PROVIDER_META.map((provider) => {
-              const activeProviderValue = getDisplayValue(PREDEFINED_FIELDS.find((f) => f.key === "DEFAULT_PROVIDER") as SettingField);
+            {providerMetas.map((provider) => {
+              const activeProviderValue = getDisplayValue(allFields.find((f) => f.key === "DEFAULT_PROVIDER") as SettingField);
               const isProviderActive = activeProviderValue === provider.id;
-              const providerFields = PREDEFINED_FIELDS.filter((f) => PROVIDER_FIELD_MAP[f.key] === provider.id);
+              const catalogEntry = providerCatalog.find((entry) => entry.id === provider.id);
+              const providerFields = allFields.filter((field) =>
+                PROVIDER_FIELD_MAP[field.key] === provider.id
+                || catalogEntry?.modelSetting === field.key
+                || catalogEntry?.baseUrlSetting === field.key
+                || catalogEntry?.apiKeySetting === field.key
+              );
 
               return (
                 <div

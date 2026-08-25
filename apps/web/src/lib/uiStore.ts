@@ -16,6 +16,10 @@ export const CODING_AGENT_MAX_WIDTH = 720;
 export const SIDEBAR_MIN_WIDTH = 180;
 export const SIDEBAR_MAX_WIDTH = 480;
 export const SIDEBAR_DEFAULT_WIDTH = 240;
+export const APP_SIDEBAR_MIN_WIDTH = 320;
+export const APP_SIDEBAR_MAX_WIDTH = 900;
+export const APP_SIDEBAR_DEFAULT_WIDTH = 440;
+export type AppSidebarTool = "apps" | "browser" | "terminal";
 
 interface UiState {
   /** Rail mode: sidebar shrinks to an icon strip. */
@@ -36,6 +40,9 @@ interface UiState {
 
   /** Chat page's own conversation column - the sidebar covers the common case now. */
   chatListOpen: boolean;
+  appSidebarOpen: boolean;
+  appSidebarWidth: number;
+  appSidebarTool: AppSidebarTool;
 
   codingAgentOpen: boolean;
   codingAgentWidth: number;
@@ -62,6 +69,10 @@ interface UiState {
   isPinned: (conversationId: number) => boolean;
   setChatListOpen: (open: boolean) => void;
   toggleChatList: () => void;
+  setAppSidebarOpen: (open: boolean) => void;
+  toggleAppSidebar: () => void;
+  setAppSidebarWidth: (width: number) => void;
+  setAppSidebarTool: (tool: AppSidebarTool) => void;
   setCodingAgentOpen: (open: boolean) => void;
   setCodingAgentWidth: (width: number) => void;
   setCodingAgentTab: (tab: CodingAgentTab) => void;
@@ -82,6 +93,9 @@ export const useUiStore = create<UiState>()(
       treeOpen: {},
       pinnedConversationIds: [],
       chatListOpen: false,
+      appSidebarOpen: false,
+      appSidebarWidth: APP_SIDEBAR_DEFAULT_WIDTH,
+      appSidebarTool: "apps",
       codingAgentOpen: true,
       codingAgentWidth: 380,
       codingAgentTab: "chat",
@@ -130,6 +144,11 @@ export const useUiStore = create<UiState>()(
 
       setChatListOpen: (chatListOpen) => set({ chatListOpen }),
       toggleChatList: () => set((s) => ({ chatListOpen: !s.chatListOpen })),
+      setAppSidebarOpen: (appSidebarOpen) => set({ appSidebarOpen }),
+      toggleAppSidebar: () => set((s) => ({ appSidebarOpen: !s.appSidebarOpen })),
+      setAppSidebarWidth: (width) =>
+        set({ appSidebarWidth: Math.min(Math.max(Math.round(width), APP_SIDEBAR_MIN_WIDTH), APP_SIDEBAR_MAX_WIDTH) }),
+      setAppSidebarTool: (appSidebarTool) => set({ appSidebarTool, appSidebarOpen: true }),
 
       setCodingAgentOpen: (codingAgentOpen) => set({ codingAgentOpen }),
       setCodingAgentWidth: (width) =>

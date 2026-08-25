@@ -204,4 +204,16 @@ export class AnthropicAdapter extends BaseAdapter {
   override supportsStreaming(): boolean {
     return true;
   }
+
+  override async listModels(): Promise<Array<{ id: string; name: string }>> {
+    const response = await fetch(`${this.baseUrl.replace(/\/+$/, "")}/models`, {
+      headers: { "x-api-key": this.apiKey ?? "", "anthropic-version": "2023-06-01" },
+    });
+    if (!response.ok) throw new Error(`Anthropic models API error: ${response.status} ${response.statusText}`);
+    const body = await response.json() as { data?: Array<{ id?: string; display_name?: string }> };
+    return (body.data ?? []).flatMap((model) => {
+      const id = model.id?.trim();
+      return id ? [{ id, name: model.display_name?.trim() || id }] : [];
+    });
+  }
 }

@@ -89,7 +89,10 @@ export function getApiBaseUrl(config: BackendConfig = readBackendConfig()): stri
  * getApiBaseUrl() yields the agent origin (e.g. http://localhost:3001/api) in that case, and a
  * proxied "/api/…" in the browser.
  */
-export function pluginUiUrl(name: string, kind: "widget" | "frontend" | "overlay"): string {
+export function pluginUiUrl(name: string, kind: "settings" | "widget" | "frontend" | "overlay", widgetId?: string): string {
+  if (kind === "widget" && widgetId) {
+    return `${getApiBaseUrl()}/plugins/${encodeURIComponent(name)}/ui/widgets/${encodeURIComponent(widgetId)}/`;
+  }
   return `${getApiBaseUrl()}/plugins/${encodeURIComponent(name)}/ui/${kind}`;
 }
 

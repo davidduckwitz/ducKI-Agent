@@ -37,6 +37,16 @@ type BrowserAction =
   // render, instead of the caller polling `screenshot` repeatedly. See browserFrameEvents.
   | "stream_start"
   | "stream_stop"
+  // Raw input forwarding for the shared interactive UI surface. Coordinates are normalized
+  // (0..1), so a resized sidebar and the real Puppeteer viewport stay in sync.
+  | "mouse_click"
+  | "mouse_drag"
+  | "scroll_by"
+  | "keyboard_type"
+  | "keyboard_press"
+  | "history_back"
+  | "history_forward"
+  | "reload"
   // Interaction & testing upgrades: accessibility-style element snapshot + text/role-based
   // targeting (so the model doesn't have to guess CSS selectors), page-error capture and
   // expect-style assertions, plus hover/drag&drop/select/upload/tab-switching.
@@ -86,6 +96,8 @@ interface BrowserWorkerFrame {
   data: string;
   format: string;
   timestamp: string;
+  width: number;
+  height: number;
 }
 
 type BrowserWorkerMessage = BrowserWorkerResponse | BrowserWorkerFrame;
@@ -98,6 +110,9 @@ type BrowserWorkerMessage = BrowserWorkerResponse | BrowserWorkerFrame;
  * without this package needing to know sockets exist.
  */
 export const browserFrameEvents = new EventEmitter();
+/** Every completed browser operation, whether initiated by an agent or the UI. The web app
+ * uses this shared stream to build an automation-ready timeline for the current session. */
+export const browserActivityEvents = new EventEmitter();
 
 // Sessions map - kept alive in main process so they persist across worker restarts
 const mainProcessSessions = new Map<string, { launchedAt: string; url?: string }>();
@@ -849,6 +864,14 @@ export const browserTool: ToolExecutor = {
             "select",
             "upload",
             "switch_tab",
+            "mouse_click",
+            "mouse_drag",
+            "scroll_by",
+            "keyboard_type",
+            "keyboard_press",
+            "history_back",
+            "history_forward",
+            "reload",
           ],
         },
         sessionId: { type: "string", description: "Browser session id" },
@@ -914,6 +937,12 @@ export const browserTool: ToolExecutor = {
         filePaths: { type: "array", items: { type: "string" }, description: "For action=upload: file path(s) to upload (or a comma-separated string)" },
         // switch_tab
         index: { type: "number", description: "For action=switch_tab: 0-based tab index to switch to" },
+        xRatio: { type: "number", description: "Normalized horizontal pointer coordinate (0..1)" },
+        yRatio: { type: "number", description: "Normalized vertical pointer coordinate (0..1)" },
+        endXRatio: { type: "number", description: "Normalized drag destination X (0..1)" },
+        endYRatio: { type: "number", description: "Normalized drag destination Y (0..1)" },
+        deltaX: { type: "number", description: "Horizontal scroll amount in CSS pixels" },
+        deltaY: { type: "number", description: "Vertical scroll amount in CSS pixels" },
       },
       required: ["action"],
     },
@@ -947,6 +976,19 @@ export const browserTool: ToolExecutor = {
         }
       }
 
+      if (input["record"] !== false && !["stream_start", "stream_stop", "screenshot", "list_sessions"].includes(action)) {
+        const sensitive = new Set(["password", "cookies", "script"]);
+        const params = Object.fromEntries(Object.entries(input).filter(([key]) => !sensitive.has(key) && key !== "record"));
+        browserActivityEvents.emit("activity", {
+          sessionId: String((result.data as Record<string, unknown> | undefined)?.["sessionId"] ?? input["sessionId"] ?? ""),
+          action,
+          actor: input["actor"] === "user" ? "user" : "agent",
+          params,
+          success: result.success,
+          error: result.error,
+          timestamp: new Date().toISOString(),
+        });
+      }
       return result;
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
@@ -1037,6 +1079,56 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         await session.page.goto(url, { waitUntil, timeout });
         session.targetUrl = session.page.url();
         return ok({ sessionId, url: session.page.url(), title: await session.page.title() });
+      }
+      case "history_back":
+      case "history_forward":
+      case "reload": {
+        const { sessionId, session } = await ensureSession(input);
+        const timeout = Number(input["timeout"] ?? 10000);
+        if (action === "history_back") await session.page.goBack({ waitUntil: "domcontentloaded", timeout }).catch(() => null);
+        else if (action === "history_forward") await session.page.goForward({ waitUntil: "domcontentloaded", timeout }).catch(() => null);
+        else await session.page.reload({ waitUntil: "domcontentloaded", timeout });
+        session.targetUrl = session.page.url();
+        return ok({ sessionId, url: session.page.url(), title: await session.page.title() });
+      }
+      case "mouse_click":
+      case "mouse_drag": {
+        const { sessionId, session } = await ensureSession(input);
+        const viewport = session.page.viewport() ?? { width: 1280, height: 720 };
+        const clamp = (value: unknown): number => Math.max(0, Math.min(1, Number(value) || 0));
+        const x = Math.round(clamp(input["xRatio"]) * viewport.width);
+        const y = Math.round(clamp(input["yRatio"]) * viewport.height);
+        if (action === "mouse_click") {
+          await session.page.mouse.click(x, y, { count: Math.max(1, Math.min(2, Number(input["clickCount"] ?? 1))) });
+          return ok({ sessionId, x, y, url: session.page.url() });
+        }
+        const endX = Math.round(clamp(input["endXRatio"]) * viewport.width);
+        const endY = Math.round(clamp(input["endYRatio"]) * viewport.height);
+        await session.page.mouse.move(x, y);
+        await session.page.mouse.down();
+        await session.page.mouse.move(endX, endY, { steps: 12 });
+        await session.page.mouse.up();
+        return ok({ sessionId, x, y, endX, endY, url: session.page.url() });
+      }
+      case "scroll_by": {
+        const { sessionId, session } = await ensureSession(input);
+        const deltaX = Number(input["deltaX"] ?? 0);
+        const deltaY = Number(input["deltaY"] ?? 0);
+        await session.page.evaluate(({ x, y }) => window.scrollBy(x, y), { x: deltaX, y: deltaY });
+        return ok({ sessionId, deltaX, deltaY, url: session.page.url() });
+      }
+      case "keyboard_type": {
+        const { sessionId, session } = await ensureSession(input);
+        const text = String(input["text"] ?? "");
+        if (text) await session.page.keyboard.type(text);
+        return ok({ sessionId, typed: text.length, url: session.page.url() });
+      }
+      case "keyboard_press": {
+        const { sessionId, session } = await ensureSession(input);
+        const key = String(input["key"] ?? "").trim();
+        if (!key) return fail("key is required");
+        await session.page.keyboard.press(key as import("puppeteer-core").KeyInput);
+        return ok({ sessionId, key, url: session.page.url() });
       }
       case "click": {
         const { sessionId, session } = await ensureSession(input);
@@ -1404,6 +1496,8 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
               sessionId,
               data: event.data,
               format,
+              width: event.metadata?.deviceWidth ?? maxWidth,
+              height: event.metadata?.deviceHeight ?? maxHeight,
               timestamp: new Date().toISOString(),
             } satisfies BrowserWorkerFrame);
           }

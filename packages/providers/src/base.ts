@@ -17,6 +17,13 @@ export interface LLMProvider {
    *  caller should rely on the text `[TOOL:...]` protocol. */
   supportsNativeTools?(): boolean;
   isAvailable(): Promise<boolean>;
+  /** Query the provider API for models available to the current credentials. */
+  listModels?(): Promise<LLMModel[]>;
+}
+
+export interface LLMModel {
+  id: string;
+  name: string;
 }
 
 export interface ProviderOptions {

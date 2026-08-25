@@ -1,9 +1,10 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useMemo, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Plus, Play, RotateCcw, Save, Trash2, Link2, Zap, Wrench, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, Eye, FileJson, Globe2, Plus, Play, RotateCcw, Save, Trash2, Link2, Upload, Zap, Wrench, ExternalLink } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { useBrowserActivityStore } from "../../lib/browserActivityStore";
 
 type Role = "manager" | "research" | "coding" | "review" | "browser";
 type NodeStatus = "pending" | "running" | "completed" | "failed";
@@ -67,6 +68,36 @@ function newNode(index: number): WorkflowNode {
   };
 }
 
+type BrowserAutomationStep = { action: string; [key: string]: unknown };
+
+function browserWorkflowPayload(rawSteps: BrowserAutomationStep[], name = "Browser Automation"): Pick<Workflow, "name" | "goal" | "nodes" | "edges"> {
+  const cleaned = rawSteps.filter((step) => step && typeof step.action === "string" && !["stream_start", "stream_stop", "screenshot", "list_sessions"].includes(step.action));
+  const firstUrl = String(cleaned.find((step) => step.action === "goto" || step.action === "launch")?.url ?? "about:blank");
+  const steps = cleaned[0]?.action === "launch" ? cleaned : [{ action: "launch", url: firstUrl, newSession: true }, ...cleaned];
+  const nodes: WorkflowNode[] = steps.map((step, index) => {
+    const id = `browser_${index + 1}`;
+    const { action, sessionId: _recordedSession, actor: _actor, ...params } = step;
+    return {
+      id,
+      title: `${index + 1}. ${action.replaceAll("_", " ")}`,
+      kind: "tool_call",
+      role: "browser",
+      prompt: "",
+      toolName: "browser",
+      toolInput: {
+        action,
+        ...params,
+        ...(index > 0 ? { sessionId: "{{browser_1.result.sessionId}}" } : {}),
+      },
+      status: "pending",
+      dependsOn: index > 0 ? [`browser_${index}`] : [],
+      position: { x: 80 + (index % 4) * 260, y: 100 + Math.floor(index / 4) * 210 },
+    };
+  });
+  const edges: WorkflowEdge[] = nodes.slice(1).map((node, index) => ({ id: `edge_${nodes[index]!.id}_${node.id}`, source: nodes[index]!.id, target: node.id }));
+  return { name, goal: "Aufgezeichnete Browser-Interaktion reproduzierbar ausführen", nodes, edges };
+}
+
 function edgeColor(status: NodeStatus): string {
   if (status === "completed") return "#10b981";
   if (status === "running") return "#3b82f6";
@@ -90,6 +121,9 @@ export function WorkflowGraphEditor() {
   const [edgeFrom, setEdgeFrom] = useState<string>("");
   const [edgeTo, setEdgeTo] = useState<string>("");
   const [dragState, setDragState] = useState<{ nodeId: string; offsetX: number; offsetY: number } | null>(null);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const browserActivities = useBrowserActivityStore((state) => state.activities);
 
   const workflowsQuery = useQuery({
     queryKey: ["workflows"],
@@ -128,6 +162,35 @@ export function WorkflowGraphEditor() {
       setSelectedNodeId((created as Workflow).nodes[0]?.id ?? null);
     },
   });
+
+  const importBrowserWorkflow = useMutation({
+    mutationFn: (payload: Pick<Workflow, "name" | "goal" | "nodes" | "edges">) => api.workflows.create(payload) as Promise<Workflow>,
+    onSuccess: async (created) => {
+      await qc.invalidateQueries({ queryKey: ["workflows"] });
+      setSelectedWorkflowId(created.id);
+      setSelectedNodeId(created.nodes[0]?.id ?? null);
+      setExpandedNodes(new Set(created.nodes.slice(0, 1).map((node) => node.id)));
+    },
+  });
+
+  const importCurrentBrowserTimeline = () => {
+    const steps = browserActivities.filter((item) => item.success).map((item) => {
+      const { action: _inputAction, actor: _actor, sessionId: _sessionId, ...params } = item.params;
+      return { action: item.action, ...params } as BrowserAutomationStep;
+    });
+    if (steps.length === 0) return;
+    importBrowserWorkflow.mutate(browserWorkflowPayload(steps, `Browser Automation ${new Date().toLocaleString()}`));
+  };
+
+  const importAutomationFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const parsed = JSON.parse(await file.text()) as { name?: string; steps?: BrowserAutomationStep[] } | BrowserAutomationStep[];
+    const steps = Array.isArray(parsed) ? parsed : parsed.steps ?? [];
+    if (steps.length === 0) throw new Error("Die Automationsdatei enthält keine Schritte");
+    importBrowserWorkflow.mutate(browserWorkflowPayload(steps, Array.isArray(parsed) ? file.name.replace(/\.json$/i, "") : parsed.name ?? file.name));
+  };
 
   const saveWorkflow = useMutation({
     mutationFn: (workflow: Workflow) => api.workflows.update(workflow.id, workflow),
@@ -254,6 +317,15 @@ export function WorkflowGraphEditor() {
           <p className="text-sm text-gray-400">{t("workflowPage.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
+          <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => void importAutomationFile(event)} />
+          <button onClick={importCurrentBrowserTimeline} disabled={browserActivities.length === 0 || importBrowserWorkflow.isPending} className="btn-secondary flex items-center gap-2 disabled:opacity-40" title="Aktuelle Browser-Timeline als Workflow importieren">
+            <Globe2 className="w-4 h-4" />
+            Browser-Timeline
+          </button>
+          <button onClick={() => importInputRef.current?.click()} disabled={importBrowserWorkflow.isPending} className="btn-secondary flex items-center gap-2">
+            <Upload className="w-4 h-4" />
+            Automation importieren
+          </button>
           <button onClick={() => createWorkflow.mutate()} className="btn-secondary flex items-center gap-2">
             <Plus className="w-4 h-4" />
             {t("workflowPage.newWorkflow")}

@@ -23,6 +23,36 @@ const SettingSpecSchema = z.object({
   options: z.array(z.string()).optional(),
 });
 
+const LLMProviderSchema = z.object({
+  /** Globally unique provider id stored in DEFAULT_PROVIDER. */
+  id: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).max(64),
+  name: z.string().min(1).max(100),
+  description: z.string().max(500).optional(),
+  icon: z.string().max(16).optional(),
+  /** ESM module exporting createProvider(config, context). Requires trust:"node". */
+  module: z.string().min(1),
+  modelSetting: z.string().min(1),
+  baseUrlSetting: z.string().min(1).optional(),
+  apiKeySetting: z.string().min(1).optional(),
+  defaultModel: z.string().optional(),
+  defaultBaseUrl: z.string().optional(),
+});
+
+export const PluginWidgetSchema = z.object({
+  id: z.string().regex(/^[a-z0-9]+(-[a-z0-9]+)*$/).max(64),
+  page: z.string().min(1),
+  placement: z.enum([
+    "dashboard", "sidebar-above-logo", "sidebar-before-mode", "sidebar-after-mode",
+    "sidebar-content", "topbar", "footer",
+  ]),
+  align: z.enum(["left", "center", "right", "full"]).default("full"),
+  frame: z.enum(["card", "borderless"]).default("card"),
+  background: z.enum(["card", "transparent", "inherit"]).default("card"),
+  height: z.number().int().min(20).max(800).default(120),
+  width: z.union([z.enum(["auto", "sm", "md", "lg", "full"]), z.number().int().min(40).max(2000)]).default("full"),
+  title: z.string().max(100).optional(),
+});
+
 const ProvidesSchema = z.object({
   /** Relative paths to declarative *.datasource.json configs. */
   dataSourceTools: z.array(z.string()).optional(),
@@ -51,6 +81,8 @@ const ProvidesSchema = z.object({
   widgetPage: z.string().optional(),
   /** Where the widget is rendered. Default "dashboard". */
   widgetPlacement: z.enum(["sidebar", "dashboard", "both"]).optional(),
+  /** Multiple independently placed and styled widget iframe surfaces. */
+  widgets: z.array(PluginWidgetSchema).max(24).optional(),
   /** Relative path to an OVERLAY page (a transparent, full-window HTML layer) the host mounts
    *  globally on top of the whole app for enabled plugins. Unlike a widget it is not boxed:
    *  the host bridges live app events into it (postMessage) and routes its notify messages back
@@ -73,6 +105,8 @@ const ProvidesSchema = z.object({
     module: z.string().min(1),
     portal: z.string().min(1),
   }).optional(),
+  /** LLM providers contributed to the core provider picker and model catalog. */
+  llmProviders: z.array(LLMProviderSchema).optional(),
 }).default({});
 
 export const PluginManifestSchema = z.object({
@@ -100,11 +134,18 @@ export const PluginManifestSchema = z.object({
   allowedHosts: z.array(z.string()).optional(),
   /** Manifest default enabled state; a user override in .state.json wins. */
   enabled: z.boolean().default(true),
+}).superRefine((manifest, ctx) => {
+  const ids = manifest.provides.widgets?.map((widget) => widget.id) ?? [];
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["provides", "widgets"], message: "widget ids must be unique within a plugin" });
+  }
 });
 
 export type PluginManifest = z.infer<typeof PluginManifestSchema>;
 export type PluginToolMapping = z.infer<typeof ToolMappingSchema>;
 export type PluginSettingSpec = z.infer<typeof SettingSpecSchema>;
+export type PluginLLMProviderSpec = z.infer<typeof LLMProviderSchema>;
+export type PluginWidgetSpec = z.infer<typeof PluginWidgetSchema>;
 
 /**
  * A declarative OAuth2 connector config (a *.oauth.json file a plugin ships). The core OAuth

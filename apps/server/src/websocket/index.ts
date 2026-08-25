@@ -17,7 +17,7 @@ import {
 import { shouldRetryAgentRun } from "../lib/agent-retry.js";
 import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
-import { browserTool, CODING_WORKSPACE_ROOT } from "@ducki/tools";
+import { browserTool, shellTool, CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { wrapTools } from "../lib/tool-wrapper.js";
 
 /**
@@ -54,6 +54,15 @@ const ALLOWED_UI_BROWSER_ACTIONS = new Set([
   "close",
   "stream_start",
   "stream_stop",
+  "launch",
+  "mouse_click",
+  "mouse_drag",
+  "scroll_by",
+  "keyboard_type",
+  "keyboard_press",
+  "history_back",
+  "history_forward",
+  "reload",
 ]);
 
 
@@ -755,7 +764,17 @@ export function setupWebSocket(
           callback?.({ success: false, error: `Action '${action}' is not allowed from the UI control panel` });
           return;
         }
-        const result = await browserTool.execute({ ...data, action });
+        const result = await browserTool.execute({ ...data, action, actor: "user" });
+        callback?.(result);
+      }
+    );
+
+    // Uses the same singleton shell tool as the agent, so background processes and output
+    // remain mutually visible instead of living in an isolated UI-only terminal.
+    socket.on(
+      "shell:control",
+      async (data: Record<string, unknown>, callback?: (result: unknown) => void) => {
+        const result = await shellTool.execute({ ...data, cwd: data["cwd"] || process.cwd() });
         callback?.(result);
       }
     );

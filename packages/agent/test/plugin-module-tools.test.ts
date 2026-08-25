@@ -94,4 +94,41 @@ describe("plugin module tools (trust: node)", () => {
     expect(info?.error).toMatch(/trust/i);
     expect(loaded.tools.some((t) => t.name === "x")).toBe(false);
   });
+
+  it("loads a node-trusted LLM provider factory with model discovery", async () => {
+    writePlugin(
+      "provider-test",
+      {
+        name: "provider-test",
+        version: "1.0.0",
+        description: "LLM provider plugin",
+        trust: "node",
+        provides: {
+          llmProviders: [{
+            id: "acme-ai", name: "Acme AI", module: "provider.js",
+            modelSetting: "ACME_MODEL", apiKeySetting: "ACME_API_KEY",
+            defaultModel: "acme-small",
+          }],
+        },
+      },
+      {
+        "provider.js": `export function createProvider(config) {
+          return {
+            name: "acme-ai", model: config.model,
+            generate: async () => ({ content: "ok" }),
+            generateStream: async () => ({ content: "ok" }),
+            supportsStreaming: () => true,
+            isAvailable: async () => true,
+            listModels: async () => [{ id: "acme-small", name: "Acme Small" }],
+          };
+        }`,
+      },
+    );
+
+    const loaded = await loadPlugins(root);
+    const declaration = loaded.llmProviders.find((provider) => provider.id === "acme-ai");
+    expect(declaration).toBeDefined();
+    const provider = await declaration!.create({ model: "acme-small", apiKey: "secret" });
+    await expect(provider.listModels?.()).resolves.toEqual([{ id: "acme-small", name: "Acme Small" }]);
+  });
 });

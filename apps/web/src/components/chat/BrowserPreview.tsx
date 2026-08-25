@@ -1,7 +1,6 @@
-import { useState, useRef } from "react";
-import { X, Maximize2, Download, Square, Code2, Radio } from "lucide-react";
+import { X, Download, Square, Code2, Globe2 } from "lucide-react";
 import { useAppStore } from "../../lib/store";
-import { useLiveBrowserStore } from "../../lib/liveBrowserStore";
+import { useUiStore } from "../../lib/uiStore";
 import type { RenderedChatMessage } from "./chatTypes";
 
 export interface BrowserPreviewData {
@@ -47,163 +46,15 @@ interface BrowserPreviewProps {
 }
 
 export function BrowserPreview({ msg }: BrowserPreviewProps) {
-  const { setBrowserPreviewModal, controlBrowserSession } = useAppStore();
   const data = msg.eventData as BrowserPreviewData | undefined;
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  if (!data) {
-    console.warn("[BrowserPreview] No eventData found");
-    return null;
-  }
-
-  // Debug: Log available data
-  const dataKeys = Object.keys(data);
-  console.debug("[BrowserPreview] Available data keys:", dataKeys);
-  console.debug("[BrowserPreview] Data:", {
-    url: data.url,
-    screenshotStorageUrl: data.screenshotStorageUrl,
-    screenshotUrl: data.screenshotUrl,
-    screenshot: data.screenshot ? `${(data.screenshot as string).substring(0, 50)}...` : undefined,
-  });
-
-  // Prefer storage URL for large screenshots, fall back to Base64, then fallback to just showing URL
-  const screenshotSource = data.screenshotStorageUrl || data.screenshotUrl || data.screenshot;
-  if (!screenshotSource && !data.url) {
-    console.warn("[BrowserPreview] No screenshot or URL found in data", data);
-    return null;
-  }
-
+  const openBrowser = useUiStore((s) => s.setAppSidebarTool);
+  if (!data || (!data.screenshotStorageUrl && !data.screenshotUrl && !data.screenshot && !data.url)) return null;
   const screenshotSrc = resolveScreenshotSrc(data);
-
-  const handleExportHtml = async () => {
-    let html = data.htmlContent;
-    if (!html) {
-      if (!data.tabId) {
-        alert("No HTML content available to export.");
-        return;
-      }
-      const result = await controlBrowserSession(data.tabId, "get_content");
-      const resultData = result.data as { html?: string } | undefined;
-      if (!result.success || !resultData?.html) {
-        alert(result.error ?? "Failed to fetch page content.");
-        return;
-      }
-      html = resultData.html;
-    }
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `browser-export-${timestamp}.html`;
-    const element = document.createElement("a");
-    element.setAttribute(
-      "href",
-      `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
-    );
-    element.setAttribute("download", filename);
-    element.style.display = "none";
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
-
-  const handleScreenshot = () => {
-    const href = resolveScreenshotSrc(data);
-    if (!href) return;
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `screenshot-${timestamp}.${data.format ?? "jpg"}`;
-    const link = document.createElement("a");
-    link.href = href;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const handleStopProcess = async () => {
-    if (!data.tabId) return;
-    const result = await controlBrowserSession(data.tabId, "close");
-    if (!result.success) {
-      console.warn("[BrowserPreview] Failed to close session", result.error);
-    }
-  };
-
   return (
-    <div
-      ref={containerRef}
-      className="rounded-lg border border-cyan-500/30 bg-cyan-500/5 overflow-hidden"
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 bg-cyan-500/10 px-3 py-2 border-b border-cyan-500/20">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-          <span className="text-xs font-medium text-cyan-200">
-            Browser {data.isStreaming ? "Live" : "Preview"}
-          </span>
-          {data.url && (
-            <span className="text-xs text-cyan-300/70 truncate">{data.url}</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {data.tabId && (
-            <button
-              onClick={() => useLiveBrowserStore.getState().openWindow(data.tabId!, data.url)}
-              className="p-1.5 rounded hover:bg-cyan-500/20 text-cyan-300 transition"
-              title="Live-Ansicht oeffnen"
-            >
-              <Radio className="w-4 h-4" />
-            </button>
-          )}
-          <button
-            onClick={handleScreenshot}
-            className="p-1.5 rounded hover:bg-cyan-500/20 text-cyan-300 transition"
-            title="Screenshot"
-          >
-            <Download className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleExportHtml}
-            className="p-1.5 rounded hover:bg-cyan-500/20 text-cyan-300 transition"
-            title="Export HTML"
-          >
-            <Code2 className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleStopProcess}
-            className="p-1.5 rounded hover:bg-red-500/20 text-red-300 transition"
-            title="Stop"
-          >
-            <Square className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setBrowserPreviewModal(true, data)}
-            className="p-1.5 rounded hover:bg-cyan-500/20 text-cyan-300 transition"
-            title="Fullscreen"
-          >
-            <Maximize2 className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Preview */}
-      <div className="relative bg-black/40 aspect-video overflow-hidden">
-        {screenshotSrc ? (
-          <img
-            src={screenshotSrc}
-            alt="Browser preview"
-            className="w-full h-full object-contain"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <div className="text-sm mb-2">Browser: {data.url || "Loading..."}</div>
-              <div className="text-xs text-muted-foreground/70">Screenshot wird geladen...</div>
-            </div>
-          </div>
-        )}
-        {data.isStreaming && (
-          <div className="absolute inset-0 pointer-events-none border-2 border-cyan-400/50 animate-pulse" />
-        )}
-      </div>
-    </div>
+    <button onClick={() => openBrowser("browser")} className="group flex max-w-sm items-center gap-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/5 p-2 text-left transition hover:bg-cyan-500/10" title="Gemeinsamen Browser öffnen">
+      <span className="relative flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-black/60">{screenshotSrc ? <img src={screenshotSrc} alt="Browser-Sicht" className="h-full w-full object-cover"/> : <Globe2 className="h-6 w-6 text-cyan-300"/>}<span className="absolute right-1 top-1 h-2 w-2 animate-pulse rounded-full bg-cyan-400"/></span>
+      <span className="min-w-0"><span className="block text-sm font-medium text-cyan-100">Das sieht dein Browser</span><span className="block truncate text-xs text-cyan-300/70">{data.url || "Gemeinsame Live-Session"}</span><span className="mt-1 block text-[10px] text-muted-foreground group-hover:text-foreground">Klicken, um ihn gemeinsam zu steuern</span></span>
+    </button>
   );
 }
 

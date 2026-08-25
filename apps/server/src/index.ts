@@ -26,7 +26,7 @@ import { getRootLogger } from "@ducki/logger";
 import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
 import type { ToolExecutor } from "@ducki/shared";
 import { createProvider, type ProviderName } from "@ducki/providers";
-import { allTools, browserFrameEvents, stopAllBackgroundProcesses } from "@ducki/tools";
+import { allTools, browserActivityEvents, browserFrameEvents, stopAllBackgroundProcesses } from "@ducki/tools";
 import { errorHandler } from "./middleware/error-handler.js";
 import { loadProviderFromSettings } from "./lib/provider-settings.js";
 import { ConnectorRegistry } from "./lib/connector-registry.js";
@@ -51,6 +51,7 @@ import { initChatToolEventBroadcaster } from "./lib/chat-tool-events.js";
 import { wrapTools } from "./lib/tool-wrapper.js";
 import { withBrowserArtifactRecording, withFilesystemArtifactRecording } from "./lib/artifact-recording.js";
 import { createPushNotificationTool } from "./lib/push-notification-tool.js";
+import { createBuilderManagementTool } from "./lib/builder-management-tool.js";
 import { initScreenshotStorage } from "./lib/screenshot-storage.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
@@ -283,7 +284,7 @@ function buildAgentFactory(
 	promptManager: PromptManager,
 	botServiceRef: { current?: BotService }
 ) {
-	return async () => {
+	return async (override: { model?: string } = {}) => {
 		// Load database settings for agent configuration
 		const maxIterationsSetting = await db.getSetting("AGENT_MAX_ITERATIONS");
 		logger.debug("buildAgentFactory: loading agent settings", {
@@ -312,7 +313,12 @@ function buildAgentFactory(
 			...(projectSkillManifests.length > 0 ? { projectSkillManifests } : {}),
 		};
 
-		const agent = new Agent(providerRef.current, db, undefined, agentOptions);
+		// Voice-Chat can select a model for one conversation turn without mutating the
+		// globally configured provider/model used by the regular WebUI and background jobs.
+		const requestProvider = override.model?.trim()
+			? (await loadProviderFromSettings(db, { model: override.model })).provider
+			: providerRef.current;
+		const agent = new Agent(requestProvider, db, undefined, agentOptions);
 		// Wrap tools to broadcast events and handle response staging
 		const wrappedTools = wrapTools(runtimeTools);
 		for (const tool of wrappedTools) {
@@ -331,6 +337,9 @@ function buildAgentFactory(
 		// createAgentForBot) is never given it, so a bot cannot delegate again (no recursion guard
 		// needed). See lib/delegate-to-bot-tool.ts.
 		agent.executor.registerTool(createDelegateToBotTool(() => botServiceRef.current));
+		// Builder mutations belong only to the primary conversational agent. Bots and workflow
+		// executors do not receive this tool, preventing recursive or unattended creation chains.
+		agent.executor.registerTool(createBuilderManagementTool(db));
 		// Registered unwrapped on purpose: wrapTools would stage this tool's own chunks.
 		agent.executor.registerTool(createToolStagingTool(() => getToolStagingManager()));
 		for (const tool of createWorkflowTools(db, connectorRegistryProxy)) {
@@ -448,9 +457,6 @@ async function bootstrap(): Promise<void> {
 		},
 	};
 
-	const loadedProvider = await loadProviderFromSettings(db);
-	const provider = loadedProvider.provider;
-	logger.info("Provider loaded", { provider: loadedProvider.providerName });
 	const mcpRegistry = new MCPRegistry();
 	const mcpServers = parseMcpServerConfigs(await db.getSetting(MCP_SERVERS_SETTING));
 	await mcpRegistry.syncServers(mcpServers);
@@ -462,6 +468,11 @@ async function bootstrap(): Promise<void> {
 		enabled: pluginManager.getPlugins().filter((p) => p.enabled && !p.error).length,
 		tools: pluginManager.getTools().length,
 	});
+	// Plugin providers must be registered before resolving DEFAULT_PROVIDER, otherwise a
+	// provider contributed by an enabled plugin would look unknown during startup.
+	const loadedProvider = await loadProviderFromSettings(db);
+	const provider = loadedProvider.provider;
+	logger.info("Provider loaded", { provider: loadedProvider.providerName });
 	const runtimeTools: ToolExecutor[] = [
 		...allTools,
 		createMcpTool(mcpRegistry),
@@ -606,6 +617,12 @@ async function bootstrap(): Promise<void> {
 		getPlugins: () => pluginManager.getPlugins(),
 		requestPluginReload: () => { pluginManager.requestReload(); },
 		createAgent,
+		runMainBot: async (message: string) => {
+			const mainBot = await botService.getBot("main");
+			if (!mainBot) throw new Error("Main-Bot wurde nicht gefunden");
+			return botService.chat(mainBot, message);
+		},
+		listBots: async () => botService.listBots() as unknown as Array<Record<string, unknown>>,
 	});
 	cloudHeartbeatService.start();
 	const cloudVoiceChatService = new CloudVoiceChatService(db, logger.child("CloudVoiceChatService"), {
@@ -614,6 +631,12 @@ async function bootstrap(): Promise<void> {
 		getPlugins: () => pluginManager.getPlugins(),
 		requestPluginReload: () => { pluginManager.requestReload(); },
 		createAgent,
+		runMainBot: async (message: string) => {
+			const mainBot = await botService.getBot("main");
+			if (!mainBot) throw new Error("Main-Bot wurde nicht gefunden");
+			return botService.chat(mainBot, message);
+		},
+		listBots: async () => botService.listBots() as unknown as Array<Record<string, unknown>>,
 	});
 	cloudVoiceChatService.start();
 
@@ -669,8 +692,11 @@ async function bootstrap(): Promise<void> {
 	// events (packages/tools has no socket/io dependency of its own) - relay each one to
 	// whichever clients joined that session's room (see "browser:stream:join" in
 	// websocket/index.ts). One subscription for the whole process lifetime, not per-request.
-	browserFrameEvents.on("frame", (frame: { sessionId: string; data: string; format: string; timestamp: string }) => {
+	browserFrameEvents.on("frame", (frame: { sessionId: string; data: string; format: string; timestamp: string; width?: number; height?: number }) => {
 		io.to(`browser-stream:${frame.sessionId}`).emit("browser:frame", frame);
+	});
+	browserActivityEvents.on("activity", (activity: unknown) => {
+		io.emit("browser:activity", activity);
 	});
 
 	// Initialize chat tool event broadcaster for real-time progress updates

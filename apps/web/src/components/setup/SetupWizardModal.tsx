@@ -18,7 +18,7 @@ interface SetupWizardModalProps {
   settings: SettingEntry[];
 }
 
-type ProviderName = "lmstudio" | "openrouter" | "openai" | "ollama" | "claude" | "nous";
+type ProviderName = "lmstudio" | "openrouter" | "openai" | "ollama" | "claude";
 type SkillBehavior = "automatic" | "active";
 
 function toBool(value: string | undefined, fallback: boolean): boolean {
@@ -49,9 +49,6 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [ollamaModel, setOllamaModel] = useState(settingsMap.get("OLLAMA_MODEL") ?? "llama3");
   const [claudeApiKey, setClaudeApiKey] = useState(settingsMap.get("CLAUDE_API_KEY") ?? "");
   const [claudeModel, setClaudeModel] = useState(settingsMap.get("CLAUDE_MODEL") ?? "claude-3-5-sonnet-20241022");
-  const [nousApiKey, setNousApiKey] = useState(settingsMap.get("NOUS_API_KEY") ?? "");
-  const [nousBaseUrl, setNousBaseUrl] = useState(settingsMap.get("NOUS_BASE_URL") ?? "https://api.nousresearch.com/v1");
-  const [nousModel, setNousModel] = useState(settingsMap.get("NOUS_MODEL") ?? "nous-hermes-2-mixtral-8x7b-dpo");
 
   // Generic connector-plugin state (plan section 8b) - replaces the old Discord-only fields.
   // Keyed by plugin name so an arbitrary number of connector plugins (Discord, future Telegram,
@@ -182,9 +179,6 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
     setOllamaModel(settingsMap.get("OLLAMA_MODEL") ?? "llama3");
     setClaudeApiKey(settingsMap.get("CLAUDE_API_KEY") ?? "");
     setClaudeModel(settingsMap.get("CLAUDE_MODEL") ?? "claude-3-5-sonnet-20241022");
-    setNousApiKey(settingsMap.get("NOUS_API_KEY") ?? "");
-    setNousBaseUrl(settingsMap.get("NOUS_BASE_URL") ?? "https://api.nousresearch.com/v1");
-    setNousModel(settingsMap.get("NOUS_MODEL") ?? "nous-hermes-2-mixtral-8x7b-dpo");
 
     setCodingEnabled(toBool(settingsMap.get("CODING_ENABLED"), false));
     setWikiEnabled(toBool(settingsMap.get("WIKI_ENABLED"), false));
@@ -219,11 +213,6 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
       if (provider === "claude") {
         writes.push(api.settings.set("CLAUDE_API_KEY", claudeApiKey));
         writes.push(api.settings.set("CLAUDE_MODEL", claudeModel));
-      }
-      if (provider === "nous") {
-        writes.push(api.settings.set("NOUS_API_KEY", nousApiKey));
-        writes.push(api.settings.set("NOUS_BASE_URL", nousBaseUrl));
-        writes.push(api.settings.set("NOUS_MODEL", nousModel));
       }
 
       // Connector plugins (Discord etc.) are saved+enabled+tested via their own dedicated plugin
@@ -319,7 +308,6 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <option value="openai">OpenAI</option>
                 <option value="ollama">Ollama</option>
                 <option value="claude">Claude (Anthropic)</option>
-                <option value="nous">Nous Research</option>
               </select>
 
               {provider === "lmstudio" && (
@@ -357,15 +345,6 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 </div>
               )}
 
-              {provider === "nous" && (
-                <div className="space-y-3">
-                  <input className="input w-full" type="password" value={nousApiKey} onChange={(e) => setNousApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.nousApiKey")} />
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <input className="input" value={nousBaseUrl} onChange={(e) => setNousBaseUrl(e.target.value)} placeholder={t("setupWizard.placeholders.nousBaseUrl")} />
-                    <input className="input" value={nousModel} onChange={(e) => setNousModel(e.target.value)} placeholder={t("setupWizard.placeholders.nousModel")} />
-                  </div>
-                </div>
-              )}
             </div>
           )}
 
@@ -510,7 +489,6 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <p><strong>{t("setupWizard.summary.provider")}:</strong> {provider}</p>
                 {provider === "openrouter" && <p><strong>{t("setupWizard.summary.openRouterModel")}:</strong> {openRouterModel || "openrouter/free"}</p>}
                 {provider === "claude" && <p><strong>{t("setupWizard.summary.claudeModel")}:</strong> {claudeModel}</p>}
-                {provider === "nous" && <p><strong>{t("setupWizard.summary.nousModel")}:</strong> {nousModel}</p>}
                 <p>
                   <strong>{t("setupWizard.summary.gateway")}:</strong>{" "}
                   {connectorPlugins.filter((p) => connectorEnabled[p.name] ?? p.enabled).length > 0

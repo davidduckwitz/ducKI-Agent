@@ -4,14 +4,15 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Nächste Termine</title>
+<script>const themeParams=new URLSearchParams(location.search);document.documentElement.dataset.theme=themeParams.get("theme")==="light"?"light":"dark";document.documentElement.dataset.accent=themeParams.get("accent")||"blue";</script>
 <style>
-  :root { color-scheme: light dark; }
-  html, body { margin: 0; height: 100%; }
+  :root { color-scheme: normal; --text: #111827; --muted: #4b5563; background: transparent; }
+  :root[data-theme="dark"] { --text: #f3f4f6; --muted: #9ca3af; }
+  html, body { margin: 0; height: 100%; background: transparent !important; }
   body {
-    font-family: system-ui, sans-serif; color: #111; background: transparent;
+    font-family: system-ui, sans-serif; color: var(--text); background: transparent;
     padding: 0.6rem 0.7rem; box-sizing: border-box;
   }
-  @media (prefers-color-scheme: dark) { body { color: #f3f4f6; } }
   h2 { margin: 0 0 0.5rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.6; }
   ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
   li { display: flex; align-items: flex-start; gap: 0.55rem; }

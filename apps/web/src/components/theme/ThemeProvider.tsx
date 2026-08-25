@@ -56,6 +56,18 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [mode, accent, systemPrefersDark]);
 
   useEffect(() => {
+    const handleNativeTheme = (event: Event) => {
+      const next = (event as CustomEvent<unknown>).detail;
+      if (!isThemeMode(next)) return;
+      setModeState(next);
+      window.localStorage.setItem(THEME_MODE_KEY, next);
+      api.settings.set(THEME_MODE_KEY, next).catch(() => {});
+    };
+    window.addEventListener("ducki:set-theme", handleNativeTheme);
+    return () => window.removeEventListener("ducki:set-theme", handleNativeTheme);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -95,7 +107,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<ThemeContextValue>(
     () => ({ mode, resolvedMode: resolveMode(mode), accent, setMode, setAccent }),
-    [mode, accent, setMode, setAccent]
+    [mode, accent, systemPrefersDark, setMode, setAccent]
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

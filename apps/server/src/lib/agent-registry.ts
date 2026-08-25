@@ -10,8 +10,9 @@ export interface ActiveAgentEntry {
   label?: string;
 }
 
-class AgentRegistry {
+export class AgentRegistry {
   private active = new Map<string, ActiveAgentEntry>();
+  private stopHandlers = new Map<string, () => void>();
   private listeners = new Set<(snapshot: { runningCount: number; agents: ActiveAgentEntry[] }) => void>();
 
   private notify(): void {
@@ -28,13 +29,14 @@ class AgentRegistry {
     };
   }
 
-  register(entry: Omit<ActiveAgentEntry, "id" | "startedAt">): string {
+  register(entry: Omit<ActiveAgentEntry, "id" | "startedAt">, controls?: { stop?: () => void }): string {
     const id = crypto.randomUUID();
     this.active.set(id, {
       id,
       startedAt: new Date().toISOString(),
       ...entry,
     });
+    if (controls?.stop) this.stopHandlers.set(id, controls.stop);
     this.notify();
     return id;
   }
@@ -51,7 +53,15 @@ class AgentRegistry {
 
   unregister(id: string): void {
     this.active.delete(id);
+    this.stopHandlers.delete(id);
     this.notify();
+  }
+
+  stop(id: string): boolean {
+    const stop = this.stopHandlers.get(id);
+    if (!stop) return false;
+    stop();
+    return true;
   }
 
   snapshot(): { runningCount: number; agents: ActiveAgentEntry[] } {

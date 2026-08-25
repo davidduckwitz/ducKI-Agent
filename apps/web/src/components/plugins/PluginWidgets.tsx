@@ -1,50 +1,68 @@
-import type { PluginInfo } from "../../lib/api";
+import type { CSSProperties } from "react";
+import type { PluginWidgetPlacement, PluginWidgetSpec } from "../../lib/api";
 import { pluginUiUrl } from "../../lib/backendUrl";
-import { usePlugins, widgetPlugins } from "../../lib/usePlugins";
+import { pluginWidgets, usePlugins, type ResolvedPluginWidget } from "../../lib/usePlugins";
+import { useTheme } from "../theme/ThemeProvider";
 
 /**
- * Renders the widget tiles of enabled plugins for a given placement. A widget is a small
- * same-origin iframe (provides.widgetPage) shown inline - compact in the sidebar, as cards on
- * the dashboard. Placement comes from the plugin manifest (sidebar | dashboard | both).
+ * Renders all enabled plugin widgets for a layout slot. Every iframe has its own manifest
+ * configuration, so one plugin may contribute independently sized and styled surfaces.
  */
-export function PluginWidgets({ placement }: { placement: "sidebar" | "dashboard" }) {
-  const { data: plugins } = usePlugins();
-  const widgets = widgetPlugins(plugins, placement);
-  if (widgets.length === 0) return null;
+const WIDTHS: Record<Exclude<PluginWidgetSpec["width"], number>, string> = {
+  auto: "auto", sm: "12rem", md: "20rem", lg: "32rem", full: "100%",
+};
 
-  if (placement === "sidebar") {
+function widthOf(width: PluginWidgetSpec["width"]): string {
+  return typeof width === "number" ? `${width}px` : WIDTHS[width];
+}
+
+export function PluginWidgets({ placement, className = "" }: { placement: PluginWidgetPlacement; className?: string }) {
+  const { data: plugins } = usePlugins();
+  const { resolvedMode, accent } = useTheme();
+  const entries = pluginWidgets(plugins, placement);
+  if (entries.length === 0) return null;
+
+  if (placement.startsWith("sidebar-")) {
     return (
-      <div className="space-y-2 px-1 py-2">
-        {widgets.map((p) => (
-          <WidgetFrame key={p.name} plugin={p} height={104} />
-        ))}
+      <div className={`min-w-0 space-y-2 px-1 py-1 ${className}`}>
+        {entries.map((entry) => <WidgetFrame key={`${entry.plugin.name}:${entry.widget.id}`} entry={entry} theme={resolvedMode} accent={accent} />)}
       </div>
     );
   }
 
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {widgets.map((p) => (
-        <div key={p.name} className="rounded-lg border border-border p-3">
-          <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-            <span>{p.icon ?? "🧩"}</span>
-            <span className="truncate">{p.name}</span>
-          </div>
-          <WidgetFrame plugin={p} height={150} />
-        </div>
-      ))}
-    </div>
-  );
+  if (placement === "dashboard") {
+    return <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 ${className}`}>{entries.map((entry) => <WidgetFrame key={`${entry.plugin.name}:${entry.widget.id}`} entry={entry} theme={resolvedMode} accent={accent} />)}</div>;
+  }
+
+  const full = entries.filter(({ widget }) => widget.align === "full");
+  const aligned = (["left", "center", "right"] as const).map((align) => ({ align, entries: entries.filter(({ widget }) => widget.align === align) }));
+  return <div className={`w-full min-w-0 shrink-0 px-2 ${className}`}>
+    {full.map((entry) => <WidgetFrame key={`${entry.plugin.name}:${entry.widget.id}`} entry={entry} theme={resolvedMode} accent={accent} />)}
+    {aligned.some((column) => column.entries.length > 0) && <div className="grid min-w-0 grid-cols-3 items-center gap-2">
+      {aligned.map((column) => <div key={column.align} className={`flex min-w-0 gap-2 ${column.align === "left" ? "justify-start" : column.align === "center" ? "justify-center" : "justify-end"}`}>
+        {column.entries.map((entry) => <WidgetFrame key={`${entry.plugin.name}:${entry.widget.id}`} entry={entry} theme={resolvedMode} accent={accent} />)}
+      </div>)}
+    </div>}
+  </div>;
 }
 
-function WidgetFrame({ plugin, height }: { plugin: PluginInfo; height: number }) {
+function WidgetFrame({ entry, theme, accent }: { entry: ResolvedPluginWidget; theme: "light" | "dark"; accent: string }) {
+  const { plugin, widget } = entry;
+  const borderless = widget.frame === "borderless";
+  const backgroundClass = widget.background === "transparent" ? "bg-transparent" : widget.background === "inherit" ? "bg-inherit" : "bg-card";
+  const style: CSSProperties = {
+    height: widget.height,
+    width: widthOf(widget.width),
+    maxWidth: "100%",
+    border: borderless ? 0 : undefined,
+    background: widget.background === "transparent" ? "transparent" : widget.background === "inherit" ? "inherit" : undefined,
+    colorScheme: widget.background === "transparent" ? "normal" : theme,
+  };
   return (
-    <iframe
-      title={`${plugin.name} Widget`}
-      src={pluginUiUrl(plugin.name, "widget")}
-      className="w-full rounded-md border border-border bg-background/40"
-      style={{ height }}
-    />
+    <div className={`${borderless ? "min-w-0 overflow-hidden" : "min-w-0 overflow-hidden rounded-lg border border-border p-2"} ${backgroundClass}`} style={{ width: widthOf(widget.width), maxWidth: "100%" }}>
+      {widget.title && !borderless && <div className="mb-1 truncate text-xs font-medium">{widget.title}</div>}
+      <iframe title={`${plugin.name}: ${widget.title ?? widget.id}`} src={`${pluginUiUrl(plugin.name, "widget", widget.id)}?theme=${theme}&accent=${encodeURIComponent(accent)}`} sandbox="allow-scripts allow-forms allow-same-origin" className="block max-w-full" style={style} />
+    </div>
   );
 }
 

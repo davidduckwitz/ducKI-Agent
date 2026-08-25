@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "erpel"
 
 # ffmpeg-static's postinstall downloads the actual ffmpeg binary for the current platform
 # (packages/agent's video-attachment pipeline, see media/video-processing.ts) - pnpm blocks

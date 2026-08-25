@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { createApiResponse } from "@ducki/shared";
+import { createApiError, createApiResponse } from "@ducki/shared";
 import { agentRegistry } from "../lib/agent-registry.js";
 
 export const agentsRouter: IRouter = Router();
@@ -51,4 +51,12 @@ agentsRouter.get("/live", (req, res) => {
     connectorStatuses,
     bitcoinPuzzles: { running: 0, total: 0, puzzles: [] },
   }));
+});
+
+agentsRouter.post("/live/:id/stop", (req, res) => {
+  if (!agentRegistry.stop(req.params["id"] ?? "")) {
+    res.status(404).json(createApiError("Active agent run not found or not stoppable"));
+    return;
+  }
+  res.json(createApiResponse({ stopped: true, id: req.params["id"] }));
 });

@@ -263,6 +263,10 @@ export abstract class BaseAdapter implements LLMProvider {
     }
   }
 
+  async listModels(): Promise<Array<{ id: string; name: string }>> {
+    return [{ id: this.model, name: this.model }];
+  }
+
   /**
    * Core generate method - must be implemented by subclasses
    */

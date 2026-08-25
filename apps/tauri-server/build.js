@@ -46,6 +46,18 @@ if (copyRecursive(serverDistSrc, serverDistDest)) {
   log('⚠ Server dist not found - make sure to run "pnpm build:server" first!');
 }
 
+// The server resolves core prompts and skills from its writable cwd at runtime.
+const coreRuntimeDest = path.join(serverDistDest, 'core-runtime');
+fs.rmSync(coreRuntimeDest, { recursive: true, force: true });
+for (const dirName of ['prompts', 'skills']) {
+  const source = path.join(__dirname, '../server', dirName);
+  if (!copyRecursive(source, path.join(coreRuntimeDest, dirName))) {
+    log(`✗ Required server runtime directory missing: apps/server/${dirName}`);
+    process.exit(1);
+  }
+}
+log('✓ Core prompts and skills bundled for first-run seeding');
+
 // The packaged app runs the server via a bundled Node.js sidecar with no access to the
 // monorepo's node_modules (pnpm symlinks don't survive outside the workspace). `pnpm deploy`
 // turned out to be too fragile for this repo (legacy mode drops nested workspace deps like
@@ -199,6 +211,59 @@ fs.rmSync(pluginsDest, { recursive: true, force: true });
 // package INTO the plugin folder (plugins-builtin/<plugin>/node_modules/<name>) so it
 // resolves from the plugin itself.
 const serverRequire = createRequire(path.join(__dirname, '../server/package.json'));
+function copyRuntimePackage(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (entry.isDirectory() && ['node_modules', '.git', 'coverage'].includes(entry.name)) continue;
+    const from = path.join(src, entry.name);
+    const to = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyRuntimePackage(from, to);
+    else fs.copyFileSync(from, to);
+  }
+}
+function resolvePackageJson(spec, resolver) {
+  for (const base of resolver.resolve.paths(spec) ?? []) {
+    const candidate = path.join(base, spec, 'package.json');
+    if (fs.existsSync(candidate)) {
+      try {
+        if (readJson(candidate).name === spec) return fs.realpathSync(candidate);
+      } catch { /* try regular resolution */ }
+    }
+  }
+  try {
+    return resolver.resolve(`${spec}/package.json`);
+  } catch {
+    let current = path.dirname(resolver.resolve(spec));
+    while (current !== path.dirname(current)) {
+      const candidate = path.join(current, 'package.json');
+      if (fs.existsSync(candidate)) {
+        try {
+          if (readJson(candidate).name === spec) return candidate;
+        } catch { /* keep walking */ }
+      }
+      current = path.dirname(current);
+    }
+    throw new Error(`Could not resolve package manifest for ${spec}`);
+  }
+}
+function bundleRuntimePackage(spec, pluginDest, resolver, seen) {
+  if (seen.has(spec)) return;
+  const pkgJsonPath = resolvePackageJson(spec, resolver);
+  const pkgJson = readJson(pkgJsonPath);
+  const pkgDir = path.dirname(pkgJsonPath);
+  seen.add(spec);
+  copyRuntimePackage(pkgDir, path.join(pluginDest, 'node_modules', spec));
+
+  const nestedResolver = createRequire(pkgJsonPath);
+  const nested = { ...(pkgJson.dependencies ?? {}), ...(pkgJson.optionalDependencies ?? {}) };
+  for (const child of Object.keys(nested)) {
+    try {
+      bundleRuntimePackage(child, pluginDest, nestedResolver, seen);
+    } catch (error) {
+      log(`⚠ Could not bundle transitive runtime dep "${child}" required by "${spec}": ${error.message}`);
+    }
+  }
+}
 function bareExternalImports(dir) {
   const found = new Set();
   function walk(d) {
@@ -230,11 +295,10 @@ if (fs.existsSync(pluginsSrc)) {
     const pluginDest = path.join(pluginsDest, entry.name);
     copyRecursive(path.join(pluginsSrc, entry.name), pluginDest);
     pluginCount += 1;
+    const bundledSpecs = new Set();
     for (const spec of bareExternalImports(path.join(pluginsSrc, entry.name))) {
       try {
-        const pkgJsonPath = serverRequire.resolve(`${spec}/package.json`);
-        const pkgDir = path.dirname(pkgJsonPath);
-        copyRecursive(pkgDir, path.join(pluginDest, 'node_modules', spec));
+        bundleRuntimePackage(spec, pluginDest, serverRequire, bundledSpecs);
         depBundled += 1;
         log(`  ↳ bundled runtime dep "${spec}" into plugin ${entry.name}`);
       } catch {

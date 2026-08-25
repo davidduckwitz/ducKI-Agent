@@ -65,7 +65,9 @@ export function PluginOverlays() {
   // Broadcast the current app snapshot to every overlay whenever it changes.
   useEffect(() => {
     const snap = appSnapshot();
-    for (const frame of framesRef.current.values()) frame.contentWindow?.postMessage(snap, "*");
+    for (const [name, frame] of framesRef.current) {
+      frame.contentWindow?.postMessage(snap, new URL(pluginUiUrl(name, "overlay"), window.location.href).origin);
+    }
   }, [isLoading, agentStatus, connected]);
 
   // Messages coming FROM the overlays.
@@ -86,7 +88,10 @@ export function PluginOverlays() {
 
       switch (data.type) {
         case "ducki:overlay:ready":
-          frame?.contentWindow?.postMessage(appSnapshot(), "*");
+          frame?.contentWindow?.postMessage(
+            appSnapshot(),
+            new URL(pluginUiUrl(name, "overlay"), window.location.href).origin,
+          );
           break;
         case "ducki:overlay:hitboxes":
           hitboxesRef.current.set(name, Array.isArray(data.rects) ? data.rects : []);
@@ -132,6 +137,7 @@ export function PluginOverlays() {
           key={p.name}
           title={`${p.name} overlay`}
           src={pluginUiUrl(p.name, "overlay")}
+          sandbox="allow-scripts allow-same-origin"
           ref={(el) => {
             if (el) {
               framesRef.current.set(p.name, el);

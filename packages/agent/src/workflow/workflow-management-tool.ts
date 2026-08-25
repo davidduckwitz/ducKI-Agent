@@ -45,6 +45,12 @@ function normalizeNodes(value: unknown): WorkflowNode[] | undefined {
     const dependsOn = Array.isArray(node["dependsOn"])
       ? (node["dependsOn"] as unknown[]).map((dep) => String(dep)).filter((dep) => dep.length > 0)
       : [];
+    const rawPosition = node["position"] && typeof node["position"] === "object"
+      ? node["position"] as Record<string, unknown>
+      : undefined;
+    const position = rawPosition && Number.isFinite(Number(rawPosition["x"])) && Number.isFinite(Number(rawPosition["y"]))
+      ? { x: Number(rawPosition["x"]), y: Number(rawPosition["y"]) }
+      : undefined;
 
     nodes.push({
       id,
@@ -56,6 +62,7 @@ function normalizeNodes(value: unknown): WorkflowNode[] | undefined {
       toolInput,
       dependsOn,
       status: "pending",
+      position,
     });
   }
 
@@ -160,7 +167,7 @@ function validateNodesAndEdges(nodes: WorkflowNode[], edges: WorkflowGraph["edge
 export function createWorkflowManagementTool(workflowEngine: WorkflowEngine): ToolExecutor {
   return {
     name: "workflow",
-    description: "Create, inspect, update, run, resume, list, and delete workflow graphs",
+    description: "Create, inspect, update, run, resume, list, and delete executable workflow boards with agent and tool-call nodes",
     definition: {
       name: "workflow",
       description: "Workflow graph management and execution",
@@ -181,9 +188,9 @@ export function createWorkflowManagementTool(workflowEngine: WorkflowEngine): To
           nodes: {
             type: "array",
             description:
-              "Workflow nodes. Each node is either kind:'agent' (role+prompt, LLM-driven, default) or kind:'tool_call' (toolName+toolInput, directly dispatched through the Executor). toolInput string values may reference a prior node's output via '{{nodeId.result}}'.",
+              "Complete workflow nodes. Use stable unique ids, kind:'agent' with role+prompt or kind:'tool_call' with toolName+toolInput. Preserve existing nodes when updating. toolInput can pass typed prior output with '{{nodeId.result}}' or a nested field such as '{{launch.result.sessionId}}'. Browser automations are sequential browser tool_call nodes sharing the launch sessionId through that nested token.",
           },
-          edges: { type: "array", description: "Workflow edges" },
+          edges: { type: "array", description: "Directed acyclic edges {id,source,target}. Each edge also establishes target.dependsOn source. Preserve existing edges on updates unless intentionally replacing the graph." },
         },
         required: ["action"],
       },

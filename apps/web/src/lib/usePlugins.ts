@@ -1,4 +1,4 @@
-import { api, type PluginInfo } from "./api";
+import { api, type PluginInfo, type PluginWidgetPlacement, type PluginWidgetSpec } from "./api";
 import { useServerQuery } from "./useServerQuery";
 
 /**
@@ -25,11 +25,15 @@ export function frontendPlugins(plugins: PluginInfo[] | undefined): PluginInfo[]
 }
 
 /** Enabled, error-free plugins whose widget should render at `placement`. */
-export function widgetPlugins(plugins: PluginInfo[] | undefined, placement: "sidebar" | "dashboard"): PluginInfo[] {
-  return (plugins ?? []).filter((p) => {
-    if (!p.enabled || p.error || !p.widgetPage) return false;
-    const where = p.widgetPlacement ?? "dashboard";
-    return where === placement || where === "both";
+export interface ResolvedPluginWidget {
+  plugin: PluginInfo;
+  widget: PluginWidgetSpec;
+}
+
+export function pluginWidgets(plugins: PluginInfo[] | undefined, placement: PluginWidgetPlacement): ResolvedPluginWidget[] {
+  return (plugins ?? []).flatMap((plugin) => {
+    if (!plugin.enabled || plugin.error) return [];
+    return (plugin.widgets ?? []).filter((widget) => widget.placement === placement).map((widget) => ({ plugin, widget }));
   });
 }
 

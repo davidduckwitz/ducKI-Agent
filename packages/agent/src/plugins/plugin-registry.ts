@@ -6,9 +6,11 @@ import { getRootLogger, type Logger } from "@ducki/logger";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parsePluginManifest, parseOAuthConfig, type PluginManifest, type PluginToolMapping, type PluginSettingSpec, type OAuthConfig } from "./plugin-manifest.js";
+import { parsePluginManifest, parseOAuthConfig, type PluginManifest, type PluginToolMapping, type PluginSettingSpec, type PluginWidgetSpec, type OAuthConfig } from "./plugin-manifest.js";
 import { withManifestCache } from "../skill-selector/skill-cache.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
+import { OpenAIProvider, type LLMProvider, type ProviderOptions } from "@ducki/providers";
+import type { PluginLLMProviderSpec } from "./plugin-manifest.js";
 
 /**
  * Runtime context handed to a plugin's async script tools and module tools. Sandboxed sync
@@ -30,6 +32,15 @@ export interface PluginToolContext {
   fetch: typeof fetch;
   logger: Logger;
   agent?: AgentCapabilities;
+  /** Host-provided adapter for OpenAI-compatible provider plugins; avoids module-resolution
+   * coupling between a portable plugin bundle and the host workspace/package layout. */
+  createOpenAICompatibleProvider?(config: ProviderOptions, name: string): LLMProvider;
+}
+
+function createOpenAICompatibleProvider(config: ProviderOptions, name: string): LLMProvider {
+  const provider = new OpenAIProvider(config);
+  Object.defineProperty(provider, "name", { value: name, enumerable: true, configurable: false });
+  return provider;
 }
 
 /** Wrap global fetch so a plugin can only reach hosts on its manifest allowlist. */
@@ -79,6 +90,8 @@ export interface LoadedPluginInfo {
   widgetPage?: string;
   /** Widget placement ("sidebar" | "dashboard" | "both"). */
   widgetPlacement?: string;
+  /** Normalized multi-widget declarations (legacy widgetPage is converted here too). */
+  widgets: PluginWidgetSpec[];
   /** Relative path to an overlay (full-window layer) page, if the plugin ships one. */
   overlayPage?: string;
   /** Declarative pet definitions the plugin ships (provides.pets), rendered by the host pet runtime. */
@@ -86,6 +99,8 @@ export interface LoadedPluginInfo {
   /** Connector capability declaration (provides.connector), if this plugin ships one. Loaded and
    *  lifecycle-managed separately by apps/server/src/lib/connector-registry.ts, not by this file. */
   connector?: { module: string; portal: string };
+  /** Serializable provider declarations; executable factories are kept server-side. */
+  llmProviders: PluginLLMProviderSpec[];
   /** Emoji/short icon for UI + sidebar. */
   icon?: string;
   /** Sidebar category ("overview" | "workspace" | "automation" | "knowledge" | "system"). */
@@ -103,6 +118,18 @@ export interface PluginLoadResult {
   mappings: PluginToolMapping[];
   settings: PluginSettingSpec[];
   plugins: LoadedPluginInfo[];
+  llmProviders: LoadedPluginLLMProvider[];
+}
+
+export interface PluginLLMProviderConfig {
+  model: string;
+  baseUrl?: string;
+  apiKey?: string;
+}
+
+export interface LoadedPluginLLMProvider extends PluginLLMProviderSpec {
+  pluginName: string;
+  create(config: PluginLLMProviderConfig): Promise<LLMProvider>;
 }
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
@@ -302,7 +329,7 @@ function buildStorageTool(pluginName: string, storage: PluginStorage): ToolExecu
   };
 }
 
-type LoadedPluginInternal = LoadedPluginInfo & { tools: ToolExecutor[] };
+type LoadedPluginInternal = LoadedPluginInfo & { tools: ToolExecutor[]; providerFactories: LoadedPluginLLMProvider[] };
 
 /** Load one plugin directory into tools/skills/mappings/settings. Never throws. */
 async function loadOnePlugin(root: string, name: string, enabled: boolean, capabilities?: AgentCapabilities): Promise<LoadedPluginInternal> {
@@ -310,7 +337,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
   const info: LoadedPluginInternal = {
     name, version: "?", description: "", enabled,
     hasStorage: false, toolNames: [], skillDirs: [], mappings: [], settings: [],
-    oauth: [], trust: "sandboxed", tools: [],
+    oauth: [], llmProviders: [], widgets: [], trust: "sandboxed", tools: [], providerFactories: [],
   };
 
   const manifestPath = join(dir, "plugin.json");
@@ -339,8 +366,19 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
   info.frontendPage = manifest.provides.frontendPage;
   info.widgetPage = manifest.provides.widgetPage;
   info.widgetPlacement = manifest.provides.widgetPlacement;
+  info.widgets = [...(manifest.provides.widgets ?? [])];
+  if (info.widgets.length === 0 && manifest.provides.widgetPage) {
+    const placement = manifest.provides.widgetPlacement ?? "dashboard";
+    if (placement === "sidebar" || placement === "both") {
+      info.widgets.push({ id: "legacy-sidebar", page: manifest.provides.widgetPage, placement: "sidebar-content", align: "full", frame: "card", background: "card", height: 104, width: "full" });
+    }
+    if (placement === "dashboard" || placement === "both") {
+      info.widgets.push({ id: "legacy-dashboard", page: manifest.provides.widgetPage, placement: "dashboard", align: "full", frame: "card", background: "card", height: 150, width: "full" });
+    }
+  }
   info.overlayPage = manifest.provides.overlayPage;
   info.connector = manifest.provides.connector;
+  info.llmProviders = manifest.provides.llmProviders ?? [];
   info.icon = manifest.icon;
   info.category = manifest.category;
   info.trust = manifest.trust;
@@ -365,6 +403,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
       fetch: guardedFetch(manifest.allowedHosts),
       logger: getRootLogger().child(`Plugin:${manifest.name}`),
       agent: manifest.trust === "node" ? capabilities : undefined,
+      createOpenAICompatibleProvider,
     };
 
     // Every plugin with its own DB gets an auto storage tool the agent can call directly.
@@ -389,6 +428,31 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
     for (const rel of moduleTools) {
       const tool = await buildModuleTool(join(dir, rel), ctx);
       info.tools.push(tool); info.toolNames.push(tool.name);
+    }
+    if (info.llmProviders.length > 0 && manifest.trust !== "node") {
+      throw new Error(`llmProviders require trust: "node" (plugin '${manifest.name}' is '${manifest.trust}')`);
+    }
+    for (const declaration of info.llmProviders) {
+      const url = `${pathToFileURL(join(dir, declaration.module)).href}?v=${Date.now()}`;
+      const mod = await import(url) as {
+        createProvider?: (config: PluginLLMProviderConfig, context: PluginToolContext) => LLMProvider | Promise<LLMProvider>;
+        default?: { createProvider?: (config: PluginLLMProviderConfig, context: PluginToolContext) => LLMProvider | Promise<LLMProvider> };
+      };
+      const createProvider = mod.createProvider ?? mod.default?.createProvider;
+      if (typeof createProvider !== "function") {
+        throw new Error(`LLM provider module '${declaration.module}' must export createProvider(config, context)`);
+      }
+      info.providerFactories.push({
+        ...declaration,
+        pluginName: manifest.name,
+        create: async (config) => {
+          const provider = await createProvider(config, ctx);
+          if (!provider || typeof provider.generate !== "function" || typeof provider.listModels !== "function") {
+            throw new Error(`Plugin provider '${declaration.id}' must implement LLMProvider including listModels()`);
+          }
+          return provider;
+        },
+      });
     }
     for (const rel of manifest.provides.oauth ?? []) {
       const parsed = parseOAuthConfig(readFileSync(join(dir, rel), "utf8"));
@@ -417,7 +481,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
  */
 export async function loadPlugins(root = pluginsRoot(), capabilities?: AgentCapabilities): Promise<PluginLoadResult> {
   const logger = getRootLogger().child("Plugins");
-  const result: PluginLoadResult = { tools: [], skillDirs: [], mappings: [], settings: [], plugins: [] };
+  const result: PluginLoadResult = { tools: [], skillDirs: [], mappings: [], settings: [], plugins: [], llmProviders: [] };
 
   if (!existsSync(root)) return result;
   const disabled = readDisabledState(root);
@@ -432,7 +496,7 @@ export async function loadPlugins(root = pluginsRoot(), capabilities?: AgentCapa
 
   for (const name of entries) {
     const enabled = !disabled.has(name);
-    const { tools, ...info } = await loadOnePlugin(root, name, enabled, capabilities);
+    const { tools, providerFactories, ...info } = await loadOnePlugin(root, name, enabled, capabilities);
     result.plugins.push(info);
     if (info.error) {
       logger.warn("Plugin skipped", { name, error: info.error });
@@ -443,6 +507,7 @@ export async function loadPlugins(root = pluginsRoot(), capabilities?: AgentCapa
     result.skillDirs.push(...info.skillDirs);
     result.mappings.push(...info.mappings);
     result.settings.push(...info.settings);
+    result.llmProviders.push(...providerFactories);
   }
 
   logger.info("Plugins loaded", {

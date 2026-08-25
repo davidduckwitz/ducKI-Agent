@@ -6,6 +6,7 @@ import { getSocketUrl } from "./backendUrl";
 import { useConnectionStore } from "./connectionStore";
 import { api } from "./api";
 import { useLiveBrowserStore } from "./liveBrowserStore";
+import { useBrowserActivityStore, type BrowserActivity } from "./browserActivityStore";
 
 const LANGUAGE_STORAGE_KEY = "ducki.language";
 const CLIENT_ID_KEY = "ducki.clientId";
@@ -740,6 +741,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     // joins a session's room while a window for it is open (see LiveBrowserWindow's effect).
     socket.on("browser:frame", (frame: { sessionId: string; data: string; format: string; timestamp: string }) => {
       useLiveBrowserStore.getState().receiveFrame(frame);
+    });
+    socket.on("browser:activity", (activity: Omit<BrowserActivity, "id">) => {
+      useBrowserActivityStore.getState().addActivity(activity);
     });
 
     // Tool call tracking

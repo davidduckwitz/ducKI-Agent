@@ -7,8 +7,11 @@
   "icon": "🕐",
   "category": "overview",
   "provides": {
-    "widgetPage": "widget/index.html",
-    "widgetPlacement": "both"
+    "widgets": [
+      { "id": "top-clock", "page": "widget/index.html", "placement": "topbar", "align": "center", "frame": "borderless", "background": "transparent", "height": 38, "width": "sm" },
+      { "id": "footer-clock", "page": "widget/index.html", "placement": "footer", "align": "right", "frame": "borderless", "background": "transparent", "height": 26, "width": "sm" },
+      { "id": "dashboard-clock", "page": "widget/index.html", "placement": "dashboard", "align": "full", "frame": "card", "background": "card", "height": 150, "width": "full", "title": "Uhrzeit" }
+    ]
   },
   "enabled": true
 }
