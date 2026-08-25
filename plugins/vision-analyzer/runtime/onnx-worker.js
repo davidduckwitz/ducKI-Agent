@@ -16,6 +16,9 @@ let runtimePromise;
 let sharpPromise;
 let cachedModelPath = "";
 let cachedSession = null;
+let activeTracks = [];
+let nextTrackId = 1;
+let trackerFrame = 0;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -35,6 +38,9 @@ async function sessionFor(ort, modelPath) {
   if (cachedSession && cachedModelPath === modelPath) return cachedSession;
   cachedSession = await ort.InferenceSession.create(modelPath);
   cachedModelPath = modelPath;
+  activeTracks = [];
+  nextTrackId = 1;
+  trackerFrame = 0;
   return cachedSession;
 }
 
@@ -113,6 +119,14 @@ function iou(a, b) {
   const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
   const union = a.w * a.h + b.w * b.h - intersection;
   return union > 0 ? intersection / union : 0;
+}
+
+function bboxIou(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return 0;
+  return iou(
+    { x1: Number(a[0]), y1: Number(a[1]), w: Number(a[2]), h: Number(a[3]) },
+    { x1: Number(b[0]), y1: Number(b[1]), w: Number(b[2]), h: Number(b[3]) },
+  );
 }
 
 function nms(items, iouThreshold, maxDetections) {
@@ -242,6 +256,49 @@ function shapeDetections(items) {
   return { people, objects };
 }
 
+function assignTrackIds(shaped) {
+  trackerFrame += 1;
+  const detections = [
+    ...shaped.people.map((entry) => ({ entry, classId: entry.classId, kind: "person" })),
+    ...shaped.objects.map((entry) => ({ entry, classId: entry.classId, kind: entry.type })),
+  ];
+  const used = new Set();
+
+  for (const detection of detections) {
+    let best = null;
+    let bestIou = 0.35;
+    for (const track of activeTracks) {
+      if (used.has(track.id) || track.classId !== detection.classId) continue;
+      const overlap = bboxIou(track.bbox, detection.entry.bbox);
+      if (overlap > bestIou) {
+        best = track;
+        bestIou = overlap;
+      }
+    }
+
+    if (!best) {
+      best = {
+        id: nextTrackId++,
+        classId: detection.classId,
+        kind: detection.kind,
+        bbox: detection.entry.bbox,
+        lastSeen: trackerFrame,
+      };
+      activeTracks.push(best);
+    } else {
+      best.bbox = detection.entry.bbox;
+      best.lastSeen = trackerFrame;
+      best.kind = detection.kind;
+    }
+
+    used.add(best.id);
+    detection.entry.trackId = best.id;
+  }
+
+  activeTracks = activeTracks.filter((track) => trackerFrame - track.lastSeen <= 8);
+  return shaped;
+}
+
 async function detect(message) {
   const { ort, sharp } = await modules();
   const session = await sessionFor(ort, message.modelPath);
@@ -264,7 +321,7 @@ async function detect(message) {
 
   let items = parseEndToEnd(output, prep, threshold, maxDetections);
   if (!items) items = parseRawYolo(output, prep, threshold, iouThreshold, maxDetections);
-  const result = shapeDetections(items);
+  const result = assignTrackIds(shapeDetections(items));
 
   return {
     ...result,
@@ -273,6 +330,7 @@ async function detect(message) {
     outputShape: output.dims ?? [],
     sourceWidth: prep.sourceWidth,
     sourceHeight: prep.sourceHeight,
+    tracking: { type: "iou", activeTracks: activeTracks.length },
   };
 }
 
