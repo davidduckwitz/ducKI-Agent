@@ -84,7 +84,7 @@ function dependencyStatus() {
   return {
     zeroDependency: {
       installed: true,
-      features: ["browser-stream", "qr-code", "motion-detection"],
+      features: ["browser-stream", "camera-preview", "qr-code", "motion-detection"],
       description: "Funktioniert ohne zusätzliche Node-Pakete und ohne LLM.",
     },
     packs,
@@ -444,6 +444,21 @@ async function runLocalObjects(context, frame) {
   return { ...result, model: model.id, scene: inferLocalScene(result.people, result.objects) };
 }
 
+function applyDetectionState(state, frame, detection) {
+  state.detections = {
+    people: detection.people ?? [],
+    objects: detection.objects ?? [],
+    scene: detection.scene ?? inferLocalScene(detection.people ?? [], detection.objects ?? []),
+    inferenceMs: detection.inferenceMs ?? null,
+    model: detection.model ?? null,
+    outputShape: detection.outputShape,
+    tracking: detection.tracking,
+    frameAt: frame.timestamp,
+    skipped: detection.skipped,
+  };
+  state.lastDetectedFrameAt = frame.timestamp;
+}
+
 async function updateBackgroundDetections(context, state) {
   if (state.localDetectBusy || !state.latestFrame) return;
   if (state.lastDetectedFrameAt === state.latestFrame.timestamp) return;
@@ -451,17 +466,7 @@ async function updateBackgroundDetections(context, state) {
   const frame = state.latestFrame;
   try {
     const detection = await runLocalObjects(context, frame);
-    state.detections = {
-      people: detection.people ?? [],
-      objects: detection.objects ?? [],
-      scene: detection.scene ?? null,
-      inferenceMs: detection.inferenceMs ?? null,
-      model: detection.model ?? null,
-      outputShape: detection.outputShape,
-      frameAt: frame.timestamp,
-      skipped: detection.skipped,
-    };
-    state.lastDetectedFrameAt = frame.timestamp;
+    applyDetectionState(state, frame, detection);
     state.updatedAt = new Date().toISOString();
     if (state.analysis?.source === "local") {
       state.analysis.scene = state.detections.scene;
@@ -494,7 +499,7 @@ function startLocalDetectorTimer(context, state) {
 
 async function localScan(context, state) {
   const frame = state.latestFrame ?? await context.agent?.browser?.getFrame(state.sessionId);
-  if (!frame) throw new Error("No browser frame available");
+  if (!frame) throw new Error("No visual frame available");
   state.latestFrame = frame;
 
   const warnings = [];
@@ -510,17 +515,7 @@ async function localScan(context, state) {
     : { people: [], objects: [], scene: null, inferenceMs: null, model: null };
   if (detectionResult.status === "rejected") warnings.push(`Objects: ${detectionResult.reason?.message ?? String(detectionResult.reason)}`);
 
-  state.detections = {
-    people: detection.people ?? [],
-    objects: detection.objects ?? [],
-    scene: detection.scene ?? inferLocalScene(detection.people ?? [], detection.objects ?? []),
-    inferenceMs: detection.inferenceMs ?? null,
-    model: detection.model ?? null,
-    outputShape: detection.outputShape,
-    frameAt: frame.timestamp,
-    skipped: detection.skipped,
-  };
-  state.lastDetectedFrameAt = frame.timestamp;
+  applyDetectionState(state, frame, detection);
 
   const peopleCount = state.detections.people.length;
   const objectCount = state.detections.objects.length;
@@ -545,15 +540,51 @@ async function localScan(context, state) {
   return publicState(state);
 }
 
+function providedFrame(input, sessionId) {
+  const raw = String(input.frameBase64 ?? "").trim();
+  if (!raw) throw new Error("frameBase64 is required");
+  const data = raw.replace(/^data:image\/(?:png|jpe?g|webp);base64,/i, "");
+  if (data.length > 20 * 1024 * 1024) throw new Error("Provided frame exceeds the 20 MB base64 safety limit");
+  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(data)) throw new Error("frameBase64 is not valid base64 image data");
+  const requestedFormat = String(input.frameFormat ?? "jpeg").toLowerCase();
+  const format = requestedFormat === "png" ? "png" : "jpeg";
+  return {
+    sessionId,
+    data,
+    format,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+async function localProvidedFrameDetect(context, state, frame) {
+  state.latestFrame = frame;
+  const detection = await runLocalObjects(context, frame);
+  applyDetectionState(state, frame, detection);
+  state.analysis = {
+    ...(state.analysis?.source === "local" ? state.analysis : {}),
+    source: "local",
+    scene: state.detections.scene,
+    people: state.detections.people,
+    objects: state.detections.objects,
+    text: Array.isArray(state.analysis?.text) ? state.analysis.text : [],
+    qrCodes: state.qrCodes,
+    motion: state.motion,
+    objectDetection: state.detections,
+    description: `Lokale Live-Erkennung: ${state.detections.people.length} Person(en), ${state.detections.objects.length} Objekt(e).`,
+  };
+  state.updatedAt = new Date().toISOString();
+  return publicState(state);
+}
+
 async function analyzeFrame(context, state, question) {
   if (context.settings?.VISION_LOCAL_ONLY === true) {
     throw new Error("Vision LLM is disabled because VISION_LOCAL_ONLY is enabled. Use action=local_scan.");
   }
   if (!context.agent) throw new Error("Agent capabilities are unavailable");
   const frame = state.latestFrame ?? await context.agent.browser?.getFrame(state.sessionId);
-  if (!frame) throw new Error("No browser frame available");
+  if (!frame) throw new Error("No visual frame available");
   state.latestFrame = frame;
-  const prompt = question || `Analyze this browser frame. Return ONLY compact JSON with keys: scene {label,confidence}, people [{confidence,bbox}], objects [{type,confidence,bbox}], text [{text,confidence,bbox}], qrCodes [{value,bbox}], description. bbox values should be normalized [x,y,width,height] when possible. Do not invent unreadable text or QR values.`;
+  const prompt = question || `Analyze this visual frame. Return ONLY compact JSON with keys: scene {label,confidence}, people [{confidence,bbox}], objects [{type,confidence,bbox}], text [{text,confidence,bbox}], qrCodes [{value,bbox}], description. bbox values should be normalized [x,y,width,height] when possible. Do not invent unreadable text or QR values.`;
   const response = await context.agent.analyzeImage(
     [{ base64: frame.data, mimeType: `image/${frame.format === "png" ? "png" : "jpeg"}` }],
     prompt,
@@ -608,9 +639,18 @@ async function stop(context, sessionId) {
   return publicState(state);
 }
 
+function closeLocalSource(sessionId) {
+  const state = sessions.get(sessionId);
+  if (state?.timer) clearInterval(state.timer);
+  if (state?.localTimer) clearInterval(state.localTimer);
+  if (state?.unsubscribe) state.unsubscribe();
+  sessions.delete(sessionId);
+  return { closed: true, sessionId };
+}
+
 export const definition = {
   name: "vision_analyzer",
-  description: "Observe DucKI browser sessions with zero-dependency local vision, optional local OCR/ONNX object detection, local scene inference, and opt-in LLM vision.",
+  description: "Observe DucKI browser or camera frames with zero-dependency local vision, optional offline OCR/ONNX object detection, local scene inference/tracking, and opt-in LLM vision.",
   parameters: {
     type: "object",
     properties: {
@@ -618,6 +658,7 @@ export const definition = {
         type: "string",
         enum: [
           "sessions", "start", "stop", "state", "local_scan", "scan", "query", "report_observation",
+          "local_frame_detect", "local_frame_scan", "local_source_stop",
           "dependency_status", "dependency_install", "dependency_remove",
           "model_status", "model_install", "model_remove",
         ],
@@ -628,6 +669,8 @@ export const definition = {
       motion: { type: "object" },
       pack: { type: "string", enum: ["ocr", "onnx"] },
       model: { type: "string", enum: ["yolo26n-coco"] },
+      frameBase64: { type: "string", description: "Base64 image data for a local source such as camera. Do not use for browser sessions." },
+      frameFormat: { type: "string", enum: ["jpeg", "png"] },
     },
     required: ["action"],
   },
@@ -642,6 +685,20 @@ export async function execute(input, context) {
   if (action === "model_status") return modelStatus();
   if (action === "model_install") return installModel(String(input.model ?? ""), context);
   if (action === "model_remove") return removeModel(String(input.model ?? ""));
+
+  if (action === "local_frame_detect" || action === "local_frame_scan") {
+    const sessionId = String(input.sessionId ?? "camera:local").trim() || "camera:local";
+    const state = stateFor(sessionId);
+    const frame = providedFrame(input, sessionId);
+    if (action === "local_frame_detect") return localProvidedFrameDetect(context, state, frame);
+    state.latestFrame = frame;
+    return localScan(context, state);
+  }
+
+  if (action === "local_source_stop") {
+    const sessionId = String(input.sessionId ?? "camera:local").trim() || "camera:local";
+    return closeLocalSource(sessionId);
+  }
 
   if (!context.agent?.browser && action !== "state" && action !== "report_observation") {
     throw new Error("DucKI browser capability unavailable. The plugin requires permission 'browser.frames'.");
