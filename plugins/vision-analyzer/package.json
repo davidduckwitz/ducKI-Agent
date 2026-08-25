@@ -1,9 +1,9 @@
 {
   "name": "@ducki-plugin/vision-analyzer-runtime",
-  "version": "0.3.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "Optional local runtime dependencies for the DucKI vision-analyzer plugin. The plugin itself has zero mandatory external dependencies.",
+  "description": "Optional local runtime dependencies for the DucKI vision-analyzer plugin. Browser, camera and local video sources work without mandatory external dependencies.",
   "engines": {
     "node": ">=20.0.0"
   }
