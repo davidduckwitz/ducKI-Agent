@@ -104,6 +104,16 @@ describe.skipIf(!browserAvailable)("browser tool - snapshot / text-based targeti
     expect((await executeInWorker({ action: "keyboard_press", sessionId, key: "Tab" })).success).toBe(true);
   }, 30000);
 
+  it("lets the UI select the exact shared default session used by agent calls", async () => {
+    const selected = await executeInWorker({ action: "set_default", sessionId });
+    expect(selected.success).toBe(true);
+    const sessions = await executeInWorker({ action: "list_sessions" });
+    const active = (sessions.data as { sessions: Array<{ sessionId: string; isDefault: boolean }> }).sessions.find((item) => item.sessionId === sessionId);
+    expect(active?.isDefault).toBe(true);
+    const implicit = await executeInWorker({ action: "get_content" });
+    expect((implicit.data as { sessionId: string }).sessionId).toBe(sessionId);
+  }, 30000);
+
   it("selects a dropdown option by its visible label", async () => {
     const r = await executeInWorker({
       action: "select",

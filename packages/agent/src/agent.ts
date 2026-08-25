@@ -111,6 +111,19 @@ export function callWouldPersistContent(toolName: string, input: Record<string, 
 }
 
 /**
+ * Exact replays of model-authored file mutations never add information. After the first
+ * successful execution they either overwrite the same bytes, append them twice, or make an
+ * edit fail because its old text is already gone. Read/test calls remain repeatable because
+ * they are legitimate verification after a mutation.
+ */
+export function toolCallMayOnlySucceedOncePerRun(
+  toolName: string,
+  input: Record<string, unknown>
+): boolean {
+  return callWouldPersistContent(toolName, input);
+}
+
+/**
  * True when a raw tool-call arguments string is structurally INCOMPLETE - i.e. it ends inside
  * an unterminated string literal or with brackets still open. That is the fingerprint of a
  * response cut off mid-call: the provider stopped emitting (output budget, dropped stream)
@@ -296,6 +309,13 @@ Never answer from the preview alone, and never claim a result is empty because i
 
 ## Browser Tool Workflow (IMPORTANT - READ CAREFULLY)
 
+### Existing user-controlled browser session
+When the user refers to "my open page", "the browser", "current page", or asks what they have
+open, call list_sessions first and use the session marked isDefault. Do NOT launch a new page,
+do NOT navigate to about:blank, and do NOT replace the user's URL. The browser sidebar marks
+the session selected by the user as the shared default, so screenshot/snapshot/get_content with
+that sessionId observes exactly the same rendered page the user sees.
+
 ### FASTEST PATH - use a macro action for the two most common needs
 Before chaining separate launch/goto/screenshot/evaluate calls, check if one of these covers
 what you need - each is a SINGLE tool call, so there is no sessionId to track or propagate at all:
@@ -317,10 +337,11 @@ whenever you're opening a fresh session at a known URL:
 
 ### Live preview (only if the user asked to watch the browser, or you need MANY screenshots)
 action="stream_start" begins a live view of a session that the user can watch in the UI (a
-floating window they opened, or one you offer them). Once streaming, action="screenshot" with
-preferLive:true returns the most recent live frame instantly instead of capturing a new
-full-page screenshot - much cheaper when you need to check the page repeatedly (e.g. after
-each of several clicks), at the cost of being viewport-only, not the full scroll height.
+floating window they opened, or one you offer them). Once streaming, a plain
+action="screenshot" automatically returns the most recent live frame instead of capturing a
+new full-page screenshot - much cheaper when you need to check the page repeatedly (e.g. after
+each of several clicks), at the cost of being viewport-only, not the full scroll height. Use
+preferLive:false for a guaranteed fresh capture or fullPage:true for the full page.
 Call action="stream_stop" when you're done (or just action="close" the session). Don't start a
 stream for a single one-off screenshot - screenshot_url is the right tool for that.
 
@@ -346,6 +367,7 @@ Correct workflow (all calls in one response):
   across separate turns; the session id is real either way, but the page state you're reacting
   to (an error, a loaded selector) is only visible once its result comes back
 - Launch MUST be first if you need a new session and aren't using screenshot_url/verify_page
+- Launch is NOT needed when list_sessions already reports the user-controlled default session
 - Do NOT invent or guess a sessionId, a URL, or a screenshot result - always use the value the
   tool actually returned in its result, never one you recalled or assumed
 - If you see "session not found", ensure launch (or a macro action) ran first in your sequence
@@ -644,7 +666,16 @@ export class Agent {
     }
     // Phase 4 "Observer": visual reasoning over screenshots (needs a vision model).
     // Gated by AGENT_ENABLE_VISION via the visionEnabled getter, refreshed per run.
-    for (const tool of createVisionTools(() => this.provider, this.logger, () => this.visionEnabled)) {
+    for (const tool of createVisionTools(
+      () => this.provider,
+      this.logger,
+      () => this.visionEnabled,
+      () => {
+        const content = this.currentScreenshotMessage?.content;
+        if (!Array.isArray(content)) return undefined;
+        return (content as LLMContent[]).find((part) => part.type === "image_url" || part.type === "image_data");
+      }
+    )) {
       this.executor.registerTool(tool);
     }
     this.executor.registerTool(createPlanTool(() => this.provider, this.logger));
@@ -1935,6 +1966,18 @@ export class Agent {
         }
       }
       if (browserAction === "screenshot") {
+        // A plain screenshot can reuse the frame already rendered in the user's live
+        // browser bubble. Mark that preference before injecting configured capture
+        // defaults, so explicit file/format/quality/full-page requests remain exact.
+        if (
+          normalizedInput["preferLive"] === undefined
+          && normalizedInput["filePath"] === undefined
+          && normalizedInput["fullPage"] === undefined
+          && normalizedInput["screenshotFormat"] === undefined
+          && normalizedInput["screenshotQuality"] === undefined
+        ) {
+          normalizedInput["preferLive"] = true;
+        }
         if (normalizedInput["screenshotFormat"] === undefined) {
           normalizedInput["screenshotFormat"] = controls.browserScreenshotFormat;
         }
@@ -5199,6 +5242,7 @@ export class Agent {
     emit: (type: AgentRunEventType, message: string, data?: Record<string, unknown>) => void,
     iterations: number,
     repeatedToolCalls: Map<string, number>,
+    successfulMutationCalls: Set<string>,
     nativeToolCalls?: ToolCall[],
     /** True when the model hit its output cap - see the write guard below. */
     responseWasTruncated = false
@@ -5392,14 +5436,40 @@ export class Agent {
           repeatCount: seen,
         });
 
-        if (seen > controls.maxRepeatedToolCall) {
+        const completedMutation = toolCallMayOnlySucceedOncePerRun(call.toolName, call.input)
+          && successfulMutationCalls.has(signature);
+        if (completedMutation || seen > controls.maxRepeatedToolCall) {
+          const repeatLimit = completedMutation ? 1 : controls.maxRepeatedToolCall;
           this.logger.warn("[TOOL-CALLS] Repeated tool call blocked", {
             callId,
             signature,
             repeatCount: seen,
-            maxAllowed: controls.maxRepeatedToolCall,
+            maxAllowed: repeatLimit,
           });
-          resultMap.set(callId, { success: false, data: null, error: "Repeated tool call blocked" });
+          if (completedMutation) {
+            const summary = summarizeToolCall(call.toolName, call.input);
+            resultMap.set(callId, {
+              success: true,
+              data: {
+                skippedDuplicate: true,
+                message: `Identical successful mutation already completed in this run: ${summary}`,
+              },
+            });
+            journalEntries.push({
+              iteration: iterations,
+              toolName: call.toolName,
+              summary: `${summary} (identische Wiederholung übersprungen)`,
+              success: true,
+              timestamp: new Date().toISOString(),
+            });
+            emit("guardrail", "Identischen erfolgreichen Schreibvorgang nicht erneut ausgeführt", {
+              toolName: call.toolName,
+              summary,
+              repeatCount: seen,
+            });
+          } else {
+            resultMap.set(callId, { success: false, data: null, error: "Repeated tool call blocked" });
+          }
           continue;
         }
 
@@ -5694,6 +5764,16 @@ export class Agent {
               { toolName: toolCall.toolName, attempts: repairAttempts, success: repairedResult.success }
             );
           }
+        }
+
+        if (
+          executed.result.success
+          && toolCall
+          && toolCallMayOnlySucceedOncePerRun(toolCall.toolName, toolCall.input as Record<string, unknown>)
+        ) {
+          successfulMutationCalls.add(
+            this.buildToolCallSignature(toolCall.toolName, toolCall.input as Record<string, unknown>)
+          );
         }
 
         // Phase 1: Track tool failures for error deduplication
@@ -7050,6 +7130,7 @@ export class Agent {
      */
     let runAbortedEarly: string | undefined;
     const repeatedToolCalls = new Map<string, number>();
+    const successfulMutationCalls = new Set<string>();
     let malformedToolCallAttempts = 0;
     let unexecutedCodeFenceNudges = 0; // Bounded retries for the "showed code instead of writing it" guardrail
     let falseCompletionClaimNudges = 0; // Bounded retries for the "narrated a fake success" guardrail
@@ -7744,6 +7825,7 @@ export class Agent {
         emit,
         iterations,
         repeatedToolCalls,
+        successfulMutationCalls,
         currentNativeToolCalls,
         // Two independent signals, either one is enough: an honest finish_reason, or the
         // completion landing suspiciously close to the requested cap (see

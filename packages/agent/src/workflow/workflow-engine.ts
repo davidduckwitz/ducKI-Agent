@@ -96,7 +96,7 @@ function normalizeWorkflow(input: Partial<WorkflowGraph> & Pick<WorkflowGraph, "
     toolName: node.toolName,
     toolInput: node.toolInput,
     resultData: node.resultData,
-    dependsOn: uniq(node.dependsOn ?? inferredDepends.get(node.id) ?? []),
+    dependsOn: uniq([...(node.dependsOn ?? []), ...(inferredDepends.get(node.id) ?? [])]),
     status: node.status ?? "pending",
     result: node.result,
     taskId: node.taskId,
@@ -119,6 +119,33 @@ function normalizeWorkflow(input: Partial<WorkflowGraph> & Pick<WorkflowGraph, "
 export interface WorkflowEngineOptions {
   logger?: Logger;
   codingAgentFactory?: () => CodingAgent;
+}
+
+function assertValidGraph(workflow: WorkflowGraph): void {
+  const ids = new Set<string>();
+  for (const node of workflow.nodes) {
+    if (!node.id || ids.has(node.id)) throw new Error(`Workflow contains invalid or duplicate node id '${node.id}'`);
+    ids.add(node.id);
+  }
+  for (const edge of workflow.edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) throw new Error(`Workflow edge '${edge.id}' references an unknown node`);
+    if (edge.source === edge.target) throw new Error(`Workflow edge '${edge.id}' cannot connect a node to itself`);
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (id: string): void => {
+    if (visiting.has(id)) throw new Error("Workflow graph contains a cyclic dependency");
+    if (visited.has(id)) return;
+    visiting.add(id);
+    const node = workflow.nodes.find((item) => item.id === id);
+    for (const dependency of node?.dependsOn ?? []) {
+      if (!ids.has(dependency)) throw new Error(`Workflow node '${id}' depends on unknown node '${dependency}'`);
+      visit(dependency);
+    }
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const id of ids) visit(id);
 }
 
 export class WorkflowEngine {
@@ -172,6 +199,7 @@ export class WorkflowEngine {
       ...input,
       createdAt: existing?.createdAt ?? input.createdAt,
     });
+    assertValidGraph(workflow);
     await this.db.setSetting(this.settingKey(workflow.id), JSON.stringify(workflow));
     return workflow;
   }

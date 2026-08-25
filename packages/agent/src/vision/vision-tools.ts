@@ -29,15 +29,43 @@ interface VisualCheck {
   detail?: string;
 }
 
+function looksLikeRawBase64(value: string): boolean {
+  return value.length > 128 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
+function looksLikeDirectImageUrl(value: string): boolean {
+  if (value.startsWith("data:image/")) return true;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return /\.(?:png|jpe?g|webp|gif|bmp|avif)(?:$|[?#])/i.test(url.pathname)
+      || /\/(?:screenshots?|images?|thumbnails?)\//i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 /** Build the image content block from either a URL or raw/data-URL base64. */
-function buildImageContent(input: Record<string, unknown>): LLMContent | { error: string } {
+function buildImageContent(
+  input: Record<string, unknown>,
+  fallbackImage?: LLMContent
+): LLMContent | { error: string } {
   const imageUrl = typeof input["imageUrl"] === "string" ? input["imageUrl"].trim() : "";
   const imageBase64 = typeof input["imageBase64"] === "string" ? input["imageBase64"].trim() : "";
   const mimeType = typeof input["mimeType"] === "string" && input["mimeType"] ? input["mimeType"] : "image/png";
 
   if (imageUrl) {
-    // A remote/served URL or an already-formed data: URL both go through image_url.
-    return { type: "image_url", image_url: { url: imageUrl, detail: "high" } };
+    // Smaller models frequently put the browser page URL or raw screenshot base64 into
+    // imageUrl. Normalize raw bytes, and use the actual current browser frame when the
+    // value is not recognizably a direct image resource.
+    if (looksLikeRawBase64(imageUrl)) {
+      return { type: "image_data", image_data: { url: `data:${mimeType};base64,${imageUrl}`, mime_type: mimeType } };
+    }
+    if (looksLikeDirectImageUrl(imageUrl)) {
+      return { type: "image_url", image_url: { url: imageUrl, detail: "high" } };
+    }
+    if (fallbackImage) return fallbackImage;
+    return { error: "imageUrl is not a direct image URL; provide imageBase64 or capture a browser screenshot first" };
   }
   if (imageBase64) {
     const url = imageBase64.startsWith("data:") ? imageBase64 : `data:${mimeType};base64,${imageBase64}`;
@@ -62,7 +90,8 @@ function parseJSON<T>(content: string): T | null {
 export function createVisionTools(
   getProvider: () => LLMProvider,
   logger: Logger,
-  isEnabled: () => boolean = () => true
+  isEnabled: () => boolean = () => true,
+  getFallbackImage: () => LLMContent | undefined = () => undefined
 ): ToolExecutor[] {
   const analyzeUiLayout: ToolExecutor = {
     name: "analyze_ui_layout",
@@ -91,7 +120,7 @@ export function createVisionTools(
       if (!isEnabled()) {
         return fail("Vision analysis is disabled in settings (AGENT_ENABLE_VISION).");
       }
-      const image = buildImageContent(input);
+      const image = buildImageContent(input, getFallbackImage());
       if ("error" in image) return fail(image.error);
 
       const question = typeof input["question"] === "string" ? input["question"].trim() : "";
@@ -138,7 +167,10 @@ ${checklist}`;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.warn("analyze_ui_layout failed", { error: message });
-        return fail(`Vision analysis failed (is a vision-capable model loaded?): ${message}`);
+        const lacksVision = /vision|image (?:input|support)|multimodal|does not support images/i.test(message);
+        return fail(lacksVision
+          ? `Vision analysis failed because the active model rejected image input: ${message}`
+          : `Vision analysis request failed: ${message}`);
       }
     },
   };

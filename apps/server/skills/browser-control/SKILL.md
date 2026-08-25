@@ -47,7 +47,7 @@ Use the `browser` tool whenever you need to inspect a browser page, verify UI be
 - `evaluate`: Execute page-context JavaScript for state inspection.
 - `expect`: **Assertion** — polls until the condition passes or `timeout` expires, returns `passed: true/false` (not an error). Conditions: `element_visible`, `element_hidden`, `text_visible`, `text_absent`, `url_contains`, `title_contains`, `no_page_errors`.
 - `get_page_errors`: Captured console errors, uncaught page errors, and failed network requests for the session. Use `clear: true` to reset.
-- `screenshot`: Capture page image to `filePath` or in-memory bytes. Optional `preferLive` for live-streamed sessions.
+- `screenshot`: Capture page image to `filePath` or in-memory bytes. Plain screenshots automatically reuse a recent live-stream frame. Use `preferLive:false` for a guaranteed fresh capture or `fullPage:true` for the complete scrollable page.
 - `switch_tab`: Activate another tab by `index` (0-based) or `urlPart`.
 - `cookies_get` / `cookies_set` / `cookies_clear`: Manage cookies for the current URL (or an explicit `url`).
 - `form_fill`: Fill many fields with `fields: { selector: value }`.

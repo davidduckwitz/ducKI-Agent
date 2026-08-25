@@ -10,6 +10,7 @@ type BrowserAction =
   | "launch"
   | "list_pages"
   | "list_sessions"
+  | "set_default"
   | "goto"
   | "click"
   | "type"
@@ -836,6 +837,7 @@ export const browserTool: ToolExecutor = {
             "launch",
             "list_pages",
             "list_sessions",
+            "set_default",
             "goto",
             "click",
             "type",
@@ -916,7 +918,8 @@ export const browserTool: ToolExecutor = {
         waitMs: { type: "number", description: "For action=screenshot_url without a selector: fixed delay (ms) after navigation before capturing, e.g. to let animations settle", default: 0 },
         close: { type: "boolean", description: "For action=screenshot_url: close the session immediately after capturing (use when you only need one snapshot, not further interaction)", default: false },
         extractText: { type: "boolean", description: "For action=verify_page: include up to 5000 chars of the page's visible text in the result", default: true },
-        preferLive: { type: "boolean", description: "For action=screenshot: if this session is live-streaming (see stream_start) and has a frame from the last 1.5s, return it instantly instead of capturing a fresh full-page screenshot. Faster, but viewport-only (not full scroll height).", default: false },
+        preferLive: { type: "boolean", description: "For action=screenshot: reuse a live frame from the last 1.5s when safe. Omitted means automatic reuse for a plain in-memory screenshot; false forces a fresh capture. Live frames are viewport-only." },
+        fullPage: { type: "boolean", description: "For action=screenshot: capture the full scrollable page. This always forces a fresh screenshot. Fresh captures default to true." },
         maxWidth: { type: "number", description: "For action=stream_start: max frame width in px", default: 960 },
         maxHeight: { type: "number", description: "For action=stream_start: max frame height in px", default: 720 },
         // snapshot
@@ -976,7 +979,7 @@ export const browserTool: ToolExecutor = {
         }
       }
 
-      if (input["record"] !== false && !["stream_start", "stream_stop", "screenshot", "list_sessions"].includes(action)) {
+      if (input["record"] !== false && !["stream_start", "stream_stop", "screenshot", "list_sessions", "set_default"].includes(action)) {
         const sensitive = new Set(["password", "cookies", "script"]);
         const params = Object.fromEntries(Object.entries(input).filter(([key]) => !sensitive.has(key) && key !== "record"));
         browserActivityEvents.emit("activity", {
@@ -1079,6 +1082,11 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         await session.page.goto(url, { waitUntil, timeout });
         session.targetUrl = session.page.url();
         return ok({ sessionId, url: session.page.url(), title: await session.page.title() });
+      }
+      case "set_default": {
+        const { sessionId, session } = await ensureSession(input);
+        defaultSessionId = sessionId;
+        return ok({ sessionId, isDefault: true, url: session.page.url(), title: await session.page.title() });
       }
       case "history_back":
       case "history_forward":
@@ -1402,15 +1410,24 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       case "screenshot": {
         const { sessionId, session } = await ensureSession(input);
 
-        // preferLive: if this session is live-streaming (action=stream_start) and has a
-        // recent frame buffered, return that instantly instead of paying for a fresh
-        // page.screenshot() capture. Opt-in (default false) because a screencast frame is
-        // the VIEWPORT as currently rendered, not a fullPage capture - existing callers that
-        // expect the full scrollable page keep getting exactly that unless they ask for speed
-        // over completeness.
-        if (input["preferLive"] === true || input["preferLive"] === "true") {
+        const filePath = String(input["filePath"] ?? "").trim();
+        const explicitlyPreferLive = input["preferLive"] === true || input["preferLive"] === "true";
+        const explicitlyFresh = input["preferLive"] === false || input["preferLive"] === "false";
+        const explicitlyFullPage = input["fullPage"] === true || input["fullPage"] === "true";
+        const requiresFreshDestination = Boolean(filePath) || explicitlyFullPage;
+        const hasEncodingOverrides = input["screenshotFormat"] !== undefined
+          || input["screenshotQuality"] !== undefined;
+        // Plain in-memory screenshots automatically reuse the already-rendered sidebar
+        // frame. File and full-page requests always retain exact capture semantics.
+        // Encoding overrides do too unless the caller explicitly prefers the live frame;
+        // preferLive:false remains an unambiguous freshness escape hatch.
+        const shouldTryLive = !explicitlyFresh
+          && !requiresFreshDestination
+          && (explicitlyPreferLive || !hasEncodingOverrides);
+        if (shouldTryLive) {
           const live = getFreshLiveFrame(sessionId);
           if (live) {
+            const ageMs = Math.max(0, Date.now() - live.timestampMs);
             return ok({
               sessionId,
               savedTo: null,
@@ -1418,18 +1435,20 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
               url: session.page.url(),
               screenshot: live.data,
               live: true,
+              reused: true,
+              source: "live_buffer",
               metadata: {
                 format: live.format,
                 width: live.width,
                 height: live.height,
                 timestamp: new Date(live.timestampMs).toISOString(),
                 sizeKb: Math.round(Buffer.byteLength(live.data, "base64") / 1024),
+                ageMs,
               },
             });
           }
         }
 
-        const filePath = String(input["filePath"] ?? "").trim();
         const path = filePath || undefined;
         // Default to jpeg: many local vision model backends (llama.cpp/GGUF loaders via
         // stb_image, used by most self-hosted Qwen-VL/Llava setups) can't decode webp at
@@ -1440,7 +1459,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         const quality = format === "png" ? undefined : Math.max(1, Math.min(100, Number(input["screenshotQuality"] ?? 85)));
         const buffer = await session.page.screenshot({
           path: path as string | undefined,
-          fullPage: true,
+          fullPage: input["fullPage"] === false || input["fullPage"] === "false" ? false : true,
           type: format,
           ...(quality !== undefined ? { quality } : {}),
         });
@@ -1458,6 +1477,8 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
           // rendering the preview to the user, not for the model to read as text).
           screenshot: Buffer.from(buffer).toString("base64"),
           live: false,
+          reused: false,
+          source: "fresh_capture",
           // Metadata for screenshot tracking
           metadata: {
             format,

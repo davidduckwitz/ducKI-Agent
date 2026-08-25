@@ -71,32 +71,30 @@ function parseMessageMetadata(raw?: string | null): Record<string, unknown> | un
 export function ChatContainer() {
   const { t } = useI18n();
   const qc = useQueryClient();
-  const {
-    messages,
-    sendMessage,
-    stopMessage,
-    clearChat,
-    handleNewChat,
-    isLoading,
-    streamingContent,
-    conversationId,
-    awaitingNewConversation,
-    setConversationId,
-    setMessages,
-    connected,
-    browserPreview,
-    setBrowserPreviewModal,
-    toolCalls,
-    removeToolCall,
-    showToolDock,
-    selectedCharacterId,
-    characterCustomizations,
-    animationStyle,
-    socket,
-    chatProvider,
-    chatModel,
-  } = useAppStore();
-  const [input, setInput] = useState("");
+  const messages = useAppStore((state) => state.messages);
+  const sendMessage = useAppStore((state) => state.sendMessage);
+  const stopMessage = useAppStore((state) => state.stopMessage);
+  const clearChat = useAppStore((state) => state.clearChat);
+  const handleNewChat = useAppStore((state) => state.handleNewChat);
+  const isLoading = useAppStore((state) => state.isLoading);
+  const streamingContent = useAppStore((state) => state.streamingContent);
+  const conversationId = useAppStore((state) => state.conversationId);
+  const awaitingNewConversation = useAppStore((state) => state.awaitingNewConversation);
+  const setConversationId = useAppStore((state) => state.setConversationId);
+  const setMessages = useAppStore((state) => state.setMessages);
+  const connected = useAppStore((state) => state.connected);
+  const browserPreview = useAppStore((state) => state.browserPreview);
+  const setBrowserPreviewModal = useAppStore((state) => state.setBrowserPreviewModal);
+  const toolCalls = useAppStore((state) => state.toolCalls);
+  const removeToolCall = useAppStore((state) => state.removeToolCall);
+  const showToolDock = useAppStore((state) => state.showToolDock);
+  const selectedCharacterId = useAppStore((state) => state.selectedCharacterId);
+  const characterCustomizations = useAppStore((state) => state.characterCustomizations);
+  const animationStyle = useAppStore((state) => state.animationStyle);
+  const socket = useAppStore((state) => state.socket);
+  const chatProvider = useAppStore((state) => state.chatProvider);
+  const chatModel = useAppStore((state) => state.chatModel);
+  const [composerDraft, setComposerDraft] = useState<{ value: string; revision: number }>();
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [analyzeImages, setAnalyzeImages] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -700,8 +698,8 @@ export function ChatContainer() {
       reader.readAsDataURL(file);
     });
 
-  const handleSend = async () => {
-    if ((!input.trim() && attachedFiles.length === 0) || isLoading || uploading) return;
+  const handleSend = async (input: string): Promise<boolean> => {
+    if ((!input.trim() && attachedFiles.length === 0) || isLoading || uploading) return false;
 
     let uploadSummary = "";
     let visionOnly = false;
@@ -739,7 +737,7 @@ export function ChatContainer() {
     }
 
     const finalInput = `${input.trim()}${uploadSummary}`.trim();
-    if (!finalInput) return;
+    if (!finalInput) return false;
 
     // Conversation was created by the plugin wizard (packages/agent CodingAgent): wrap the
     // prompt in the same [CODING_CONTEXT] marker CodingWorkspace.tsx uses, so the server (see
@@ -766,13 +764,13 @@ export function ChatContainer() {
       chatModel,
       visionOnly
     );
-    setInput("");
     setAttachedFiles([]);
     setAnalyzeImages(false);
+    return true;
   };
 
   const handleInsertSkill = (slug: string) => {
-    setInput(`/${slug} `);
+    setComposerDraft({ value: `/${slug} `, revision: Date.now() });
   };
 
   const handleToolExecuted = (result: { toolName: string; success: boolean; data: unknown; error?: string }) => {
@@ -790,7 +788,6 @@ export function ChatContainer() {
         eventData: { toolName: result.toolName, success: result.success, data: result.data, error: result.error },
       },
     ]);
-    setInput("");
   };
 
   // Chat -> Coding Area handoff: a finished CODE plan (planKind === "code") navigates to
@@ -984,7 +981,7 @@ export function ChatContainer() {
                 <ChatWelcome
                   characterId={selectedCharacterId}
                   characterCustomizations={characterCustomizations}
-                  onPick={(prompt) => setInput(prompt)}
+                  onPick={(prompt) => setComposerDraft({ value: prompt, revision: Date.now() })}
                 />
               )}
 
@@ -1013,7 +1010,7 @@ export function ChatContainer() {
                     key={item.msg.id}
                     msg={item.msg}
                     compactMode={compactMode}
-                    onResend={item.msg.role === "user" ? () => setInput(item.msg.content) : undefined}
+                    onResend={item.msg.role === "user" ? () => setComposerDraft({ value: item.msg.content, revision: Date.now() }) : undefined}
                     t={t}
                   />
                 )
@@ -1079,9 +1076,8 @@ export function ChatContainer() {
             )}
 
             <ChatComposer
-              value={input}
-              onChange={setInput}
-              onSend={() => void handleSend()}
+              draftRequest={composerDraft}
+              onSend={handleSend}
               onStop={stopMessage}
               isLoading={isLoading}
               uploading={uploading}

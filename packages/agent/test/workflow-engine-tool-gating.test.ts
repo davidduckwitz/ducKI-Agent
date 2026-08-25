@@ -8,6 +8,7 @@ type PrivateWorkflowEngineMethods = {
     workflow: WorkflowGraph,
     node: WorkflowNode
   ) => Promise<{ resultText: string; resultData?: unknown; success: boolean }>;
+  resolveTemplateTokens: (value: unknown, workflow: WorkflowGraph) => unknown;
 };
 
 function asPrivate(engine: WorkflowEngine): PrivateWorkflowEngineMethods {
@@ -67,6 +68,16 @@ const emptyWorkflow: WorkflowGraph = {
 };
 
 describe("WorkflowEngine tool_call node gating", () => {
+  it("passes nested structured output fields between browser workflow nodes", () => {
+    const engine = buildEngine(null);
+    const workflow: WorkflowGraph = {
+      ...emptyWorkflow,
+      nodes: [{ ...buildNode("filesystem"), id: "launch", resultData: { sessionId: "browser_shared_1", url: "https://example.com" } }],
+    };
+    expect(asPrivate(engine).resolveTemplateTokens("{{launch.result.sessionId}}", workflow)).toBe("browser_shared_1");
+    expect(asPrivate(engine).resolveTemplateTokens({ sessionId: "{{launch.result.sessionId}}" }, workflow)).toEqual({ sessionId: "browser_shared_1" });
+  });
+
   it("rejects a disabled optional tool before dispatching to the executor", async () => {
     const engine = buildEngine(null);
     const result = await asPrivate(engine).executeToolCallNode(emptyWorkflow, buildNode("shell"));

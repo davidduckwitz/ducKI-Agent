@@ -7,8 +7,7 @@ import { ToolSkillSelector, type SelectorMode } from "./ToolSkillSelector";
 const MAX_TEXTAREA_HEIGHT = 220;
 
 export function ChatComposer({
-  value,
-  onChange,
+  draftRequest,
   onSend,
   onStop,
   isLoading,
@@ -25,9 +24,8 @@ export function ChatComposer({
   onToolExecuted,
   totalTokens,
 }: {
-  value: string;
-  onChange: (value: string) => void;
-  onSend: () => void;
+  draftRequest?: { value: string; revision: number };
+  onSend: (value: string) => Promise<boolean>;
   onStop: () => void;
   isLoading: boolean;
   uploading: boolean;
@@ -44,7 +42,11 @@ export function ChatComposer({
   totalTokens: number;
 }) {
   const { t } = useI18n();
-  const { chatProvider, chatModel, setChatProvider, setChatModel } = useAppStore();
+  const chatProvider = useAppStore((state) => state.chatProvider);
+  const chatModel = useAppStore((state) => state.chatModel);
+  const setChatProvider = useAppStore((state) => state.setChatProvider);
+  const setChatModel = useAppStore((state) => state.setChatModel);
+  const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -56,19 +58,31 @@ export function ChatComposer({
   const shouldSendAfterTranscribeRef = useRef(false);
 
   useEffect(() => {
+    if (!draftRequest) return;
+    setValue(draftRequest.value);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, [draftRequest]);
+
+  useEffect(() => {
     const element = textareaRef.current;
     if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+    // Measuring scrollHeight forces layout. Defer it to the next animation frame so the
+    // keystroke itself can paint immediately, and collapse multiple rapid input events into
+    // one measurement per frame.
+    const frame = requestAnimationFrame(() => {
+      element.style.height = "auto";
+      element.style.height = `${Math.min(element.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [value]);
 
   // Separate effect for auto-send to avoid double-sends
   useEffect(() => {
     if (shouldSendAfterTranscribeRef.current && value.trim().length > 0 && !isLoading) {
       shouldSendAfterTranscribeRef.current = false;
-      onSend();
+      void submit();
     }
-  }, [value, isLoading, onSend]);
+  }, [value, isLoading]);
 
   const focusInput = () => textareaRef.current?.focus();
 
@@ -163,7 +177,7 @@ export function ChatComposer({
           const text = result.data?.text?.trim();
           if (text) {
             const newMessage = value + (value.trim() ? " " : "") + text;
-            onChange(newMessage);
+            setValue(newMessage);
             setVoiceError(null);
             // Set flag to auto-send when value updates
             shouldSendAfterTranscribeRef.current = true;
@@ -210,7 +224,7 @@ export function ChatComposer({
   };
 
   const handleChange = (next: string) => {
-    onChange(next);
+    setValue(next);
     // A leading "/" is how the agent itself detects a skill request
     // (extractRequestedSkillSlugs in agent.ts) - mirror that trigger here.
     if (next.trimStart().startsWith("/") && !selector) {
@@ -219,6 +233,10 @@ export function ChatComposer({
   };
 
   const canSend = (value.trim().length > 0 || attachedFiles.length > 0) && !isLoading && !uploading;
+  const submit = async () => {
+    if (!canSend) return;
+    if (await onSend(value)) setValue("");
+  };
 
   return (
     <div className="relative">
@@ -234,6 +252,7 @@ export function ChatComposer({
           }}
           onToolExecuted={(result) => {
             onToolExecuted(result);
+            setValue("");
             setSelector(null);
           }}
           onClose={() => {
@@ -378,7 +397,7 @@ export function ChatComposer({
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
-              if (canSend) onSend();
+              if (canSend) void submit();
             }
           }}
           onPaste={(e) => {
@@ -478,7 +497,7 @@ export function ChatComposer({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSend();
+                  void submit();
                 }}
                 disabled={!canSend}
                 title={t("chat.send")}

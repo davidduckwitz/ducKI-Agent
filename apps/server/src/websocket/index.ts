@@ -47,6 +47,7 @@ function codingChatRunLabel(prompt: string): string {
 /** Actions the browser control panel (UI-initiated, not agent-initiated) may invoke directly. */
 const ALLOWED_UI_BROWSER_ACTIONS = new Set([
   "list_sessions",
+  "set_default",
   "screenshot",
   "goto",
   "get_content",
