@@ -1,0 +1,103 @@
+{
+  "name": "vision-analyzer",
+  "version": "0.5.1",
+  "description": "Local-first realtime vision for DucKI across integrated browser, opt-in camera and local video files: QR, motion, offline OCR, ONNX object/person detection, per-source tracking, local scene inference and optional agent vision.",
+  "author": "DucKI",
+  "license": "MIT",
+  "icon": "👁️",
+  "category": "workspace",
+  "trust": "node",
+  "permissions": [
+    "browser.frames",
+    "media.camera"
+  ],
+  "enabled": true,
+  "storage": {
+    "sqlite": true
+  },
+  "allowedHosts": [
+    "huggingface.co"
+  ],
+  "provides": {
+    "moduleTools": [
+      "tools/vision.js",
+      "tools/browser.js"
+    ],
+    "skills": [
+      "skills/vision"
+    ],
+    "frontendPage": "frontend/index.html",
+    "widgets": [
+      {
+        "id": "vision-status",
+        "title": "Vision",
+        "page": "widgets/status/index.html",
+        "placement": "sidebar-content",
+        "align": "full",
+        "frame": "card",
+        "background": "card",
+        "height": 120,
+        "width": "full"
+      }
+    ],
+    "settings": [
+      {
+        "key": "VISION_LOCAL_ONLY",
+        "type": "boolean",
+        "default": true,
+        "description": "Disable all Vision-LLM calls. Local features remain available."
+      },
+      {
+        "key": "VISION_LOCAL_AUTO_DETECT",
+        "type": "boolean",
+        "default": true,
+        "description": "Run local ONNX object detection in the background when runtime + model are installed."
+      },
+      {
+        "key": "VISION_LOCAL_OBJECT_FPS",
+        "type": "number",
+        "default": 2,
+        "description": "Target local object-detection rate while a browser stream is active (0.2–15 FPS)."
+      },
+      {
+        "key": "VISION_OBJECT_MODEL",
+        "type": "select",
+        "default": "yolo26n-coco",
+        "options": [
+          "yolo26n-coco"
+        ],
+        "description": "Local object-detection model."
+      },
+      {
+        "key": "VISION_OBJECT_CONFIDENCE",
+        "type": "number",
+        "default": 0.35,
+        "description": "Minimum local object-detection confidence (0.01–0.99)."
+      },
+      {
+        "key": "VISION_OBJECT_IOU",
+        "type": "number",
+        "default": 0.45,
+        "description": "IoU threshold for fallback NMS on raw YOLO outputs."
+      },
+      {
+        "key": "VISION_OBJECT_MAX_DETECTIONS",
+        "type": "number",
+        "default": 50,
+        "description": "Maximum objects returned per local frame."
+      },
+      {
+        "key": "VISION_AUTO_ANALYZE",
+        "type": "boolean",
+        "default": false,
+        "description": "Run LLM vision periodically while a stream is active. Ignored when Local-only is enabled."
+      },
+      {
+        "key": "VISION_ANALYZE_INTERVAL_MS",
+        "type": "number",
+        "default": 5000,
+        "description": "Minimum interval between automatic Vision-LLM analyses."
+      }
+    ]
+  }
+}

@@ -18,11 +18,9 @@ import type { PluginLLMProviderSpec } from "./plugin-manifest.js";
  * the vm surface. `settings`/`secrets` come from the plugin's own settings store; `fetch` is
  * host-guarded by the manifest's allowedHosts; `logger` is namespaced to the plugin.
  *
- * `agent` (vision/transcription/video/text-analysis via the currently configured LLM provider)
- * is only populated for trust:"node" plugins - same bar as moduleTools, since it can trigger
- * real LLM API calls/cost. Sandboxed plugins never see it. Callers of loadPlugins()/loadOnePlugin()
- * that don't pass a `capabilities` factory simply get plugins without this (e.g. metadata-only
- * listing endpoints) - existing behavior for those callers is unchanged.
+ * `agent` is only populated for trust:"node" plugins. Host-owned sub-capabilities are then
+ * scoped by manifest permissions before the context is created; e.g. `agent.browser` is only
+ * present when the plugin declares `browser.frames`. Sandboxed plugins never see it.
  */
 export interface PluginToolContext {
   pluginName: string;
@@ -41,6 +39,20 @@ function createOpenAICompatibleProvider(config: ProviderOptions, name: string): 
   const provider = new OpenAIProvider(config);
   Object.defineProperty(provider, "name", { value: name, enumerable: true, configurable: false });
   return provider;
+}
+
+/**
+ * Build the capability view exposed to one trusted plugin. `trust:"node"` remains the bar for
+ * receiving agent capabilities at all, while individual host-owned surfaces require explicit
+ * manifest permissions. This avoids accidentally exposing browser sessions/frames to every
+ * trusted plugin just because one plugin needs them.
+ */
+function scopedAgentCapabilities(manifest: PluginManifest, capabilities?: AgentCapabilities): AgentCapabilities | undefined {
+  if (manifest.trust !== "node" || !capabilities) return undefined;
+  return {
+    ...capabilities,
+    browser: manifest.permissions.includes("browser.frames") ? capabilities.browser : undefined,
+  };
 }
 
 /** Wrap global fetch so a plugin can only reach hosts on its manifest allowlist. */
@@ -97,7 +109,7 @@ export interface LoadedPluginInfo {
   /** Declarative pet definitions the plugin ships (provides.pets), rendered by the host pet runtime. */
   pets?: PluginPet[];
   /** Connector capability declaration (provides.connector), if this plugin ships one. Loaded and
-   *  lifecycle-managed separately by apps/server/src/lib/connector-registry.ts, not by this file. */
+   * lifecycle-managed separately by apps/server/src/lib/connector-registry.ts, not by this file. */
   connector?: { module: string; portal: string };
   /** Serializable provider declarations; executable factories are kept server-side. */
   llmProviders: PluginLLMProviderSpec[];
@@ -107,6 +119,8 @@ export interface LoadedPluginInfo {
   category?: string;
   /** Trust level ("sandboxed" | "node"). */
   trust: string;
+  /** Explicit host capabilities requested by the manifest. */
+  permissions: string[];
   error?: string;
 }
 
@@ -171,8 +185,6 @@ export function listPluginSkillDirs(root = pluginsRoot()): string[] {
     return [];
   }
   const watchedFiles = [join(root, ".state.json"), ...entries.map((name) => join(root, name, "plugin.json"))];
-  // Cached: re-parsing every plugin.json on every agent turn is wasted work when nothing
-  // changed. Watches .state.json (enable/disable overrides) + each plugin.json (mtime/size).
   return withManifestCache(`plugin-skills:${root}`, watchedFiles, () => {
     const disabled = readDisabledState(root);
     const dirs: string[] = [];
@@ -195,10 +207,7 @@ export function listPluginSkillDirs(root = pluginsRoot()): string[] {
   });
 }
 
-/** Build a ToolExecutor from a plugin script-tool config. Async tools (with `async:true`)
- *  run in an AsyncFunction and receive the enriched `toolContext` (storage, settings, secrets,
- *  guarded fetch, logger); sync tools reuse the shared vm sandbox with only `{ pluginName }` -
- *  no secrets, no fetch - matching dynamic (tool_factory) tools. */
+/** Build a ToolExecutor from a plugin script-tool config. */
 function buildScriptTool(
   cfg: { name: string; description: string; parameters?: Record<string, unknown>; script: string; async?: boolean },
   ctx: PluginToolContext,
@@ -223,7 +232,6 @@ function buildScriptTool(
   };
 }
 
-/** Shape a module tool must export. */
 interface ModuleToolExports {
   definition?: { name?: string; description?: string; parameters?: Record<string, unknown> };
   name?: string;
@@ -232,11 +240,6 @@ interface ModuleToolExports {
   execute: (input: Record<string, unknown>, ctx: PluginToolContext) => Promise<unknown> | unknown;
 }
 
-/**
- * Load an ESM module tool (.js/.mjs) from `absPath`. The module runs in the full Node scope
- * and gets the enriched context. Only reached for trust: "node" plugins. Import is cache-busted
- * with a query so a hot-reload picks up edited files.
- */
 async function buildModuleTool(absPath: string, ctx: PluginToolContext): Promise<ToolExecutor> {
   const url = `${pathToFileURL(absPath).href}?v=${Date.now()}`;
   const mod = (await import(url)) as ModuleToolExports & { default?: ModuleToolExports };
@@ -264,12 +267,6 @@ async function buildModuleTool(absPath: string, ctx: PluginToolContext): Promise
   };
 }
 
-/**
- * Auto-generated storage tool for any plugin that opts into `storage.sqlite`. It gives the
- * AGENT a first-class way to read/write the plugin's OWN private database (the same isolated
- * file plugin-storage manages) without the plugin author hand-writing a tool. Scoped strictly
- * to that one plugin's DB - it cannot reach the main database or another plugin's data.
- */
 function buildStorageTool(pluginName: string, storage: PluginStorage): ToolExecutor {
   const toolName = `${pluginName.replace(/-/g, "_")}_storage`;
   return {
@@ -337,7 +334,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
   const info: LoadedPluginInternal = {
     name, version: "?", description: "", enabled,
     hasStorage: false, toolNames: [], skillDirs: [], mappings: [], settings: [],
-    oauth: [], llmProviders: [], widgets: [], trust: "sandboxed", tools: [], providerFactories: [],
+    oauth: [], llmProviders: [], widgets: [], trust: "sandboxed", permissions: [], tools: [], providerFactories: [],
   };
 
   const manifestPath = join(dir, "plugin.json");
@@ -382,6 +379,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
   info.icon = manifest.icon;
   info.category = manifest.category;
   info.trust = manifest.trust;
+  info.permissions = [...manifest.permissions];
 
   if (name !== manifest.name) {
     info.error = `manifest name '${manifest.name}' must match directory '${name}'`;
@@ -390,8 +388,6 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
 
   try {
     const storage = manifest.storage?.sqlite ? openPluginDb(manifest.name) : undefined;
-    // Decrypted settings/secrets for the runtime context (falls back to defaults). Only read
-    // when the plugin declares settings, so a settings-less plugin never gets a data/ folder.
     const runtime: PluginRuntimeConfig = info.settings.length > 0
       ? await getPluginRuntimeConfig(manifest.name, info.settings)
       : { settings: {}, secrets: {} };
@@ -402,11 +398,10 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
       secrets: runtime.secrets,
       fetch: guardedFetch(manifest.allowedHosts),
       logger: getRootLogger().child(`Plugin:${manifest.name}`),
-      agent: manifest.trust === "node" ? capabilities : undefined,
+      agent: scopedAgentCapabilities(manifest, capabilities),
       createOpenAICompatibleProvider,
     };
 
-    // Every plugin with its own DB gets an auto storage tool the agent can call directly.
     if (storage) {
       const dbTool = buildStorageTool(manifest.name, storage);
       info.tools.push(dbTool); info.toolNames.push(dbTool.name);
@@ -474,11 +469,7 @@ async function loadOnePlugin(root: string, name: string, enabled: boolean, capab
   return info;
 }
 
-/**
- * Scan the plugins/ directory and load every ENABLED plugin. File-first: the manifest is
- * the source of truth, plugins/.state.json only carries user disable overrides. Returns the
- * combined tools, skill dirs, mappings and settings for the caller to wire in.
- */
+/** Scan the plugins/ directory and load every ENABLED plugin. */
 export async function loadPlugins(root = pluginsRoot(), capabilities?: AgentCapabilities): Promise<PluginLoadResult> {
   const logger = getRootLogger().child("Plugins");
   const result: PluginLoadResult = { tools: [], skillDirs: [], mappings: [], settings: [], plugins: [], llmProviders: [] };

@@ -88,12 +88,16 @@ export function getApiBaseUrl(config: BackendConfig = readBackendConfig()): stri
  * instead of the plugin page — the iframe then shows the whole app, recursively. Going through
  * getApiBaseUrl() yields the agent origin (e.g. http://localhost:3001/api) in that case, and a
  * proxied "/api/…" in the browser.
+ *
+ * Page URLs intentionally end with a slash. Plugin pages commonly reference sibling assets
+ * relatively (e.g. <script src="app.js">). Without the trailing slash a browser resolves such
+ * assets one level too high (/ui/app.js instead of /ui/frontend/app.js).
  */
 export function pluginUiUrl(name: string, kind: "settings" | "widget" | "frontend" | "overlay", widgetId?: string): string {
   if (kind === "widget" && widgetId) {
     return `${getApiBaseUrl()}/plugins/${encodeURIComponent(name)}/ui/widgets/${encodeURIComponent(widgetId)}/`;
   }
-  return `${getApiBaseUrl()}/plugins/${encodeURIComponent(name)}/ui/${kind}`;
+  return `${getApiBaseUrl()}/plugins/${encodeURIComponent(name)}/ui/${kind}/`;
 }
 
 /**

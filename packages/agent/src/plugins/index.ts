@@ -18,6 +18,9 @@ export {
   type AgentCapabilities,
   type AgentImageInput,
   type AgentVideoAnalysisResult,
+  type PluginBrowserCapabilities,
+  type PluginBrowserFrame,
+  type PluginBrowserSessionInfo,
 } from "./agent-capabilities.js";
 export {
   parsePluginManifest,
@@ -47,11 +50,6 @@ export type {
   ConnectorModuleExports,
 } from "./connector-types.js";
 
-/**
- * Persist a user enable/disable override to plugins/.state.json. File-first: the manifest
- * stays the default, this file only records what the user turned off, so the main database
- * is never touched.
- */
 export function setPluginEnabled(name: string, enabled: boolean, root = pluginsRoot()): void {
   const disabled = readDisabledState(root);
   if (enabled) disabled.delete(name);

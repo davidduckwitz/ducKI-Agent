@@ -130,6 +130,12 @@ export const PluginManifestSchema = z.object({
    * phases, routes/workers) which run in the full Node scope.
    */
   trust: z.enum(["sandboxed", "node"]).default("sandboxed"),
+  /**
+   * Host capabilities requested by the plugin frontend/runtime. Declaring a permission does
+   * not grant arbitrary access: every capability still has to be explicitly implemented and
+   * checked by the host. Example: "browser.frames" enables the narrow live-frame iframe bridge.
+   */
+  permissions: z.array(z.string().regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/)).max(32).default([]),
   /** Optional fetch host allowlist for the plugin's runtime (empty/absent = any host). */
   allowedHosts: z.array(z.string()).optional(),
   /** Manifest default enabled state; a user override in .state.json wins. */
@@ -193,7 +199,7 @@ export interface ParsedManifest {
   error?: string;
 }
 
-/** Parse + validate a plugin.json string. Never throws - returns a typed result. */
+/** Parse + validate an *.oauth.json string. Never throws. */
 export function parsePluginManifest(raw: string): ParsedManifest {
   let json: unknown;
   try {
