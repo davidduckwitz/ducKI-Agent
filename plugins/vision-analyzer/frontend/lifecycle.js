@@ -7,11 +7,13 @@ window.addEventListener("pagehide", () => {
   currentSession = "";
 
   try {
+    // Parent origin can differ in Tauri/remote mode. The host validates this iframe's exact
+    // origin plus event.source, so wildcard delivery does not widen the privileged bridge.
     parent.postMessage({
       type: "ducki:browser:unsubscribe",
       requestId: crypto.randomUUID(),
       sessionId,
-    }, location.origin);
+    }, "*");
   } catch {}
 
   // keepalive lets Chromium finish this small request while tearing down the iframe. Failure is
