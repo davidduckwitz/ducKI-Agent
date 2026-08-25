@@ -1,10 +1,17 @@
 import type { ToolExecutor } from "@ducki/shared";
-import { loadPlugins, createAgentCapabilities, type LoadedPluginInfo, type AgentCapabilities, type LoadedPluginLLMProvider, type PluginBrowserFrame, type PluginBrowserSessionInfo } from "@ducki/agent";
+import { loadPlugins, createAgentCapabilities, type LoadedPluginInfo, type AgentCapabilities, type LoadedPluginLLMProvider } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { browserTool, browserFrameEvents } from "@ducki/tools";
 import { agentRegistry } from "./agent-registry.js";
 import { loadProviderFromSettings, setPluginLLMProviders } from "./provider-settings.js";
+
+type BrowserFrame = NonNullable<AgentCapabilities["browser"]> extends infer B
+  ? B extends { getFrame(...args: any[]): Promise<infer F> } ? F : never
+  : never;
+type BrowserSessionInfo = NonNullable<AgentCapabilities["browser"]> extends infer B
+  ? B extends { listSessions(): Promise<Array<infer S>> } ? S : never
+  : never;
 
 function unwrapBrowserData(result: Awaited<ReturnType<typeof browserTool.execute>>): Record<string, unknown> {
   if (!result.success) throw new Error(result.error ?? "Browser operation failed");
@@ -13,7 +20,7 @@ function unwrapBrowserData(result: Awaited<ReturnType<typeof browserTool.execute
 
 function wireBrowserCapabilities(capabilities: AgentCapabilities): void {
   capabilities.browser = {
-    async listSessions(): Promise<PluginBrowserSessionInfo[]> {
+    async listSessions(): Promise<BrowserSessionInfo[]> {
       const data = unwrapBrowserData(await browserTool.execute({ action: "list_sessions" }));
       const rows = Array.isArray(data["sessions"]) ? data["sessions"] : [];
       return rows.map((entry) => {
@@ -25,10 +32,10 @@ function wireBrowserCapabilities(capabilities: AgentCapabilities): void {
           launchedAt: row["launchedAt"] ? String(row["launchedAt"]) : undefined,
           isDefault: row["isDefault"] === true,
         };
-      }).filter((entry) => entry.sessionId.length > 0);
+      }).filter((entry) => entry.sessionId.length > 0) as BrowserSessionInfo[];
     },
 
-    async getFrame(sessionId?: string): Promise<PluginBrowserFrame> {
+    async getFrame(sessionId?: string): Promise<BrowserFrame> {
       const data = unwrapBrowserData(await browserTool.execute({
         action: "screenshot",
         ...(sessionId ? { sessionId } : {}),
@@ -47,7 +54,7 @@ function wireBrowserCapabilities(capabilities: AgentCapabilities): void {
         timestamp: String(metadata["timestamp"] ?? new Date().toISOString()),
         width: Number(metadata["width"] ?? 0) || undefined,
         height: Number(metadata["height"] ?? 0) || undefined,
-      };
+      } as BrowserFrame;
     },
 
     async startStream(sessionId?: string): Promise<string> {
@@ -61,7 +68,7 @@ function wireBrowserCapabilities(capabilities: AgentCapabilities): void {
       unwrapBrowserData(await browserTool.execute({ action: "stream_stop", sessionId }));
     },
 
-    subscribeFrames(sessionId: string, handler: (frame: PluginBrowserFrame) => void): () => void {
+    subscribeFrames(sessionId: string, handler: (frame: BrowserFrame) => void): () => void {
       const listener = (payload: unknown) => {
         const frame = payload as Record<string, unknown>;
         if (String(frame["sessionId"] ?? "") !== sessionId) return;
@@ -72,7 +79,7 @@ function wireBrowserCapabilities(capabilities: AgentCapabilities): void {
           timestamp: String(frame["timestamp"] ?? new Date().toISOString()),
           width: Number(frame["width"] ?? 0) || undefined,
           height: Number(frame["height"] ?? 0) || undefined,
-        });
+        } as BrowserFrame);
       };
       browserFrameEvents.on("frame", listener);
       return () => browserFrameEvents.off("frame", listener);
