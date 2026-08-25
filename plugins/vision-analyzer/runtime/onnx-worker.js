@@ -16,9 +16,7 @@ let runtimePromise;
 let sharpPromise;
 let cachedModelPath = "";
 let cachedSession = null;
-let activeTracks = [];
-let nextTrackId = 1;
-let trackerFrame = 0;
+const trackerStates = new Map();
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -38,10 +36,18 @@ async function sessionFor(ort, modelPath) {
   if (cachedSession && cachedModelPath === modelPath) return cachedSession;
   cachedSession = await ort.InferenceSession.create(modelPath);
   cachedModelPath = modelPath;
-  activeTracks = [];
-  nextTrackId = 1;
-  trackerFrame = 0;
+  trackerStates.clear();
   return cachedSession;
+}
+
+function trackerFor(key) {
+  const safeKey = String(key || "default").slice(0, 256);
+  let state = trackerStates.get(safeKey);
+  if (!state) {
+    state = { activeTracks: [], nextTrackId: 1, frame: 0 };
+    trackerStates.set(safeKey, state);
+  }
+  return state;
 }
 
 async function preprocess(sharp, imageBuffer, size) {
@@ -256,8 +262,9 @@ function shapeDetections(items) {
   return { people, objects };
 }
 
-function assignTrackIds(shaped) {
-  trackerFrame += 1;
+function assignTrackIds(shaped, trackingKey) {
+  const tracker = trackerFor(trackingKey);
+  tracker.frame += 1;
   const detections = [
     ...shaped.people.map((entry) => ({ entry, classId: entry.classId, kind: "person" })),
     ...shaped.objects.map((entry) => ({ entry, classId: entry.classId, kind: entry.type })),
@@ -267,7 +274,7 @@ function assignTrackIds(shaped) {
   for (const detection of detections) {
     let best = null;
     let bestIou = 0.35;
-    for (const track of activeTracks) {
+    for (const track of tracker.activeTracks) {
       if (used.has(track.id) || track.classId !== detection.classId) continue;
       const overlap = bboxIou(track.bbox, detection.entry.bbox);
       if (overlap > bestIou) {
@@ -278,16 +285,16 @@ function assignTrackIds(shaped) {
 
     if (!best) {
       best = {
-        id: nextTrackId++,
+        id: tracker.nextTrackId++,
         classId: detection.classId,
         kind: detection.kind,
         bbox: detection.entry.bbox,
-        lastSeen: trackerFrame,
+        lastSeen: tracker.frame,
       };
-      activeTracks.push(best);
+      tracker.activeTracks.push(best);
     } else {
       best.bbox = detection.entry.bbox;
-      best.lastSeen = trackerFrame;
+      best.lastSeen = tracker.frame;
       best.kind = detection.kind;
     }
 
@@ -295,8 +302,8 @@ function assignTrackIds(shaped) {
     detection.entry.trackId = best.id;
   }
 
-  activeTracks = activeTracks.filter((track) => trackerFrame - track.lastSeen <= 8);
-  return shaped;
+  tracker.activeTracks = tracker.activeTracks.filter((track) => tracker.frame - track.lastSeen <= 8);
+  return { shaped, activeTracks: tracker.activeTracks.length };
 }
 
 async function detect(message) {
@@ -321,16 +328,20 @@ async function detect(message) {
 
   let items = parseEndToEnd(output, prep, threshold, maxDetections);
   if (!items) items = parseRawYolo(output, prep, threshold, iouThreshold, maxDetections);
-  const result = assignTrackIds(shapeDetections(items));
+  const tracked = assignTrackIds(shapeDetections(items), message.trackingKey);
 
   return {
-    ...result,
+    ...tracked.shaped,
     inferenceMs: Math.round(inferenceMs * 10) / 10,
     inputSize,
     outputShape: output.dims ?? [],
     sourceWidth: prep.sourceWidth,
     sourceHeight: prep.sourceHeight,
-    tracking: { type: "iou", activeTracks: activeTracks.length },
+    tracking: {
+      type: "iou",
+      key: String(message.trackingKey || "default").slice(0, 256),
+      activeTracks: tracked.activeTracks,
+    },
   };
 }
 
