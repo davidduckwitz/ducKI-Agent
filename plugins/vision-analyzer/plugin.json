@@ -1,7 +1,7 @@
 {
   "name": "vision-analyzer",
-  "version": "0.4.0",
-  "description": "Local-first realtime browser and camera vision for DucKI: live frames, QR, motion, optional offline OCR, ONNX object/person detection, lightweight tracking and local scene inference, plus opt-in agent vision.",
+  "version": "0.5.0",
+  "description": "Local-first realtime vision for DucKI across integrated browser, opt-in camera and local video files: QR, motion, offline OCR, ONNX object/person detection, per-source tracking, local scene inference and optional agent vision.",
   "author": "DucKI",
   "license": "MIT",
   "icon": "👁️",
