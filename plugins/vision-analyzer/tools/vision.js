@@ -221,6 +221,7 @@ async function runDetector(frame, model, settings) {
       id,
       type: "detect",
       frameBase64: frame.data,
+      trackingKey: String(frame.sessionId || "default"),
       modelPath: modelPath(model),
       inputSize: model.inputSize,
       threshold,
@@ -650,7 +651,7 @@ function closeLocalSource(sessionId) {
 
 export const definition = {
   name: "vision_analyzer",
-  description: "Observe DucKI browser or camera frames with zero-dependency local vision, optional offline OCR/ONNX object detection, local scene inference/tracking, and opt-in LLM vision.",
+  description: "Observe DucKI browser or local media frames with zero-dependency local vision, optional offline OCR/ONNX object detection, local scene inference/tracking, and opt-in LLM vision.",
   parameters: {
     type: "object",
     properties: {
@@ -669,7 +670,7 @@ export const definition = {
       motion: { type: "object" },
       pack: { type: "string", enum: ["ocr", "onnx"] },
       model: { type: "string", enum: ["yolo26n-coco"] },
-      frameBase64: { type: "string", description: "Base64 image data for a local source such as camera. Do not use for browser sessions." },
+      frameBase64: { type: "string", description: "Base64 image data for a local source such as camera/video. Do not use for browser sessions." },
       frameFormat: { type: "string", enum: ["jpeg", "png"] },
     },
     required: ["action"],
