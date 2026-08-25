@@ -193,8 +193,10 @@ function mediaLoop() {
 async function activateMediaFile(file) {
   if (!file) return;
   cleanupMediaSource();
-  if (!String(file.type || "").startsWith("video/")) {
-    throw new Error("Bitte eine Videodatei auswählen.");
+  const mimeLooksVideo = String(file.type || "").startsWith("video/");
+  const extensionLooksVideo = /\.(mp4|webm|ogv|ogg|mov|m4v)$/i.test(String(file.name || ""));
+  if (!mimeLooksVideo && !extensionLooksVideo) {
+    throw new Error("Bitte eine unterstützte Videodatei auswählen.");
   }
 
   if (currentSession && currentSession !== "video:local") {
