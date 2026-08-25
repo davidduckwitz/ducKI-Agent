@@ -16,7 +16,10 @@ const qrDetector = "BarcodeDetector" in window
 
 function request(type, extra = {}) {
   const requestId = crypto.randomUUID();
-  parent.postMessage({ type, requestId, ...extra }, location.origin);
+  // The plugin may be hosted on the backend origin while the parent runs on a Tauri/remote
+  // frontend origin. The parent validates both event.source and this iframe's exact origin, so
+  // wildcard target delivery here is safe and avoids assuming both documents share an origin.
+  parent.postMessage({ type, requestId, ...extra }, "*");
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(requestId);
@@ -418,7 +421,9 @@ async function refreshState() {
 }
 
 window.addEventListener("message", (event) => {
-  if (event.origin !== location.origin) return;
+  // The parent may live on a different origin (remote backend / Tauri). `event.source` is the
+  // fixed parent WindowProxy, so only the actual embedding parent is allowed to drive the UI.
+  if (event.source !== parent) return;
   const msg = event.data || {};
 
   if (msg.type === "ducki:browser:response" && pending.has(msg.requestId)) {
