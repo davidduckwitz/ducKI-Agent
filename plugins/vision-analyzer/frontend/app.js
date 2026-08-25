@@ -65,6 +65,11 @@ function displayObjects(state) {
   };
 }
 
+function trackedLabel(entry, fallback = "object") {
+  const type = entry?.type || fallback;
+  return `${type}${entry?.trackId ? ` #${entry.trackId}` : ""}`;
+}
+
 function renderAnalysis(state) {
   lastRenderedState = state;
   const analysis = state?.analysis || {};
@@ -77,14 +82,17 @@ function renderAnalysis(state) {
   renderList(
     "objects",
     [...shown.people, ...shown.objects],
-    (entry) => `${entry.type || "object"}${entry.confidence ? ` · ${Math.round(entry.confidence * 100)}%` : ""}`,
+    (entry) => `${trackedLabel(entry)}${entry.confidence ? ` · ${Math.round(entry.confidence * 100)}%` : ""}`,
   );
   renderList("text", analysis.text, (entry) => entry.text || "");
   renderList("qr", state?.qrCodes || analysis.qrCodes, (entry) => entry.value || entry.rawValue || "QR");
 
   const detector = state?.detections;
+  const trackingInfo = detector?.tracking?.activeTracks != null
+    ? ` · Tracks ${detector.tracking.activeTracks}`
+    : "";
   const detectorInfo = detector?.inferenceMs
-    ? `\n\nLocal detector: ${detector.model || "ONNX"} · ${detector.inferenceMs} ms`
+    ? `\n\nLocal detector: ${detector.model || "ONNX"} · ${detector.inferenceMs} ms${trackingInfo}`
     : detector?.skipped
       ? `\n\nLocal detector: ${detector.skipped}`
       : "";
@@ -152,7 +160,7 @@ function renderDependencies(status) {
   root.appendChild(createManagerCard(
     "Core Local",
     "✓ bereit",
-    "Browser-Stream, QR-Code und Bewegungserkennung. Keine Installation, kein LLM.",
+    "Browser-Stream, Kamera/Video, QR-Code und Bewegungserkennung. Keine Installation, kein LLM.",
     "Immer aktiv",
     async () => {},
   ));
@@ -378,8 +386,8 @@ function drawOverlay(state) {
   const analysis = state?.analysis || {};
   const shown = displayObjects(state);
   const entries = [
-    ...shown.people.map((entry) => ({ ...entry, label: "person" })),
-    ...shown.objects.map((entry) => ({ ...entry, label: entry.type || "object" })),
+    ...shown.people.map((entry) => ({ ...entry, label: trackedLabel(entry, "person") })),
+    ...shown.objects.map((entry) => ({ ...entry, label: trackedLabel(entry) })),
     ...(analysis.text || []).map((entry) => ({ ...entry, label: String(entry.text || "text").slice(0, 32) })),
     ...(state?.qrCodes || analysis.qrCodes || []).map((entry) => ({ ...entry, label: "QR" })),
   ];
