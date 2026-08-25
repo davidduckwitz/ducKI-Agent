@@ -1,0 +1,34 @@
+{
+  "name": "vision-analyzer",
+  "version": "0.1.0",
+  "description": "Realtime browser vision for DucKI: live frames, QR detection and agent-backed visual analysis.",
+  "author": "DucKI",
+  "license": "MIT",
+  "icon": "👁️",
+  "category": "workspace",
+  "trust": "node",
+  "enabled": true,
+  "storage": { "sqlite": true },
+  "provides": {
+    "moduleTools": ["tools/vision.js"],
+    "skills": ["skills/vision"],
+    "frontendPage": "frontend/index.html",
+    "widgets": [
+      {
+        "id": "vision-status",
+        "title": "Vision",
+        "page": "widgets/status/index.html",
+        "placement": "sidebar-content",
+        "align": "full",
+        "frame": "card",
+        "background": "card",
+        "height": 120,
+        "width": "full"
+      }
+    ],
+    "settings": [
+      { "key": "VISION_AUTO_ANALYZE", "type": "boolean", "default": false, "description": "Run LLM vision periodically while a stream is active." },
+      { "key": "VISION_ANALYZE_INTERVAL_MS", "type": "number", "default": 5000, "description": "Minimum interval between automatic vision analyses." }
+    ]
+  }
+}

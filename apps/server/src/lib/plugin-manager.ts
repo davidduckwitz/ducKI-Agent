@@ -1,19 +1,85 @@
 import type { ToolExecutor } from "@ducki/shared";
-import { loadPlugins, createAgentCapabilities, type LoadedPluginInfo, type AgentCapabilities, type LoadedPluginLLMProvider } from "@ducki/agent";
+import { loadPlugins, createAgentCapabilities, type LoadedPluginInfo, type AgentCapabilities, type LoadedPluginLLMProvider, type PluginBrowserFrame, type PluginBrowserSessionInfo } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
+import { browserTool, browserFrameEvents } from "@ducki/tools";
 import { agentRegistry } from "./agent-registry.js";
 import { loadProviderFromSettings, setPluginLLMProviders } from "./provider-settings.js";
 
-/**
- * Holds the current set of plugin tools and reloads them on enable/disable/install.
- *
- * SAFETY CONTRACT: a reload NEVER interrupts a running agent. Per-request agents capture
- * their tool set at creation time, so swapping this.tools only affects agents created
- * AFTERWARDS. Additionally, a reload is only APPLIED when no agent is active
- * (agentRegistry.runningCount === 0); if agents are busy, it is deferred and applied the
- * moment the system next goes idle (via the agentRegistry subscription).
- */
+function unwrapBrowserData(result: Awaited<ReturnType<typeof browserTool.execute>>): Record<string, unknown> {
+  if (!result.success) throw new Error(result.error ?? "Browser operation failed");
+  return (result.data ?? {}) as Record<string, unknown>;
+}
+
+function wireBrowserCapabilities(capabilities: AgentCapabilities): void {
+  capabilities.browser = {
+    async listSessions(): Promise<PluginBrowserSessionInfo[]> {
+      const data = unwrapBrowserData(await browserTool.execute({ action: "list_sessions" }));
+      const rows = Array.isArray(data["sessions"]) ? data["sessions"] : [];
+      return rows.map((entry) => {
+        const row = entry as Record<string, unknown>;
+        return {
+          sessionId: String(row["sessionId"] ?? row["tabId"] ?? ""),
+          url: row["url"] ? String(row["url"]) : undefined,
+          title: row["title"] ? String(row["title"]) : undefined,
+          launchedAt: row["launchedAt"] ? String(row["launchedAt"]) : undefined,
+          isDefault: row["isDefault"] === true,
+        };
+      }).filter((entry) => entry.sessionId.length > 0);
+    },
+
+    async getFrame(sessionId?: string): Promise<PluginBrowserFrame> {
+      const data = unwrapBrowserData(await browserTool.execute({
+        action: "screenshot",
+        ...(sessionId ? { sessionId } : {}),
+        preferLive: true,
+        screenshotFormat: "jpeg",
+        screenshotQuality: 70,
+      }));
+      const metadata = (data["metadata"] ?? {}) as Record<string, unknown>;
+      const resolvedSessionId = String(data["sessionId"] ?? sessionId ?? "");
+      const screenshot = String(data["screenshot"] ?? "");
+      if (!resolvedSessionId || !screenshot) throw new Error("Browser returned no frame");
+      return {
+        sessionId: resolvedSessionId,
+        data: screenshot,
+        format: String(metadata["format"] ?? "jpeg"),
+        timestamp: String(metadata["timestamp"] ?? new Date().toISOString()),
+        width: Number(metadata["width"] ?? 0) || undefined,
+        height: Number(metadata["height"] ?? 0) || undefined,
+      };
+    },
+
+    async startStream(sessionId?: string): Promise<string> {
+      const data = unwrapBrowserData(await browserTool.execute({ action: "stream_start", ...(sessionId ? { sessionId } : {}) }));
+      const resolved = String(data["sessionId"] ?? sessionId ?? "");
+      if (!resolved) throw new Error("No browser session available for stream_start");
+      return resolved;
+    },
+
+    async stopStream(sessionId: string): Promise<void> {
+      unwrapBrowserData(await browserTool.execute({ action: "stream_stop", sessionId }));
+    },
+
+    subscribeFrames(sessionId: string, handler: (frame: PluginBrowserFrame) => void): () => void {
+      const listener = (payload: unknown) => {
+        const frame = payload as Record<string, unknown>;
+        if (String(frame["sessionId"] ?? "") !== sessionId) return;
+        handler({
+          sessionId,
+          data: String(frame["data"] ?? ""),
+          format: String(frame["format"] ?? "jpeg"),
+          timestamp: String(frame["timestamp"] ?? new Date().toISOString()),
+          width: Number(frame["width"] ?? 0) || undefined,
+          height: Number(frame["height"] ?? 0) || undefined,
+        });
+      };
+      browserFrameEvents.on("frame", listener);
+      return () => browserFrameEvents.off("frame", listener);
+    },
+  };
+}
+
 export class PluginManager {
   private tools: ToolExecutor[] = [];
   private plugins: LoadedPluginInfo[] = [];
@@ -25,18 +91,13 @@ export class PluginManager {
   private readonly capabilities: AgentCapabilities;
 
   private constructor(db: DatabaseService) {
-    // Lazy, no-cache provider lookup: every capability call re-resolves the CURRENTLY
-    // configured provider (see provider-settings.ts) instead of pinning it at construction
-    // time, so a settings change takes effect on a plugin's very next capability call without
-    // needing a plugin reload.
     this.capabilities = createAgentCapabilities(db, this.logger, async () => (await loadProviderFromSettings(db)).provider);
-    // Apply any deferred reload as soon as the last active agent finishes.
+    wireBrowserCapabilities(this.capabilities);
     agentRegistry.subscribe((snap) => {
       if (this.pending && snap.runningCount === 0) void this.apply("idle");
     });
   }
 
-  /** Async factory - loadPlugins is async (module tools import ESM, settings read from disk). */
   static async create(db: DatabaseService): Promise<PluginManager> {
     const mgr = new PluginManager(db);
     const loaded = await loadPlugins(undefined, mgr.capabilities);
@@ -47,47 +108,26 @@ export class PluginManager {
     return mgr;
   }
 
-  /** Current unwrapped plugin tools; the agent factory wraps + registers these per request. */
-  getTools(): ToolExecutor[] {
-    return this.tools;
-  }
+  getTools(): ToolExecutor[] { return this.tools; }
+  getPlugins(): LoadedPluginInfo[] { return this.plugins; }
+  getLLMProviders(): LoadedPluginLLMProvider[] { return this.llmProviders; }
 
-  getPlugins(): LoadedPluginInfo[] {
-    return this.plugins;
-  }
-
-  getLLMProviders(): LoadedPluginLLMProvider[] {
-    return this.llmProviders;
-  }
-
-  /**
-   * Request a reload. Rapid successive requests (enable/disable/settings-save bursts) are
-   * COALESCED via a short debounce so we run at most one loadPlugins() per burst instead of one
-   * per call. If agents are busy the reload is deferred until the system next goes idle.
-   * Returns whether it applied now or was deferred.
-   */
   requestReload(): { applied: boolean; deferred: boolean } {
     if (agentRegistry.snapshot().runningCount === 0) {
       if (this.debounceTimer) clearTimeout(this.debounceTimer);
       this.debounceTimer = setTimeout(() => {
         this.debounceTimer = undefined;
-        // Re-check at fire time: never swap the tool set out from under a run that just started.
         if (agentRegistry.snapshot().runningCount === 0) void this.apply("request");
         else this.pending = true;
       }, this.debounceMs);
       return { applied: true, deferred: false };
     }
     this.pending = true;
-    this.logger.info("Plugin reload deferred until agents are idle", {
-      runningAgents: agentRegistry.snapshot().runningCount,
-    });
+    this.logger.info("Plugin reload deferred until agents are idle", { runningAgents: agentRegistry.snapshot().runningCount });
     return { applied: false, deferred: true };
   }
 
-  /** Whether a reload is queued (agents currently busy). */
-  isReloadPending(): boolean {
-    return this.pending;
-  }
+  isReloadPending(): boolean { return this.pending; }
 
   private async apply(reason: string): Promise<void> {
     const loaded = await loadPlugins(undefined, this.capabilities);
