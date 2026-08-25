@@ -1,13 +1,21 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { Worker } from "node:worker_threads";
 
 const execFileAsync = promisify(execFile);
-const require = createRequire(import.meta.url);
+const require = createRequire(fileURLToPath(import.meta.url));
 const pluginRoot = fileURLToPath(new URL("..", import.meta.url));
+const modelsRoot = join(pluginRoot, "models");
 const sessions = new Map();
 let ocrWorkerPromise = null;
+let detectorWorker = null;
+let detectorSequence = 0;
+const detectorPending = new Map();
 
 const DEPENDENCY_PACKS = {
   ocr: {
@@ -20,11 +28,30 @@ const DEPENDENCY_PACKS = {
   onnx: {
     id: "onnx",
     label: "Local Vision Runtime",
-    description: "ONNX Runtime + Sharp als lokale Basis für YOLO/Object Detection. Kein Modell wird automatisch ausgeführt.",
-    packages: ["onnxruntime-node@1.29.0", "sharp@0.35.3"],
+    description: "ONNX Runtime + Sharp für lokale Personen- und Objekterkennung. Das Erkennungsmodell wird separat installiert.",
+    packages: ["onnxruntime-node@1.27.0", "sharp@0.35.3"],
+    installArgs: ["--onnxruntime-node-install=skip"],
     probes: ["onnxruntime-node", "sharp"],
   },
 };
+
+const MODEL_CATALOG = {
+  "yolo26n-coco": {
+    id: "yolo26n-coco",
+    label: "YOLO26n · COCO 80",
+    description: "Kleines 640×640-ONNX-Modell für Personen und 79 weitere COCO-Objektklassen.",
+    filename: "yolo26n-coco.onnx",
+    downloadUrl: "https://huggingface.co/zwh20081/yolo26-onnx/resolve/main/yolo26n.onnx?download=true",
+    sourceUrl: "https://huggingface.co/zwh20081/yolo26-onnx",
+    sha256: "356b2726bbdba982e2a304e14b4d9a18b2726b7705b3206093d21331e4dbdd98",
+    license: "AGPL-3.0",
+    inputSize: 640,
+  },
+};
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
 function isInstalled(moduleName) {
   try {
@@ -53,10 +80,43 @@ function dependencyStatus() {
   };
 }
 
+function modelPath(model) {
+  return join(modelsRoot, model.filename);
+}
+
+function modelStatus() {
+  const models = Object.values(MODEL_CATALOG).map((model) => {
+    const path = modelPath(model);
+    const installed = existsSync(path);
+    let sizeBytes = 0;
+    if (installed) {
+      try { sizeBytes = statSync(path).size; } catch {}
+    }
+    return {
+      id: model.id,
+      label: model.label,
+      description: model.description,
+      installed,
+      sizeBytes,
+      license: model.license,
+      sourceUrl: model.sourceUrl,
+      expectedSha256: model.sha256,
+      inputSize: model.inputSize,
+    };
+  });
+  return { models };
+}
+
 function packFor(id) {
   const pack = DEPENDENCY_PACKS[id];
   if (!pack) throw new Error(`Unknown dependency pack '${id}'`);
   return pack;
+}
+
+function catalogModel(id) {
+  const model = MODEL_CATALOG[id];
+  if (!model) throw new Error(`Unknown vision model '${id}'`);
+  return model;
 }
 
 async function runNpm(args) {
@@ -76,23 +136,153 @@ async function runNpm(args) {
   }
 }
 
-async function installPack(id) {
+function stopLocalDetectorTimers() {
+  for (const state of sessions.values()) {
+    if (state.localTimer) clearInterval(state.localTimer);
+    state.localTimer = null;
+    state.localDetectBusy = false;
+  }
+}
+
+function rejectDetectorPending(error) {
+  for (const [id, entry] of detectorPending) {
+    clearTimeout(entry.timer);
+    entry.reject(error);
+    detectorPending.delete(id);
+  }
+}
+
+async function stopDetectorWorker() {
+  const worker = detectorWorker;
+  detectorWorker = null;
+  rejectDetectorPending(new Error("Local detector stopped"));
+  if (worker) {
+    try { await worker.terminate(); } catch {}
+  }
+}
+
+function ensureDetectorWorker() {
+  if (detectorWorker) return detectorWorker;
+  if (!DEPENDENCY_PACKS.onnx.probes.every(isInstalled)) {
+    throw new Error("Local Vision Runtime is not installed");
+  }
+
+  const worker = new Worker(new URL("../runtime/onnx-worker.js", import.meta.url));
+  detectorWorker = worker;
+
+  worker.on("message", (message) => {
+    const entry = detectorPending.get(message?.id);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    detectorPending.delete(message.id);
+    if (message.ok) entry.resolve(message.result);
+    else entry.reject(new Error(message.error || "Local detector failed"));
+  });
+
+  worker.on("error", (error) => {
+    if (detectorWorker === worker) detectorWorker = null;
+    rejectDetectorPending(error instanceof Error ? error : new Error(String(error)));
+  });
+
+  worker.on("exit", (code) => {
+    if (detectorWorker !== worker) return;
+    detectorWorker = null;
+    if (code !== 0) rejectDetectorPending(new Error(`Local detector worker exited with code ${code}`));
+  });
+
+  return worker;
+}
+
+async function runDetector(frame, model, settings) {
+  const worker = ensureDetectorWorker();
+  const id = `vision_${Date.now()}_${++detectorSequence}`;
+  const threshold = clamp(Number(settings?.VISION_OBJECT_CONFIDENCE ?? 0.35), 0.01, 0.99);
+  const iouThreshold = clamp(Number(settings?.VISION_OBJECT_IOU ?? 0.45), 0.01, 0.99);
+  const maxDetections = Math.max(1, Math.min(300, Number(settings?.VISION_OBJECT_MAX_DETECTIONS ?? 50)));
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      detectorPending.delete(id);
+      reject(new Error("Local object detection timed out"));
+    }, 45_000);
+    detectorPending.set(id, { resolve, reject, timer });
+    worker.postMessage({
+      id,
+      type: "detect",
+      frameBase64: frame.data,
+      modelPath: modelPath(model),
+      inputSize: model.inputSize,
+      threshold,
+      iouThreshold,
+      maxDetections,
+    });
+  });
+}
+
+async function installPack(id, context) {
   const pack = packFor(id);
-  if (pack.probes.every(isInstalled)) return { changed: false, status: dependencyStatus() };
-  const output = await runNpm(["install", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", ...pack.packages]);
-  return { changed: true, output: output.slice(-2000), status: dependencyStatus() };
+  if (pack.probes.every(isInstalled)) return { changed: false, status: dependencyStatus(), models: modelStatus() };
+  const output = await runNpm(["install", "--no-save", "--package-lock=false", "--workspaces=false", "--no-audit", "--no-fund", ...(pack.installArgs ?? []), ...pack.packages]);
+  if (id === "onnx") {
+    for (const state of sessions.values()) {
+      if (state.running) startLocalDetectorTimer(context, state);
+    }
+  }
+  return { changed: true, output: output.slice(-2000), status: dependencyStatus(), models: modelStatus() };
 }
 
 async function removePack(id) {
   const pack = packFor(id);
-  if (!pack.probes.some(isInstalled)) return { changed: false, status: dependencyStatus() };
+  if (!pack.probes.some(isInstalled)) return { changed: false, status: dependencyStatus(), models: modelStatus() };
   if (id === "ocr" && ocrWorkerPromise) {
     try { (await ocrWorkerPromise)?.terminate?.(); } catch {}
     ocrWorkerPromise = null;
   }
+  if (id === "onnx") {
+    stopLocalDetectorTimers();
+    await stopDetectorWorker();
+  }
   const names = pack.packages.map((entry) => entry.replace(/@\d+(?:\.\d+){0,2}$/, ""));
-  const output = await runNpm(["uninstall", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", ...names]);
-  return { changed: true, output: output.slice(-2000), status: dependencyStatus() };
+  const output = await runNpm(["uninstall", "--no-save", "--package-lock=false", "--workspaces=false", "--no-audit", "--no-fund", ...names]);
+  return { changed: true, output: output.slice(-2000), status: dependencyStatus(), models: modelStatus() };
+}
+
+async function installModel(id, context) {
+  const model = catalogModel(id);
+  const path = modelPath(model);
+  if (existsSync(path)) return { changed: false, status: modelStatus() };
+
+  mkdirSync(modelsRoot, { recursive: true });
+  const response = await context.fetch(model.downloadUrl);
+  if (!response.ok) throw new Error(`Model download failed: HTTP ${response.status}`);
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (contentLength > 100 * 1024 * 1024) throw new Error("Model download exceeds 100 MB safety limit");
+
+  const data = Buffer.from(await response.arrayBuffer());
+  if (data.byteLength > 100 * 1024 * 1024) throw new Error("Model download exceeds 100 MB safety limit");
+  const digest = createHash("sha256").update(data).digest("hex");
+  if (digest !== model.sha256) {
+    throw new Error(`Model checksum mismatch. Expected ${model.sha256}, got ${digest}`);
+  }
+
+  const temp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(temp, data);
+  renameSync(temp, path);
+
+  for (const state of sessions.values()) {
+    if (state.running) startLocalDetectorTimer(context, state);
+  }
+  return { changed: true, status: modelStatus() };
+}
+
+async function removeModel(id) {
+  const model = catalogModel(id);
+  const path = modelPath(model);
+  if (!existsSync(path)) return { changed: false, status: modelStatus() };
+  stopLocalDetectorTimers();
+  await stopDetectorWorker();
+  rmSync(path, { force: true });
+  return { changed: true, status: modelStatus() };
 }
 
 function stateFor(sessionId) {
@@ -105,9 +295,13 @@ function stateFor(sessionId) {
       analysis: null,
       qrCodes: [],
       motion: { score: 0, active: false },
+      detections: { people: [], objects: [], inferenceMs: null, model: null, frameAt: null },
       updatedAt: null,
       unsubscribe: null,
       timer: null,
+      localTimer: null,
+      localDetectBusy: false,
+      lastDetectedFrameAt: null,
     };
     sessions.set(sessionId, state);
   }
@@ -122,7 +316,9 @@ function publicState(state) {
     analysis: state.analysis,
     qrCodes: state.qrCodes,
     motion: state.motion,
+    detections: state.detections,
     dependencies: dependencyStatus(),
+    models: modelStatus(),
     updatedAt: state.updatedAt,
   };
 }
@@ -153,26 +349,126 @@ async function runLocalOcr(frame) {
   const text = String(result?.data?.text ?? "").trim();
   if (!text) return [];
   const confidence = Number(result?.data?.confidence ?? 0) / 100;
-  return [{ text, confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : undefined }];
+  return [{
+    text,
+    confidence: Number.isFinite(confidence) ? clamp(confidence, 0, 1) : undefined,
+  }];
+}
+
+function selectedModel(context) {
+  const requested = String(context.settings?.VISION_OBJECT_MODEL ?? "yolo26n-coco");
+  const model = MODEL_CATALOG[requested] ?? MODEL_CATALOG["yolo26n-coco"];
+  return existsSync(modelPath(model)) ? model : null;
+}
+
+async function runLocalObjects(context, frame) {
+  const runtimeReady = DEPENDENCY_PACKS.onnx.probes.every(isInstalled);
+  const model = selectedModel(context);
+  if (!runtimeReady || !model) {
+    return {
+      people: [],
+      objects: [],
+      inferenceMs: null,
+      model: model?.id ?? null,
+      skipped: !runtimeReady ? "Local Vision Runtime not installed" : "Object detection model not installed",
+    };
+  }
+  const result = await runDetector(frame, model, context.settings);
+  return { ...result, model: model.id };
+}
+
+async function updateBackgroundDetections(context, state) {
+  if (state.localDetectBusy || !state.latestFrame) return;
+  if (state.lastDetectedFrameAt === state.latestFrame.timestamp) return;
+  state.localDetectBusy = true;
+  const frame = state.latestFrame;
+  try {
+    const detection = await runLocalObjects(context, frame);
+    state.detections = {
+      people: detection.people ?? [],
+      objects: detection.objects ?? [],
+      inferenceMs: detection.inferenceMs ?? null,
+      model: detection.model ?? null,
+      outputShape: detection.outputShape,
+      frameAt: frame.timestamp,
+      skipped: detection.skipped,
+    };
+    state.lastDetectedFrameAt = frame.timestamp;
+    state.updatedAt = new Date().toISOString();
+    if (state.analysis?.source === "local") {
+      state.analysis.people = state.detections.people;
+      state.analysis.objects = state.detections.objects;
+      state.analysis.objectDetection = state.detections;
+    }
+  } catch (error) {
+    state.detections = {
+      ...state.detections,
+      error: error instanceof Error ? error.message : String(error),
+      frameAt: frame.timestamp,
+    };
+  } finally {
+    state.localDetectBusy = false;
+  }
+}
+
+function startLocalDetectorTimer(context, state) {
+  if (state.localTimer) return;
+  if (context.settings?.VISION_LOCAL_AUTO_DETECT === false) return;
+  if (!DEPENDENCY_PACKS.onnx.probes.every(isInstalled) || !selectedModel(context)) return;
+  const fps = clamp(Number(context.settings?.VISION_LOCAL_OBJECT_FPS ?? 2), 0.2, 15);
+  const interval = Math.max(67, Math.round(1000 / fps));
+  state.localTimer = setInterval(() => {
+    void updateBackgroundDetections(context, state);
+  }, interval);
+  void updateBackgroundDetections(context, state);
 }
 
 async function localScan(context, state) {
   const frame = state.latestFrame ?? await context.agent?.browser?.getFrame(state.sessionId);
   if (!frame) throw new Error("No browser frame available");
   state.latestFrame = frame;
-  const text = await runLocalOcr(frame);
+
+  const warnings = [];
+  const [textResult, detectionResult] = await Promise.allSettled([
+    runLocalOcr(frame),
+    runLocalObjects(context, frame),
+  ]);
+  const text = textResult.status === "fulfilled" ? textResult.value : [];
+  if (textResult.status === "rejected") warnings.push(`OCR: ${textResult.reason?.message ?? String(textResult.reason)}`);
+
+  const detection = detectionResult.status === "fulfilled"
+    ? detectionResult.value
+    : { people: [], objects: [], inferenceMs: null, model: null };
+  if (detectionResult.status === "rejected") warnings.push(`Objects: ${detectionResult.reason?.message ?? String(detectionResult.reason)}`);
+
+  state.detections = {
+    people: detection.people ?? [],
+    objects: detection.objects ?? [],
+    inferenceMs: detection.inferenceMs ?? null,
+    model: detection.model ?? null,
+    outputShape: detection.outputShape,
+    frameAt: frame.timestamp,
+    skipped: detection.skipped,
+  };
+  state.lastDetectedFrameAt = frame.timestamp;
+
+  const peopleCount = state.detections.people.length;
+  const objectCount = state.detections.objects.length;
   state.analysis = {
     source: "local",
     scene: null,
-    people: [],
-    objects: [],
+    people: state.detections.people,
+    objects: state.detections.objects,
     text,
     qrCodes: state.qrCodes,
     motion: state.motion,
-    description: text.length
-      ? `Lokaler Scan: ${text.length} Textblock erkannt. QR: ${state.qrCodes.length}.`
-      : `Lokaler Scan ohne OCR-Treffer. QR: ${state.qrCodes.length}.`,
-    available: dependencyStatus(),
+    objectDetection: state.detections,
+    description: `Lokaler Scan: ${peopleCount} Person(en), ${objectCount} Objekt(e), ${text.length} OCR-Block/Blöcke, ${state.qrCodes.length} QR-Code(s).`,
+    warnings,
+    available: {
+      dependencies: dependencyStatus(),
+      models: modelStatus(),
+    },
   };
   state.updatedAt = new Date().toISOString();
   return publicState(state);
@@ -187,7 +483,10 @@ async function analyzeFrame(context, state, question) {
   if (!frame) throw new Error("No browser frame available");
   state.latestFrame = frame;
   const prompt = question || `Analyze this browser frame. Return ONLY compact JSON with keys: scene {label,confidence}, people [{confidence,bbox}], objects [{type,confidence,bbox}], text [{text,confidence,bbox}], qrCodes [{value,bbox}], description. bbox values should be normalized [x,y,width,height] when possible. Do not invent unreadable text or QR values.`;
-  const response = await context.agent.analyzeImage([{ base64: frame.data, mimeType: `image/${frame.format === "png" ? "png" : "jpeg"}` }], prompt);
+  const response = await context.agent.analyzeImage(
+    [{ base64: frame.data, mimeType: `image/${frame.format === "png" ? "png" : "jpeg"}` }],
+    prompt,
+  );
   state.analysis = parseJson(response);
   if (Array.isArray(state.analysis?.qrCodes)) state.qrCodes = state.analysis.qrCodes;
   state.updatedAt = new Date().toISOString();
@@ -197,17 +496,30 @@ async function analyzeFrame(context, state, question) {
 async function start(context, sessionId) {
   if (!context.agent?.browser) throw new Error("Browser capability unavailable");
   const state = stateFor(sessionId);
-  if (state.running) return publicState(state);
+  if (state.running) {
+    startLocalDetectorTimer(context, state);
+    return publicState(state);
+  }
   const resolved = await context.agent.browser.startStream(sessionId);
-  state.sessionId = resolved;
+  if (resolved !== sessionId) {
+    sessions.delete(sessionId);
+    state.sessionId = resolved;
+    sessions.set(resolved, state);
+  }
   state.running = true;
-  state.unsubscribe = context.agent.browser.subscribeFrames(resolved, (frame) => { state.latestFrame = frame; });
+  state.unsubscribe = context.agent.browser.subscribeFrames(resolved, (frame) => {
+    state.latestFrame = frame;
+  });
 
   const auto = context.settings?.VISION_AUTO_ANALYZE === true && context.settings?.VISION_LOCAL_ONLY !== true;
   const interval = Math.max(2000, Number(context.settings?.VISION_ANALYZE_INTERVAL_MS ?? 5000));
   if (auto) {
-    state.timer = setInterval(() => { if (state.latestFrame) void analyzeFrame(context, state).catch(() => {}); }, interval);
+    state.timer = setInterval(() => {
+      if (state.latestFrame) void analyzeFrame(context, state).catch(() => {});
+    }, interval);
   }
+
+  startLocalDetectorTimer(context, state);
   return publicState(state);
 }
 
@@ -215,8 +527,11 @@ async function stop(context, sessionId) {
   const state = stateFor(sessionId);
   if (state.unsubscribe) state.unsubscribe();
   if (state.timer) clearInterval(state.timer);
+  if (state.localTimer) clearInterval(state.localTimer);
   state.unsubscribe = null;
   state.timer = null;
+  state.localTimer = null;
+  state.localDetectBusy = false;
   state.running = false;
   if (context.agent?.browser) await context.agent.browser.stopStream(sessionId).catch(() => {});
   return publicState(state);
@@ -224,27 +539,42 @@ async function stop(context, sessionId) {
 
 export const definition = {
   name: "vision_analyzer",
-  description: "Observe DucKI browser sessions with zero-dependency local vision, optional local OCR/ONNX packs, and opt-in LLM vision.",
+  description: "Observe DucKI browser sessions with zero-dependency local vision, optional local OCR/ONNX object detection, and opt-in LLM vision.",
   parameters: {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["sessions", "start", "stop", "state", "local_scan", "scan", "query", "report_observation", "dependency_status", "dependency_install", "dependency_remove"] },
+      action: {
+        type: "string",
+        enum: [
+          "sessions", "start", "stop", "state", "local_scan", "scan", "query", "report_observation",
+          "dependency_status", "dependency_install", "dependency_remove",
+          "model_status", "model_install", "model_remove",
+        ],
+      },
       sessionId: { type: "string" },
       question: { type: "string" },
       qrCodes: { type: "array", items: { type: "object" } },
       motion: { type: "object" },
-      pack: { type: "string", enum: ["ocr", "onnx"] }
+      pack: { type: "string", enum: ["ocr", "onnx"] },
+      model: { type: "string", enum: ["yolo26n-coco"] },
     },
-    required: ["action"]
-  }
+    required: ["action"],
+  },
 };
 
 export async function execute(input, context) {
   const action = String(input.action ?? "");
+
   if (action === "dependency_status") return dependencyStatus();
-  if (action === "dependency_install") return installPack(String(input.pack ?? ""));
+  if (action === "dependency_install") return installPack(String(input.pack ?? ""), context);
   if (action === "dependency_remove") return removePack(String(input.pack ?? ""));
-  if (!context.agent?.browser && action !== "state" && action !== "report_observation") throw new Error("DucKI browser capability unavailable");
+  if (action === "model_status") return modelStatus();
+  if (action === "model_install") return installModel(String(input.model ?? ""), context);
+  if (action === "model_remove") return removeModel(String(input.model ?? ""));
+
+  if (!context.agent?.browser && action !== "state" && action !== "report_observation") {
+    throw new Error("DucKI browser capability unavailable");
+  }
   if (action === "sessions") return { sessions: await context.agent.browser.listSessions() };
 
   const sessionId = String(input.sessionId ?? "").trim();
@@ -252,30 +582,35 @@ export async function execute(input, context) {
   if (action === "start") return start(context, sessionId);
   if (action === "stop") return stop(context, sessionId);
   if (action === "state") return publicState(stateFor(sessionId));
+
   if (action === "local_scan") {
     const state = stateFor(sessionId);
     state.latestFrame = await context.agent.browser.getFrame(sessionId);
     return localScan(context, state);
   }
+
   if (action === "scan") {
     const state = stateFor(sessionId);
     state.latestFrame = await context.agent.browser.getFrame(sessionId);
     return analyzeFrame(context, state);
   }
+
   if (action === "query") {
     const state = stateFor(sessionId);
     state.latestFrame = await context.agent.browser.getFrame(sessionId);
     return analyzeFrame(context, state, String(input.question ?? "Describe what is happening in this frame."));
   }
+
   if (action === "report_observation") {
     const state = stateFor(sessionId);
     if (Array.isArray(input.qrCodes)) state.qrCodes = input.qrCodes.slice(0, 32);
     if (input.motion && typeof input.motion === "object") {
-      const score = Math.max(0, Math.min(1, Number(input.motion.score ?? 0) || 0));
+      const score = clamp(Number(input.motion.score ?? 0) || 0, 0, 1);
       state.motion = { score, active: input.motion.active === true };
     }
     state.updatedAt = new Date().toISOString();
     return publicState(state);
   }
+
   throw new Error(`Unknown action: ${action}`);
 }
