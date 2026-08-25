@@ -1,31 +1,38 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { getApiBaseUrl, pluginUiUrl } from "../../lib/backendUrl";
 import { usePlugins } from "../../lib/usePlugins";
 import { useAppStore } from "../../lib/store";
 
 /**
- * Full-page host for a plugin mini-app. Host bridges are capability-gated: a same-origin iframe
- * is not enough to receive privileged app data. The raw manifest must explicitly request the
- * capability and the plugin must be trust:"node" before browser frames are exposed.
+ * Full-page host for a plugin mini-app. Host bridges are capability-gated: iframe origin,
+ * WindowProxy and raw-manifest permission are all verified before privileged app data is sent.
  */
 export function PluginFrontendView() {
   const { name = "" } = useParams();
   const { data: plugins } = usePlugins();
   const plugin = plugins?.find((p) => p.name === name);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const subscribedSession = useRef<string>();
+  const subscribedSession = useRef<string | undefined>(undefined);
   const [browserBridgeAllowed, setBrowserBridgeAllowed] = useState(false);
   const socket = useAppStore((s) => s.socket);
   const refreshBrowserSessions = useAppStore((s) => s.refreshBrowserSessions);
 
-  // Read the plugin detail endpoint because it includes the raw manifest. The public plugin-list
-  // type intentionally stays compact; privileged bridge permissions are checked against the
-  // manifest itself instead of being inferred from plugin name or merely trust:"node".
+  const frontendSrc = useMemo(() => pluginUiUrl(name, "frontend"), [name]);
+  const frontendOrigin = useMemo(() => {
+    try {
+      return new URL(frontendSrc, window.location.href).origin;
+    } catch {
+      return "";
+    }
+  }, [frontendSrc]);
+
+  // Read the plugin detail endpoint because it includes the raw manifest. Privileged bridge
+  // permissions are checked against that manifest instead of being inferred from plugin name.
   useEffect(() => {
     let cancelled = false;
     setBrowserBridgeAllowed(false);
-    if (!name || !plugin?.enabled) return () => { cancelled = true; };
+    if (!name || !plugin?.enabled || !frontendOrigin) return () => { cancelled = true; };
 
     void (async () => {
       try {
@@ -49,13 +56,13 @@ export function PluginFrontendView() {
     })();
 
     return () => { cancelled = true; };
-  }, [name, plugin?.enabled]);
+  }, [name, plugin?.enabled, frontendOrigin]);
 
   useEffect(() => {
-    if (!socket || !browserBridgeAllowed) return;
+    if (!socket || !browserBridgeAllowed || !frontendOrigin) return;
 
     const send = (message: unknown) => {
-      iframeRef.current?.contentWindow?.postMessage(message, window.location.origin);
+      iframeRef.current?.contentWindow?.postMessage(message, frontendOrigin);
     };
 
     // The bridge only manages Socket.IO room membership. It deliberately does NOT stop the
@@ -80,7 +87,7 @@ export function PluginFrontendView() {
     };
 
     const onMessage = async (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow) return;
+      if (event.origin !== frontendOrigin || event.source !== iframeRef.current?.contentWindow) return;
       const msg = event.data as { type?: string; requestId?: string; sessionId?: string } | undefined;
       if (!msg?.type?.startsWith("ducki:browser:")) return;
 
@@ -130,7 +137,7 @@ export function PluginFrontendView() {
       window.removeEventListener("message", onMessage);
       unsubscribe();
     };
-  }, [socket, browserBridgeAllowed, refreshBrowserSessions]);
+  }, [socket, browserBridgeAllowed, frontendOrigin, refreshBrowserSessions]);
 
   if (plugin && (!plugin.frontendPage || !plugin.enabled)) {
     return (
@@ -149,7 +156,7 @@ export function PluginFrontendView() {
       <iframe
         ref={iframeRef}
         title={`${name} Frontend`}
-        src={pluginUiUrl(name, "frontend")}
+        src={frontendSrc}
         sandbox="allow-scripts allow-forms allow-same-origin"
         className="min-h-0 flex-1 w-full border-0 bg-background"
       />
