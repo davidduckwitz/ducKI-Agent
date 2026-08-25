@@ -1,7 +1,7 @@
 {
   "name": "vision-analyzer",
   "version": "0.2.0",
-  "description": "Realtime browser vision for DucKI with zero-dependency local mode, optional OCR/ONNX packs and opt-in agent vision.",
+  "description": "Realtime browser vision for DucKI with zero-dependency local mode, optional click-to-install OCR/ONNX packs and opt-in agent vision.",
   "author": "DucKI",
   "license": "MIT",
   "icon": "👁️",
