@@ -30,18 +30,28 @@ export function createProviderModelsRouter(db: DatabaseService): IRouter {
    */
   router.get("/:provider", async (req, res) => {
     const { provider } = req.params;
+    logger.info("Fetching models for provider", { provider });
 
     try {
-      const { provider: instance } = await loadProviderFromSettings(db, { providerName: provider });
+      const { provider: instance, providerName } = await loadProviderFromSettings(db, { providerName: provider });
+      logger.info("Provider resolved, listing models", { provider, providerName, hasListModels: !!instance.listModels });
       if (!instance.listModels) return res.status(501).json(createApiError(`${provider} does not support model discovery`));
       const models: Model[] = await instance.listModels();
       return res.json(createApiResponse({ models }));
     } catch (error) {
-      logger.error("Provider models API error", {
-        error: error instanceof Error ? error.message : String(error),
-        provider: req.params.provider,
-      });
-      res.status(500).json(createApiError("Internal server error"));
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.error("Provider models API error", { error: msg, provider: req.params.provider });
+
+      // LM Studio 401: the server requires an API token but none was provided.
+      const isLMStudioAuth = /401|token.*required|authentication/i.test(msg) && provider === "lmstudio";
+      if (isLMStudioAuth) {
+        return res.status(401).json(createApiError(
+          "LM Studio requires an API token. Open LM Studio > Developer > Authentication, " +
+          "copy the token, then paste it into Settings > Provider > LM Studio API Key."
+        ));
+      }
+
+      res.status(500).json(createApiError(`Provider error: ${msg}`));
     }
   });
 

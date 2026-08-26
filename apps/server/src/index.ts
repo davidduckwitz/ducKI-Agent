@@ -39,6 +39,12 @@ import { LlmWikiService } from "./lib/llm-wiki-service.js";
 import { CloudBackupScheduler } from "./lib/cloud-backup-scheduler.js";
 import { CloudHeartbeatService } from "./lib/cloud-heartbeat.js";
 import { CloudVoiceChatService } from "./lib/cloud-voice.js";
+import { BotChatOrchestrator } from "./lib/bot-chat-orchestrator.js";
+import { sharedWorkspace } from "./lib/shared-workspace-service.js";
+import {
+	TEAM_BOT_SLUGS_SETTING,
+	TEAM_CHAT_CONVERSATION_ID_SETTING,
+} from "./lib/cloud-control.js";
 import { createWikiTool } from "./lib/wiki-tool.js";
 import { PromptManager } from "./lib/prompt-manager.js";
 import {
@@ -284,7 +290,7 @@ function buildAgentFactory(
 	promptManager: PromptManager,
 	botServiceRef: { current?: BotService }
 ) {
-	return async (override: { model?: string } = {}) => {
+	return async (override: { provider?: string; model?: string } = {}) => {
 		// Load database settings for agent configuration
 		const maxIterationsSetting = await db.getSetting("AGENT_MAX_ITERATIONS");
 		logger.debug("buildAgentFactory: loading agent settings", {
@@ -313,10 +319,15 @@ function buildAgentFactory(
 			...(projectSkillManifests.length > 0 ? { projectSkillManifests } : {}),
 		};
 
-		// Voice-Chat can select a model for one conversation turn without mutating the
-		// globally configured provider/model used by the regular WebUI and background jobs.
-		const requestProvider = override.model?.trim()
-			? (await loadProviderFromSettings(db, { model: override.model })).provider
+		// Voice-Chat / chat UI can select a provider+model for one conversation turn without
+		// mutating the globally configured provider/model used by the regular WebUI and
+		// background jobs.
+		const hasOverride = override.provider?.trim() || override.model?.trim();
+		const requestProvider = hasOverride
+			? (await loadProviderFromSettings(db, {
+				...(override.provider?.trim() ? { providerName: override.provider.trim() } : {}),
+				...(override.model?.trim() ? { model: override.model.trim() } : {}),
+			})).provider
 			: providerRef.current;
 		const agent = new Agent(requestProvider, db, undefined, agentOptions);
 		// Wrap tools to broadcast events and handle response staging
@@ -630,6 +641,66 @@ async function bootstrap(): Promise<void> {
 	workflowExecutor.registerTool(createWikiTool(() => wikiServiceRef.current));
 	const cloudBackupScheduler = new CloudBackupScheduler(db, logger.child("CloudBackupScheduler"));
 	cloudBackupScheduler.start();
+	// Voice-App "Team" mode: run the message through the real group-chat engine
+	// (BotChatOrchestrator) instead of the single main bot - that is where the bots actually
+	// talk to each other, brainstorm and delegate. The team conversation is created once and
+	// reused so the discussion has continuity (TEAM_CHAT_CONVERSATION_ID). Roster comes from
+	// the TEAM_BOT_SLUGS setting (Settings > Bots).
+	const runTeamChat = async (message: string, options?: { mode?: "plan" | "execute" }) => {
+		const configured = (await db.getSetting(TEAM_BOT_SLUGS_SETTING))?.trim();
+		const defaultRoster = ["main", "coding", "frontend-developer", "backend-infrastructure"];
+		const slugs = (configured || defaultRoster.join(","))
+			.split(",")
+			.map((slug) => slug.trim().toLowerCase())
+			.filter(Boolean);
+		const bots = [];
+		for (const slug of slugs) {
+			const botRow = await botService.getBot(slug);
+			if (botRow) bots.push(botRow);
+		}
+		if (bots.length === 0) throw new Error("Kein Bot fuer den Team-Chat konfiguriert (TEAM_BOT_SLUGS)");
+
+		let conversationId = Number(await db.getSetting(TEAM_CHAT_CONVERSATION_ID_SETTING));
+		const existing = Number.isFinite(conversationId) && conversationId > 0 ? await db.getConversation(conversationId) : undefined;
+		if (!existing) {
+			const created = await db.createConversation({ name: "Team-Chat", origin: "bot_chat" });
+			conversationId = created.id;
+			for (const botRow of bots) await db.addBotChatParticipant(conversationId, botRow.slug);
+			await sharedWorkspace.injectWorkspaceContext(db, conversationId, conversationId);
+			await db.setSetting(TEAM_CHAT_CONVERSATION_ID_SETTING, String(conversationId));
+		}
+
+		await db.addMessage({ conversationId, role: "user", content: message });
+		const orchestrator = new BotChatOrchestrator(db, botService);
+		const turns = await orchestrator.handleUserMessage(
+			conversationId,
+			bots.map((botRow) => botRow.slug),
+			message,
+			undefined,
+			options
+		);
+		const planTurn = turns.find((turn) => turn.isPlan);
+		const visible = turns.filter((turn) => !turn.passed);
+		const lastVisible = visible.length > 0 ? visible[visible.length - 1]! : undefined;
+		const response = planTurn?.content ?? lastVisible?.content ?? "Die Bots haben sich besprochen, aber keine Antwort formuliert.";
+		return {
+			response,
+			conversationId,
+			turns: turns.map((turn) => ({
+				round: turn.round,
+				botId: turn.botId,
+				botName: turn.botName,
+				content: turn.content,
+				passed: turn.passed,
+				needsUserDecision: turn.needsUserDecision,
+				isPlan: turn.isPlan,
+				planPath: turn.planPath,
+			})),
+			needsUserDecision: turns.some((turn) => turn.needsUserDecision),
+			stalled: false,
+		};
+	};
+
 	const cloudHeartbeatService = new CloudHeartbeatService(db, logger.child("CloudHeartbeatService"), {
 		db,
 		logger: logger.child("CloudControl"),
@@ -641,6 +712,7 @@ async function bootstrap(): Promise<void> {
 			if (!mainBot) throw new Error("Main-Bot wurde nicht gefunden");
 			return botService.chat(mainBot, message);
 		},
+		runTeamChat,
 		listBots: async () => botService.listBots() as unknown as Array<Record<string, unknown>>,
 	});
 	cloudHeartbeatService.start();
@@ -655,6 +727,7 @@ async function bootstrap(): Promise<void> {
 			if (!mainBot) throw new Error("Main-Bot wurde nicht gefunden");
 			return botService.chat(mainBot, message);
 		},
+		runTeamChat,
 		listBots: async () => botService.listBots() as unknown as Array<Record<string, unknown>>,
 	});
 	cloudVoiceChatService.start();

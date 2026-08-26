@@ -1,9 +1,16 @@
 import type { Agent } from "@ducki/agent";
 import type { BotSelect, DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
-import { CODING_BOT_SLUG, type BotService } from "./bot-service.js";
+import {
+  CODING_BOT_SLUG,
+  CODING_SPECIALIST_BOT_SLUGS,
+  MAIN_BOT_SLUG,
+  type BotService,
+} from "./bot-service.js";
 import { BotHandoffService } from "./bot-handoff-service.js";
 import { sharedWorkspace } from "./shared-workspace-service.js";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 
 const logger = getRootLogger().child("BotChatOrchestrator");
 
@@ -67,6 +74,20 @@ export interface BotChatTurn {
   messageId?: number;
   needsUserDecision: boolean;
   passed: boolean;
+  /** True for the synthesized plan artifact that ends a planning exchange (see handleUserMessage). */
+  isPlan?: boolean;
+  /** Absolute path of the plan markdown saved into the group's shared workspace. */
+  planPath?: string;
+}
+
+/** Per-exchange control for the orchestrator (see handleUserMessage). */
+export interface BotChatExchangeOptions {
+  /**
+   * "plan" forces a discussion-only exchange that ends with a synthesized plan artifact;
+   * "execute" forces tool-using rounds. Absent = auto-detect from the user message via
+   * isPlanningIntent().
+   */
+  mode?: "plan" | "execute";
 }
 
 /** Why a bot is being asked to respond this round - purely for prompt wording, never a length or
@@ -172,15 +193,39 @@ export class BotChatOrchestrator {
     conversationId: number,
     participantSlugs: string[],
     userMessage: string,
-    onActiveBotChange?: (bots: Array<{ slug: string; name: string; activity: string }>) => void
+    onActiveBotChange?: (bots: Array<{ slug: string; name: string; activity: string }>) => void,
+    options?: BotChatExchangeOptions
   ): Promise<BotChatTurn[]> {
+    const planning =
+      options?.mode === "plan" ||
+      // A follow-up like "setz den Plan um" must NOT be re-classified as planning just because it
+      // mentions the word "Plan": explicit execution intent overrides planning keywords (Part 4).
+      (options?.mode !== "execute" && this.isPlanningIntent(userMessage) && !this.isExecutionIntent(userMessage));
+
     const participants = new Map<string, BotSelect>();
     for (const slug of participantSlugs) {
       const bot = await this.botService.getBot(slug);
       if (bot) participants.set(slug, bot);
     }
 
+    // Part 2 (brainstorm): execution workers (CodingAgent + coding specialists) have nothing to
+    // contribute to a discussion - and their mutating coding loop would start implementing
+    // instead of deliberating. Exclude them from planning rounds; the hard no-tools gate for the
+    // remaining bots is enforced in BotService.createAgentForBot (noTools), not just in prompts.
+    if (planning) {
+      for (const slug of [...participants.keys()]) {
+        if (slug === CODING_BOT_SLUG || CODING_SPECIALIST_BOT_SLUGS.has(slug)) {
+          participants.delete(slug);
+        }
+      }
+    }
+
     sharedWorkspace.resolveGroupWorkspace(conversationId);
+
+    // Part 4 (plan -> execute): a follow-up EXECUTION message after a brainstorming exchange picks
+    // up the newest plan artifact from the group's shared workspace and injects it into every
+    // round's prompt, so the bots implement the approved plan instead of discussing from scratch.
+    const activePlan = planning ? undefined : await this.findActivePlan(conversationId);
 
     // A handoff created directly by the user must be visible to round 1. Await it before
     // fetching the round context so the first delegated prompt cannot race the DB write.
@@ -202,7 +247,8 @@ export class BotChatOrchestrator {
     let responders = this.pickInitialResponders(userMessage, participants);
     const workspaceContext = sharedWorkspace.getWorkspaceContext(conversationId);
     let handoffContext = await this.handoffService.getHandoffContext(conversationId);
-    const buildContextHeader = () => [workspaceContext, handoffContext].filter(Boolean).join("\n\n");
+    const buildContextHeader = () =>
+      [workspaceContext, activePlan ? this.formatPlanContext(activePlan) : "", handoffContext].filter(Boolean).join("\n\n");
 
     while (round <= maxRounds && responders.size > 0) {
       const batches = parallelEnabled
@@ -222,14 +268,21 @@ export class BotChatOrchestrator {
         // boundary. If preparation throws, no bot in this batch has started generating yet.
         const preparedAgents = new Map<string, Agent>();
         const prepareFn = (this.botService as unknown as {
-          prepareAgentForGroupTurn?: (bot: BotSelect, conversationId: number) => Promise<Agent | undefined>;
+          prepareAgentForGroupTurn?: (
+            bot: BotSelect,
+            conversationId: number,
+            options?: { groupProtocol?: string; noTools?: boolean }
+          ) => Promise<Agent | undefined>;
         }).prepareAgentForGroupTurn;
         if (batch.length > 1 && typeof prepareFn === "function") {
           const prepared = await Promise.all(
             batch.map(async ([slug]) => {
               const bot = participants.get(slug);
               if (!bot) return undefined;
-              const agent = await prepareFn.call(this.botService, bot, conversationId);
+              const agent = await prepareFn.call(this.botService, bot, conversationId, {
+                groupProtocol: this.buildBotModeProtocol(bot, participants),
+                noTools: planning,
+              });
               return agent ? ([slug, agent] as const) : undefined;
             })
           );
@@ -264,13 +317,18 @@ export class BotChatOrchestrator {
               activeBots.set(slug, "thinking…");
               notifyActive();
 
-              const prompt = this.buildDelegatedPrompt(bot, trigger, participants, buildContextHeader(), userMessage);
+              const prompt = this.buildDelegatedPrompt(bot, trigger, participants, buildContextHeader(), userMessage, planning, Boolean(activePlan));
 
               let result: { response: string; messageId?: number; stalled: boolean };
               try {
                 result = await this.botService.chat(bot, prompt, {
                   conversationId,
                   tagPromptAsInternal: true,
+                  // Planning/discussion turns get the runtime tool-strip (noTools) and the
+                  // bot-to-bot protocol baked into their Agent (groupProtocol, Hermes
+                  // "bot_mode_protocol" pattern) - see BotService.createAgentForBot.
+                  noTools: planning,
+                  groupProtocol: this.buildBotModeProtocol(bot, participants),
                   ...(preparedAgents.has(slug) ? { preparedAgent: preparedAgents.get(slug)! } : {}),
                   onEvent: (event) => {
                     if (event.type === "tool_call") {
@@ -376,6 +434,32 @@ export class BotChatOrchestrator {
       handoffContext = await this.handoffService.getHandoffContext(conversationId);
     }
 
+    // Part 2 (brainstorm) - convergence: a planning exchange ends with a synthesized plan
+    // artifact (Planner + markdown saved into the group's shared workspace) authored by the
+    // main bot (or the first remaining participant), so "plan something" yields an actual
+    // plan - not just a pile of opinions - that a later execution turn can pick up.
+    if (planning && participants.size > 0) {
+      const converger = participants.get(MAIN_BOT_SLUG) ?? [...participants.values()][0]!;
+      try {
+        const plan = await this.botService.synthesizeTeamPlan(userMessage, conversationId, converger);
+        turns.push({
+          round,
+          botId: converger.slug,
+          botName: converger.name,
+          content: plan.content,
+          messageId: plan.messageId,
+          needsUserDecision: false,
+          passed: false,
+          isPlan: true,
+          planPath: plan.path,
+        });
+      } catch (error) {
+        logger.warn("Plan synthesis failed after discussion", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     return turns;
   }
 
@@ -387,10 +471,106 @@ export class BotChatOrchestrator {
     return new Map([...participants.keys()].map((slug) => [slug, { kind: "user_broadcast" as const }]));
   }
 
-  /** Detect if the user's message is asking for planning/discussion rather than execution. */
+  /**
+   * Detect if the user's message is asking for planning/discussion rather than execution.
+   * Word-boundary matching per phrase (German + English) so "planen"/"plane" match but
+   * "Planet" or "plant" do not.
+   */
   private isPlanningIntent(userMessage: string): boolean {
     const lower = userMessage.toLowerCase();
-    return /\b(plan|discuss|brainstorm|think|approach|how would|what do you think|strategy|outline|architecture|design|before we start|first step|roadmap|how can we|suggest|recommend|what's the best way|what are the options)\b/i.test(lower);
+    const phrases = [
+      "plan", "plane", "planen", "plant", "planung", "pläne", "einen plan", "mach einen plan", "macht einen plan",
+      "konzept", "konzeption", "idee", "ideen", "ansatz", "vorgehen", "vorgehensweise", "varianten", "optionen",
+      "brainstorm", "brainstorming", "besprechen", "besprechen wir", "diskutieren", "beraten", "beratschlagen",
+      "überlegen", "überleg", "überlegt", "erst einmal", "erstmal", "erst mal", "bevor wir anfangen",
+      "architektur", "strategie", "roadmap", "entwurf", "design", "approach", "discuss", "outline",
+      "how should we", "what are the options", "what's the best way", "what is the best way", "come up with ideas",
+      "suggest", "recommend", "was wäre der beste weg", "wie würden wir", "wie würden sie",
+    ];
+    return phrases.some((phrase) =>
+      new RegExp(`(^|[^a-zäöüß0-9])${phrase.replace(/ /g, "[\\s-]+")}([^a-zäöüß0-9]|$)`, "i").test(lower)
+    );
+  }
+
+  /**
+   * Detect messages that explicitly ask to EXECUTE rather than discuss/plan - e.g. a follow-up
+   * "setz den Plan um" after a brainstorming exchange. Such messages must not be classified as
+   * planning just because they mention the word "Plan": the whole point of the plan -> execute
+   * handoff is that "Plan" plus an execution verb means "go do it now".
+   */
+  private isExecutionIntent(userMessage: string): boolean {
+    const lower = userMessage.toLowerCase();
+    // Strong, explicit "execute the plan NOW" phrases - deliberately NOT bare words like
+    // "umsetzen" or "implementieren", because planning sentences use those too
+    // ("bevor wir den Plan umsetzen" / "wie wir das implementieren").
+    const phrases = [
+      "setz den plan um", "setze den plan um", "setzt den plan um", "den plan um", "plan um",
+      "den plan ausführen", "arbeite den plan ab", "arbeitet den plan ab",
+      "starte den plan", "start den plan", "startet den plan",
+    ];
+    if (
+      phrases.some((phrase) =>
+        new RegExp(`(^|[^a-zäöüß0-9])${phrase.replace(/ /g, "[\\s-]+")}([^a-zäöüß0-9]|$)`, "i").test(lower)
+      )
+    ) {
+      return true;
+    }
+    // German separable-prefix verbs with the object in between: "setzt den Plan jetzt um",
+    // "führe den Plan gleich aus". The middle must contain "plan" or an urgency word so
+    // ordinary sentences ("arbeitet an der Aufgabe") never match.
+    const separable =
+      /\b(setz|setze|setzt|führ|führe|führt|arbeit|arbeite|arbeitet|mach|mache|macht|leg|lege|legt|fang|fange|fängt)\s+[a-zäöüß0-9][a-zäöüß0-9\s-]*(plan|jetzt|sofort|gleich)[a-zäöüß0-9\s-]*\s+(um|aus|ab|los|an)\b/i;
+    return separable.test(lower);
+  }
+
+  /**
+   * Part 4 (plan -> execute): reads the newest plan artifact (output/plan-*.md) from the group's
+   * shared workspace so a follow-up execution message can drive the work from the approved plan.
+   * Returns undefined when no plan exists yet (plain execution) or the workspace is unavailable.
+   */
+  private async findActivePlan(
+    conversationId: number
+  ): Promise<{ path: string; content: string } | undefined> {
+    const workspaceDir = sharedWorkspace.resolveGroupWorkspace(conversationId);
+    if (!workspaceDir) return undefined;
+    const outputDir = join(workspaceDir, "output");
+    try {
+      const entries = await readdir(outputDir, { withFileTypes: true });
+      const candidates: Array<{ path: string; mtimeMs: number }> = [];
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.startsWith("plan-") || !entry.name.endsWith(".md")) continue;
+        const path = join(outputDir, entry.name);
+        try {
+          const info = await stat(path);
+          candidates.push({ path, mtimeMs: info.mtimeMs });
+        } catch {
+          // File vanished between readdir and stat - skip it.
+        }
+      }
+      if (candidates.length === 0) return undefined;
+      candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+      const latest = candidates[0]!;
+      const content = await readFile(latest.path, "utf8");
+      return { path: latest.path, content };
+    } catch (error) {
+      logger.warn("Could not read the active plan from the group workspace", {
+        conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /** Render the plan artifact as a context section every execution round can see. */
+  private formatPlanContext(plan: { path: string; content: string }): string {
+    return [
+      "[ACTIVE PLAN from the group discussion - EXECUTE this plan now:]",
+      `Plan file: ${plan.path}`,
+      "",
+      plan.content,
+      "",
+      "This is the approved plan. Follow it step by step: implement the steps matching your expertise with your tools and hand off the rest to the right bot.",
+    ].join("\n");
   }
 
   /** Build a roster of all participants so each bot knows who its teammates are. */
@@ -431,29 +611,37 @@ export class BotChatOrchestrator {
     participants: Map<string, BotSelect>,
     handoffContext?: string,
     userMessage?: string,
+    planning = false,
+    hasActivePlan = false
   ): string {
     const handoffHeader = handoffContext
       ? ["[Open tasks for this chat:]", handoffContext, ""].join("\n")
       : "";
 
-    const isPlanning = userMessage ? this.isPlanningIntent(userMessage) : false;
     const protocol = this.buildBotModeProtocol(bot, participants);
 
-    const groupChatGuidelines = isPlanning
+    const groupChatGuidelines = planning
       ? [
           "This is a GROUP CHAT with multiple bots. You are having a CONVERSATION, not working alone.",
-          "CRITICAL: Do NOT use any tools (filesystem, shell, browser, HTTP, etc.) in this chat.",
-          "Do NOT write code, create files, or execute any actions. Instead, share your perspective, suggest an approach, or discuss how you would tackle this.",
+          "Tools are DISABLED for this turn - they are not available to you at all, and you cannot write code, create files, or execute actions.",
+          "Instead, share your perspective, suggest an approach, or discuss how you would tackle this - the exchange will be synthesized into a concrete plan afterwards.",
           "Other bots will also share their thoughts. The user wants a discussion first, then delegation to the right bot later.",
           "Read the conversation history before responding — do not repeat what other bots already said.",
         ].join(" ")
-      : [
-          "This is a GROUP CHAT with multiple bots. You are having a CONVERSATION, not working alone.",
-          "CRITICAL: Do NOT use any tools (filesystem, shell, browser, HTTP, etc.) in this chat unless you are explicitly given a handoff task.",
-          "Your job RIGHT NOW is to: (1) evaluate if this task is in your area of expertise, (2) claim it or pass, (3) briefly describe HOW you would approach it — but do NOT actually execute it yet.",
-          "Only the bot that receives a formal handoff task should execute. All others discuss and coordinate.",
-          "If another bot already claimed the task or gave a good answer, reply (pass).",
-        ].join(" ");
+      : hasActivePlan
+        ? [
+            "This is a GROUP CHAT with multiple bots. You are working together to EXECUTE an approved plan.",
+            "CRITICAL: The ACTIVE PLAN above is what the user wants done NOW. Claim the plan steps that match your expertise and implement them with your tools.",
+            "Work through the plan step by step. Hand off steps that are not yours with \"@botname übernimm <task>\", and mark finished work with \"@botname erledigt\".",
+            "If another bot already claimed a step or gave a good answer, reply (pass).",
+          ].join(" ")
+        : [
+            "This is a GROUP CHAT with multiple bots. You are having a CONVERSATION, not working alone.",
+            "CRITICAL: Do NOT use any tools (filesystem, shell, browser, HTTP, etc.) in this chat unless you are explicitly given a handoff task.",
+            "Your job RIGHT NOW is to: (1) evaluate if this task is in your area of expertise, (2) claim it or pass, (3) briefly describe HOW you would approach it — but do NOT actually execute it yet.",
+            "Only the bot that receives a formal handoff task should execute. All others discuss and coordinate.",
+            "If another bot already claimed the task or gave a good answer, reply (pass).",
+          ].join(" ");
 
     const contentReminder =
       "Write your actual result (text, answer, report - whatever was requested) directly in this message. Do NOT just describe that you did something - a description without content is invisible to others in the chat. Do not artificially shorten real, extensive content.";

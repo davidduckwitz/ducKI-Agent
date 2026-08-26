@@ -1,0 +1,26 @@
+{
+  "name": "laravel-llm-provider",
+  "version": "1.2.0",
+  "description": "DucKI Cloud als OpenAI-kompatibler LLM-Provider mit zentralem Modellkatalog, Usage-Metering und automatischer AI/Coding-Klassifizierung.",
+  "author": "DucKI",
+  "icon": "☁️",
+  "category": "system",
+  "trust": "node",
+  "provides": {
+    "llmProviders": [
+      {
+        "id": "laravel",
+        "name": "DucKI Cloud LLM",
+        "description": "Vom Administrator veröffentlichte LM-Studio-, RunPod- und weitere OpenAI-kompatible Modelle über DucKI Cloud. AI- und Coding-Läufe werden automatisch getrennt gemessen.",
+        "icon": "☁️",
+        "module": "provider.js",
+        "modelSetting": "LARAVEL_LLM_MODEL",
+        "baseUrlSetting": "LARAVEL_LLM_BASE_URL",
+        "apiKeySetting": "LARAVEL_LLM_API_KEY",
+        "defaultModel": "auto",
+        "defaultBaseUrl": "https://ducki.cloud/api/llm/v1"
+      }
+    ]
+  },
+  "enabled": true
+}

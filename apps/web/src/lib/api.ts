@@ -1123,6 +1123,11 @@ export const api = {
       request<{ root: string; files: Array<{ path: string; size: number; isDirectory: boolean }> }>(`/bot-chats/${id}/workspace`),
     getWorkspaceFile: (id: number, filePath: string) =>
       request<{ path: string; size: number; truncated: boolean; content: string }>(`/bot-chats/${id}/workspace/${encodeURIComponent(filePath)}`),
+    updatePlan: (id: number, path: string, content: string) =>
+      request<{ path: string; updated: boolean }>(`/bot-chats/${id}/plan`, {
+        method: "PUT",
+        body: JSON.stringify({ path, content }),
+      }),
   },
 
   projectSkills: {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Send, UserPlus, AlertTriangle, Sparkles, Trash2, X, FolderOpen, FileText, ChevronRight, ChevronDown } from "lucide-react";
+import { ArrowLeft, Send, UserPlus, AlertTriangle, Sparkles, Trash2, X, FolderOpen, FileText, ChevronRight, ChevronDown, ClipboardList, Pencil, Check } from "lucide-react";
 import { api, type BotChatMessage, type BotInfo } from "../../lib/api";
 import { Card, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
@@ -16,6 +16,12 @@ interface DisplayMessage {
   authorName?: string;
   content: string;
   needsUserDecision?: boolean;
+  /** True for the synthesized plan artifact that ends a planning exchange (metadata.plan). */
+  isPlan?: boolean;
+  /** Absolute path of the plan markdown in the group's shared workspace (metadata.planPath). */
+  planPath?: string;
+  /** True once a newer planning exchange superseded this plan (metadata.archived). */
+  archived?: boolean;
   /** Real DB row id - only set for persisted messages, which is what makes them deletable
    *  (an in-flight optimistic turn has no row yet, so there's nothing to delete server-side). */
   dbId?: number;
@@ -79,9 +85,21 @@ function toDisplayMessages(rows: BotChatMessage[], botBySlug: Map<string, BotInf
     .filter((m) => m.content.trim().length > 0)
     .map((m) => {
       let needsUserDecision = false;
+      let isPlan = false;
+      let archived = false;
+      let planPath: string | undefined;
       if (m.metadata) {
         try {
-          needsUserDecision = Boolean((JSON.parse(m.metadata) as { needsUserDecision?: boolean }).needsUserDecision);
+          const parsed = JSON.parse(m.metadata) as {
+            needsUserDecision?: boolean;
+            plan?: boolean;
+            archived?: boolean;
+            planPath?: string;
+          };
+          needsUserDecision = Boolean(parsed.needsUserDecision);
+          isPlan = Boolean(parsed.plan);
+          archived = Boolean(parsed.archived);
+          planPath = typeof parsed.planPath === "string" ? parsed.planPath : undefined;
         } catch {
           // ignore malformed metadata
         }
@@ -94,6 +112,9 @@ function toDisplayMessages(rows: BotChatMessage[], botBySlug: Map<string, BotInf
         authorName: bot?.name ?? m.authorBotId ?? undefined,
         content: m.content,
         needsUserDecision,
+        isPlan,
+        planPath,
+        archived,
         dbId: m.id,
       } satisfies DisplayMessage;
     });
@@ -115,6 +136,12 @@ export function BotChatRoom() {
   const [polling, setPolling] = useState(false);
   const [showWorkspace, setShowWorkspace] = useState(false);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
+  // Pinned "Active Plan" strip: the latest plan artifact from a converged planning exchange,
+  // kept open so the room shows the plan that a follow-up execution message will drive from.
+  const [showActivePlan, setShowActivePlan] = useState(true);
+  // Inline plan editing: the plan card swaps its markdown for a textarea while a draft is open.
+  const [editingPlanKey, setEditingPlanKey] = useState<string | null>(null);
+  const [planDraft, setPlanDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -170,6 +197,16 @@ export function BotChatRoom() {
     ...persisted,
     ...(pendingUserText ? [{ key: "pending-user", role: "user" as const, content: pendingUserText }] : []),
   ];
+  // The "active" plan is the newest plan artifact in the transcript - the same one a follow-up
+  // execution message picks up from the shared workspace (BotChatOrchestrator.findActivePlan).
+  const latestPlan = useMemo(() => {
+    for (let index = persisted.length - 1; index >= 0; index--) {
+      const candidate = persisted[index];
+      // Skip archived (superseded) plans - only the newest, still-active one is pinned.
+      if (candidate?.isPlan && !candidate.archived) return candidate;
+    }
+    return undefined;
+  }, [persisted]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -201,6 +238,16 @@ export function BotChatRoom() {
   const deleteMessageMutation = useMutation({
     mutationFn: (messageId: number) => api.botChats.deleteMessage(conversationId, messageId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["botChatMessages", conversationId] }),
+  });
+
+  const updatePlanMutation = useMutation({
+    mutationFn: ({ path, content }: { path: string; content: string }) =>
+      api.botChats.updatePlan(conversationId, path, content),
+    onSuccess: async () => {
+      setEditingPlanKey(null);
+      await messagesQuery.refetch();
+    },
+    onError: (error: Error) => setSendError(error.message || "Plan could not be saved."),
   });
 
   const deleteChatMutation = useMutation({
@@ -355,6 +402,31 @@ export function BotChatRoom() {
 
       <Card className="flex flex-1 flex-col overflow-hidden">
         <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+          {latestPlan ? (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 shadow-sm">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left"
+                onClick={() => setShowActivePlan(!showActivePlan)}
+              >
+                <ClipboardList className="size-4 shrink-0 text-emerald-600" />
+                <span className="text-sm font-semibold">Active Plan</span>
+                <span className="truncate font-mono text-xs text-muted-foreground" title={latestPlan.planPath}>
+                  {latestPlan.planPath}
+                </span>
+                {showActivePlan ? (
+                  <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground" />
+                )}
+              </button>
+              {showActivePlan ? (
+                <div className="border-t border-emerald-500/20 px-3 pb-3 pt-2 text-sm">
+                  <MarkdownMessage content={latestPlan.content} />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {display.map((msg) => {
             const deleteButton = msg.dbId !== undefined ? (
               <button
@@ -379,6 +451,106 @@ export function BotChatRoom() {
                 </div>
               );
             }
+
+            if (msg.isPlan) {
+              // A converged planning exchange renders as a dedicated plan card, not a regular bot
+              // bubble: the synthesized markdown plus the artifact path in the shared workspace.
+              // Superseded plans (archived by a newer planning exchange) render dimmed without an
+              // edit affordance - their file was moved to output/archive/.
+              const planBody = msg.content
+                .replace(/^##\s*📋?\s*Gemeinsamer Plan\s*\n+/, "")
+                .replace(/\n+_Plan gespeichert: .*_$/, "")
+                .trim();
+              const editing = editingPlanKey === msg.key;
+              return (
+                <div key={msg.key} className="group flex items-start gap-2">
+                  <div
+                    className={`min-w-0 flex-1 rounded-xl border px-4 py-3 shadow-sm ${
+                      msg.archived
+                        ? "border-muted-foreground/20 bg-muted/40 opacity-70"
+                        : "border-emerald-500/30 bg-emerald-500/5"
+                    }`}
+                  >
+                    <div
+                      className={`mb-1 flex items-center gap-1.5 text-xs font-semibold ${
+                        msg.archived ? "text-muted-foreground" : "text-emerald-600"
+                      }`}
+                    >
+                      <ClipboardList className="size-3.5 shrink-0" />
+                      Gemeinsamer Plan
+                      {msg.authorName ? <span className="font-normal text-muted-foreground">· {msg.authorName}</span> : null}
+                      {msg.archived ? (
+                        <span className="ml-auto rounded border border-muted-foreground/30 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          Archiviert
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          title={editing ? "Schließen" : "Plan bearbeiten"}
+                          className="ml-auto rounded p-1 text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-700"
+                          onClick={() => {
+                            if (editing) {
+                              setEditingPlanKey(null);
+                            } else {
+                              setEditingPlanKey(msg.key);
+                              setPlanDraft(planBody);
+                            }
+                          }}
+                        >
+                          <Pencil className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    {editing ? (
+                      <div className="space-y-2">
+                        <textarea
+                          className="input min-h-48 w-full resize-y font-mono text-xs leading-relaxed"
+                          value={planDraft}
+                          onChange={(e) => setPlanDraft(e.target.value)}
+                          spellCheck={false}
+                          placeholder="Plan-Markdown bearbeiten…"
+                        />
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            className="flex items-center gap-1"
+                            disabled={updatePlanMutation.isPending || !msg.planPath || !planDraft.trim()}
+                            onClick={() => msg.planPath && updatePlanMutation.mutate({ path: msg.planPath, content: planDraft })}
+                          >
+                            <Check className="size-3.5" /> Speichern
+                          </Button>
+                          <Button size="sm" variant="ghost" className="flex items-center gap-1" onClick={() => setEditingPlanKey(null)}>
+                            <X className="size-3.5" /> Abbrechen
+                          </Button>
+                          {updatePlanMutation.isPending ? (
+                            <span className="text-xs text-muted-foreground">Wird gespeichert…</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm">
+                        <MarkdownMessage content={planBody} />
+                      </div>
+                    )}
+                    {msg.planPath && !msg.archived ? (
+                      <button
+                        type="button"
+                        title="Open plan file in the workspace"
+                        className="mt-2 block w-full truncate rounded font-mono text-xs text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
+                        onClick={() => {
+                          setPreviewFile(msg.planPath!);
+                          setShowWorkspace(true);
+                        }}
+                      >
+                        {msg.planPath}
+                      </button>
+                    ) : null}
+                  </div>
+                  {deleteButton}
+                </div>
+              );
+            }
+
             const color = botAccentColor(msg.authorBotId ?? "bot");
             return (
               <div key={msg.key} className="group flex max-w-[90%] items-start gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">

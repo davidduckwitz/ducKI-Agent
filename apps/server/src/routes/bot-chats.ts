@@ -2,8 +2,9 @@ import { Router, type IRouter } from "express";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
-import { readdirSync, statSync, readFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { readdirSync, statSync, readFileSync, existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { join, relative, resolve, sep, isAbsolute } from "node:path";
 import type { BotService } from "../lib/bot-service.js";
 import { BotChatOrchestrator } from "../lib/bot-chat-orchestrator.js";
 import { sharedWorkspace } from "../lib/shared-workspace-service.js";
@@ -337,6 +338,77 @@ botChatsRouter.post("/:id/messages", async (req, res, next) => {
   } catch (error) {
     if (generationReserved) activeGenerations.delete(conversationId);
     logger.error("Bot chat message failed", { error: error instanceof Error ? error.message : String(error) });
+    next(error);
+  }
+});
+
+/**
+ * PUT /api/bot-chats/:id/plan - let the user adjust the synthesized plan markdown before it is
+ * executed. Writes the new content over the plan artifact in the group's shared workspace (so a
+ * follow-up execution message reads the edited version - findActivePlan picks the newest file by
+ * mtime, and this write bumps it) and syncs the tagged plan message row so the transcript shows
+ * the edit. Refuses paths outside the group workspace and edits while an exchange is running.
+ */
+botChatsRouter.put("/:id/plan", async (req, res, next) => {
+  try {
+    const db = getDb(req);
+    const conversationId = parseInt(req.params["id"] ?? "0", 10);
+    const conversation = await db.getConversation(conversationId);
+    if (!conversation || conversation.origin !== "bot_chat") {
+      res.status(404).json(createApiError("Bot chat not found"));
+      return;
+    }
+    if (activeGenerations.has(conversationId)) {
+      res.status(409).json(createApiError("An exchange is running - wait for the bots to finish before editing the plan"));
+      return;
+    }
+
+    const { path, content } = req.body as { path?: string; content?: string };
+    if (typeof path !== "string" || path.length === 0 || typeof content !== "string") {
+      res.status(400).json(createApiError("path and content are required"));
+      return;
+    }
+
+    const workspaceDir = resolve(sharedWorkspace.resolveGroupWorkspace(conversationId));
+    // The client may send either the absolute artifact path (metadata.planPath) or a
+    // workspace-relative path. Both must resolve inside this group's workspace.
+    const rawPath = isAbsolute(path) ? path : join(workspaceDir, path);
+    const fullPath = resolve(rawPath);
+    // Prevent path traversal: the resolved path must stay inside this group's workspace.
+    if (fullPath !== workspaceDir && !fullPath.startsWith(workspaceDir + sep)) {
+      res.status(403).json(createApiError("Access denied: path is outside the group workspace"));
+      return;
+    }
+    if (!fullPath.endsWith(".md")) {
+      res.status(400).json(createApiError("Only markdown plan files can be edited"));
+      return;
+    }
+    if (!existsSync(fullPath)) {
+      res.status(404).json(createApiError("Plan file not found"));
+      return;
+    }
+
+    await writeFile(fullPath, content, "utf8");
+
+    // Keep the transcript in sync: rewrite the tagged plan message with the new markdown,
+    // re-wrapped exactly like BotService.synthesizeTeamPlan wraps it on creation.
+    const wrapped = `## 📋 Gemeinsamer Plan\n\n${content.trim()}\n\n_Plan gespeichert: ${fullPath}_`;
+    const messages = await db.getMessages(conversationId);
+    for (const message of messages) {
+      if (message.role !== "assistant" || !message.metadata) continue;
+      try {
+        const meta = JSON.parse(message.metadata) as { plan?: boolean; planPath?: string };
+        if (meta.plan && meta.planPath === fullPath) {
+          await db.updateMessage(message.id, wrapped);
+          break;
+        }
+      } catch {
+        // ignore malformed metadata
+      }
+    }
+
+    res.json(createApiResponse({ path: fullPath, updated: true }));
+  } catch (error) {
     next(error);
   }
 });

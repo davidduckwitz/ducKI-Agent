@@ -114,9 +114,9 @@ export function ProviderModelSelector({
 
       {/* Error Display */}
       {error && (
-        <div className="flex items-center gap-2 text-xs text-destructive">
-          <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          <span className="truncate">{error}</span>
+        <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">
+          <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span className="leading-relaxed">{error}</span>
         </div>
       )}
     </div>

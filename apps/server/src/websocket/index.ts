@@ -117,7 +117,7 @@ function buildHelloSnapshot(gatewayStatus: unknown, runningConversationIds: numb
 
 export function setupWebSocket(
   io: SocketIOServer,
-  createAgent: () => Promise<Agent>,
+  createAgent: (override?: { provider?: string; model?: string }) => Promise<Agent>,
   db: DatabaseService,
   getGatewayStatus: () => unknown = () => undefined
 ): void {
@@ -269,6 +269,8 @@ export function setupWebSocket(
       agentMode?: "full" | "plan";
       visionOnly?: boolean;
       localMessageId?: string;
+      provider?: string;
+      model?: string;
     }) => {
       let registryRunId: string | undefined;
       const runAgents: Agent[] = [];
@@ -531,7 +533,9 @@ export function setupWebSocket(
         };
 
         const runAttempt = async (prompt: string) => {
-          const runAgent = await createAgent();
+          const runAgent = await createAgent(
+            data.provider || data.model ? { provider: data.provider, model: data.model } : undefined
+          );
 
           // Coding-area chat: scope the filesystem tool to the project sandbox so
           // relative paths land in shared-workspace/coding/<project>/ instead of the

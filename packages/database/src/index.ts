@@ -711,6 +711,12 @@ export class DatabaseService {
     await this.db.update(schema.messages).set(data).where(eq(schema.messages.id, id)).run();
   }
 
+  /** Replaces the plain content of a message row - used when a plan artifact is edited so the
+   *  transcript stays in sync with the markdown file on disk. */
+  async updateMessage(id: number, content: string): Promise<void> {
+    await this.db.update(schema.messages).set({ content }).where(eq(schema.messages.id, id)).run();
+  }
+
   async deleteMessagesAfter(conversationId: number, afterId: number): Promise<void> {
     await this.db
       .delete(schema.messages)

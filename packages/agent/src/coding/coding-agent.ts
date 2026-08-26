@@ -820,7 +820,6 @@ export class CodingAgent {
       "test-driven-development": ["test", "tdd", "unit test", "jest", "vitest", "spec"],
       "code-review": ["review", "quality", "style", "lint", "format"],
       "debugging": ["debug", "error", "bug", "fix", "crash"],
-      "planning": ["plan", "architecture", "design", "structure"],
     };
 
     const goalLower = goal.toLowerCase();
@@ -1098,7 +1097,13 @@ export class CodingAgent {
     // When resuming, we still call the Planner for the NEW goal — the old plan was for a
     // different task (or the same task's previous attempt, now stale).
     const toolNames = this.agent.executor.listTools().map((tool) => tool.name);
-    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames));
+    // Selecting Coding Agent is itself an execution instruction. Do not let the shared planner
+    // downgrade that explicit context into a general/research plan: such a plan can write a
+    // Markdown research artifact, create a real checkpoint diff, and then make this run look
+    // successful without ever implementing the requested software.
+    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames, {
+      requiredPlanType: "coding",
+    }));
     this.currentPlan = plan;
     this.emitPlanEvent(plan);
     // Pre-seeds the checklist with the planner's steps so the UI shows real progress from the

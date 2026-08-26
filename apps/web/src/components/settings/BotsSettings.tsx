@@ -41,6 +41,9 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
     BOT_AGENT_MAX_ITERATIONS: "50",
     BOT_AGENT_TIMEOUT_MS: "600000",
     CODING_MULTI_BOT_ENABLED: "true",
+    TEAM_BOT_SLUGS: "main, coding, frontend-developer, backend-infrastructure",
+    DELEGATION_MODEL: "",
+    DELEGATION_MAX_CONCURRENT: "3",
   };
 
   const labels: Record<string, string> = {
@@ -51,6 +54,9 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
     BOT_AGENT_MAX_ITERATIONS: "Max. Iterationen pro Bot-Zug",
     BOT_AGENT_TIMEOUT_MS: "Timeout pro Bot-Zug (ms)",
     CODING_MULTI_BOT_ENABLED: "CodingAgent Multi-Bot-Unterstützung",
+    TEAM_BOT_SLUGS: "Team-Bots (Voice-Chat Team-Modus)",
+    DELEGATION_MODEL: "Subagent-Modell (delegate_task)",
+    DELEGATION_MAX_CONCURRENT: "Max. parallele Subagenten",
   };
 
   const descriptions: Record<string, string> = {
@@ -59,7 +65,7 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
     BOT_CHAT_MAX_MESSAGES_PER_ROUND:
       "Wie viele Bots innerhalb einer einzelnen Runde gleichzeitig antworten dürfen. Nur relevant bei vielen Teilnehmern in einem Chat.",
     BOT_CHAT_PARALLEL_ENABLED:
-      "Bots in der ersten Runde parallel statt nacheinander ausführen — Broadcast-Nachrichten (ohne sequenzielle \"dann\"/\"danach\" Cues) werden 3-4x schneller. Bot-@Erwähnungen in Folgerunden bleiben immer sequenziell.",
+      "Unabhängige Bots in späteren @Erwähnungs-Runden parallel statt nacheinander ausführen. Die erste (Broadcast-)Runde läuft immer sequenziell, damit jeder Bot die vorherige Antwort sieht und bei Bedarf passen kann, statt sie zu wiederholen.",
     BOT_CHAT_PARALLEL_MAX_CONCURRENT:
       "Wie viele Bots MAXIMAL gleichzeitig laufen dürfen (begrenzt API-Rate-Limits). Unabhängige Bots in einem Parallel-Batch werden auf dieses Limit gedeckelt.",
     BOT_AGENT_MAX_ITERATIONS:
@@ -68,6 +74,12 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
       "Wie lange ein einzelner Bot-Zug maximal laufen darf, bevor er als fehlgeschlagen gilt (dann erscheint eine sichtbare Fehlermeldung im Chat statt endlosem Warten). In Millisekunden: 300000 = 5 Min, 600000 = 10 Min.",
     CODING_MULTI_BOT_ENABLED:
       "Erlaubt dem CodingAgent, größere klar abgegrenzte Aufgaben an die editierbaren Spezialisten Frontend Developer und Backend Infrastructure zu delegieren und auf deren Ergebnis zu warten.",
+    TEAM_BOT_SLUGS:
+      "Kommagetrennte Liste der Bots, die im Team-Modus (Voice-Chat) mitdiskutieren und arbeiten. Planungs-Fragen laufen als Gruppen-Diskussion ohne Werkzeuge, danach wird ein Plan erstellt - erst eine ausdrückliche Ausführungs-Nachricht lässt die Bots Werkzeuge nutzen.",
+    DELEGATION_MODEL:
+      "Optional günstigeres/anderes Modell für delegate_task-Subagenten (Frontier-Modell plant, günstige Worker führen aus). Leer = die Subagenten nutzen dasselbe Modell wie der Bot.",
+    DELEGATION_MAX_CONCURRENT:
+      "Wie viele delegate_task-Subagenten maximal gleichzeitig laufen dürfen (begrenzt API-Rate-Limits).",
   };
 
   const getDisplayValue = (key: string): string => edits[key] ?? settingsMap.get(key) ?? defaults[key] ?? "";
@@ -93,6 +105,28 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
     const seconds = Math.round((ms % 60000) / 1000);
     return seconds > 0 ? `${minutes} Min ${seconds} s` : `${minutes} Min`;
   };
+
+  const renderTextField = (key: string, placeholder?: string) => (
+    <div key={key} className="space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
+      <label className="flex items-center justify-between text-sm">
+        <span className="font-medium text-foreground">{labels[key]}</span>
+        {defaults[key] ? <span className="text-xs text-muted-foreground">Standard: {defaults[key]}</span> : null}
+      </label>
+      <p className="text-xs text-muted-foreground">{descriptions[key]}</p>
+      <div className="flex items-start gap-2">
+        <input
+          type="text"
+          value={getDisplayValue(key)}
+          onChange={(e) => setEdits((prev) => ({ ...prev, [key]: e.target.value }))}
+          placeholder={placeholder}
+          className="input flex-1"
+        />
+        <button onClick={() => handleSaveField(key)} className="btn-primary flex items-center gap-1" disabled={save.isPending}>
+          <Save className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
 
   const renderField = (key: string, opts: { min: number; step: number; max?: number }) => (
     <div key={key} className="space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
@@ -184,10 +218,11 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
             <div className="group relative cursor-help">
               <HelpCircle className="h-4 w-4 text-muted-foreground" />
               <div className="absolute bottom-full left-0 hidden group-hover:block rounded bg-black/80 text-white text-xs p-2 mb-2 w-80 z-10">
-                Wenn aktiviert, laufen unabhängige Bots (Broadcast, nicht-sequenzielle @Erwähnungen)
-                in der ersten Runde parallel statt nacheinander — 3-4x schneller. Sequenzielle
-                Cue-Words ("dann", "danach", "once that's done") erzwingen weiterhin sequenzielle
-                Ausführung.
+                Wenn aktiviert, laufen unabhängige Bots in späteren @Erwähnungs-Runden parallel
+                statt nacheinander. Die erste (Broadcast-)Runde läuft immer sequenziell — jeder
+                Bot sieht die vorherige Antwort und kann passen statt sie zu wiederholen.
+                Sequenzielle Cue-Words ("dann", "danach", "once that's done") erzwingen ebenfalls
+                weiterhin sequenzielle Ausführung.
               </div>
             </div>
           </div>
@@ -291,6 +326,15 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
           <div className="space-y-3 pl-4">
             {renderField("BOT_AGENT_MAX_ITERATIONS", { min: 5, max: 300, step: 5 })}
             {renderField("BOT_AGENT_TIMEOUT_MS", { min: 30000, step: 30000 })}
+          </div>
+        </div>
+
+        <div className="space-y-3 border-t border-border pt-4">
+          <h4 className="text-sm font-medium">Team-Chat & Delegation</h4>
+          <div className="space-y-3 pl-4">
+            {renderTextField("TEAM_BOT_SLUGS", "main, coding, frontend-developer, backend-infrastructure")}
+            {renderTextField("DELEGATION_MODEL", "z.B. openrouter/google/gemini-flash-2.0 (leer = gleiches Modell)")}
+            {renderField("DELEGATION_MAX_CONCURRENT", { min: 1, max: 8, step: 1 })}
           </div>
         </div>
 

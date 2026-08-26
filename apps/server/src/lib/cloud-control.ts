@@ -28,6 +28,14 @@ import { listActiveProviderModels } from "./provider-settings.js";
 export const SETTING_CLOUD_CONTROL_ENABLED = "CLOUD_CONTROL_ENABLED";
 
 /**
+ * Settings keys for the Voice-App "Team" mode. TEAM_BOT_SLUGS is the roster (comma-separated
+ * bot slugs) that participates in the persistent team conversation; TEAM_CHAT_CONVERSATION_ID
+ * stores the created bot_chat conversation so the brainstorm has continuity across messages.
+ */
+export const TEAM_BOT_SLUGS_SETTING = "TEAM_BOT_SLUGS";
+export const TEAM_CHAT_CONVERSATION_ID_SETTING = "TEAM_CHAT_CONVERSATION_ID";
+
+/**
  * Bewusst kuratiert -- MUSS mit RemoteControlService::ALLOWED_SETTING_KEYS im Laravel-Repo
  * uebereinstimmen. Niemals Provider-API-Keys oder andere Secrets hier aufnehmen.
  */
@@ -201,6 +209,57 @@ async function findNewMediaFiles(sinceMs: number): Promise<OutboundMediaAttachme
   return attachments;
 }
 
+/** A completed team exchange (see CloudControlDeps.runTeamChat). */
+export interface TeamChatResult {
+  /** Last visible turn (the synthesized plan for a planning exchange, otherwise the last bot reply). */
+  response: string;
+  /** The persistent bot_chat conversation the exchange ran in - send it back for continuity. */
+  conversationId: number;
+  /** Every non-pass turn, oldest first, so a chat UI can render per-bot bubbles. */
+  turns: Array<{
+    round: number;
+    botId: string;
+    botName: string;
+    content: string;
+    passed: boolean;
+    needsUserDecision: boolean;
+    isPlan?: boolean;
+    planPath?: string;
+  }>;
+  /** True if any bot wrote "@user" (needs the human's decision). */
+  needsUserDecision: boolean;
+  stalled: boolean;
+}
+
+/**
+ * Runs a team-chat message, falling back to the single main bot if the team roster can't be
+ * resolved (e.g. TEAM_BOT_SLUGS misconfigured/unset, or every configured slug is a typo/deleted
+ * bot) rather than failing the whole voice/chat command outright.
+ */
+async function runTeamChatWithFallback(
+  deps: CloudControlDeps,
+  message: string,
+  options?: { mode?: "plan" | "execute" }
+): Promise<TeamChatResult> {
+  if (!deps.runTeamChat) throw new Error("Team-Chat (BotService) ist nicht verfuegbar");
+  try {
+    return await deps.runTeamChat(message, options);
+  } catch (error) {
+    if (!deps.runMainBot) throw error;
+    deps.logger.warn("Team-Chat-Roster nicht verfuegbar, falle auf Main-Bot zurueck", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    const fallback = await deps.runMainBot(message);
+    return {
+      response: fallback.response,
+      conversationId: fallback.conversationId,
+      turns: [],
+      needsUserDecision: false,
+      stalled: fallback.stalled,
+    };
+  }
+}
+
 export interface CloudControlDeps {
   db: DatabaseService;
   logger: Logger;
@@ -208,6 +267,12 @@ export interface CloudControlDeps {
   requestPluginReload: () => void;
   createAgent: (override?: { model?: string }) => Promise<Agent>;
   runMainBot?: (message: string) => Promise<{ response: string; conversationId: number; stalled: boolean }>;
+  /**
+   * Runs a message through the real group-chat engine (BotChatOrchestrator) instead of the
+   * single main bot - the Voice-App "Team" mode. `mode` forces a planning/discussion exchange
+   * ("plan") or a tool-using one ("execute"); absent = auto-detected from the message.
+   */
+  runTeamChat?: (message: string, options?: { mode?: "plan" | "execute" }) => Promise<TeamChatResult>;
   listBots?: () => Promise<Array<Record<string, unknown>>>;
 }
 
@@ -469,18 +534,29 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
       case "bot.chat.send": {
         const message = String(payload["message"] ?? "").trim();
         if (!message) throw new Error("bot.chat.send: 'message' fehlt");
-        if (!deps.runMainBot) throw new Error("bot.chat.send: BotService ist nicht verfuegbar");
-        const runResult = await deps.runMainBot(message);
+        if (!deps.runTeamChat) throw new Error("bot.chat.send: Team-Chat (BotService) ist nicht verfuegbar");
+        // Explicit plan/execute intent from the voice app: chatMode is the canonical key (the
+        // voice app also uses it for voice.transcribe, whose "mode" already means agent/team).
+        // "mode" stays as a back-compat alias for older clients.
+        const rawMode =
+          payload["chatMode"] === "plan" || payload["chatMode"] === "execute"
+            ? payload["chatMode"]
+            : payload["mode"] === "plan" || payload["mode"] === "execute"
+              ? payload["mode"]
+              : undefined;
+        const runResult = await runTeamChatWithFallback(deps, message, rawMode ? { mode: rawMode } : undefined);
         const { providerName, model } = await describeActiveProvider(deps.db);
         const contextMessageCount = await deps.db.getMessageCount(runResult.conversationId);
         return {
           status: "done",
           result: {
             reply: runResult.response,
+            turns: runResult.turns,
             botConversationId: runResult.conversationId,
             providerName,
             model,
             contextMessageCount,
+            needsUserDecision: runResult.needsUserDecision,
             stalled: runResult.stalled,
           },
         };
@@ -499,8 +575,12 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
         if (!transcript) throw new Error("voice.transcribe: Keine Sprache erkannt");
 
         if (payload["mode"] === "team") {
-          if (!deps.runMainBot) throw new Error("voice.transcribe: BotService ist nicht verfuegbar");
-          const runResult = await deps.runMainBot(transcript);
+          if (!deps.runTeamChat) throw new Error("voice.transcribe: Team-Chat (BotService) ist nicht verfuegbar");
+          // Explicit plan/execute intent forwarded from the voice app (chatMode - "mode" here
+          // already means agent vs. team, so the intent uses a separate key).
+          const chatMode =
+            payload["chatMode"] === "plan" || payload["chatMode"] === "execute" ? payload["chatMode"] : undefined;
+          const runResult = await runTeamChatWithFallback(deps, transcript, chatMode ? { mode: chatMode } : undefined);
           const { providerName, model } = await describeActiveProvider(deps.db);
           const contextMessageCount = await deps.db.getMessageCount(runResult.conversationId);
           return {
@@ -508,10 +588,12 @@ export async function dispatchCommand(deps: CloudControlDeps, command: PendingCo
             result: {
               transcript,
               reply: runResult.response,
+              turns: runResult.turns,
               botConversationId: runResult.conversationId,
               providerName,
               model,
               contextMessageCount,
+              needsUserDecision: runResult.needsUserDecision,
               stalled: runResult.stalled,
             },
           };
