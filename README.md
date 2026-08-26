@@ -1,50 +1,264 @@
-# DucKI Node
+# 🦆 DucKI Agent
 
-**A self-hosted, pure-Node.js AI agent platform** — chat, tasks, coding, workflows, persistent memory and a file-first plugin system, all behind one web UI, REST API and WebSocket stream. No cloud lock-in: run it fully local against LM Studio, Ollama, OpenRouter or OpenAI.
+**A self-hosted AI agent platform for chat, coding, multi-agent workflows, automation, persistent memory, browser use and local-first vision.**
 
-[**🌐 ducki.cloud**](https://ducki.cloud) · [**⚡ Installation**](https://ducki.cloud/download) · [**📘 Documentation**](https://ducki.cloud/docs) · [**🧩 Plugin System**](#plugin-system) · [**🎬 Video & Image Analysis**](#video--image-analysis) · [**❤️ Sponsor**](https://ducki.cloud/sponsor) · [**👤 Author**](https://www.davidduckwitz.de/)
+DucKI combines a Node.js agent runtime, React web UI, extensible skills/tools, bots, workflows and a file-first plugin system in one project. Run it with local models through LM Studio or Ollama, or connect OpenRouter/OpenAI-compatible providers when you want cloud models.
 
-![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Runtime: Node.js](https://img.shields.io/badge/Runtime-Node.js-339933.svg?logo=node.js&logoColor=white) ![Language: TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6.svg?logo=typescript&logoColor=white) ![Made in Fulda](https://img.shields.io/badge/Made%20in-Fulda%2C%20Germany-red.svg)
+[**🌐 ducki.cloud**](https://ducki.cloud) · [**⚡ Install**](https://ducki.cloud/download) · [**📘 Docs**](https://ducki.cloud/docs) · [**🧩 Plugins**](#-plugin-system) · [**👁 Vision Analyzer**](#-vision-analyzer) · [**❤️ Sponsor**](https://ducki.cloud/sponsor)
 
-<img width="1427" height="946" alt="DucKI Node dashboard" src="https://github.com/user-attachments/assets/44420dc1-d681-4ba6-8aaf-cc769a3e48b7" />
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
+![Runtime: Node.js](https://img.shields.io/badge/Runtime-Node.js-339933.svg?logo=node.js&logoColor=white)
+![Language: TypeScript](https://img.shields.io/badge/Language-TypeScript-3178C6.svg?logo=typescript&logoColor=white)
+![UI: React](https://img.shields.io/badge/UI-React-61DAFB.svg?logo=react&logoColor=111)
+![Package Manager: pnpm](https://img.shields.io/badge/pnpm-10.x-F69220.svg?logo=pnpm&logoColor=white)
 
-## Why DucKI
+> DucKI is under active development. The UI changes quickly, so this README uses architecture diagrams instead of an old static chat screenshot. Current setup guides and UI documentation live at **[ducki.cloud/docs](https://ducki.cloud/docs)**.
 
-- **Truly self-hosted & private** — everything runs on your machine; point it at a local LLM (LM Studio / Ollama) and no data leaves your network.
-- **One platform, many jobs** — an assistant for chat, an executor for tasks & Kanban, a coding agent, and a workflow engine, sharing one memory and skill layer.
-- **Pure Node.js, lightweight core** — no heavyweight runtime, no framework sprawl. Easy to read, easy to extend.
-- **Extend without touching the core** — a file-first [plugin system](#plugin-system) adds tools, API connectors (OAuth), settings, and full UI pages (sidebar apps, dashboard widgets) as drop-in bundles.
-- **Provider-agnostic** — LM Studio, Ollama, OpenRouter and OpenAI, switchable at runtime from `/settings`.
-- **Reach it from anywhere** — messaging gateways (Discord, Telegram, Slack, Signal, custom webhooks) with optional local speech-to-text.
-- **Built in the heart of Germany** — Fulda, near the Rhön. This agent is for me and for all — contributions, issues and feedback are very welcome.
+## ✨ What DucKI is
 
-## Key Features
+DucKI is more than a chat interface. It is a local/self-hosted agent environment where the same runtime can reason, use tools, work with files, control a browser, remember information, delegate to specialized bots, execute coding tasks, run workflows and automations, and load complete mini-apps as plugins.
 
-| Area | Highlights |
+```mermaid
+flowchart LR
+    U[Web UI / Tauri Desktop] --> API[Express API + Socket.IO]
+    API --> A[DucKI Agent Runtime]
+
+    A --> B[Multi-Bot / Agents]
+    A --> C[Coding / Agent Control]
+    A --> T[Tools]
+    A --> S[Skills]
+    A --> M[Persistent Memory]
+    A --> W[Workflows + CronJobs]
+    A --> P[Plugin Runtime]
+
+    P --> CAL[Calendar]
+    P --> V[Vision Analyzer]
+    P --> CON[Connectors]
+    P --> APPS[Plugin Mini-Apps]
+
+    A --> LLM[Local or Cloud LLM Providers]
+    T --> BR[Integrated Browser]
+```
+
+## 🚀 Highlights
+
+| Area | What it provides |
 | --- | --- |
-| 🤖 **Multi-agent core** | Parallel chat / task / websocket runs without global lock contention; live metrics on `/agents` |
-| 🧠 **Persistent memory** | Self-updating agent & user memory with profiles, approvals and curation flows |
-| 🎬 **Video & image analysis** | Any attachment gets a transcript + sampled frames (video) or a direct vision pass (image) — see [below](#video--image-analysis) |
-| 🧩 **Plugin system** | File-first bundles: agent tools, OAuth connectors, encrypted settings/secrets, and typed UI pages — see [below](#plugin-system) |
-| 🛠️ **Rich tooling** | Filesystem, HTTP, shell, git, browser automation, workflow, cronjob and memory tools — enable per tool |
-| 🕸️ **Workflow engine** | Build, run and resume graph workflows from the UI and from tools |
-| 📚 **Skills system** | Slash-skill loading, automatic skill selection, pin/enable management, markdown editor |
-| 📖 **LLM-Wiki** | Ingest shared-workspace files into searchable, moderated knowledge wired into memory |
-| ⏰ **CronJobs** | Schedule prompts, tasks and skills to run at a specific time |
-| 💬 **Messaging gateways** | Discord, Telegram, Slack, Signal & custom webhooks — with optional local speech-to-text |
-| 🔌 **MCP integration** | Register MCP servers, discover and call remote tools (one-shot or streamed) via `/mcp` |
-| 🖥️ **Desktop apps** | Two Tauri apps for Windows (frontend + tray-based backend server) |
-| 🦆 **Desk Pet** | A draggable companion that reacts to agent events, fully configurable |
+| 🤖 **Multi-agent & Bots** | Create specialized bots with their own role, skills and chat context; use dedicated bot chats alongside the main agent. |
+| 💻 **Coding / Agent Control** | Integrated coding workspace for agent-driven implementation and iterative development workflows. |
+| 🧠 **Persistent Memory** | Agent/user memory, semantic knowledge, curation/approval flows and LLM-Wiki integration. |
+| 🛠️ **Tools** | Filesystem, project/task management, HTTP, shell, git, browser automation, workflow, cronjob, history, MCP and more. |
+| 📚 **Skills** | Markdown-based agent skills with automatic selection, explicit activation and per-bot specialization. |
+| 🕸️ **Workflow Engine** | Build and run graph-based workflows, including tool/agent execution and resumable flows. |
+| ⏰ **Automations** | CronJobs can launch prompts, tasks, workflows and other scheduled actions. |
+| 🌐 **Integrated Browser** | Puppeteer-based browser sessions, interaction, screenshots, downloads, PDFs and live frame streaming. |
+| 👁 **Vision Analyzer** | Browser, camera and local video analysis with QR, motion, optional OCR, ONNX object detection and tracking. |
+| 🧩 **Plugin System** | Drop-in tools, skills, settings, SQLite storage, OAuth/connectors, widgets and full frontend mini-apps. |
+| 🔌 **MCP** | Register MCP servers, discover tools and call or stream remote MCP tools. |
+| 💬 **Messaging** | Connector/gateway support including Discord and Telegram plugins plus gateway infrastructure. |
+| 🖥️ **Desktop** | Tauri frontend and backend-server apps for a desktop/self-hosted setup. |
+| 🦆 **Desk Pet** | Configurable animated companion reacting to agent state and UI events. |
 
-> 📘 Full documentation and setup guides: **[ducki.cloud/docs](https://ducki.cloud/docs)** · one-command install: **[ducki.cloud/download](https://ducki.cloud/download)**.
+## 👁 Vision Analyzer
 
-## Quick Start
+The bundled **Vision Analyzer** plugin turns DucKI's browser, a local camera or a local video file into a local-first visual source.
 
-### One-command install (recommended)
+**Sources**
 
-Sets up everything (Node, pnpm, build, autostart service) and runs the agent on `http://localhost:3001`:
+- Integrated DucKI browser sessions
+- Camera via explicit browser permission
+- Local video files selected by the user
 
-**Windows** (PowerShell or Terminal)
+**Local capabilities**
+
+- QR-code detection in the frontend
+- Motion detection
+- Optional offline OCR with Tesseract.js
+- Optional ONNX object/person detection
+- Bounding boxes and lightweight per-source tracking IDs
+- Local scene inference from recognized objects
+- Optional configured Vision-LLM analysis when Local-only mode is disabled
+
+```mermaid
+flowchart LR
+    B[Integrated Browser] --> V[Vision Analyzer]
+    C[Camera] --> V
+    F[Local Video File] --> V
+
+    V --> QR[QR Detection]
+    V --> MOT[Motion]
+    V --> OCR[Optional Offline OCR]
+    V --> ONNX[Optional ONNX Detection]
+
+    ONNX --> TR[Object / Person Tracking]
+    ONNX --> SC[Local Scene Inference]
+
+    QR --> ST[Vision State]
+    MOT --> ST
+    OCR --> ST
+    TR --> ST
+    SC --> ST
+
+    ST --> AG[Agent / Plugin UI]
+```
+
+The plugin is located at:
+
+```text
+apps/server/plugins/vision-analyzer/
+```
+
+Its heavier local components are **optional**. Browser/camera/video UI, QR and motion do not require the ONNX/OCR packs. Models are downloaded only when explicitly requested from the plugin UI.
+
+## 🧩 Plugin System
+
+Plugins are first-class DucKI extensions and live in:
+
+```text
+apps/server/plugins/<plugin-name>/
+```
+
+Each plugin has a `plugin.json` manifest and can contribute one or more of the following:
+
+- declarative data-source tools
+- sandboxed script tools
+- trusted Node module tools
+- agent skills
+- plugin-specific settings and encrypted secrets
+- isolated SQLite storage
+- OAuth/connectors
+- sidebar/dashboard widgets
+- a complete frontend mini-app
+- explicitly declared host capabilities/permissions for trusted plugins
+
+A typical plugin looks like this:
+
+```text
+apps/server/plugins/my-plugin/
+├── plugin.json
+├── tools/
+├── skills/
+├── frontend/
+├── widgets/
+└── package.json          # optional runtime dependencies
+```
+
+Plugins can call their own tools from a frontend through the plugin invoke API, allowing mini-apps such as Calendar and Vision Analyzer to stay self-contained.
+
+### Bundled plugins
+
+The repository currently includes a growing set of plugins, including:
+
+| Plugin | Purpose / example |
+| --- | --- |
+| `calendar` | Persistent calendar mini-app with plugin storage and automation hooks |
+| `vision-analyzer` | Local-first browser/camera/video vision pipeline |
+| `social-media` | Media analysis workflow using agent vision/video capabilities |
+| `video-editor` | Video-related plugin workflow/UI |
+| `github-connector` | GitHub connector/tool integration |
+| `discord-connector` | Discord integration |
+| `telegram-connector` | Telegram integration |
+| `homeassistant` | Home Assistant integration |
+| `notes` | Plugin-owned notes/storage frontend |
+| `news` | News-oriented plugin |
+| `shopping-list` | Persistent shopping-list mini-app |
+| `time-tracking` | Time-tracking plugin |
+| `meal-planner` | Meal planning |
+| `invoicing` | Invoicing workflow/plugin |
+| `bitcoin-puzzle` | Bitcoin-focused plugin/example |
+
+See **`apps/server/plugins/`** for the current list.
+
+## 🤖 Bots & Multi-Agent Work
+
+DucKI supports dedicated bots in addition to the main agent. This makes it possible to keep specialist behavior separated instead of forcing one giant system prompt to handle every task.
+
+Typical specialist roles include:
+
+- Coding Agent
+- Research Agent
+- Code Review Agent
+- UI/UX Agent
+- Documentation Agent
+- Memory Agent
+- Business Agent
+- Content Agent
+
+Each bot can work with a focused role and skill set, while bot chats provide separate working contexts in the Web UI.
+
+## 💻 Coding & Agent Control
+
+The `/coding` area is the workspace for agent-assisted development. It is designed for iterative implementation rather than a single prompt/response cycle and lives alongside the normal chat, projects, tasks and agent monitoring pages.
+
+DucKI's tooling can combine:
+
+- project/file context
+- filesystem operations
+- shell commands
+- git operations
+- browser checks
+- task/workflow context
+- skills and persistent memory
+
+Optional tools remain controllable from the Tools settings instead of being exposed blindly to every run.
+
+## 🧠 Memory, Skills & Knowledge
+
+### Persistent Memory
+
+The memory system supports agent/user knowledge and controlled update flows. Memory can be added, replaced, removed and curated rather than being an append-only chat dump.
+
+### Skills
+
+Skills are Markdown-based instruction bundles (`SKILL.md`) and can be enabled, selected automatically or assigned as focused capabilities for specialized agents/bots.
+
+### LLM-Wiki
+
+Files from the shared workspace can be ingested into moderated searchable knowledge. Candidate chunks can be approved or rejected before they become trusted knowledge, and approved content can optionally feed semantic memory.
+
+## 🌐 Browser & Media
+
+The built-in browser tool runs browser automation in an isolated worker process and supports actions such as navigation, click/type, form filling, screenshots, cookies, downloads and PDF capture.
+
+Images and video attachments can also use DucKI's media pipeline:
+
+- images → vision-capable provider
+- videos → transcript + sampled frames
+- audio/voice → configured speech-to-text pipeline
+
+Trusted plugins can access narrow agent capabilities such as image/video analysis without receiving the raw LLM provider object.
+
+## 🔧 Architecture
+
+```text
+apps/
+├── server/
+│   ├── src/                    Express + Socket.IO backend
+│   └── plugins/                Bundled/runtime plugins
+├── web/                        React + Vite Web UI
+├── cli/                        CLI
+├── tauri-desktop/              Desktop frontend wrapper
+└── tauri-server/               Desktop/backend tray app
+
+packages/
+├── agent/                      Agent loop, skills, memory, plugin runtime
+├── tools/                      Built-in tools and browser worker
+├── providers/                  LLM provider integrations
+├── database/                   SQLite/database services
+├── logger/
+└── shared/
+
+skills/                         Core/user skill folders
+storage/                        Runtime data and logs
+```
+
+The system intentionally separates the UI, backend, agent runtime, tools and plugins so features can evolve without turning the main agent loop into one monolithic module.
+
+## ⚡ Quick Start
+
+### One-command install
+
+**Windows (PowerShell)**
 
 ```powershell
 irm https://ducki.cloud/install.ps1 | iex
@@ -56,791 +270,176 @@ irm https://ducki.cloud/install.ps1 | iex
 curl -fsSL https://ducki.cloud/install.sh | bash
 ```
 
-Then open the hosted Web UI at **[ducki.cloud/app](https://ducki.cloud/app)** (Free mode) — it connects to your local agent automatically.
+Installation and update instructions are maintained at **[ducki.cloud/download](https://ducki.cloud/download)**.
 
-Optional extras:
+### Development from source
 
-- **Local Web UI** (fully offline, self-hosted): `install-webui.ps1` (Windows) / `install-webui.sh` (macOS/Linux)
-- **Portable Windows desktop app**: download the `.exe` (with SHA-256 checksum) from **[ducki.cloud/download](https://ducki.cloud/download)**
+Requirements from the workspace: **Node.js 20+** and **pnpm 9+** (the repository currently pins pnpm 10.x).
 
-All commands, copy buttons, checksums and a step-by-step guide (incl. updating & troubleshooting) live on **[ducki.cloud/download](https://ducki.cloud/download)** and **[ducki.cloud/docs](https://ducki.cloud/docs)**.
-
-### From source (development)
-
-Clone this repo, then:
-
-**Linux/macOS/WSL**
+**Linux / macOS / WSL**
 
 ```bash
+git clone https://github.com/davidduckwitz/ducKI-Agent.git
+cd ducKI-Agent
 pnpm install
 cp .env.example .env
 pnpm dev
 ```
 
-**Windows (PowerShell)**
+**Windows PowerShell**
 
 ```powershell
+git clone https://github.com/davidduckwitz/ducKI-Agent.git
+cd ducKI-Agent
 pnpm install
 Copy-Item .env.example .env
 pnpm dev
 ```
 
-After startup:
+Default development endpoints:
 
 - Web UI: `http://localhost:5173`
-- API: `http://localhost:3001`
-- Health check: `http://localhost:3001/health`
-
-Common first steps:
-
-1. Open `/settings` and set provider/model.
-2. Open `/skills` and enable only required skills.
-3. Use `/chat` for iterative work with tools.
-4. Use `/workflow` for graph-based execution.
-5. Monitor `/agents` for currently running agents.
-6. Open `/plugins` to enable extensions and their settings/frontend pages.
-
-## Plugin System
-
-DucKI can be extended **without touching the core** through file-first plugins. A plugin is a
-self-contained bundle in `plugins/<name>/` with a `plugin.json` manifest — **no npm dependency,
-no core code change, no database row required**. Drop a folder in, enable it on `/plugins`, and it
-hot-reloads without interrupting running agents.
-
-**What a plugin can provide**
-
-- **Agent tools** in three flavors:
-  - *Data-source tools* — declarative JSON that turns a public/keyed API into a first-class tool.
-  - *Script tools* — small sandboxed scripts (no network/filesystem) that transform data.
-  - *Module tools* — full Node.js ESM modules (`trust: "node"`) with a host-guarded `fetch`,
-    logger and access to the plugin's settings/secrets.
-- **Its own SQLite database** (`storage.sqlite`) — isolated per plugin, never bloating the main DB.
-  Every DB-backed plugin automatically gains a `<name>_storage` tool the agent can query directly.
-- **Encrypted settings & secrets** — declared in the manifest and edited from the UI. Secrets
-  (API tokens, OAuth tokens) are AES-256-GCM encrypted at rest and never returned in clear text.
-- **OAuth2 connectors** — a declarative `*.oauth.json` runs the full authorization-code flow and
-  stores the token as an encrypted plugin secret, so an authenticated tool just reads it.
-- **Typed UI pages**, rendered as sandboxed same-origin iframes:
-  - `settingsPage` — a pure configuration page on the plugin's card.
-  - `frontendPage` — a full mini-app that gets its own **sidebar link** (with `icon` + `category`)
-    and opens in the content area like a built-in route.
-  - `widgetPage` — a small tile rendered **inline in the sidebar and/or on the dashboard**.
-
-**Manage plugins** from the `/plugins` page or the `/api/plugins` API: list, enable/disable
-(hot-reloaded), install bundles, and read/write per-plugin settings.
-
-**Bundled example plugins**
-
-| Plugin | Demonstrates |
-| --- | --- |
-| `exchange-rates` | Declarative data-source tool (no code) |
-| `notes` | Own SQLite DB, auto `notes_storage` tool, and a **frontend** page in the sidebar |
-| `clock` | A **widget** (time / date / weekday) shown in the sidebar and on the dashboard |
-| `github-connector` | Node module tool + **OAuth2** connector + encrypted secrets + **settings** page |
-| `social-media` | Node module tool using the [agent capability API](#video--image-analysis) (`ctx.agent.analyzeVideo`/`analyzeImage`) to analyze a video/image from any URL (YouTube, TikTok, Instagram, X, or a direct link) |
-
-## Configuration
-
-### Port Configuration
-
-By default:
-- Frontend (Web UI): `http://localhost:5173`
 - Backend API: `http://localhost:3001`
+- Health: `http://localhost:3001/health`
 
-To use different ports, set environment variables in `.env`:
+Then start with:
+
+1. `/settings` — configure provider and model.
+2. `/tools` — enable the optional tools you actually need.
+3. `/skills` — configure skills.
+4. `/chat` — use the main agent.
+5. `/bots` / `/bot-chats` — create and use specialist agents.
+6. `/coding` — open Agent Control / coding workspace.
+7. `/plugins` — configure plugin apps and integrations.
+8. `/workflow` / `/cronjobs` — build repeatable or scheduled work.
+9. `/agents` — inspect active agent runs.
+
+## 🧰 Useful Commands
 
 ```bash
-# Frontend port (defaults to 5173, auto-increments if already in use)
-VITE_PORT=5173
+# Development
+pnpm dev
 
-# Backend port (defaults to 3001)
-PORT=3001
+# Build
+pnpm build
+pnpm build:web
+pnpm build:server
+
+# Desktop
+pnpm tauri:dev
+pnpm tauri:server:dev
+pnpm tauri:all:dev
+pnpm tauri:build
+pnpm tauri:server:build
+
+# Quality / utilities
+pnpm typecheck
+pnpm test
+pnpm lint
+pnpm skills:validate
 ```
 
-**Note:** If a port is already in use, the frontend automatically tries the next available port (5174, 5175, etc.).
+## 🖥 Desktop Applications
 
-## Troubleshooting
+DucKI includes separate Tauri apps for the frontend and backend server:
 
-### Port Already in Use
+- **`tauri-desktop`** — desktop wrapper for the Web UI; can connect to a local or remote backend.
+- **`tauri-server`** — tray-based backend wrapper with local server management and port handling.
 
-If you get `Port 5173 is already in use`:
-
-1. **Quick fix:** The dev server will automatically use the next available port (5174, 5175, etc.)
-2. **Manual fix:** Kill the old process:
-   ```bash
-   # Windows: Find and kill the process using port 5173
-   netstat -ano | findstr :5173
-   taskkill /PID <PID> /F
-   
-   # Linux/macOS:
-   lsof -ti:5173 | xargs kill -9
-   ```
-3. **Custom port:** Set `VITE_PORT` in `.env` before running `pnpm dev`
-
-## Project Structure
-
-```text
-apps/
-	server/      Express + Socket.IO API
-	web/         React + Vite dashboard
-	cli/         CLI entrypoint
-packages/
-	agent/       Core agent loop, guards, memory integration
-	tools/       Tool executors (filesystem, http, shell, git, skills)
-	providers/   LLM providers (LM Studio, OpenAI, OpenRouter, Ollama)
-	database/    SQLite service + schema
-	logger/      Logging helpers
-	shared/      Shared types and API helpers
-skills/        User and system skill folders (SKILL.md per skill)
-plugins/       File-first plugin bundles (plugin.json per plugin)
-storage/       Runtime storage (DB, logs)
-```
-
-## Desktop Applications
-
-DucKI includes two separate Tauri apps for Windows:
-
-### tauri-desktop (Frontend App)
-- Standalone web UI application
-- Connects to backend (local or remote)
-- Settings: Local/Remote toggle in `/settings`
-- Starts with: `pnpm tauri:dev`
-- Build: `pnpm tauri:build`
-
-### tauri-server (Backend Server App)
-- Separate backend application with system tray integration
-- Manages Node.js server process
-- Auto-detects available port (3001-3010 fallback)
-- Windows Autostart support
-- Starts with: `pnpm tauri:server:dev`
-- Build: `pnpm tauri:server:build`
-
-### Running Both Together
-
-Start everything (web server + both Tauri apps) with one command:
+For local development of both together:
 
 ```bash
 pnpm tauri:all:dev
 ```
 
-This will automatically start in parallel:
-1. `pnpm dev` → Vite dev server (5173) + Node API server (3001)
-2. `pnpm tauri:server:dev` → Backend Wrapper (system tray)
-3. `pnpm tauri:dev` → Frontend (waits for Vite to be ready)
+## 🔌 MCP & Messaging
 
-**All three start together - just use one terminal!**
+### MCP
 
-### Separate Usage
+The `/mcp` page manages MCP server registrations and discovered tools. DucKI supports normal tool calls as well as streamed MCP execution.
 
-If you only need the frontend (connecting to remote server):
-```bash
-pnpm tauri:dev
-```
+### Messaging / Connectors
 
-If you only need the backend server:
-```bash
-pnpm tauri:server:dev
-```
+The gateway and plugin infrastructure can connect the agent to external channels. Connector plugins currently include Discord and Telegram, while the core gateway layer supports additional integrations and custom workflows.
 
-### Port Management
+## 🔐 Local-first & Security Model
 
-**tauri-server** implements smart port detection:
-- Tries port 3001 first
-- Falls back to 3002-3010 if ports are in use
-- Displays actual port in system tray tooltip
-- Logs port on startup
+DucKI is designed so that local providers, local storage and local tooling can be used without requiring a cloud LLM.
 
-The frontend automatically detects the backend port, or you can set it manually in Settings.
+A few important boundaries:
 
-### System Tray Integration
+- sandboxed plugin scripts do not receive unrestricted Node access
+- trusted `node` plugins are privileged code and should only be installed from sources you trust
+- host capabilities can require explicit manifest permissions (for example browser frames or camera access)
+- plugin secrets/settings are separated from normal plugin frontend state
+- optional tools can be disabled so they are not available to the agent
+- Vision Analyzer defaults to Local-only behavior and requires explicit user actions for camera/model setup
 
-When **tauri-server** starts, it creates a system tray icon that shows:
-- 🟢 Status indicator (green = running)
-- Tooltip with port information: `DucKI Server - Running on localhost:3001`
-- Hover to see full details and port number
+Self-hosting is not the same as automatic security: review plugins, tool permissions, exposed ports and provider configuration before making an instance reachable from outside your trusted network.
 
-The tray icon persists in the Windows system tray even when the app window is closed, allowing the server to run in the background.
+## 🗺 Main UI Areas
 
-### Architecture
-
-```
-┌─────────────────────────────────────────┐
-│   tauri-desktop (Frontend App)          │
-│   - Windows desktop wrapper for web UI  │
-│   - Vite dev server on :5173            │
-│   - Settings: Local/Remote backend      │
-└─────────────────────────────────────────┘
-                    ↓ connects to ↓
-┌─────────────────────────────────────────┐
-│   tauri-server (Backend Server App)     │
-│   - System tray with port indicator     │
-│   - Manages Node.js server process      │
-│   - Auto-detects free port (3001+)      │
-│   - Windows Autostart support           │
-│   - tsx compiles TypeScript on-the-fly  │
-└─────────────────────────────────────────┘
-                    ↓ runs ↓
-┌─────────────────────────────────────────┐
-│   Node.js Server (apps/server/)         │
-│   - Express API on detected port        │
-│   - Socket.IO WebSocket events          │
-│   - Agent/Memory/Skill systems          │
-└─────────────────────────────────────────┘
-```
-
-### Troubleshooting Tauri Apps
-
-**"Waiting for your frontend dev server to start..."**
-- The frontend needs Vite dev server on :5173
-- This is normal; wait or check that Vite is running
-- Vite auto-increments port if 5173 is in use
-
-**Backend not starting**
-- Check if ports 3001-3010 are available
-- Run `pnpm build:server` to ensure Node server is built
-- Check console for port binding errors
-
-**Frontend can't connect to backend**
-- Verify tauri-server is running (check system tray)
-- Check Settings: Local/Remote toggle
-- If using Remote: verify URL and port are correct
-- Frontend will auto-detect localhost port if using Local
-
-## CLI and Scripts
-
-```bash
-# Development
-pnpm dev                      # Start web + server (Vite + Node + shared watch)
-pnpm tauri:dev               # Start tauri-desktop only
-pnpm tauri:server:dev        # Start tauri-server only
-pnpm tauri:all:dev           # Start everything (web + server + both tauri apps)
-pnpm tauri:dev:no-server     # Start tauri apps without dev server (uses built web)
-
-# Building
-pnpm tauri:build             # Build tauri-desktop .exe
-pnpm tauri:server:build      # Build tauri-server .exe
-pnpm build                   # Build all packages
-pnpm build:web               # Build web frontend only
-pnpm build:server            # Build Node server only
-
-# Utilities
-pnpm typecheck
-pnpm test
-pnpm lint
-```
-
-CLI examples:
-
-```bash
-pnpm --filter @ducki/cli dev chat
-pnpm --filter @ducki/cli dev run "implement health endpoint"
-pnpm --filter @ducki/cli dev tools
-```
-
-## Agent & Provider Configuration
-
-Settings are stored in DB via `/api/settings` and can be edited from `/settings`.
-
-Important agent controls:
-
-- `AGENT_MAX_ITERATIONS`
-- `AGENT_TIMEOUT_MS`
-- `AGENT_MAX_TOOL_FAILURES`
-- `AGENT_MAX_REPEATED_TOOL_CALL`
-- `AGENT_STALE_READ_STREAK` (consecutive iterations repeating the same read-only calls before the run aborts as a non-converging loop; default 4)
-- `DUCKI_EXPLORE_TIMEOUT_MS` (hard wall-clock budget for one `explore` sub-agent call, in ms; default 180000 = 3 min)
-- `AGENT_AUTO_MEMORY`
-- `AGENT_AUTO_SKILL_SELECTION`
-- `AGENT_SKILL_BEHAVIOR` (`automatic` or `active`)
-- `AGENT_AUTO_SKILL_FALLBACK_NONE`
-- `AGENT_AUTO_SKILL_THRESHOLD`
-- `AGENT_AUTO_SKILL_MARGIN`
-- `AGENT_AUTO_SKILL_MIN_INPUT_LEN`
-- `AGENT_AUTO_SKILL_MIN_OVERLAP`
-
-LLM-Wiki controls:
-
-- `WIKI_ENABLED` (hard on/off switch; when `false`, no ingest and no reindex)
-- `WIKI_SHARED_SOURCE_PATH` (default: `llm-wiki` under shared workspace root)
-- `WIKI_SHARED_SOURCE_AUTO_MEMORY` (write approved wiki chunks into semantic memory)
-- `WIKI_AUTO_APPROVE` (if `true`, new chunks become `approved`; otherwise `candidate`)
-- `WIKI_SHARED_SOURCE_MAX_FILE_SIZE_KB`
-- `WIKI_INGEST_INTERVAL_MS`
-- `WIKI_CHUNK_SIZE_CHARS`
-- `WIKI_CHUNK_OVERLAP_CHARS`
-
-Skill behavior notes:
-
-- `AGENT_SKILL_BEHAVIOR=automatic`: Agent evaluates relevance and auto-loads only needed skills from `ENABLED_SKILLS` allowlist.
-- `AGENT_SKILL_BEHAVIOR=active`: Agent loads all skills listed in `ENABLED_SKILLS`.
-- `AGENT_AUTO_SKILL_FALLBACK_NONE=true`: In `automatic` mode, if no skill matches, no skill is loaded.
-
-Tool modularity notes:
-
-Every built-in tool has a `tools/<name>/TOOL.md` manifest (frontmatter: `name`,
-`description`, `core`) alongside its TypeScript implementation. All built-in
-tools are always registered (so they're always listed on the Tools settings
-page, including ones nobody has enabled yet), but whether a tool can actually
-*run* depends on its `core` flag: tools marked `core: true` always run; all
-others are optional and disabled by default until enabled via
-`ENABLED_OPTIONAL_TOOLS` (same JSON-array-of-names shape as `ENABLED_SKILLS`),
-settable from the Tools page in the web UI.
-
-- Core (always usable): `project`, `task`, `memory`, `skill_manage`, `tool_factory`, `filesystem`.
-- Optional (off by default): `http`, `git`, `browser`, `shell`, `mcp`, `workflow`, `cronjob`, `history`, `gateway`.
-- `ENABLED_OPTIONAL_TOOLS=["shell", "http"]`: enables those two optional tools; all other optional tools stay disabled.
-- Disabling a tool hides it from the agent's system prompt and rejects any call to it with a clear "disabled" error - enforced fresh on every call, both for the interactive chat agent and for workflow/cronjob `tool_call` dispatch, so a setting change takes effect immediately without a restart.
-- Tools loaded from an external URL (tool packages) are not yet supported - only skills currently support `POST /api/skills/import`. This is a deliberate follow-up, not an oversight.
-
-Script-backed tools (no TypeScript required):
-
-A `tools/<name>/TOOL.md` can also declare an executable script - the same
-convention skills already use (frontmatter `script:` pointing to a file, a
-sibling `script.js`, or an inline `<script>...</script>` block), plus a
-required sibling `parameters.json` (the tool's JSON-schema parameters, since
-there's no TypeScript file to declare them in). This turns the manifest into
-a real, independently callable tool with no hand-written code at all:
-
-```
-tools/weather_summary/TOOL.md      # frontmatter: script, optional subagent: true
-tools/weather_summary/script.js    # sees toolInput/toolContext only - no fetch/require/fs
-tools/weather_summary/parameters.json
-```
-
-- The script runs in the exact same sandbox as skill scripts
-  (`runScriptInSandbox`, 1500ms timeout, no network/filesystem access) - it
-  can only transform data the calling agent already gathered (e.g. via
-  `http`/`filesystem`), not fetch new data itself.
-- Set `subagent: true` in the frontmatter to have a **second, lightweight LLM
-  call** interpret the script's raw result (+ console logs) before it's
-  returned to the calling agent - useful when the raw output needs
-  summarizing/formatting rather than being returned as-is. The frontmatter
-  body (everything after the closing `---`) becomes that subagent's
-  directive. This is a genuinely separate, billed LLM call per tool
-  invocation - the Tools settings page badges any tool with `subagent: true`
-  for this reason, since an unattended cronjob could trigger it repeatedly.
-- If the script throws, the tool call fails immediately with no subagent call
-  (no extra cost on a hard failure). If the subagent call itself fails or
-  times out, the tool call still succeeds with the raw script result plus a
-  `subagentFailed: true` marker - a bad interpretation step never discards a
-  script that ran successfully.
-- `AGENT_SCRIPT_SUBAGENT_TIMEOUT_MS` (default `20000`): timeout for the
-  subagent's LLM call.
-- A tool name reserved by a built-in (`filesystem`, `shell`, `task`, ...) or
-  missing/invalid `parameters.json` is skipped with a `warn` log rather than
-  registered - check server logs if a script tool doesn't show up.
-- New/changed script tools reach the interactive chat agent on the next
-  request (no restart). They only reach workflow/cronjob `tool_call`
-  dispatch after a server restart, same as `MCP_SERVERS`.
-
-Provider controls:
-
-- `DEFAULT_PROVIDER`
-- `*_MODEL`, `*_BASE_URL`, `*_API_KEY`
-
-Messaging gateways and local STT controls:
-
-DucKI can receive and reply to messages across **Discord, Telegram, Slack, Signal and custom
-webhooks**. Configure endpoints on the `/gateway` page (each with its own portal, token/webhook
-and channel hints); inbound messages run the agent and the reply is sent back on the same channel.
-Discord additionally supports voice notes via local speech-to-text using the controls below.
-
-- `DISCORD_GATEWAY_ENABLED`
-- `DISCORD_BOT_TOKEN` (or gateway `authToken` in `/gateway` config)
-- `DISCORD_GUILD_ID` (optional)
-- `DISCORD_ALLOWED_USER_ID` (optional)
-- `DISCORD_VOICE_STT_PROVIDER` (`local`, `nodejs-whisper`, `silero`, `ollama`, `openai`)
-- `DISCORD_VOICE_STT_COMMAND` / `DISCORD_VOICE_STT_ARGS` (for provider `local`)
-- `LOCAL_STT_COMMAND` / `LOCAL_STT_ARGS` / `LOCAL_STT_TIMEOUT_MS`
-- `DEFAULT_SPEECH_TO_TEXT_PROVIDER`
-- `NODEJS_WHISPER_MODEL_NAME` / `NODEJS_WHISPER_MODEL_ROOT_PATH`
-- `NODEJS_WHISPER_AUTO_DOWNLOAD` / `NODEJS_WHISPER_USE_CUDA`
-- `NODEJS_WHISPER_LANGUAGE` / `NODEJS_WHISPER_TIMEOUT_MS`
-
-Example for local STT binary (`whisper.cpp` style):
-
-```bash
-DISCORD_VOICE_STT_PROVIDER=local
-LOCAL_STT_COMMAND=whisper-cli
-LOCAL_STT_ARGS=-m C:/models/ggml-base.en.bin -f {input}
-```
-
-Supported placeholders for local STT args:
-
-- `{input}` temporary input audio file path
-- `{output}` temporary transcript output file path
-- `{outputBase}` temporary output file base path
-- `{language}` language hint (if provided)
-
-### Whisper installation (Windows)
-
-Recommended setup for Discord voice transcription without external cloud STT:
-
-1. Install `nodejs-whisper` in the workspace (already included in this project).
-2. Install CMake:
-	 - `winget install -e --id Kitware.CMake`
-3. Ensure Visual C++ Build Tools are available (required by `cmake --build`).
-4. In Settings (`/settings`), set:
-
-```bash
-DISCORD_VOICE_STT_PROVIDER=nodejs-whisper
-DEFAULT_SPEECH_TO_TEXT_PROVIDER=nodejs-whisper
-NODEJS_WHISPER_MODEL_NAME=base
-NODEJS_WHISPER_AUTO_DOWNLOAD=true
-NODEJS_WHISPER_LANGUAGE=auto
-NODEJS_WHISPER_TIMEOUT_MS=180000
-```
-
-Optional local command fallback (used if configured):
-
-```bash
-LOCAL_STT_COMMAND=C:/tools/whispercpp/whisper-cli.exe
-LOCAL_STT_ARGS=-m C:/tools/whispercpp/models/ggml-base.bin -f {input} -otxt -of {outputBase} -l de
-LOCAL_STT_INPUT_EXT=ogg
-LOCAL_STT_TIMEOUT_MS=180000
-```
-
-Notes:
-
-- On first run, `nodejs-whisper` may download a model and build `whisper.cpp`.
-- Build output executable is typically:
-	- `node_modules/.pnpm/nodejs-whisper@0.3.0/node_modules/nodejs-whisper/cpp/whisper.cpp/build/bin/Release/whisper-cli.exe`
-- If Discord voice message processing is rate-limited by LLM provider (`429`), the system still returns the raw transcript when available.
-
-## API Overview
-
-Core endpoints:
-
-- `POST /api/chat`
-- `GET /api/chat/conversations`
-- `GET /api/chat/conversations/:id/messages`
-- `GET /api/workflows`
-- `POST /api/workflows`
-- `POST /api/workflows/:id/run`
-- `GET /api/memory`
-- `POST /api/memory/actions`
-- `GET /api/skills`
-- `GET /api/wiki/status`
-- `GET /api/wiki/entries`
-- `GET /api/wiki/search`
-- `POST /api/wiki/reindex`
-- `PUT /api/wiki/config`
-- `POST /api/wiki/entries/:id/approve`
-- `POST /api/wiki/entries/:id/reject`
-- `GET /api/shared/files`
-- `GET /api/agents/live`
-- `GET /api/logs`
-
-## WebSocket Events
-
-Client -> server:
-
-- `chat:message`
-- `chat:stop`
-- `agent:status`
-
-Server -> client:
-
-- `chat:start`
-- `chat:chunk`
-- `chat:event`
-- `chat:complete`
-- `chat:error`
-- `agent:status`
-- `agent:metrics`
-
-## Skills and Memory
-
-- Skills live in `skills/<slug>/SKILL.md`.
-- Enable/disable skills in `/skills`.
-- Agent can auto-select relevant skills when enabled.
-- Memory supports add/replace/remove/batch/approval flows.
-
-## Desk Pet
-
-A small companion lives on top of the whole web UI: it walks along the window
-floor (or flies freely), reacts to what the agent is doing, and can be picked up
-and thrown anywhere. Everything is configured in `/settings` -> `Character` tab.
-
-Interaction:
-
-- Drag & drop the pet anywhere; releasing it mid-air throws it with real momentum
-  (ground pets fall, bounce and walk on from where they land).
-- Click for a reaction + speech bubble, right-click for the pet menu
-  (wave, jump, sleep, reset position, settings, hide).
-- It gets startled by fast pointer moves; chasing the cursor is off by default and
-  can be switched on in the settings.
-- It falls asleep after a minute without interaction and wakes up when the cursor
-  comes close.
-
-Agent reactions (toggleable):
-
-| Event | Reaction |
+| Route | Area |
 | --- | --- |
-| Agent run starts | Working animation + "working on it" bubble |
-| Run finished | Happy jump + "done" bubble |
-| `agentStatus = error` | Shake / fail animation |
-| WebSocket disconnect / reconnect | Sad state, waves again when back online |
+| `/dashboard` | Overview |
+| `/chat` | Main agent chat |
+| `/bots` | Bot management |
+| `/bot-chats` | Specialist bot chats |
+| `/coding` | Coding / Agent Control |
+| `/projects` | Projects |
+| `/tasks` | Tasks |
+| `/workflow` | Workflow editor |
+| `/cronjobs` | Scheduled automation |
+| `/mcp` | MCP servers/tools |
+| `/tools` | Tool management |
+| `/skills` | Skill management |
+| `/plugins` | Plugin management |
+| `/memory` | Memory + LLM-Wiki |
+| `/gateway` | Messaging gateway |
+| `/agents` | Live agent activity |
+| `/logs` | Logs |
+| `/settings` | Runtime configuration |
 
-Settings (`/settings` -> `Character` -> `Desk Pet`):
+## 🛠 Troubleshooting
 
-- On/off, pet gallery, size, speed, opacity, ground offset.
-- Movement mode: `automatic` (use the pet's own), forced `walking` or forced `flying`.
-- Toggles for cursor following, agent-event reactions and speech bubbles.
-- State preview (idle, walk, run, fly, jump, wave, work, fail, sleep, drag) plus
-  trigger buttons to test wave/jump/reset position on the live pet.
+If the development UI or API does not start:
 
-Built-in pets: `Ducki` (duck, ground), `Pixel Cat` (ground), `Ghost` (air),
-`Helper Bot` (air) - all drawn as SVG + CSS, no image assets required.
+```bash
+# Windows: inspect frontend port
+netstat -ano | findstr :5173
 
-Custom sprite-sheet pets:
-
-1. `Character` tab -> `Import sprite sheet`, choose a PNG/GIF/WebP sheet.
-2. Enter the grid (columns x rows) - the frame size is derived from the image.
-3. Map sheet rows to engine states (`row`, `frames`, `loop`) and check them in the
-   state viewer, then save.
-4. Unmapped states fall back to related ones (`run` -> `walk` -> `idle`), so a
-   partially mapped sheet still animates everywhere.
-
-Storage note: pet settings, last position and imported sheets live in the
-browser's `localStorage` (`ducki.pet`), not in the server DB - they are per
-device and per browser. Sprite sheets are stored as data URLs, so keep them
-small (a few hundred KB).
-
-Implementation lives in `apps/web/src/components/pet/` (engine, renderer, overlay,
-importer) with the settings UI in `apps/web/src/components/settings/PetSettingsPanel.tsx`.
-
-## LLM-Wiki
-
-LLM-Wiki turns files in shared workspace into searchable, moderated knowledge for the agent.
-
-Source folder:
-
-- `shared-workspace/llm-wiki`
-
-What happens during ingest:
-
-1. Scanner reads supported text files (`.md`, `.txt`, `.json`) from the wiki folder.
-2. Files are chunked (`WIKI_CHUNK_SIZE_CHARS` + `WIKI_CHUNK_OVERLAP_CHARS`).
-3. Chunks are stored as wiki entries with moderation status (`candidate`, `approved`, `rejected`, `error`).
-4. If auto-memory is enabled, approved chunks are mirrored into semantic memory.
-
-Moderation flow:
-
-1. New chunks are `candidate` by default.
-2. Approve to promote reliable chunks into active knowledge.
-3. Reject to exclude incorrect chunks from retrieval.
-
-Search behavior:
-
-- `/api/wiki/search` ranks by token relevance + recency + moderation weight.
-- `approved` entries are prioritized.
-- `rejected` and `error` entries are excluded.
-- `candidate` entries are only included when explicitly requested.
-
-UI controls:
-
-- Open `/memory` -> `LLM Wiki` tab.
-- Toggle `WIKI_ENABLED` and `WIKI_SHARED_SOURCE_AUTO_MEMORY`.
-- Trigger `Reindex` manually.
-- Filter/search entries and approve/reject candidates.
-
-Disable guarantee:
-
-- With `WIKI_ENABLED=false`, wiki ingest does not run and reindex requests are rejected.
-
-## Browser Tool
-
-The `browser` tool (in `packages/tools/src/browser.ts`) supports browser automation via Puppeteer Core and runs in an isolated worker process.
-
-Implemented actions:
-
-- `detect`
-- `launch`
-- `list_pages`
-- `goto`
-- `click`
-- `type`
-- `press`
-- `wait`
-- `evaluate`
-- `screenshot`
-- `cookies_get`
-- `cookies_set`
-- `cookies_clear`
-- `form_fill`
-- `login`
-- `pdf`
-- `download`
-- `close`
-
-Operational notes:
-
-- Browser execution is isolated in a child process (IPC). Puppeteer runtime failures return tool errors and should not terminate the agent process.
-- On Windows, browser detection checks env vars and common install paths for Edge/Chrome/Chromium.
-- For `download`, use `saveDir` for deterministic storage and verify resulting files in that directory.
-
-Minimal flow example:
-
-1. `detect`
-2. `launch` (optional `url`)
-3. Interact with `goto`/`click`/`type`/`form_fill`/`login`
-4. Capture artifacts with `screenshot` or `pdf`
-5. `close`
-
-## Video & Image Analysis
-
-Any image or video attachment — via the web chat composer, a Discord message, or the Cloud
-Voice-App — is analyzed automatically as part of the same turn, no separate upload/processing
-step required.
-
-- **Images** are sent straight to the active vision-capable model.
-- **Videos** run through an ffmpeg + Whisper pipeline
-  (`packages/agent/src/media/video-processing.ts`): the audio track is extracted and transcribed
-  locally (same `nodejs-whisper` pipeline as voice messages), and a handful of frames are
-  **sampled** — not every frame, which would blow the context window on anything longer than a
-  few seconds. Transcript + frames are then sent to the model together. Hard caps: ~3 min of a
-  video actually sampled, ~80MB input, up to 6 frames.
-- Every entry point shares the same code
-  (`buildAttachmentImageContent`/`buildAttachmentVideoContent` in `packages/agent/src/agent.ts`),
-  so a video attachment behaves identically whether it arrives through the chat UI, a Discord
-  message, or the Cloud Voice-App's `chat.send` command.
-
-### Plugin capability API
-
-A `trust: "node"` plugin can call the **same** vision/transcription pipeline the core agent uses,
-via `ctx.agent` in its module tool's context
-(`packages/agent/src/plugins/agent-capabilities.ts`):
-
-```ts
-ctx.agent.analyzeImage(images, question?)   // vision reasoning over one or more images
-ctx.agent.transcribeAudio(buffer, opts?)    // Whisper transcription of a raw audio buffer
-ctx.agent.analyzeVideo(buffer, question?)   // transcript + sampled frames (+ optional vision pass)
-ctx.agent.analyzeText(text, instruction)    // plain text-in, text-out LLM call
+# Linux/macOS
+lsof -i :5173
 ```
 
-This is deliberately **not** the raw `LLMProvider` — a plugin can't fire arbitrary prompts at any
-model or step around cost/provider governance; each method wraps exactly one narrow, existing
-capability. Only `trust: "node"` plugins receive `ctx.agent` (same bar as `moduleTools`);
-`sandboxed` plugins never see it.
+The Vite frontend can move to another available port when `5173` is already occupied. The backend defaults to `3001`.
 
-**Example — the `social-media` plugin** (`plugins/social-media/`): analyzes a video or image from
-a URL (YouTube, TikTok, Instagram, X/Twitter and hundreds more sites via `yt-dlp`, or a direct
-image/video link). Analyses are organized into projects in the plugin's own SQLite DB; each item
-supports unlimited follow-up questions (the transcript + frames are stored, not just one answer),
-and its downloaded video file can be deleted independently to free disk space while the
-transcript/frames/Q&A history stay fully intact.
+For agent/plugin/runtime errors, also inspect the DucKI Logs page (`/logs`) and server console output.
 
-## MCP Integration
+## 🤝 Contributing
 
-The project includes MCP runtime integration with server registry, reconnect handling, streaming, and a dedicated UI page (`/mcp`).
+Contributions, issues and ideas are welcome — especially new plugins, skills, connectors, agent improvements and fixes.
 
-Core capabilities:
-
-- Configure MCP servers (`id`, `name`, `url`, `enabled`) and persist settings.
-- Automatic runtime sync/reload of configured servers.
-- Reconnect tracking (`connected`, `reconnectAttempts`) and discovered tool counts.
-- List discovered remote tools across connected MCP servers.
-- Execute remote MCP tools via one-shot calls.
-- Execute remote MCP tools via SSE stream with live output.
-- Stop active streams from UI.
-- Inspect streamed chunks with per-chunk timestamps in UI.
-
-Server API endpoints:
-
-- `GET /api/mcp/servers`
-- `PUT /api/mcp/servers`
-- `POST /api/mcp/servers/reload`
-- `GET /api/mcp/tools`
-- `POST /api/mcp/tools/call`
-- `POST /api/mcp/tools/stream`
-
-UI flow (`/mcp`):
-
-1. Add or update MCP servers.
-2. Click reload to sync runtime.
-3. Verify connected status and tool discovery.
-4. Call tools directly or start stream mode.
-5. Stop stream if needed and review chunk timeline.
-
-## Development Notes
-
-- Workspace uses `pnpm` with TypeScript project references.
-- Route-heavy pages are lazy-loaded in web app.
-- Server logs requests/errors to DB and exposes `/api/logs`.
-- Shared workspace APIs are under `/api/shared/*`.
-- Sidebar `Live Agenten` card shows Discord gateway runtime state (green/red) with tooltip (`lastError` when inactive).
-- Discord inbound lifecycle can set reactions on source messages: `👀` on receive, `✅` on success, `⚠️` on failure.
-
-## Troubleshooting
-
-If server fails to start:
-
-1. Ensure port `3001` is free.
-2. Run `pnpm --filter @ducki/server run start`.
-3. Check `/api/logs` and console output.
-
-If Discord gateway is inactive (red indicator):
-
-1. Check `/api/agents/live` -> `gateway.discord.lastError`.
-2. Verify bot token source (`DISCORD_BOT_TOKEN` or `/gateway` config `authToken`).
-3. Confirm Discord bot has permissions: View Channel, Read Message History, Add Reactions, Send Messages.
-
-If Discord reactions are missing on inbound messages:
-
-1. Confirm inbound payload includes `sourceMessageId` (WS bridge sends this automatically).
-2. Verify channel permissions for reactions.
-3. Inspect `/api/logs` for `reaction_set` / `reaction_error` gateway events.
-
-If local voice transcription fails:
-
-1. Ensure `LOCAL_STT_COMMAND` points to an installed local binary.
-2. Check `LOCAL_STT_ARGS` placeholders and quoting for Windows paths.
-3. Validate command manually with a local audio file before running `pnpm dev`.
-
-If `nodejs-whisper` fails with `cmake` or `whisper-cli` errors:
-
-1. Verify CMake is installed and reachable:
-	- `cmake --version`
-2. If CMake was just installed, restart terminal/dev server.
-3. Confirm Build Tools are installed (Visual Studio Build Tools with C++ workload).
-4. If the log shows `whisper-cli executable not found`, run one clean rebuild:
-
-```powershell
-$root = Join-Path (Resolve-Path .) "node_modules/.pnpm/nodejs-whisper@0.3.0/node_modules/nodejs-whisper/cpp/whisper.cpp"
-& "C:\Program Files\CMake\bin\cmake.exe" -S $root -B (Join-Path $root "build")
-& "C:\Program Files\CMake\bin\cmake.exe" --build (Join-Path $root "build") --config Release
-```
-
-If skills are not visible:
-
-1. Verify files exist under `skills/<slug>/SKILL.md`.
-2. Confirm `SKILLS_PATH` (or fallback resolution) points to workspace `skills`.
-3. Restart server after path/config changes.
-
-## Contributing
-
-Contributions, issues and feedback are very welcome — new features, connectors, plugins and fixes.
+A simple contribution flow:
 
 1. Create a feature branch.
-2. Run `pnpm typecheck` and relevant tests.
-3. Open a PR with a short change summary and validation steps.
+2. Keep changes focused and reversible.
+3. Run the checks relevant to your change.
+4. Open a PR with a short summary and validation notes.
 
-## Sponsors & Support
+## ❤️ Sponsors & Support
 
-DucKI is free and open source, built in Fulda, Germany. Donations and sponsorships fund development time, servers and new features — and keep the project independent. **Thank you! 🦆**
+DucKI is free and open source. Sponsorship helps fund development time, infrastructure and future features.
 
-- **❤️ Become a sponsor:** **[ducki.cloud/sponsor](https://ducki.cloud/sponsor)** — companies and individuals can support DucKI and, if they wish, be credited here and on the sponsor page.
+- **Sponsor:** [ducki.cloud/sponsor](https://ducki.cloud/sponsor)
 - **PayPal:** https://www.paypal.me/davidduckwitz
 - **Bitcoin:** `1AinLLwLGvh2Y51a53PAYi5PdPBsLwpU1G`
 
-### Our sponsors
+### Sponsors
 
-> No sponsors yet — [be the first](https://ducki.cloud/sponsor) and get listed here (name, and optionally logo & link).
+> No sponsors yet — [be the first](https://ducki.cloud/sponsor).
 
-<!-- Sponsors are added here as the project grows. -->
-
-## Links
+## 🔗 Links
 
 - **Website:** https://ducki.cloud
 - **Installation:** https://ducki.cloud/download
@@ -848,6 +447,6 @@ DucKI is free and open source, built in Fulda, Germany. Donations and sponsorshi
 - **Sponsor:** https://ducki.cloud/sponsor
 - **Author:** https://www.davidduckwitz.de/
 
-## License
+## 📄 License
 
-MIT (see `LICENSE` if present).
+DucKI is released under the **MIT license**. Individual plugins or downloaded third-party models may declare their own licenses; check the relevant `plugin.json` or model metadata when redistributing them.
