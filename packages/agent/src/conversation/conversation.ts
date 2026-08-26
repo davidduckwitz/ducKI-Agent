@@ -132,6 +132,11 @@ export class ConversationManager {
     this.messages = [];
   }
 
+  /** Replace all in-memory messages (used by tiered compression). */
+  setMessages(messages: LLMMessage[]): void {
+    this.messages = [...messages];
+  }
+
   get id(): number | undefined {
     return this.conversationId;
   }

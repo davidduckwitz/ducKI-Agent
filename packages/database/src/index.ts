@@ -68,6 +68,15 @@ export class DatabaseService {
     this.logger = getRootLogger().child("Database");
   }
 
+  /**
+   * Execute raw SQL with parameters. Used for tables not yet in the Drizzle schema
+   * (e.g. task_board). Prefer typed Drizzle queries when possible.
+   */
+  async runRawSQL(sql: string, args?: unknown[]): Promise<Array<Record<string, unknown>>> {
+    const result = await this.client.execute({ sql, args: (args ?? []) as never[] });
+    return result.rows as Array<Record<string, unknown>>;
+  }
+
   async initialize(): Promise<void> {
     const dir = dirname(this.dbPath);
     if (!existsSync(dir)) {

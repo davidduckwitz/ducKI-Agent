@@ -19,6 +19,7 @@ import { Executor } from "./executor/executor.js";
 import { Reasoner } from "./reasoner/reasoner.js";
 import { Reflection } from "./reflection/reflection.js";
 import { Verifier } from "./verification/verifier.js";
+import { createEmptyFixHistory, recordFixAttempt, compileFixContext, getEscalationLevel, type VerifyFixHistory } from "./verification/verify-types.js";
 import { ChecklistManager, type ChecklistItem } from "./checklist/checklist-manager.js";
 import { CostTracker } from "./cost/cost-tracker.js";
 import { History } from "./history/history.js";
@@ -43,6 +44,14 @@ import { HookRegistry, type AgentHook } from "./hooks/agent-hooks.js";
 import { AGENT_HOOK_NAMES } from "./hooks/hook-names.js";
 import { EventEmitterV2, AGENT_EVENT_TYPES } from "./events/index.js";
 import { InputNormalizerPipeline, AliasNormalizer, TypeCoercer, JSONRepairNormalizer } from "./tools/input-normalizer.js";
+import {
+  shouldActivateProgressiveDisclosure,
+  partitionTools,
+  createBridgeToolExecutors,
+} from "./tools/tool-search-bridge.js";
+import type { ToolDefinition } from "@ducki/shared";
+import { TaskBoard } from "./task-board/task-board.js";
+import { TieredContextCompressor } from "./context/tiered-compressor.js";
 import type { ToolApprovalPolicy } from "./tools/tool-approval-policy.js";
 import { createCompletionTool } from "./tools/completion-tool.js";
 import { retryWithBackoff, DEFAULT_RETRY_CONFIG, adjustTimeoutForCompression } from "./utils/retry-utils.js";
@@ -121,6 +130,64 @@ export function toolCallMayOnlySucceedOncePerRun(
   input: Record<string, unknown>
 ): boolean {
   return callWouldPersistContent(toolName, input);
+}
+
+/**
+ * True when a native (structured) tool call is self-contained — i.e. it already carries
+ * whatever content-bearing field its tool+action combination needs, so text extraction from
+ * the response body is unnecessary.
+ *
+ * The canonical case: a native `filesystem(action:"write")` call with a `content` string
+ * in its arguments is fully self-contained. The same call WITHOUT `content` (bare action/path)
+ * means the model put the file body in a text heredoc instead, and text extraction must
+ * pick it up.
+ *
+ * Tools that never need a content field (reads, lists, shell commands, etc.) are always
+ * self-contained — the native arguments are the complete call.
+ */
+/**
+ * Maps tool+action → the field names that carry the action's payload. A native call is
+ * "self-contained" when at least one of its listed fields is a non-empty string.
+ *
+ * Tools not listed here (reads, lists, shell, etc.) are always self-contained because
+ * they never need a content-bearing field — the native arguments are the complete call.
+ */
+const CONTENT_FIELD_MAP: Record<string, Record<string, readonly string[]>> = {
+  filesystem: {
+    write:      ["content", "contents"],
+    append:     ["content", "contents"],
+    edit:       ["content", "contents"],
+    edit_lines: ["content", "contents"],
+  },
+  browser: {
+    evaluate: ["script"],
+  },
+  http: {
+    post:  ["body"],
+    put:   ["body"],
+    patch: ["body"],
+  },
+  memory: {
+    add:     ["content"],
+    replace: ["content"],
+  },
+};
+
+export function isSelfContainedNativeCall(
+  toolName: string,
+  input: Record<string, unknown>
+): boolean {
+  const action = String(input["action"] ?? "").toLowerCase();
+  const fields = CONTENT_FIELD_MAP[toolName]?.[action];
+  if (!fields) return true; // not in the map → no content field needed → always self-contained
+  return fields.some((field) => {
+    const value = input[field];
+    if (value == null) return false; // undefined or null
+    if (typeof value === "string") return value !== ""; // non-empty string
+    if (typeof value === "object") return true; // object (e.g. HTTP body) is always truthy
+    if (typeof value === "number" || typeof value === "boolean") return true; // primitives
+    return false;
+  });
 }
 
 /**
@@ -443,6 +510,12 @@ export class Agent {
   /** True when the caller passed an explicit per-run maxIterations to the constructor (see
    *  the constructor for why this is tracked separately from the value itself). */
   private hasExplicitMaxIterations: boolean;
+  /** True once progressive disclosure (tool_search bridge) has been activated for this run. */
+  private progressiveDisclosureActive = false;
+  /** Cross-conversation Kanban-style task board. */
+  private taskBoard: TaskBoard;
+  /** Tiered context compressor with escalating strategies. */
+  private tieredCompressor: TieredContextCompressor;
 
   private conversation: ConversationManager;
   private memory: MemorySystem;
@@ -520,6 +593,10 @@ export class Agent {
   // Phase 4 Monitoring: Tool health and dependencies
   private toolHealthMonitor: ToolHealthMonitor;
   private toolDependencyChecker: ToolDependencyChecker;
+
+  // Extraction strategy telemetry — tracks which parsing path is used per iteration
+  // so we can validate the native-prioritization optimization in production.
+  private extractionStrategyCounts = { "native-only": 0, "native+text": 0, "text-only": 0 };
 
   constructor(
     private readonly provider: LLMProvider,
@@ -701,6 +778,8 @@ export class Agent {
     this.thinkBlockParser = new ThinkBlockParser();
     this.toolGraph = new ToolExecutionGraph();
     this.conversationCompressor = new ConversationCompressor(provider);
+    this.taskBoard = new TaskBoard(db, this.logger);
+    this.tieredCompressor = new TieredContextCompressor(provider, { modelName: provider.model });
 
     // Log the merged skill pool size (core + enabled plugin skills) once per process, so
     // runtime verification of plugin-skill availability (e.g. discord) works from the log
@@ -5255,19 +5334,27 @@ export class Agent {
     // fold all tool calls issued by this single LLM response into one collapsible group.
     const toolBatchId = randomUUID();
 
+    // === Tool-call extraction strategy ===
     // Prefer NATIVE (structured) tool calls when the provider returned them: the model
     // never hand-serialized the call into prose, so there is nothing to leak or mis-parse.
-    // The text `[TOOL:...]` parser ALSO always runs on the accompanying response text and is
-    // merged in, rather than being skipped whenever native calls are present - some local
-    // models (e.g. gpt-oss) emit a bare native call (action/path only, no content) AND
-    // separately write the actual file content as a `[TOOL:filesystem ...]` heredoc block in
-    // the same response, apparently trying to satisfy both conventions at once. Treating
-    // native-present as exclusive silently dropped that heredoc block and the write failed
-    // with "Content required". Merging picks up whichever form actually carried the content.
+    //
+    // When native calls are SELF-CONTAINED (carry their content-bearing fields like
+    // `content`/`contents`), text extraction is skipped entirely — it would only produce
+    // duplicates or overwrite the higher-fidelity native data.
+    //
+    // When native calls are BARE (action/path only, no content — the gpt-oss pattern),
+    // text extraction runs as a supplement to pick up heredoc bodies that the native call
+    // didn't carry. The dedup step below collapses identical calls from both sources.
+    //
+    // When no native calls exist, text extraction is the sole source.
     const nativeExtract = nativeToolCalls && nativeToolCalls.length > 0
       ? this.nativeToolCallsToExtractResult(nativeToolCalls)
       : undefined;
-    const textExtract = this.extractAllToolCalls(response);
+    const nativeCallsAreSelfContained = nativeExtract != null
+      && nativeExtract.calls.every((c) => isSelfContainedNativeCall(c.toolName, c.input));
+    const textExtract = nativeCallsAreSelfContained
+      ? { calls: [], markerCount: 0, unparsed: [] as string[] }
+      : this.extractAllToolCalls(response);
     const extractResult = nativeExtract
       ? {
           calls: [...nativeExtract.calls, ...textExtract.calls],
@@ -5276,6 +5363,10 @@ export class Agent {
         }
       : textExtract;
     let toolCalls = extractResult.calls;
+
+    // Track extraction strategy usage for telemetry
+    const strategy = nativeCallsAreSelfContained ? "native-only" : nativeExtract ? "native+text" : "text-only";
+    this.extractionStrategyCounts[strategy]++;
 
     // Deduplicate tool calls: if same action is called twice in a row, keep only first
     const deduplicatedCalls: typeof toolCalls = [];
@@ -5300,6 +5391,9 @@ export class Agent {
 
     this.logger.info("[TOOL-CALLS] Extraction complete", {
       responsePreview: response.slice(0, 300),
+      strategy: nativeCallsAreSelfContained ? "native-only" : nativeExtract ? "native+text" : "text-only",
+      nativeCallCount: nativeExtract?.calls.length ?? 0,
+      textCallCount: textExtract.calls.length,
       markerCount: extractResult.markerCount,
       extractedCount: extractResult.calls.length,
       browserLaunches,
@@ -6815,7 +6909,43 @@ export class Agent {
     let conversationSummaryContext = "";
     if (effectiveMode === "full") {
       const allConversationMessages = this.conversation.getMessages();
-      if (this.conversationCompressor.shouldCompress(allConversationMessages)) {
+
+      // Tiered compression: applies escalating strategies based on context pressure
+      const tier = this.tieredCompressor.getCompressionTier(allConversationMessages);
+      if (tier > 0) {
+        try {
+          const { messages: compressed, decision } = await this.tieredCompressor.compress(allConversationMessages);
+          // Replace conversation messages with compressed version for this run
+          this.conversation.setMessages(compressed);
+          conversationSummaryContext = `\n\n## Context Compression (Tier ${decision.tier})\n${decision.reason}\nMessages: ${decision.messagesBefore} → ${decision.messagesAfter}, tokens saved: ${decision.tokensSaved}`;
+          emit("decision", "Tiered context compression applied", {
+            tier: decision.tier,
+            messagesBefore: decision.messagesBefore,
+            messagesAfter: decision.messagesAfter,
+            tokensSaved: decision.tokensSaved,
+          });
+        } catch (error) {
+          this.logger.warn("Tiered compression failed, falling back to legacy", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          // Fallback to legacy compressor
+          try {
+            const { summaries } = await this.conversationCompressor.buildCompressedContext(allConversationMessages, 20);
+            if (summaries.length > 0) {
+              conversationSummaryContext = `\n\n## Earlier Conversation Summary\n${summaries
+                .map((s, i) => `[Part ${i + 1}] ${s.summary}${s.keyDecisions.length > 0 ? ` (Key points: ${s.keyDecisions.join("; ")})` : ""}`)
+                .join("\n")}`;
+              emit("decision", "Older conversation history compressed (legacy fallback)", {
+                segments: summaries.length,
+                totalMessages: allConversationMessages.length,
+              });
+            }
+          } catch {
+            // Both compressors failed — continue uncompressed
+          }
+        }
+      } else if (this.conversationCompressor.shouldCompress(allConversationMessages)) {
+        // Below tiered thresholds but legacy compressor thinks compression is needed
         try {
           const { summaries } = await this.conversationCompressor.buildCompressedContext(allConversationMessages, 20);
           if (summaries.length > 0) {
@@ -7506,7 +7636,61 @@ export class Agent {
           signal: this.abortController?.signal,
         };
         if (nativeToolsEnabled) {
-          mainGenOptions.tools = this.executor.getToolDefinitions();
+          const allToolDefs = this.executor.getToolDefinitions();
+
+          // Progressive disclosure: when tool schema tokens exceed a threshold of the
+          // context budget, hide non-core tools behind tool_search/tool_describe/tool_call
+          // bridge tools. This reduces schema tokens by ~10% and prevents context overflow
+          // when many script-backed/optional tools are registered.
+          try {
+            const budget = TokenCounter.getContextBudget(this.provider.model, {
+              reserveOutputTokens: adjustedControls.maxOutputTokens,
+            });
+            const disclosure = shouldActivateProgressiveDisclosure(allToolDefs, budget.availableTokens);
+            if (disclosure.active) {
+              const { core, deferred } = partitionTools(allToolDefs);
+
+              // Register bridge tools only once per run (not every iteration)
+              if (!this.progressiveDisclosureActive) {
+                this.progressiveDisclosureActive = true;
+                const bridgeExecutors = createBridgeToolExecutors(
+                  allToolDefs,
+                  (name) => this.executor.getTool(name),
+                  this.logger
+                );
+                for (const bridge of bridgeExecutors) {
+                  this.executor.registerTool(bridge);
+                }
+              }
+
+              // Get bridge tool definitions (they're now in the executor)
+              const bridgeDefs = ["tool_search", "tool_describe", "tool_call"]
+                .map((name) => this.executor.getTool(name)?.definition)
+                .filter((d): d is ToolDefinition => d != null);
+
+              // Expose only core tools + bridge tools to the LLM
+              mainGenOptions.tools = [...core, ...bridgeDefs];
+              this.logger.info("[PROGRESSIVE-DISCLOSURE] Activated — hiding deferred tools behind bridge", {
+                totalTools: allToolDefs.length,
+                coreTools: core.length,
+                deferredTools: deferred.length,
+                toolSchemaTokens: disclosure.totalTokens,
+                budgetTokens: disclosure.budgetTokens,
+                threshold: disclosure.thresholdPercent + "%",
+                deferredNames: deferred.map((d) => d.name),
+              });
+              emit("decision", "Progressive disclosure activated — non-core tools behind tool_search bridge", {
+                totalTools: allToolDefs.length,
+                coreTools: core.length,
+                deferredTools: deferred.length,
+              });
+            } else {
+              mainGenOptions.tools = allToolDefs;
+            }
+          } catch {
+            // Token counter may not recognize the model — fall back to all tools
+            mainGenOptions.tools = allToolDefs;
+          }
         }
         // Reset per-turn so a native call from a previous iteration never re-executes.
         currentNativeToolCalls = undefined;
@@ -8744,6 +8928,12 @@ export class Agent {
           : [];
 
         if (constraints.length > 0) {
+          // Fix-history tracker: compiles error context across attempts so the fix prompt
+          // can reference what was tried and what still failed — avoids looping on the same
+          // strategy. Inspired by hermes-agent's state-machine approach to repair cycles.
+          const fixHistory = createEmptyFixHistory();
+          let previousResponseForTracking = this.sanitizeFinalResponse(finalResponse);
+
           for (let fixAttempt = 0; fixAttempt <= adjustedControls.verifyMaxFixAttempts; fixAttempt++) {
             const verifyResult = await this.withTimeout(
               this.verifier.verify(
@@ -8761,42 +8951,80 @@ export class Agent {
               checks: verifyResult.checks.map((c) => ({ status: c.status, description: c.description })),
               failures: verifyResult.failures.slice(0, 3),
               totalTokens: verifyResult.totalTokens,
+              stalledConstraints: fixHistory.stalledConstraintIds,
             });
 
             if (verifyResult.passed || !verifyResult.shouldFix) break;
             if (fixAttempt >= adjustedControls.verifyMaxFixAttempts) {
               emit("guardrail", "Verification failed after fix attempts", {
                 failures: verifyResult.failures.slice(0, 5),
+                fixHistoryLength: fixHistory.attempts.length,
               });
               break;
             }
 
-            // Ask the model to fix specifically the failing constraints.
+            // Collect the IDs of constraints that are still failing after this verify.
+            const remainingFailureIds = verifyResult.checks
+              .filter((c) => c.status === "failed")
+              .map((c) => c.constraintId);
+
+            // Build the fix prompt with full error context from the history.
+            const fixContext = compileFixContext(fixHistory);
             const fixMessages: LLMMessage[] = [
               {
                 role: "system",
                 content:
-                  "You revise a previous answer so it satisfies the listed failing requirements. Return only the corrected answer, no commentary.",
+                  "You revise a previous answer so it satisfies the listed failing requirements. " +
+                  "The history below shows what you already tried — do NOT repeat failed strategies. " +
+                  fixContext,
               },
               {
                 role: "user",
                 content: `Original request:\n${effectiveInput}\n\nPrevious answer:\n${finalResponse}\n\nFailing requirements to fix:\n${verifyResult.failures.map((f) => `- ${f}`).join("\n")}`,
               },
             ];
+
+            // Escalate temperature for stalled constraints — higher creativity to break loops.
+            const hasStalled = fixHistory.stalledConstraintIds.length > 0;
+            const fixTemp = hasStalled ? 0.5 : 0.3;
+
             const fixResponse = await this.withTimeout(
               // Generous headroom for reasoning models (hidden "thinking" tokens eat into the
               // same budget before the real corrected answer is written) - see agent-wide note.
               // frequencyPenalty guards against a weak local model looping instead of writing
               // the corrected answer - see planner.ts's createPlan for the failure this covers.
-              this.provider.generate(fixMessages, { temperature: 0.3, maxTokens: 8000, frequencyPenalty: 0.4 }),
+              this.provider.generate(fixMessages, { temperature: fixTemp, maxTokens: 8000, frequencyPenalty: 0.4 }),
               adjustedControls.qualityPassTimeoutMs,
               "verify-fix"
             );
             const fixed = fixResponse.content?.trim();
-            if (!fixed || fixed === finalResponse.trim()) {
-              emit("guardrail", "Verification fix skipped", { reason: "no_change" });
-              break;
+            const changed = !(!fixed || fixed === finalResponse.trim());
+
+            // Record this attempt's outcome into the fix-history tracker.
+            recordFixAttempt(
+              fixHistory,
+              fixAttempt + 1,
+              previousResponseForTracking,
+              verifyResult.failures,
+              changed,
+              remainingFailureIds
+            );
+
+            // If the fix produced no change, the model is looping — escalate or bail.
+            if (!changed) {
+              emit("guardrail", "Verification fix produced no change", {
+                attempt: fixAttempt,
+                stalledConstraints: fixHistory.stalledConstraintIds,
+              });
+              // Allow one more attempt with drastic escalation, then bail.
+              if (fixHistory.stalledConstraintIds.length > 0 && fixAttempt < adjustedControls.verifyMaxFixAttempts - 1) {
+                // Fall through — the escalated fix prompt below will try a different approach.
+              } else {
+                break;
+              }
             }
+
+            previousResponseForTracking = finalResponse;
             finalResponse = fixed;
           }
         }
@@ -8948,6 +9176,12 @@ export class Agent {
     // Phase 1: Flush any pending events before returning
     this.eventEmitterV2.flushPending();
 
+    // Log extraction strategy telemetry for production validation
+    this.logger.info("[telemetry] Extraction strategy distribution", {
+      ...this.extractionStrategyCounts,
+      total: Object.values(this.extractionStrategyCounts).reduce((a, b) => a + b, 0),
+    });
+
     const responseText = this.buildNonEmptyResponse(
       this.sanitizeFinalResponse(finalResponse),
       toolsUsed,
@@ -9019,6 +9253,16 @@ export class Agent {
 
   getStatus(): AgentStatus {
     return this.status;
+  }
+
+  /** Returns a snapshot of extraction strategy usage counts for this agent instance. */
+  getExtractionStrategyCounts(): Readonly<Record<string, number>> {
+    return { ...this.extractionStrategyCounts };
+  }
+
+  /** Access the cross-conversation Kanban task board. */
+  getTaskBoard(): TaskBoard {
+    return this.taskBoard;
   }
 
   getHistory(): History {
