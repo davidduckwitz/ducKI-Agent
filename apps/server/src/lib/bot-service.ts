@@ -1,18 +1,24 @@
 import {
   Agent,
+  Planner,
   createScopedDiagnosticsTool,
   createScopedFilesystemTool,
   createScopedShellTool,
+  formatPlanAsMarkdown,
   type CodingAgent,
 } from "@ducki/agent";
 import type { BotInsert, BotSelect, DatabaseService } from "@ducki/database";
-import { createProvider, type LLMProvider, type ProviderName } from "@ducki/providers";
-import type { ToolExecutor } from "@ducki/shared";
+import type { LLMProvider } from "@ducki/providers";
+import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import { getRootLogger } from "@ducki/logger";
 import { randomUUID } from "node:crypto";
+import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { wrapTools } from "./tool-wrapper.js";
 import { runAgentWithRepairRetry, shouldRetryAgentRun } from "./agent-retry.js";
 import { deriveConversationTitle } from "./conversation-title.js";
+import { sharedWorkspace } from "./shared-workspace-service.js";
+import { loadProviderFromSettings } from "./provider-settings.js";
 
 /** Fixed slugs for the two agents that already exist in this app - seeded once so they show up
  *  as ordinary rows in the bots list/UI alongside user-created bots. */
@@ -33,6 +39,10 @@ export const EDITABLE_SYSTEM_BOT_SLUGS = new Set([...CODING_SPECIALIST_BOT_SLUGS
  *  a bot behaves like the default agent until someone deliberately widens or narrows its budget. */
 export const BOT_AGENT_MAX_ITERATIONS_SETTING = "BOT_AGENT_MAX_ITERATIONS";
 export const BOT_AGENT_TIMEOUT_MS_SETTING = "BOT_AGENT_TIMEOUT_MS";
+
+/** Settings-page keys (Settings > Bots) controlling the delegate_task subagent tool. */
+export const DELEGATION_MAX_CONCURRENT_SETTING = "DELEGATION_MAX_CONCURRENT";
+export const DELEGATION_MODEL_SETTING = "DELEGATION_MODEL";
 
 const UNRESTRICTED_ACCESS = "*";
 
@@ -90,12 +100,12 @@ const STALLED_INTENT_RE =
   /^(ich werde|ich will jetzt|ich fange (jetzt )?an|ich beginne (jetzt )?|lass mich|let me|i will|i'll|i am going to|i'm going to)\b/i;
 const MAX_STALL_RECOVERY_ATTEMPTS = 2;
 const STALL_RECOVERY_NUDGE =
-  "Das war noch keine Antwort, sondern nur eine Ankündigung, was du tun wirst. Führe die angekündigte Aktion jetzt tatsächlich aus - rufe das passende Werkzeug auf, oder liefere das eigentliche Ergebnis direkt als Text. Wiederhole nicht nur die Absicht.";
+  "That was not an answer - it was only an announcement of what you will do. Actually perform the announced action now - call the appropriate tool, or deliver the actual result directly as text. Do NOT just repeat the intent.";
 /** Used only on the LAST retry attempt: a plain repeat of STALL_RECOVERY_NUDGE clearly wasn't
  *  enough if the model is still just announcing intent by then, so the final attempt is far more
  *  directive - forbid prose-only output outright rather than asking nicely again. */
 const STALL_RECOVERY_FINAL_NUDGE =
-  "Du hast bereits zweimal nur angekündigt, etwas zu tun, ohne es zu tun. Antworte in DIESER Nachricht NICHT mit einer Ankündigung. Rufe SOFORT ein Werkzeug auf (z.B. filesystem, browser oder http, je nachdem was die Aufgabe erfordert) oder schreibe das fertige Ergebnis direkt aus. Ein Satz wie \"Ich werde ... durchführen\" ist keine gültige Antwort mehr.";
+  "You have already announced your intent twice without actually doing anything. Do NOT respond with another announcement in THIS message. Call a tool IMMEDIATELY (e.g. filesystem, browser, or http, depending on what the task requires) or write the finished result directly. A sentence like 'I will ...' is no longer a valid answer.";
 
 function looksLikeStalledIntent(text: string): boolean {
   const trimmed = text.trim();
@@ -117,12 +127,13 @@ const BUILTIN_BOTS: ReadonlyArray<{
   name: string;
   description: string;
   avatar: string;
+  soul?: string;
   systemPrompt?: string;
   skillWhitelist?: string[];
   toolWhitelist?: string[];
 }> = [
-  { slug: MAIN_BOT_SLUG, name: "DucKI", description: "Der Standard-Hauptagent für allgemeine Aufgaben.", avatar: "duck-matrix" },
-  { slug: CODING_BOT_SLUG, name: "CodingAgent", description: "Spezialisiert auf Code lesen, schreiben und verifizieren.", avatar: "coding-agent" },
+  { slug: MAIN_BOT_SLUG, name: "DucKI", description: "Der Standard-Hauptagent für allgemeine Aufgaben.", avatar: "duck-matrix", soul: "Du bist DucKI, ein intelligenter KI-Assistent. Du bist hilfsreich, präzise und professionell." },
+  { slug: CODING_BOT_SLUG, name: "CodingAgent", description: "Spezialisiert auf Code lesen, schreiben und verifizieren.", avatar: "coding-agent", soul: "Du bist der CodingAgent, ein Spezialist für Code-Analyse, -schreibung und -verifikation. Du bist präzise und gründlich." },
   {
     slug: FRONTEND_DEVELOPER_BOT_SLUG,
     name: "Frontend Developer",
@@ -169,6 +180,8 @@ export interface CreateBotInput {
   name: string;
   description?: string;
   avatar?: string;
+  /** Bot's identity/persona text (like hermes SOUL.md). Injected as slot #1 in system prompt. */
+  soul?: string;
   systemPrompt?: string;
   providerId?: string;
   modelId?: string;
@@ -179,6 +192,30 @@ export interface CreateBotInput {
 }
 
 export type UpdateBotInput = Partial<CreateBotInput>;
+
+/** Options for building a bot's Agent instance (see createAgentForBot). */
+export interface CreateAgentForBotOptions {
+  /** Planning/discussion turn: register NO tools and NO skills - enforced at runtime, not just in the prompt. */
+  noTools?: boolean;
+  /** Hermes "bot_mode_protocol": teammate roster + messaging protocol appended to the system prompt. */
+  groupProtocol?: string;
+  /** Leaf subagent spawned by delegate_task: must not be able to delegate again. */
+  isSubagent?: boolean;
+  /** Optional model override (delegate_task workers via DELEGATION_MODEL). */
+  modelId?: string;
+}
+
+/** Options for a single bot turn (BotService.chat). */
+export interface BotChatOptions {
+  conversationId?: number;
+  tagPromptAsInternal?: boolean;
+  preparedAgent?: Agent;
+  codingContext?: { sandboxRoot: string };
+  noTools?: boolean;
+  groupProtocol?: string;
+  isSubagent?: boolean;
+  onEvent?: (event: { type: string; message: string; data?: Record<string, unknown> }) => void;
+}
 
 /**
  * Custom "bots": user-configured personas built on top of the existing Agent class, plus the two
@@ -202,6 +239,7 @@ export class BotService {
         name: builtin.name,
         description: builtin.description,
         avatar: builtin.avatar,
+        soul: builtin.soul ?? null,
         systemPrompt: builtin.systemPrompt ?? null,
         providerId: null,
         modelId: null,
@@ -231,6 +269,7 @@ export class BotService {
       name,
       description: input.description?.trim() || null,
       avatar: input.avatar?.trim() || null,
+      soul: input.soul?.trim() || null,
       systemPrompt: input.systemPrompt?.trim() || null,
       providerId: input.providerId?.trim() || null,
       modelId: input.modelId?.trim() || null,
@@ -252,6 +291,7 @@ export class BotService {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
       ...(input.description !== undefined ? { description: input.description.trim() || null } : {}),
       ...(input.avatar !== undefined ? { avatar: input.avatar.trim() || null } : {}),
+      ...(input.soul !== undefined ? { soul: input.soul.trim() || null } : {}),
       ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt.trim() || null } : {}),
       ...(input.providerId !== undefined ? { providerId: input.providerId.trim() || null } : {}),
       ...(input.modelId !== undefined ? { modelId: input.modelId.trim() || null } : {}),
@@ -300,7 +340,7 @@ export class BotService {
     if (!bot) return undefined;
     const allowedSkillSlugs = parseAccessList(bot.skillWhitelist);
     return {
-      provider: this.resolveProvider(bot),
+      provider: await this.resolveProvider(bot),
       ...(bot.systemPrompt ? { systemPrompt: bot.systemPrompt } : {}),
       ...(allowedSkillSlugs !== undefined ? { allowedSkillSlugs } : {}),
     };
@@ -316,9 +356,13 @@ export class BotService {
    * reloads the conversation itself. The orchestrator therefore isolates the coding bot into a
    * sequential batch instead of pretending it is snapshot-safe.
    */
-  async prepareAgentForGroupTurn(bot: BotSelect, conversationId: number): Promise<Agent | undefined> {
+  async prepareAgentForGroupTurn(
+    bot: BotSelect,
+    conversationId: number,
+    options?: { groupProtocol?: string; noTools?: boolean }
+  ): Promise<Agent | undefined> {
     if (bot.slug === CODING_BOT_SLUG) return undefined;
-    const agent = await this.createAgentForBot(bot);
+    const agent = await this.createAgentForBot(bot, undefined, options);
     await agent.loadConversation(conversationId);
     return agent;
   }
@@ -355,12 +399,7 @@ export class BotService {
   async chat(
     bot: BotSelect,
     message: string,
-    opts?: {
-      conversationId?: number;
-      tagPromptAsInternal?: boolean;
-      preparedAgent?: Agent;
-      codingContext?: { sandboxRoot: string };
-    }
+    opts?: BotChatOptions
   ): Promise<{ response: string; conversationId: number; messageId?: number; stalled: boolean }> {
     const conversationId = opts?.conversationId ?? (await this.resolveConversationId(bot));
     if (!opts?.conversationId) {
@@ -379,7 +418,13 @@ export class BotService {
       opts?.tagPromptAsInternal && bot.slug !== CODING_BOT_SLUG
         ? `bot-internal-${bot.slug}-${randomUUID()}`
         : undefined;
-    const agentRunOptions = internalPromptLocalId ? { localMessageId: internalPromptLocalId } : undefined;
+    const agentRunOptions = {
+      ...(internalPromptLocalId ? { localMessageId: internalPromptLocalId, displayContent: `[Delegated to ${bot.name}]` } : {}),
+      ...(opts?.onEvent ? { onEvent: opts.onEvent } : {}),
+      // A planning/discussion turn runs in chatbot mode as an extra iteration cap on top of
+      // the hard tool-strip in createAgentForBot (noTools).
+      ...(opts?.noTools ? { agentMode: "chatbot" as const } : {}),
+    };
 
     // CodingAgent does not currently expose localMessageId through its macro run() wrapper.
     // It is deliberately isolated into a sequential batch by BotChatOrchestrator, so the legacy
@@ -433,7 +478,11 @@ export class BotService {
           }
         } else {
           const { result } = await runAgentWithRepairRetry(
-            () => this.createAgentForBot(bot, opts?.codingContext),
+            () => this.createAgentForBot(bot, opts?.codingContext, {
+              noTools: opts?.noTools,
+              groupProtocol: opts?.groupProtocol,
+              isSubagent: opts?.isSubagent,
+            }),
             currentMessage,
             (errorMessage) => runtimeRetryPrompt(errorMessage, currentMessage),
             async (runAgent) => {
@@ -544,14 +593,31 @@ export class BotService {
   /** Builds (or reuses) the Agent that should run this bot. Not valid for the "coding" bot,
    *  which uses a differently-shaped CodingAgent - callers must special-case that slug first
    *  (see routes/bots.ts) and call deps.createCodingAgentFactory() instead. */
-  async createAgentForBot(bot: BotSelect, codingContext?: { sandboxRoot: string }): Promise<Agent> {
-    if (bot.slug === MAIN_BOT_SLUG) return this.deps.createAgent();
+  async createAgentForBot(
+    bot: BotSelect,
+    codingContext?: { sandboxRoot: string },
+    options: CreateAgentForBotOptions = {}
+  ): Promise<Agent> {
+    // The "main" bot normally reuses the shared default agent factory (full tools, special
+    // wiring in index.ts). Three cases must NOT do that: a planning/discussion turn (options.
+    // noTools - the whole point is tools disabled at runtime, see Part 2 of the team design), a
+    // delegate_task subagent (options.isSubagent - it must never delegate again, Part 3), and a
+    // group/team chat turn (options.groupProtocol - main must get the bot-to-bot protocol baked
+    // into its system prompt and the message_agent/delegate_task tools like every other
+    // participant, or it can't act as a peer bot in the conversation).
+    // In all three cases main is built as an ordinary scoped Agent like any custom bot.
+    if (bot.slug === MAIN_BOT_SLUG && !options.noTools && !options.isSubagent && !options.groupProtocol) {
+      return this.deps.createAgent();
+    }
     if (bot.slug === CODING_BOT_SLUG) {
       throw new Error("The coding bot must be run via createCodingAgentFactory(), not createAgentForBot()");
     }
 
-    const provider = this.resolveProvider(bot);
-    const allowedSkillSlugs = parseAccessList(bot.skillWhitelist);
+    const provider = await this.resolveProvider(bot, options.modelId);
+    // A planning/discussion turn must never be able to call tools or load skills - the
+    // "do not use tools" instruction is enforced at the runtime level here, not only in the
+    // prompt (see buildDelegatedPrompt in bot-chat-orchestrator.ts).
+    const allowedSkillSlugs = options.noTools ? [] : parseAccessList(bot.skillWhitelist);
     const [maxIterationsSetting, timeoutMsSetting] = await Promise.all([
       this.deps.db.getSetting(BOT_AGENT_MAX_ITERATIONS_SETTING),
       this.deps.db.getSetting(BOT_AGENT_TIMEOUT_MS_SETTING),
@@ -559,11 +625,19 @@ export class BotService {
     const workspaceDirective = codingContext
       ? `\n\n## Delegated coding workspace\nThe project root is exactly: ${codingContext.sandboxRoot}\nFor every filesystem call, set basePath to that exact project root and use paths relative to it. Never read or write outside it.`
       : "";
+    // Team/group chats inject the bot-to-bot messaging protocol (roster, @mentions, pass,
+    // @user escalation) into the SYSTEM PROMPT at agent-build time - the Hermes
+    // "bot_mode_protocol" pattern - so it is persistent context, not just a per-message nudge.
+    const systemPrompt = [bot.systemPrompt ?? "", workspaceDirective, options.groupProtocol ?? ""]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
     const agent = new Agent(provider, this.deps.db, undefined, {
       name: bot.name,
-      ...(bot.systemPrompt || workspaceDirective
-        ? { systemPrompt: `${bot.systemPrompt ?? ""}${workspaceDirective}`.trim() }
-        : {}),
+      // Soul is the bot's identity (slot #1 in system prompt)
+      ...(bot.soul ? { soul: bot.soul } : {}),
+      // System prompt is project-specific instructions + workspace + group protocol (slots #2+)
+      ...(systemPrompt ? { systemPrompt } : {}),
       ...(allowedSkillSlugs !== undefined ? { allowedSkillSlugs } : {}),
       // Configurable per Settings > Bots instead of only the env-var defaults every other agent
       // falls back to - a bot stuck failing tool calls mid-task (see the filesystem path bug
@@ -593,7 +667,7 @@ export class BotService {
       disableQualityPasses: true,
     });
 
-    const allowedToolNames = parseAccessList(bot.toolWhitelist);
+    const allowedToolNames = options.noTools ? [] : parseAccessList(bot.toolWhitelist);
     const allowedTools = allowedToolNames === undefined ? undefined : new Set<string>(allowedToolNames);
     const registerScoped = (tool: ToolExecutor) => {
       if (!allowedTools || allowedTools.has(tool.name)) agent.executor.registerTool(tool);
@@ -621,13 +695,36 @@ export class BotService {
     for (const tool of wrapTools(runtimeTools)) registerScoped(tool);
     for (const tool of wrapTools(this.deps.pluginManager.getTools())) registerScoped(tool);
 
+    // Part 3 (Hermes parity) - bot-to-bot messaging: inside a team/group chat every participant
+    // gets message_agent so it can DM a teammate directly. Outside group context (no
+    // groupProtocol) the tool is not registered.
+    if (options.groupProtocol && !options.noTools) {
+      agent.executor.registerTool(this.buildMessageAgentTool(bot));
+    }
+    // Part 3 (Hermes parity) - delegate_task: any bot that is itself a full agent (not a coding
+    // worker, not a leaf subagent, not the read-only explorer) may spawn isolated subagents
+    // with its inherited tool whitelist - and a subagent can never delegate further (no
+    // recursion).
+    if (!options.noTools && !options.isSubagent && !CODING_SPECIALIST_BOT_SLUGS.has(bot.slug) && bot.slug !== EXPLORER_BOT_SLUG) {
+      agent.executor.registerTool(this.buildDelegateTaskTool(bot));
+    }
+
     return agent;
   }
 
-  private resolveProvider(bot: BotSelect): LLMProvider {
-    if (!bot.modelId) return this.deps.providerRef.current;
+  private async resolveProvider(bot: BotSelect, modelOverride?: string): Promise<LLMProvider> {
+    const model = modelOverride?.trim() || bot.modelId;
+    if (!model) return this.deps.providerRef.current;
     try {
-      return createProvider({ name: (bot.providerId?.trim() || "openrouter") as ProviderName, model: bot.modelId });
+      // Go through the same settings-backed resolution the main chat agent uses (baseUrl,
+      // apiKey per provider) instead of a bare createProvider(), which has no baseUrl/apiKey
+      // and silently points a custom-provider bot at the hardcoded default endpoint with no
+      // credentials.
+      const { provider } = await loadProviderFromSettings(this.deps.db, {
+        providerName: bot.providerId?.trim() || undefined,
+        model,
+      });
+      return provider;
     } catch (error) {
       this.logger.warn("Falling back to the default provider for a bot with an unresolvable provider/model", {
         bot: bot.slug,
@@ -636,6 +733,266 @@ export class BotService {
         error: error instanceof Error ? error.message : String(error),
       });
       return this.deps.providerRef.current;
+    }
+  }
+
+  /**
+   * Part 3 (Hermes parity) - message_agent: fire-and-forget bot-to-bot DM delivered into the
+   * target's canonical home chat, with attribution. The sender gets an acknowledgement and
+   * finishes its turn; the reply arrives later as a background turn in the sender's chat.
+   */
+  async deliverBotMessage(
+    senderBot: BotSelect,
+    targetSlug: string,
+    message: string
+  ): Promise<{ delivered: boolean; error?: string }> {
+    const target = await this.getBot(targetSlug);
+    if (!target) return { delivered: false, error: `No bot with slug '${targetSlug}'.` };
+    const attributed = `Message from 🤖 ${senderBot.name} (@${senderBot.slug}): ${message}`;
+    void this.chat(target, attributed)
+      .then((result) =>
+        this.logger.info("Bot DM delivered", {
+          from: senderBot.slug,
+          to: targetSlug,
+          response: result.response.slice(0, 80),
+        })
+      )
+      .catch((error) =>
+        this.logger.warn("Bot DM delivery failed", {
+          from: senderBot.slug,
+          to: targetSlug,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      );
+    return { delivered: true };
+  }
+
+  private buildMessageAgentTool(bot: BotSelect): ToolExecutor {
+    const service = this;
+    return {
+      name: "message_agent",
+      description:
+        "Send a direct message to a teammate bot (they receive it in their own chat, attributed to you). Fire-and-forget: you get an acknowledgement now, their reply arrives later in this chat.",
+      definition: {
+        name: "message_agent",
+        description: "Message another bot directly.",
+        parameters: {
+          type: "object",
+          properties: {
+            target: { type: "string", description: "The teammate's bot slug (e.g. \"eddy\")." },
+            message: { type: "string", description: "The message to deliver verbatim." },
+          },
+          required: ["target", "message"],
+        },
+      },
+      async execute(input: Record<string, unknown>): Promise<ToolResult> {
+        const target = String(input["target"] ?? "").trim();
+        const message = String(input["message"] ?? "").trim();
+        if (!target) return { success: false, data: null, error: "message_agent: 'target' (bot slug) is required." };
+        if (!message) return { success: false, data: null, error: "message_agent: 'message' is required." };
+        const outcome = await service.deliverBotMessage(bot, target, message);
+        return outcome.delivered
+          ? { success: true, data: { status: "delivered", to: target } }
+          : { success: false, data: null, error: outcome.error ?? "Delivery failed." };
+      },
+    };
+  }
+
+  /**
+   * Part 3 (Hermes parity) - delegate_task: spawn isolated subagents (fresh conversation, no
+   * memory of the caller) to complete goal+context tasks and wait for their summaries. Supports
+   * a tasks array for parallel batches; results come back in input order. A subagent inherits
+   * the caller bot's tool whitelist and can never delegate further (leaf, see createAgentForBot).
+   */
+  async delegateTask(
+    bot: BotSelect,
+    tasks: Array<{ goal: string; context?: string }>,
+    options: { maxConcurrent?: number } = {}
+  ): Promise<Array<{ goal: string; response: string; stalled: boolean }>> {
+    const [concurrencySetting, modelSetting] = await Promise.all([
+      this.deps.db.getSetting(DELEGATION_MAX_CONCURRENT_SETTING),
+      this.deps.db.getSetting(DELEGATION_MODEL_SETTING),
+    ]);
+    const maxConcurrent = Math.max(1, options.maxConcurrent ?? parsePositiveInt(concurrencySetting, 3));
+    const modelOverride = modelSetting?.trim() || undefined;
+
+    const results: Array<{ goal: string; response: string; stalled: boolean }> = new Array(tasks.length);
+    let cursor = 0;
+
+    const worker = async (): Promise<void> => {
+      while (cursor < tasks.length) {
+        const index = cursor++;
+        const task = tasks[index]!;
+        const conversation = await this.deps.db.createConversation({
+          name: `Delegation: ${bot.name}`,
+          origin: "delegation",
+        });
+        try {
+          const agent = await this.createAgentForBot(bot, undefined, { isSubagent: true, modelId: modelOverride });
+          await agent.loadConversation(conversation.id);
+          const prompt = task.context ? `${task.context}\n\n${task.goal}` : task.goal;
+          const result = await agent.run(prompt);
+          results[index] = { goal: task.goal, response: result.response, stalled: false };
+        } catch (error) {
+          results[index] = {
+            goal: task.goal,
+            response: `Subagent error: ${error instanceof Error ? error.message : String(error)}`,
+            stalled: true,
+          };
+        } finally {
+          await this.deps.db.deleteConversation(conversation.id).catch(() => {});
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(maxConcurrent, tasks.length) }, () => worker()));
+    return results;
+  }
+
+  private buildDelegateTaskTool(bot: BotSelect): ToolExecutor {
+    const service = this;
+    return {
+      name: "delegate_task",
+      description:
+        "Spawn isolated subagent(s) with a completely FRESH context to complete a task and wait for the summary. Subagents know nothing about this conversation - pass everything they need via goal + context. Pass tasks=[...] to run several in parallel (results come back in input order).",
+      definition: {
+        name: "delegate_task",
+        description: "Run task(s) in isolated subagents and wait for their summaries.",
+        parameters: {
+          type: "object",
+          properties: {
+            goal: { type: "string", description: "The task for the subagent (required unless using tasks)." },
+            context: { type: "string", description: "All context the subagent needs - it has no memory of this conversation." },
+            tasks: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { goal: { type: "string" }, context: { type: "string" } },
+              },
+              description: "Alternative to goal: run several tasks in parallel.",
+            },
+            maxConcurrent: { type: "number", description: "Max parallel subagents (default 3)." },
+          },
+        },
+      },
+      async execute(input: Record<string, unknown>): Promise<ToolResult> {
+        const rawTasks = Array.isArray(input["tasks"]) ? input["tasks"] : [];
+        const tasks: Array<{ goal: string; context?: string }> = [];
+        if (rawTasks.length > 0) {
+          for (const item of rawTasks) {
+            if (!item || typeof item !== "object") continue;
+            const goal = String((item as Record<string, unknown>)["goal"] ?? "").trim();
+            const context = String((item as Record<string, unknown>)["context"] ?? "").trim();
+            if (goal) tasks.push({ goal, ...(context ? { context } : {}) });
+          }
+        } else {
+          const goal = String(input["goal"] ?? "").trim();
+          const context = String(input["context"] ?? "").trim();
+          if (goal) tasks.push({ goal, ...(context ? { context } : {}) });
+        }
+        if (tasks.length === 0) {
+          return { success: false, data: null, error: "delegate_task requires 'goal' (or a non-empty 'tasks' array)." };
+        }
+        const rawConcurrent = Number(input["maxConcurrent"]);
+        const results = await service.delegateTask(bot, tasks, {
+          maxConcurrent: Number.isFinite(rawConcurrent) && rawConcurrent > 0 ? Math.round(rawConcurrent) : undefined,
+        });
+        return {
+          success: true,
+          data: {
+            results: results.map((result, index) => ({
+              index,
+              goal: result.goal,
+              response: result.response,
+              failed: result.stalled,
+            })),
+          },
+        };
+      },
+    };
+  }
+
+  /**
+   * Part 2 (brainstorm) - convergence: after the discussion rounds settle, synthesize the
+   * exchange into a concrete, structured plan (Planner) and persist it as a markdown artifact
+   * in the group's shared workspace. Returns the plan text (also written as an assistant
+   * message authored by $authorBot, so the room transcript ends with the plan).
+   */
+  async synthesizeTeamPlan(
+    goal: string,
+    conversationId: number,
+    authorBot: BotSelect
+  ): Promise<{ content: string; path: string; messageId?: number }> {
+    const planner = new Planner(this.deps.providerRef.current, this.logger);
+    const plan = await planner.createPlan(goal, []);
+    const markdown = formatPlanAsMarkdown(plan);
+
+    const workspaceDir = sharedWorkspace.resolveGroupWorkspace(conversationId);
+    const outputDir = join(workspaceDir, "output");
+    const archiveDir = join(outputDir, "archive");
+    await mkdir(archiveDir, { recursive: true });
+    const slug = goal.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "plan";
+    const path = join(outputDir, `plan-${slug}-${Date.now()}.md`);
+
+    // A new planning exchange supersedes the previously-active plan: move every old plan-*.md
+    // out of output/ (so findActivePlan only ever sees the current one) and tag their transcript
+    // rows as archived so the chat UI shows them as superseded instead of still active.
+    await this.archiveSupersededPlans(conversationId, path);
+
+    await writeFile(path, markdown, "utf8");
+
+    const content = `## 📋 Gemeinsamer Plan\n\n${markdown}\n\n_Plan gespeichert: ${path}_`;
+    const message = await this.deps.db.addMessage({
+      conversationId,
+      role: "assistant",
+      content,
+      authorBotId: authorBot.slug,
+      // Marks this row as the group's plan artifact so chat UIs can render it as a plan card and
+      // pin the latest one as the "active plan" (see BotChatRoom.tsx). planPath is the absolute
+      // markdown file in the group's shared workspace that execution rounds read back.
+      metadata: JSON.stringify({ plan: true, planPath: path }),
+    });
+    return { content, path, messageId: message.id };
+  }
+
+  /**
+   * Plan lifecycle: moves superseded plan artifacts (every output/plan-*.md except the new one)
+   * into output/archive/ and marks their transcript rows with metadata.archived - so exactly one
+   * plan stays "active" at a time, namely the one findActivePlan picks up for execution.
+   */
+  private async archiveSupersededPlans(conversationId: number, newPlanPath: string): Promise<void> {
+    const workspaceDir = sharedWorkspace.resolveGroupWorkspace(conversationId);
+    const outputDir = join(workspaceDir, "output");
+    const archiveDir = join(outputDir, "archive");
+    try {
+      const entries = await readdir(outputDir, { withFileTypes: true });
+      const archivedPaths: string[] = [];
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.startsWith("plan-") || !entry.name.endsWith(".md")) continue;
+        const from = join(outputDir, entry.name);
+        if (from === newPlanPath) continue;
+        await rename(from, join(archiveDir, entry.name));
+        archivedPaths.push(from);
+      }
+      if (archivedPaths.length === 0) return;
+
+      const messages = await this.deps.db.getMessages(conversationId);
+      for (const message of messages) {
+        if (message.role !== "assistant" || !message.metadata) continue;
+        try {
+          const meta = JSON.parse(message.metadata) as { plan?: boolean; planPath?: string };
+          if (meta.plan && typeof meta.planPath === "string" && archivedPaths.includes(meta.planPath)) {
+            await this.deps.db.tagMessage(message.id, { metadata: JSON.stringify({ ...meta, archived: true }) });
+          }
+        } catch {
+          // ignore malformed metadata
+        }
+      }
+    } catch (error) {
+      this.logger.warn("Could not archive superseded plans", {
+        conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

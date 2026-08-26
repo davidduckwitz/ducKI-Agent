@@ -63,6 +63,36 @@ const PLAN_JSON = JSON.stringify({
 });
 
 describe("CodingAgent + Planner integration", () => {
+  it("does not select a planning skill for a website implementation goal", () => {
+    const provider = scriptedProvider([PLAN_JSON]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, {});
+
+    expect((codingAgent as any).autoSelectCodingSkill("Plan and design a bakery website")).toBeUndefined();
+  });
+
+  it("requires a coding-shaped plan for a website run", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-planner-type-"));
+    sandboxes.push(sandbox);
+    const generalResearchPlan = JSON.stringify({
+      goal: "Create a website for a bakery",
+      planType: "general",
+      steps: [{ id: "step_1", title: "Research bakery websites", description: "Write research.md" }],
+      estimatedComplexity: "low",
+    });
+    const provider = scriptedProvider([
+      generalResearchPlan,
+      PLAN_JSON,
+      ">> PHASE: EXPLORE\n<< EXPLORE COMPLETE\n>> PHASE: PLAN\n<< PLAN COMPLETE\n>> PHASE: EDIT\n<< EDIT COMPLETE",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    await codingAgent.run("Create a website for a bakery", { maxAttempts: 1 });
+
+    expect((codingAgent as any).currentPlan.planType).toBe("coding");
+    expect((codingAgent as any).currentPlan.steps[0]?.title).toBe("Read the router file");
+  });
+
   it("seeds the todo checklist from the Planner's steps before the first attempt", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-planner-"));
     sandboxes.push(sandbox);

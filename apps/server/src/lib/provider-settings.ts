@@ -144,7 +144,6 @@ export async function loadProviderFromSettings(db: DatabaseService, override: Pr
       rawKeyLength: rawKey?.length ?? 0,
       hasNormalizedKey: !!normalizedKey,
       normalizedKeyLength: normalizedKey?.length ?? 0,
-      normalizedKeyStart: normalizedKey?.substring(0, 20) ?? "none",
       baseUrl: "https://api.anthropic.com/v1",
       model: override.model?.trim() || readSettingValue(settingMap, "CLAUDE_MODEL", "CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
     });

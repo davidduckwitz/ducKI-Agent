@@ -1,6 +1,6 @@
 import type { LLMProvider } from "@ducki/providers";
 import type { DatabaseService } from "@ducki/database";
-import type { ToolExecutor } from "@ducki/shared";
+import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import {
@@ -820,7 +820,6 @@ export class CodingAgent {
       "test-driven-development": ["test", "tdd", "unit test", "jest", "vitest", "spec"],
       "code-review": ["review", "quality", "style", "lint", "format"],
       "debugging": ["debug", "error", "bug", "fix", "crash"],
-      "planning": ["plan", "architecture", "design", "structure"],
     };
 
     const goalLower = goal.toLowerCase();
@@ -864,6 +863,77 @@ export class CodingAgent {
     }
     if (this.readPackageJsonScripts()?.["build"]) return "npm run build";
     return undefined;
+  }
+
+  /**
+   * A plain HTML/CSS/JS project (no tsconfig.json, no package.json build script) has no shell
+   * command to grade against, so detectDefaultVerifyCommand() returns undefined and every such
+   * run previously fell straight into "no verification possible" - leaving a checklist step like
+   * "Teste im Browser" entirely dependent on the model remembering to call the browser tool
+   * itself (it often doesn't). This finds the static entry point so runBrowserVerify() can supply
+   * a REAL, non-shell verification for exactly that case. Root index.html only, deliberately -
+   * scanning for other entry points risks guessing wrong and "verifying" the wrong page.
+   *
+   * Requires previewBaseUrl: without it there is no real HTTP URL to load the page from, and
+   * loading it via a `file://` URL instead would silently break any ES module script or fetch()
+   * call (Chromium blocks both under file:, per the BROWSER PREVIEW note in buildFooter below) -
+   * reporting made-up "errors" that are really just the CORS restriction, not a real bug in the
+   * project. previewBaseUrl is only ever set by the real server wiring, never by a bare
+   * `new CodingAgent(...)` construction (as every existing unit test does), so this also keeps
+   * unit tests from unexpectedly launching a real headless browser.
+   */
+  private detectStaticEntryFile(): string | undefined {
+    if (!this.sandboxRoot || !this.previewBaseUrl) return undefined;
+    return existsSync(join(this.sandboxRoot, "index.html")) ? "index.html" : undefined;
+  }
+
+  /**
+   * Loads `entryFile` in the shared browser tool (via the real HTTP preview route - see
+   * detectStaticEntryFile) and reports console errors, uncaught page exceptions, and failed
+   * requests captured during that load - the same signal a human would get from opening
+   * devtools. Returns a ToolResult so the caller can feed it through the exact same
+   * success/failure/retry handling as a shell verifyCommand's result (see run()).
+   */
+  private async runBrowserVerify(entryFile: string): Promise<ToolResult> {
+    const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot!)}/serve/${entryFile}`;
+    const gotoResult = await this.agent.executor.execute("browser", {
+      action: "goto",
+      url: previewUrl,
+      waitUntil: "networkidle2",
+      timeout: 10000,
+    });
+    if (!gotoResult.success) {
+      return { success: false, data: null, error: `Browser could not load ${entryFile}: ${gotoResult.error ?? "unknown error"}` };
+    }
+
+    const errorsResult = await this.agent.executor.execute("browser", { action: "get_page_errors" });
+    if (!errorsResult.success) {
+      return { success: false, data: null, error: `Browser check could not read page errors: ${errorsResult.error ?? "unknown error"}` };
+    }
+
+    const data = errorsResult.data as {
+      pageErrors?: Array<{ type: string; text: string; url: string }>;
+      networkErrors?: Array<{ url: string; error: string }>;
+    };
+    const pageErrors = data.pageErrors ?? [];
+    const networkErrors = data.networkErrors ?? [];
+
+    if (pageErrors.length === 0) {
+      return {
+        success: true,
+        data: { entryFile, networkErrorCount: networkErrors.length },
+      };
+    }
+
+    const detail = pageErrors
+      .slice(0, 10)
+      .map((e) => `[${e.type}] ${e.text} (${e.url})`)
+      .join("\n");
+    return {
+      success: false,
+      data: null,
+      error: `${pageErrors.length} console/page error(s) after loading ${entryFile} in the browser:\n${detail}`,
+    };
   }
 
   get executor() {
@@ -983,6 +1053,15 @@ export class CodingAgent {
 
     const detectedSkill = this.autoSelectCodingSkill(goal);
     let verifyCommand = opts.verifyCommand;
+    // Set together with verifyCommand the first time the browser-check fallback fires (see the
+    // attempt loop below) and never reset per-attempt - verifyCommand itself persists across
+    // attempts once detected, so this flag must too. It used to be re-declared fresh inside each
+    // attempt iteration, which meant attempt 2 correctly set BOTH verifyCommand and this flag,
+    // but attempt 3+ saw verifyCommand already truthy, skipped re-detection entirely, and fell
+    // through to the SHELL branch with a non-executable label as the "command" - producing
+    // exactly "'browser' is not recognized as an internal or external command".
+    let usingBrowserVerify = false;
+    let staticEntryFile: string | undefined;
 
     if (!verifyCommand && detectedSkill === "code-review") {
       // "npm test" is deliberately never auto-selected as a verifyCommand - a project's test
@@ -996,6 +1075,11 @@ export class CodingAgent {
     if (!verifyCommand) {
       verifyCommand = this.detectDefaultVerifyCommand();
     }
+    // Fixed for the whole run (the shell-based checks above are project-structural facts that
+    // don't change attempt to attempt). The static-HTML browser-check fallback below is NOT
+    // decided here - unlike tsconfig.json/package.json, index.html often does not exist yet at
+    // this point (the model writes it during attempt 1), so that check is re-evaluated fresh at
+    // the top of every attempt instead, right before the verify step runs.
 
     // When resuming an existing conversation with a new goal (the user typed follow-up
     // instructions in the coding chat), the persisted plan from a previous run describes a
@@ -1013,7 +1097,13 @@ export class CodingAgent {
     // When resuming, we still call the Planner for the NEW goal — the old plan was for a
     // different task (or the same task's previous attempt, now stale).
     const toolNames = this.agent.executor.listTools().map((tool) => tool.name);
-    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames));
+    // Selecting Coding Agent is itself an execution instruction. Do not let the shared planner
+    // downgrade that explicit context into a general/research plan: such a plan can write a
+    // Markdown research artifact, create a real checkpoint diff, and then make this run look
+    // successful without ever implementing the requested software.
+    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames, {
+      requiredPlanType: "coding",
+    }));
     this.currentPlan = plan;
     this.emitPlanEvent(plan);
     // Pre-seeds the checklist with the planner's steps so the UI shows real progress from the
@@ -1231,6 +1321,13 @@ export class CodingAgent {
       // punish entirely normal steps and could never converge (each such demotion re-opens the
       // checklist, which re-triggers the "checklist not finished" continuation below, forever).
       let attemptChangedFileCount = 0;
+      // Set when this attempt's own "done" claim got demoted below - a real signal that the
+      // model IS actively driving the checklist (just prematurely), distinct from
+      // anyFileChangedThisRun's "never touched the checklist tool at all" scenario. Used below
+      // to justify one more attempt even when no file changed yet - a legitimate diagnostic step
+      // (e.g. "reproduce the error" via the browser tool) can be genuinely complete without
+      // editing a single file, so gating solely on a file diff wrongly ends runs like that one.
+      let groundingDemotedThisAttempt = false;
       if (this.sandboxRoot && checkpoint) {
         const attemptDiff = await diffCheckpoint(this.sandboxRoot, checkpoint.sha);
         const changedFileCount = attemptDiff?.files.length ?? 0;
@@ -1244,6 +1341,7 @@ export class CodingAgent {
                 item.status === "done" &&
                 todosBeforeAttempt.find((before) => before.id === item.id)?.status !== "done"
             );
+          groundingDemotedThisAttempt = newlyDone.length > 0;
           if (newlyDone.length > 0) {
             for (const item of newlyDone) {
               this.todos.update(
@@ -1269,6 +1367,22 @@ export class CodingAgent {
       const announcedWorkStep = this.findAnnouncedWorkStep(lastSummary);
       this.reconcileAnnouncedStep(lastSummary, attemptChangedFileCount);
 
+      // Re-checked fresh every attempt UNTIL it fires once (not just once before the loop): a
+      // static HTML/CSS/JS project's index.html typically does not exist yet on attempt 1 - it
+      // is the model's FIRST edit - so detecting it before the loop starts would always miss it.
+      // Once usingBrowserVerify is true, both it and verifyCommand are left alone for the rest
+      // of the run (re-detecting would be redundant, and re-running this block after
+      // verifyCommand is already the browser-check label would break the `!verifyCommand` guard
+      // below the same way the bug this fixes did). See detectStaticEntryFile()/
+      // runBrowserVerify() for why this exists at all.
+      if (!verifyCommand) {
+        staticEntryFile = this.detectStaticEntryFile();
+        if (staticEntryFile && this.agent.executor.listTools().some((tool) => tool.name === "browser")) {
+          verifyCommand = `browser check: ${staticEntryFile} (console/page errors)`;
+          usingBrowserVerify = true;
+        }
+      }
+
       if (!verifyCommand) {
         // No shell command to grade against, but the model's OWN checklist may still list
         // unfinished steps (typically VERIFY/REPORT) - accepting the run here regardless is
@@ -1289,7 +1403,7 @@ export class CodingAgent {
         // "Step N: <work>" is an explicit continuation signal even before the first edit.
         // That is the normal EXPLORE -> EDIT transition, so requiring a file diff here would
         // incorrectly finalize precisely when the model announces the work it will do next.
-        const hasGroundedOpenWork = openItems.length > 0 && anyFileChangedThisRun;
+        const hasGroundedOpenWork = openItems.length > 0 && (anyFileChangedThisRun || groundingDemotedThisAttempt);
         const hasExplicitContinuation = announcedWorkStep !== undefined && (
           attemptChangedFileCount > 0 || !retriedUngroundedAnnouncements.has(announcedWorkStep)
         );
@@ -1301,7 +1415,9 @@ export class CodingAgent {
             "decision",
             hasExplicitContinuation
               ? `Keine Verifikation moeglich, aber Schritt ${announcedWorkStep} wurde als naechste Arbeit angekuendigt - fordere Fortsetzung an.`
-              : `Keine Verifikation moeglich, aber ${openItems.length} Checklisten-Schritt(e) noch offen - fordere Fortsetzung an.`,
+              : groundingDemotedThisAttempt
+                ? `Keine Verifikation moeglich, und die eben zurueckgestufte Checkliste zeigt noch ${openItems.length} offene(n) Schritt(e) - fordere Fortsetzung an.`
+                : `Keine Verifikation moeglich, aber ${openItems.length} Checklisten-Schritt(e) noch offen - fordere Fortsetzung an.`,
             { attempt, announcedWorkStep, openItems: openItems.map((item) => item.title) }
           );
           lastSummary =
@@ -1320,12 +1436,14 @@ export class CodingAgent {
         return finalize({ success: true, verified: false, summary: lastSummary, attempts: attempt, conversationId });
       }
 
-      const verifyResult = await this.agent.executor.execute("shell", {
-        command: verifyCommand,
-        // Without an explicit cwd the shell tool falls back to the server process's own
-        // directory, so a sandboxed run would verify the wrong project entirely.
-        ...(this.sandboxRoot ? { cwd: this.sandboxRoot } : {}),
-      });
+      const verifyResult = usingBrowserVerify
+        ? await this.runBrowserVerify(staticEntryFile!)
+        : await this.agent.executor.execute("shell", {
+            command: verifyCommand,
+            // Without an explicit cwd the shell tool falls back to the server process's own
+            // directory, so a sandboxed run would verify the wrong project entirely.
+            ...(this.sandboxRoot ? { cwd: this.sandboxRoot } : {}),
+          });
       if (verifyResult.success) {
         this.emit("decision", `Verifikation "${verifyCommand}" erfolgreich.`, { attempt, verifyCommand });
         return finalize({
@@ -1865,6 +1983,17 @@ export class CodingAgent {
       `- ALL file operations (filesystem AND shell) are automatically scoped to ${this.sandboxRoot}`,
       `- Examples of CORRECT paths: 'index.html', 'src/app.ts', 'config/settings.json'`,
       `- Examples of WRONG paths: '/apps/server/...', 'shared-workspace/...', 'coding/...'`,
+      "",
+      "YOUR OWN PLANNING / STATUS NOTES:",
+      "- If you keep a status file, progress log, or planning note FOR YOURSELF (not something the",
+      "  user asked you to build), it belongs under 'plans/' (e.g. 'plans/STATUS.md') - never at the",
+      "  project root and never under a name you invent fresh each run.",
+      "- Before writing one, list 'plans/' first. If a status/plan file already exists there, UPDATE",
+      "  that file - do not create a second one with a different name. You will not remember this run",
+      "  on the next one; the file is the only memory of it, so there must only ever be one.",
+      "- Only write one at all if it actually serves a purpose (a genuinely multi-attempt or",
+      "  multi-session task). A short, single-pass fix does not need a status file - do not create",
+      "  one out of habit.",
       "",
     ];
     if (this.previewBaseUrl) {

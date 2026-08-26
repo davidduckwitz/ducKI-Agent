@@ -1,9 +1,16 @@
 import type { Agent } from "@ducki/agent";
 import type { BotSelect, DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
-import { CODING_BOT_SLUG, type BotService } from "./bot-service.js";
+import {
+  CODING_BOT_SLUG,
+  CODING_SPECIALIST_BOT_SLUGS,
+  MAIN_BOT_SLUG,
+  type BotService,
+} from "./bot-service.js";
 import { BotHandoffService } from "./bot-handoff-service.js";
 import { sharedWorkspace } from "./shared-workspace-service.js";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join } from "node:path";
 
 const logger = getRootLogger().child("BotChatOrchestrator");
 
@@ -67,6 +74,20 @@ export interface BotChatTurn {
   messageId?: number;
   needsUserDecision: boolean;
   passed: boolean;
+  /** True for the synthesized plan artifact that ends a planning exchange (see handleUserMessage). */
+  isPlan?: boolean;
+  /** Absolute path of the plan markdown saved into the group's shared workspace. */
+  planPath?: string;
+}
+
+/** Per-exchange control for the orchestrator (see handleUserMessage). */
+export interface BotChatExchangeOptions {
+  /**
+   * "plan" forces a discussion-only exchange that ends with a synthesized plan artifact;
+   * "execute" forces tool-using rounds. Absent = auto-detect from the user message via
+   * isPlanningIntent().
+   */
+  mode?: "plan" | "execute";
 }
 
 /** Why a bot is being asked to respond this round - purely for prompt wording, never a length or
@@ -160,44 +181,51 @@ export class BotChatOrchestrator {
       return entries.map((entry) => [entry]);
     }
 
-    // CodingAgent is a mutating worker and its CodingAgent.run() wrapper reloads the shared
-    // conversation itself. Keep it deterministic and side-effect-safe by splitting the otherwise
-    // parallel round around it while still allowing contiguous non-coding peers to run in parallel.
-    const batches: Array<Array<[string, Trigger]>> = [];
-    let parallelBatch: Array<[string, Trigger]> = [];
-    const flushParallel = () => {
-      if (parallelBatch.length > 0) {
-        batches.push(parallelBatch);
-        parallelBatch = [];
-      }
-    };
-
-    for (const entry of entries) {
-      if (entry[0] === CODING_BOT_SLUG) {
-        flushParallel();
-        batches.push([entry]);
-      } else {
-        parallelBatch.push(entry);
-      }
-    }
-    flushParallel();
-
-    return batches;
+    // BROADCAST: all participants respond. Use SERIAL execution (one bot at a time) so each bot
+    // can see the previous bot's response before deciding whether to speak or pass. This mirrors
+    // Hermes "Bot Mode"'s serial-round design where bots deliberate in order — a bot that sees
+    // another bot already covered the topic passes instead of repeating. Parallel broadcast caused
+    // every bot to respond blind, leading to redundant answers.
+    return entries.map((entry) => [entry]);
   }
 
   async handleUserMessage(
     conversationId: number,
     participantSlugs: string[],
     userMessage: string,
-    onActiveBotChange?: (bot: { slug: string; name: string } | null) => void
+    onActiveBotChange?: (bots: Array<{ slug: string; name: string; activity: string }>) => void,
+    options?: BotChatExchangeOptions
   ): Promise<BotChatTurn[]> {
+    const planning =
+      options?.mode === "plan" ||
+      // A follow-up like "setz den Plan um" must NOT be re-classified as planning just because it
+      // mentions the word "Plan": explicit execution intent overrides planning keywords (Part 4).
+      (options?.mode !== "execute" && this.isPlanningIntent(userMessage) && !this.isExecutionIntent(userMessage));
+
     const participants = new Map<string, BotSelect>();
     for (const slug of participantSlugs) {
       const bot = await this.botService.getBot(slug);
       if (bot) participants.set(slug, bot);
     }
 
+    // Part 2 (brainstorm): execution workers (CodingAgent + coding specialists) have nothing to
+    // contribute to a discussion - and their mutating coding loop would start implementing
+    // instead of deliberating. Exclude them from planning rounds; the hard no-tools gate for the
+    // remaining bots is enforced in BotService.createAgentForBot (noTools), not just in prompts.
+    if (planning) {
+      for (const slug of [...participants.keys()]) {
+        if (slug === CODING_BOT_SLUG || CODING_SPECIALIST_BOT_SLUGS.has(slug)) {
+          participants.delete(slug);
+        }
+      }
+    }
+
     sharedWorkspace.resolveGroupWorkspace(conversationId);
+
+    // Part 4 (plan -> execute): a follow-up EXECUTION message after a brainstorming exchange picks
+    // up the newest plan artifact from the group's shared workspace and injects it into every
+    // round's prompt, so the bots implement the approved plan instead of discussing from scratch.
+    const activePlan = planning ? undefined : await this.findActivePlan(conversationId);
 
     // A handoff created directly by the user must be visible to round 1. Await it before
     // fetching the round context so the first delegated prompt cannot race the DB write.
@@ -219,7 +247,8 @@ export class BotChatOrchestrator {
     let responders = this.pickInitialResponders(userMessage, participants);
     const workspaceContext = sharedWorkspace.getWorkspaceContext(conversationId);
     let handoffContext = await this.handoffService.getHandoffContext(conversationId);
-    const buildContextHeader = () => [workspaceContext, handoffContext].filter(Boolean).join("\n\n");
+    const buildContextHeader = () =>
+      [workspaceContext, activePlan ? this.formatPlanContext(activePlan) : "", handoffContext].filter(Boolean).join("\n\n");
 
     while (round <= maxRounds && responders.size > 0) {
       const batches = parallelEnabled
@@ -239,14 +268,21 @@ export class BotChatOrchestrator {
         // boundary. If preparation throws, no bot in this batch has started generating yet.
         const preparedAgents = new Map<string, Agent>();
         const prepareFn = (this.botService as unknown as {
-          prepareAgentForGroupTurn?: (bot: BotSelect, conversationId: number) => Promise<Agent | undefined>;
+          prepareAgentForGroupTurn?: (
+            bot: BotSelect,
+            conversationId: number,
+            options?: { groupProtocol?: string; noTools?: boolean }
+          ) => Promise<Agent | undefined>;
         }).prepareAgentForGroupTurn;
         if (batch.length > 1 && typeof prepareFn === "function") {
           const prepared = await Promise.all(
             batch.map(async ([slug]) => {
               const bot = participants.get(slug);
               if (!bot) return undefined;
-              const agent = await prepareFn.call(this.botService, bot, conversationId);
+              const agent = await prepareFn.call(this.botService, bot, conversationId, {
+                groupProtocol: this.buildBotModeProtocol(bot, participants),
+                noTools: planning,
+              });
               return agent ? ([slug, agent] as const) : undefined;
             })
           );
@@ -261,18 +297,16 @@ export class BotChatOrchestrator {
         // still see the same immutable pre-batch history as the first chunk.
         for (let offset = 0; offset < batch.length; offset += parallelMaxConcurrent) {
           const chunk = batch.slice(offset, offset + parallelMaxConcurrent);
-          const activeBots = new Set<string>();
+          const activeBots = new Map<string, string>(); // slug -> current activity description
           const notifyActive = () => {
-            const active = [...activeBots];
-            if (active.length === 0) {
-              onActiveBotChange?.(null);
-              return;
-            }
-            const first = chunk.find(([s]) => activeBots.has(s));
-            if (first) {
-              const bot = participants.get(first[0]);
-              if (bot) onActiveBotChange?.({ slug: bot.slug, name: bot.name });
-            }
+            const activeEntries = chunk
+              .filter(([s]) => activeBots.has(s))
+              .map(([s]) => {
+                const bot = participants.get(s);
+                return bot ? { slug: bot.slug, name: bot.name, activity: activeBots.get(s) ?? "thinking…" } : undefined;
+              })
+              .filter((b): b is { slug: string; name: string; activity: string } => Boolean(b));
+            onActiveBotChange?.(activeEntries);
           };
 
           const chunkResults = await Promise.allSettled(
@@ -280,17 +314,32 @@ export class BotChatOrchestrator {
               const bot = participants.get(slug);
               if (!bot) return undefined;
 
-              activeBots.add(slug);
+              activeBots.set(slug, "thinking…");
               notifyActive();
 
-              const prompt = this.buildDelegatedPrompt(bot, trigger, buildContextHeader());
+              const prompt = this.buildDelegatedPrompt(bot, trigger, participants, buildContextHeader(), userMessage, planning, Boolean(activePlan));
 
               let result: { response: string; messageId?: number; stalled: boolean };
               try {
                 result = await this.botService.chat(bot, prompt, {
                   conversationId,
                   tagPromptAsInternal: true,
+                  // Planning/discussion turns get the runtime tool-strip (noTools) and the
+                  // bot-to-bot protocol baked into their Agent (groupProtocol, Hermes
+                  // "bot_mode_protocol" pattern) - see BotService.createAgentForBot.
+                  noTools: planning,
+                  groupProtocol: this.buildBotModeProtocol(bot, participants),
                   ...(preparedAgents.has(slug) ? { preparedAgent: preparedAgents.get(slug)! } : {}),
+                  onEvent: (event) => {
+                    if (event.type === "tool_call") {
+                      const toolName = (event.data?.toolName as string) ?? (event.message?.split?.(" ")?.[0] as string) ?? "working";
+                      activeBots.set(slug, toolName);
+                      notifyActive();
+                    } else if (event.type === "tool_result") {
+                      activeBots.set(slug, "analyzing…");
+                      notifyActive();
+                    }
+                  },
                 });
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -298,12 +347,12 @@ export class BotChatOrchestrator {
                 const errorMessage = await this.db.addMessage({
                   conversationId,
                   role: "assistant",
-                  content: `⚠️ ${bot.name} konnte nicht antworten (technischer Fehler): ${message}`,
+                  content: `⚠️ ${bot.name} could not respond (technical error): ${message}`,
                   authorBotId: slug,
                 });
-                activeBots.delete(slug);
-                notifyActive();
-                return {
+              activeBots.delete(slug);
+              notifyActive();
+              return {
                   turn: {
                     round,
                     botId: slug,
@@ -385,6 +434,32 @@ export class BotChatOrchestrator {
       handoffContext = await this.handoffService.getHandoffContext(conversationId);
     }
 
+    // Part 2 (brainstorm) - convergence: a planning exchange ends with a synthesized plan
+    // artifact (Planner + markdown saved into the group's shared workspace) authored by the
+    // main bot (or the first remaining participant), so "plan something" yields an actual
+    // plan - not just a pile of opinions - that a later execution turn can pick up.
+    if (planning && participants.size > 0) {
+      const converger = participants.get(MAIN_BOT_SLUG) ?? [...participants.values()][0]!;
+      try {
+        const plan = await this.botService.synthesizeTeamPlan(userMessage, conversationId, converger);
+        turns.push({
+          round,
+          botId: converger.slug,
+          botName: converger.name,
+          content: plan.content,
+          messageId: plan.messageId,
+          needsUserDecision: false,
+          passed: false,
+          isPlan: true,
+          planPath: plan.path,
+        });
+      } catch (error) {
+        logger.warn("Plan synthesis failed after discussion", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     return turns;
   }
 
@@ -396,43 +471,212 @@ export class BotChatOrchestrator {
     return new Map([...participants.keys()].map((slug) => [slug, { kind: "user_broadcast" as const }]));
   }
 
-  private buildDelegatedPrompt(bot: BotSelect, trigger: Trigger, handoffContext?: string): string {
+  /**
+   * Detect if the user's message is asking for planning/discussion rather than execution.
+   * Word-boundary matching per phrase (German + English) so "planen"/"plane" match but
+   * "Planet" or "plant" do not.
+   */
+  private isPlanningIntent(userMessage: string): boolean {
+    const lower = userMessage.toLowerCase();
+    const phrases = [
+      "plan", "plane", "planen", "plant", "planung", "pläne", "einen plan", "mach einen plan", "macht einen plan",
+      "konzept", "konzeption", "idee", "ideen", "ansatz", "vorgehen", "vorgehensweise", "varianten", "optionen",
+      "brainstorm", "brainstorming", "besprechen", "besprechen wir", "diskutieren", "beraten", "beratschlagen",
+      "überlegen", "überleg", "überlegt", "erst einmal", "erstmal", "erst mal", "bevor wir anfangen",
+      "architektur", "strategie", "roadmap", "entwurf", "design", "approach", "discuss", "outline",
+      "how should we", "what are the options", "what's the best way", "what is the best way", "come up with ideas",
+      "suggest", "recommend", "was wäre der beste weg", "wie würden wir", "wie würden sie",
+    ];
+    return phrases.some((phrase) =>
+      new RegExp(`(^|[^a-zäöüß0-9])${phrase.replace(/ /g, "[\\s-]+")}([^a-zäöüß0-9]|$)`, "i").test(lower)
+    );
+  }
+
+  /**
+   * Detect messages that explicitly ask to EXECUTE rather than discuss/plan - e.g. a follow-up
+   * "setz den Plan um" after a brainstorming exchange. Such messages must not be classified as
+   * planning just because they mention the word "Plan": the whole point of the plan -> execute
+   * handoff is that "Plan" plus an execution verb means "go do it now".
+   */
+  private isExecutionIntent(userMessage: string): boolean {
+    const lower = userMessage.toLowerCase();
+    // Strong, explicit "execute the plan NOW" phrases - deliberately NOT bare words like
+    // "umsetzen" or "implementieren", because planning sentences use those too
+    // ("bevor wir den Plan umsetzen" / "wie wir das implementieren").
+    const phrases = [
+      "setz den plan um", "setze den plan um", "setzt den plan um", "den plan um", "plan um",
+      "den plan ausführen", "arbeite den plan ab", "arbeitet den plan ab",
+      "starte den plan", "start den plan", "startet den plan",
+    ];
+    if (
+      phrases.some((phrase) =>
+        new RegExp(`(^|[^a-zäöüß0-9])${phrase.replace(/ /g, "[\\s-]+")}([^a-zäöüß0-9]|$)`, "i").test(lower)
+      )
+    ) {
+      return true;
+    }
+    // German separable-prefix verbs with the object in between: "setzt den Plan jetzt um",
+    // "führe den Plan gleich aus". The middle must contain "plan" or an urgency word so
+    // ordinary sentences ("arbeitet an der Aufgabe") never match.
+    const separable =
+      /\b(setz|setze|setzt|führ|führe|führt|arbeit|arbeite|arbeitet|mach|mache|macht|leg|lege|legt|fang|fange|fängt)\s+[a-zäöüß0-9][a-zäöüß0-9\s-]*(plan|jetzt|sofort|gleich)[a-zäöüß0-9\s-]*\s+(um|aus|ab|los|an)\b/i;
+    return separable.test(lower);
+  }
+
+  /**
+   * Part 4 (plan -> execute): reads the newest plan artifact (output/plan-*.md) from the group's
+   * shared workspace so a follow-up execution message can drive the work from the approved plan.
+   * Returns undefined when no plan exists yet (plain execution) or the workspace is unavailable.
+   */
+  private async findActivePlan(
+    conversationId: number
+  ): Promise<{ path: string; content: string } | undefined> {
+    const workspaceDir = sharedWorkspace.resolveGroupWorkspace(conversationId);
+    if (!workspaceDir) return undefined;
+    const outputDir = join(workspaceDir, "output");
+    try {
+      const entries = await readdir(outputDir, { withFileTypes: true });
+      const candidates: Array<{ path: string; mtimeMs: number }> = [];
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.startsWith("plan-") || !entry.name.endsWith(".md")) continue;
+        const path = join(outputDir, entry.name);
+        try {
+          const info = await stat(path);
+          candidates.push({ path, mtimeMs: info.mtimeMs });
+        } catch {
+          // File vanished between readdir and stat - skip it.
+        }
+      }
+      if (candidates.length === 0) return undefined;
+      candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+      const latest = candidates[0]!;
+      const content = await readFile(latest.path, "utf8");
+      return { path: latest.path, content };
+    } catch (error) {
+      logger.warn("Could not read the active plan from the group workspace", {
+        conversationId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /** Render the plan artifact as a context section every execution round can see. */
+  private formatPlanContext(plan: { path: string; content: string }): string {
+    return [
+      "[ACTIVE PLAN from the group discussion - EXECUTE this plan now:]",
+      `Plan file: ${plan.path}`,
+      "",
+      plan.content,
+      "",
+      "This is the approved plan. Follow it step by step: implement the steps matching your expertise with your tools and hand off the rest to the right bot.",
+    ].join("\n");
+  }
+
+  /** Build a roster of all participants so each bot knows who its teammates are. */
+  private buildTeammateRoster(bot: BotSelect, participants: Map<string, BotSelect>): string {
+    const lines = ["Teammates in this group chat:"];
+    for (const [slug, member] of participants) {
+      if (slug === bot.slug) continue; // skip self
+      const desc = member.description ? ` — ${member.description}` : "";
+      lines.push(`- ${member.name} (@${slug})${desc}`);
+    }
+    return lines.join("\n");
+  }
+
+  /** Build the bot-to-bot messaging protocol instructions. */
+  private buildBotModeProtocol(bot: BotSelect, participants: Map<string, BotSelect>): string {
+    const roster = this.buildTeammateRoster(bot, participants);
+    return [
+      "## How to communicate with teammates",
+      roster,
+      "",
+      "To message a teammate directly (they will receive it in their own chat):",
+      '  Use @botname in your message, e.g. "@eddy please review this code" — the message will be delivered to that bot.',
+      "",
+      "To delegate work to a specific teammate:",
+      '  Write "@botname take over <task description>" — this creates a trackable handoff.',
+      "",
+      "To escalate a decision to the user:",
+      '  Write "@user" in your message — the user will be notified that their input is needed.',
+      "",
+      "To pass (you have nothing to add):",
+      '  Reply with exactly "(pass)" — this is silent and expected. It lets others speak without noise.',
+    ].join("\n");
+  }
+
+  private buildDelegatedPrompt(
+    bot: BotSelect,
+    trigger: Trigger,
+    participants: Map<string, BotSelect>,
+    handoffContext?: string,
+    userMessage?: string,
+    planning = false,
+    hasActivePlan = false
+  ): string {
     const handoffHeader = handoffContext
-      ? ["[Offene Aufgaben für diesen Chat:]", handoffContext, ""].join("\n")
+      ? ["[Open tasks for this chat:]", handoffContext, ""].join("\n")
       : "";
+
+    const protocol = this.buildBotModeProtocol(bot, participants);
+
+    const groupChatGuidelines = planning
+      ? [
+          "This is a GROUP CHAT with multiple bots. You are having a CONVERSATION, not working alone.",
+          "Tools are DISABLED for this turn - they are not available to you at all, and you cannot write code, create files, or execute actions.",
+          "Instead, share your perspective, suggest an approach, or discuss how you would tackle this - the exchange will be synthesized into a concrete plan afterwards.",
+          "Other bots will also share their thoughts. The user wants a discussion first, then delegation to the right bot later.",
+          "Read the conversation history before responding — do not repeat what other bots already said.",
+        ].join(" ")
+      : hasActivePlan
+        ? [
+            "This is a GROUP CHAT with multiple bots. You are working together to EXECUTE an approved plan.",
+            "CRITICAL: The ACTIVE PLAN above is what the user wants done NOW. Claim the plan steps that match your expertise and implement them with your tools.",
+            "Work through the plan step by step. Hand off steps that are not yours with \"@botname übernimm <task>\", and mark finished work with \"@botname erledigt\".",
+            "If another bot already claimed a step or gave a good answer, reply (pass).",
+          ].join(" ")
+        : [
+            "This is a GROUP CHAT with multiple bots. You are having a CONVERSATION, not working alone.",
+            "CRITICAL: Do NOT use any tools (filesystem, shell, browser, HTTP, etc.) in this chat unless you are explicitly given a handoff task.",
+            "Your job RIGHT NOW is to: (1) evaluate if this task is in your area of expertise, (2) claim it or pass, (3) briefly describe HOW you would approach it — but do NOT actually execute it yet.",
+            "Only the bot that receives a formal handoff task should execute. All others discuss and coordinate.",
+            "If another bot already claimed the task or gave a good answer, reply (pass).",
+          ].join(" ");
+
     const contentReminder =
-      "Schreibe das eigentliche Ergebnis (den Text, die Antwort, den Bericht - was auch immer verlangt wurde) direkt in diese Nachricht. Beschreibe nicht nur, dass du etwas erledigt oder \"gesendet\" hast - eine Beschreibung ohne Inhalt ist für die anderen im Chat unsichtbar. Kürze echte, umfangreiche Inhalte nicht künstlich, nur damit die Antwort kompakter wirkt.";
+      "Write your actual result (text, answer, report - whatever was requested) directly in this message. Do NOT just describe that you did something - a description without content is invisible to others in the chat. Do not artificially shorten real, extensive content.";
     const passReminder =
-      "Wenn du inhaltlich nichts Neues beizutragen hast, antworte NUR mit exakt \"(pass)\" (ohne alles andere). Das ist eine gute, erwünschte Antwort - sie lässt das Gespräch zur Ruhe kommen, statt es mit einer Nachricht zu füllen, die niemandem weiterhilft.";
-    const handoffReminder =
-      'Wenn du eine Aufgabe an einen anderen Bot übergibst, schreibe "@botname übernimm <aufgabe>" — das erstellt eine nachverfolgbare Aufgabe. Wenn ein anderer Bot dir eine Aufgabe zugewiesen hat und du sie erledigt hast, schreibe "@botname erledigt" oder "@botname done".';
+      'If you have nothing new to contribute, reply ONLY with exactly "(pass)" (nothing else). This is a good, expected response - it lets the conversation settle instead of filling it with a message that helps no one.';
 
     if (trigger.kind === "user_mention") {
       return [
-        `[Gruppen-Chat: Der Nutzer hat dich (@${bot.name}) in seiner letzten Nachricht direkt erwähnt.]`,
-        "Antworte darauf, so wie es deiner Rolle entspricht.",
+        `[Group Chat: The user directly mentioned you (@${bot.name}) in their last message.]`,
+        groupChatGuidelines,
+        protocol,
         handoffHeader,
         contentReminder,
-        handoffReminder,
         passReminder,
       ].filter(Boolean).join("\n");
     }
     if (trigger.kind === "bot_mention") {
       return [
-        `[Gruppen-Chat: ${trigger.sourceBotName} hat dich (@${bot.name}) in diesem Chat erwähnt und um deine Antwort gebeten.]`,
-        "Sieh dir den bisherigen Gesprächsverlauf an und antworte darauf, so wie es deiner Rolle entspricht.",
+        `[Group Chat: ${trigger.sourceBotName} mentioned you (@${bot.name}) and requested your response.]`,
+        "Review the conversation history. The other bot has asked for your input.",
+        groupChatGuidelines,
+        protocol,
         handoffHeader,
         contentReminder,
-        handoffReminder,
         passReminder,
       ].filter(Boolean).join("\n");
     }
     return [
-      `[Gruppen-Chat: Die letzte Nachricht im Verlauf richtet sich an die ganze Gruppe (keine gezielte Erwähnung).]`,
-      "Wenn du inhaltlich etwas beizutragen hast, antworte so, wie es deiner Rolle entspricht.",
+      `[Group Chat: The last message in the conversation targets the entire group (no specific mention).]`,
+      "This is NOT directed at you specifically. Only respond if the task directly matches your expertise AND no other bot has already claimed it. Otherwise reply (pass).",
+      "CRITICAL: Do NOT use any tools or write code in this response. This is a discussion turn, not an execution turn.",
+      groupChatGuidelines,
+      protocol,
       handoffHeader,
       contentReminder,
-      handoffReminder,
       passReminder,
     ].filter(Boolean).join("\n");
   }

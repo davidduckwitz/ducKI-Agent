@@ -133,7 +133,16 @@ const SMALL_SETTINGS: Readonly<Record<string, string>> = {
 
   AGENT_CODING_MAX_ITERATIONS: "26",
   AGENT_CODING_ENABLE_REFLECTION: "false",
-  AGENT_CODING_ENABLE_VERIFY: "true",
+  // The Verification Pass (Critic, in agent.ts) is text-only - it grades the final response
+  // against derived constraints and, on failure, asks the model to "revise" its answer via a
+  // single tool-less LLM call. It cannot actually read/write files, so a constraint like
+  // "existing files are read before modification" can never be satisfied post-hoc, and a weak
+  // local model frequently can't produce the strict JSON this pass grades on either - both
+  // combine into a fixAttempt loop that burns several round-trips producing garbled non-JSON,
+  // then guardrail-stops without the coding-agent's own tool-capable attempt loop ever getting
+  // to act. Off here for the same reason AGENT_CODING_ENABLE_REFLECTION is off above; the
+  // coding-agent already has real verification via verifyCommand + checklist grounding.
+  AGENT_CODING_ENABLE_VERIFY: "false",
 
   AGENT_CHECKLIST_ENABLED: "true",
   AGENT_CHECKLIST_MIN_COMPLEXITY: "medium",
@@ -152,7 +161,13 @@ const SMALL_SETTINGS: Readonly<Record<string, string>> = {
   CODING_AGENT_MAX_ITERATIONS_SIMPLE: "18",
   CODING_AGENT_MAX_ITERATIONS_MEDIUM: "24",
   CODING_AGENT_MAX_ITERATIONS_COMPLEX: "32",
-  CODING_AGENT_MAX_ATTEMPTS: "2",
+  // Was "2": too tight when a whole attempt gets "used up" by the checklist-grounding safety
+  // net (a demoted "done" claim with no real file change) without the model getting a real
+  // shot at finishing the remaining steps - runs ended stuck at e.g. 2/3 checklist items even
+  // though the continuation logic (coding-agent.ts) wanted to grant another attempt and simply
+  // had none left. Raised per explicit user request prioritizing checklist completeness over
+  // per-run latency on slow local models; still overridable per-run via the Settings page.
+  CODING_AGENT_MAX_ATTEMPTS: "6",
   // A slow/small local model is exactly what this profile targets - 8 minutes total for up to
   // 2 attempts x 24 iterations each was routinely exhausted by attempt 1 ALONE (each iteration
   // is a full LLM round-trip plus tool calls, both slower on a small local model), so the

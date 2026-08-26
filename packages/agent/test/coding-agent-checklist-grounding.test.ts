@@ -93,4 +93,34 @@ describe("CodingAgent checklist grounding against the checkpoint diff", () => {
     expect(todos).toHaveLength(1);
     expect(todos[0].status).toBe("done");
   });
+
+  /**
+   * Regression: a step demoted by grounding (this attempt's own "done" claim, with zero file
+   * changes) used to still fall through to the terminal "unverified, no more attempts" branch
+   * whenever anyFileChangedThisRun was false and the response text didn't happen to match the
+   * "announced next step" pattern - ending the WHOLE run (success:true, verified:false) with
+   * attempts left on the table and a checklist item that was JUST reopened one line earlier.
+   * A legitimate no-file-change step (e.g. "reproduce the error" via a read-only tool) hit this
+   * exact path. The demotion itself is real signal that the model is actively driving the
+   * checklist, not evidence it should be abandoned - it must earn another attempt.
+   */
+  it("continues to another attempt after a same-attempt grounding demotion, instead of ending the run", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-cp-ground-continue-"));
+    sandboxes.push(sandbox);
+    // Attempt 1: marks the only step "done" without writing any file - gets demoted, and
+    // (with maxAttempts:2) a second attempt should follow instead of the run ending here.
+    const provider = scriptedProvider([
+      PLAN_JSON,
+      "[TOOL:todo action=update id=1 status=done]",
+      "Fertig fuer diesen Versuch.",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    const result = await codingAgent.run("add a health endpoint", { maxAttempts: 2 });
+
+    // Ran a second attempt rather than stopping after the first - scriptedProvider clamps to
+    // its last scripted content once exhausted, so `attempts` > 1 is the signal that matters.
+    expect(result.attempts).toBeGreaterThan(1);
+  });
 });

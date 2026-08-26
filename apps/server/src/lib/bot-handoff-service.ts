@@ -41,6 +41,31 @@ const HANDOFF_BLOCKED_RE = /@([a-z0-9][a-z0-9-]*)\s+(?:ist\s+)?(?:blockiert|bloc
 const TASK_CREATED_BY_PREFIX = "bot:";
 const TASK_ARROW = "→";
 
+/**
+ * Conversation scoping: every handoff task carries `conversationId:<id>` in its description, so
+ * multiple group chats keep separate task boards (previously ALL open handoffs from EVERY chat
+ * leaked into every other chat's context).
+ */
+const CONVERSATION_TAG_RE = /conversationId:(\d+)/;
+
+function encodeConversationTag(conversationId: number): string {
+  return `conversationId:${conversationId}`;
+}
+
+function conversationIdOfTask(task: { description?: string | null }): number | undefined {
+  const match = task.description?.match(CONVERSATION_TAG_RE);
+  return match ? Number(match[1]) : undefined;
+}
+
+function isBotHandoffAssignMessage(content: string, taskId: number): boolean {
+  try {
+    const parsed = JSON.parse(content) as { type?: string; action?: string; taskId?: number };
+    return parsed.type === "bot_handoff" && parsed.action === "assign" && parsed.taskId === taskId;
+  } catch {
+    return false;
+  }
+}
+
 function encodeCreatedBy(sourceSlug: string, targetSlug: string): string {
   return `${TASK_CREATED_BY_PREFIX}${sourceSlug}${TASK_ARROW}${targetSlug}`;
 }
@@ -55,6 +80,33 @@ function decodeCreatedBy(raw: string): { source: string; target: string } | null
 
 export class BotHandoffService {
   constructor(private readonly db: DatabaseService) {}
+
+  /**
+   * Scopes a handoff task to a conversation. Tasks created after conversation-tagging shipped
+   * carry the `conversationId:<id>` tag directly. Tasks created before that (no tag) are matched
+   * by finding the "bot_handoff" assign message that references this task id in the given
+   * conversation's own message log, then the tag is backfilled onto the task so this lookup
+   * only has to happen once per legacy task - without this, every handoff pending before the
+   * tag was introduced would be permanently invisible/unresolvable.
+   */
+  private async isTaskInConversation(
+    task: { id: number; description?: string | null },
+    conversationId: number
+  ): Promise<boolean> {
+    const tagged = conversationIdOfTask(task);
+    if (tagged !== undefined) return tagged === conversationId;
+
+    const messages = await this.db.getMessages(conversationId);
+    const owningMessage = messages.find(
+      (m) => m.role === "system" && isBotHandoffAssignMessage(m.content, task.id)
+    );
+    if (!owningMessage) return false;
+
+    await this.db.updateTask(task.id, {
+      description: [task.description?.trim() || "", encodeConversationTag(conversationId)].filter(Boolean).join(" "),
+    });
+    return true;
+  }
 
   /** Parse a message for handoff patterns: assign, done, and blocked.
    *  Returns the tasks that were created or updated during this call. */
@@ -75,7 +127,7 @@ export class BotHandoffService {
       if (participants.includes(targetSlug)) {
         const task = await this.db.createTask({
           title: taskDescription.slice(0, 200),
-          description: `Assigned by @${authorBotSlug} to @${targetSlug} in group chat`,
+          description: `Assigned by @${authorBotSlug} to @${targetSlug} in group chat ${encodeConversationTag(conversationId)}`,
           projectId: undefined,
           priority: "medium",
           status: "pending",
@@ -130,7 +182,7 @@ export class BotHandoffService {
 
       // Find pending tasks assigned TO targetSlug (means targetSlug is the
       // bot being told "you're done"), matched by `createdBy` encoding.
-      const matched = await this.findHandoffTaskByTarget(targetSlug, "pending");
+      const matched = await this.findHandoffTaskByTarget(targetSlug, "pending", conversationId);
       if (matched) {
         const doneTask = await this.db.updateTask(matched.id, {
           status: "completed",
@@ -180,7 +232,7 @@ export class BotHandoffService {
       const targetSlug = blockedMatch[1]!.toLowerCase();
       const reason = blockedMatch[2]?.trim() || undefined;
 
-      const matched = await this.findHandoffTaskByTarget(targetSlug, "pending");
+      const matched = await this.findHandoffTaskByTarget(targetSlug, "pending", conversationId);
       if (matched) {
         const blockedTask = await this.db.updateTask(matched.id, {
           status: "blocked",
@@ -213,7 +265,8 @@ export class BotHandoffService {
    */
   private async findHandoffTaskByTarget(
     targetSlug: string,
-    status: string
+    status: string,
+    conversationId: number
   ): Promise<{ id: number; createdBy: string | null } | null> {
     const allTasks = await this.db.listTasks();
     const suffix = `${TASK_ARROW}${targetSlug}`;
@@ -221,35 +274,58 @@ export class BotHandoffService {
       if (!t.createdBy?.startsWith(TASK_CREATED_BY_PREFIX)) continue;
       if (!t.createdBy.endsWith(suffix)) continue;
       if (t.status !== status) continue;
+      if (!(await this.isTaskInConversation(t, conversationId))) continue;
       return { id: t.id, createdBy: t.createdBy };
     }
     return null;
   }
 
+  private toHandoffTask(t: { id: number; title: string; createdBy: string | null; status: string; priority: string | null; result?: string | null; createdAt: string; updatedAt: string }, conversationId: number): HandoffTask {
+    const decoded = decodeCreatedBy(t.createdBy ?? "");
+    return {
+      taskId: t.id,
+      title: t.title,
+      assignedBy: decoded?.source ?? "",
+      assignedTo: decoded?.target ?? "",
+      conversationId,
+      status: (t.status as HandoffTask["status"]) || "pending",
+      priority: (t.priority as HandoffTask["priority"]) || "medium",
+      result: t.result ?? undefined,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+    };
+  }
+
   /**
-   * Get all open handoff tasks for a conversation.
-   * Filters tasks whose `createdBy` starts with "bot:" and are not completed.
+   * Get all open handoff tasks for a conversation. Filtered by the conversationId tag so one
+   * group chat never sees another chat's open handoffs.
    */
-  async getOpenHandoffs(_conversationId: number): Promise<HandoffTask[]> {
+  async getOpenHandoffs(conversationId: number): Promise<HandoffTask[]> {
     const allTasks = await this.db.listTasks();
-    return allTasks
-      .filter(
-        (t) => t.createdBy?.startsWith(TASK_CREATED_BY_PREFIX) && t.status !== "completed"
-      )
-      .map((t) => {
-        const decoded = decodeCreatedBy(t.createdBy ?? "");
-        return {
-          taskId: t.id,
-          title: t.title,
-          assignedBy: decoded?.source ?? "",
-          assignedTo: decoded?.target ?? "",
-          conversationId: _conversationId,
-          status: (t.status as HandoffTask["status"]) || "pending",
-          priority: (t.priority as HandoffTask["priority"]) || "medium",
-          createdAt: t.createdAt,
-          updatedAt: t.updatedAt,
-        };
-      });
+    const candidates = allTasks.filter(
+      (t) => t.createdBy?.startsWith(TASK_CREATED_BY_PREFIX) && t.status !== "completed"
+    );
+    const owned: typeof candidates = [];
+    for (const t of candidates) {
+      if (await this.isTaskInConversation(t, conversationId)) owned.push(t);
+    }
+    return owned.map((t) => this.toHandoffTask(t, conversationId));
+  }
+
+  /**
+   * Kanban-lite: the full task board for one group chat - all handoff tasks (open AND
+   * completed), newest first - so a later exchange can resume where a previous one left off.
+   */
+  async listHandoffTasks(conversationId: number): Promise<HandoffTask[]> {
+    const allTasks = await this.db.listTasks();
+    const candidates = allTasks.filter((t) => t.createdBy?.startsWith(TASK_CREATED_BY_PREFIX));
+    const owned: typeof candidates = [];
+    for (const t of candidates) {
+      if (await this.isTaskInConversation(t, conversationId)) owned.push(t);
+    }
+    return owned
+      .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+      .map((t) => this.toHandoffTask(t, conversationId));
   }
 
   /** Build a context summary of open handoffs for injection into bot prompts. */

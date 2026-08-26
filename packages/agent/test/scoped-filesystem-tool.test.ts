@@ -68,6 +68,30 @@ describe("normalizeScopedPath single-segment sandbox slug", () => {
   });
 });
 
+/**
+ * Regression: a model that ignores the "NEVER include 'shared-workspace' or 'coding' in your
+ * file paths" instruction sometimes writes a bare "coding/STATUS.md" - no project slug, so the
+ * suffix-match above never fires - which used to land as a genuine unwanted "coding" subfolder
+ * inside the sandbox instead of at the project root the model actually meant.
+ */
+describe("normalizeScopedPath bare reserved-name prefix", () => {
+  it("strips a leading 'coding/' with no project slug following it", () => {
+    expect(normalizeScopedPath("coding/STATUS.md", "/shared-workspace/coding/my-project")).toBe("STATUS.md");
+  });
+
+  it("strips a leading 'shared-workspace/' with no project slug following it", () => {
+    expect(normalizeScopedPath("shared-workspace/STATUS.md", "/shared-workspace/coding/my-project")).toBe("STATUS.md");
+  });
+
+  it("strips both in sequence", () => {
+    expect(normalizeScopedPath("shared-workspace/coding/STATUS.md", "/shared-workspace/coding/my-project")).toBe("STATUS.md");
+  });
+
+  it("leaves a path that merely starts with those words as a substring untouched", () => {
+    expect(normalizeScopedPath("coding-notes/STATUS.md", "/shared-workspace/coding/my-project")).toBe("coding-notes/STATUS.md");
+  });
+});
+
 describe("scoped filesystem tool write/read round-trip", () => {
   const sandboxes: string[] = [];
   afterEach(() => {

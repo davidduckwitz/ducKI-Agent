@@ -531,5 +531,30 @@ describe("Planner - Enhanced Features", () => {
       const plan = await planner.createPlan("Plane ein Team-Offsite und erstelle die Agenda");
       expect(plan.planType).toBe("general");
     });
+
+    it("rejects a general research plan when the execution context requires coding", async () => {
+      vi.mocked(mockProvider.generate).mockResolvedValue({
+        content: JSON.stringify({
+          goal: "Create a website for a bakery",
+          planType: "general",
+          steps: [{
+            id: "step_1",
+            title: "Research bakery websites",
+            description: "Write the findings to research.md",
+            status: "pending",
+          }],
+          estimatedComplexity: "low",
+        }),
+        usage: { promptTokens: 100, completionTokens: 100, totalTokens: 200 },
+      });
+
+      const plan = await planner.createPlan("Create a website for a bakery", [], {
+        requiredPlanType: "coding",
+      });
+
+      expect(mockProvider.generate).toHaveBeenCalledTimes(3);
+      expect(plan.planType).toBe("coding");
+      expect(plan.steps[0]?.description).toBe("Create a website for a bakery");
+    });
   });
 });

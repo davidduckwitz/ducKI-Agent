@@ -47,6 +47,8 @@ export const bots = sqliteTable("bots", {
   name: text("name").notNull(),
   description: text("description"),
   avatar: text("avatar"),
+  /** Bot's identity/persona text (like hermes SOUL.md). Injected as slot #1 in system prompt. */
+  soul: text("soul"),
   systemPrompt: text("system_prompt"),
   /** Optional per-bot LLM override. Null means "use the system default provider/model" -
    *  resolved at agent-creation time, same default every other agent in this app uses. */

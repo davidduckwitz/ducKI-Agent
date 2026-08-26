@@ -378,6 +378,8 @@ export class OpenAIProvider implements LLMProvider {
       temperature: merged.temperature,
       top_p: merged.topP,
       max_tokens: merged.maxTokens,
+      ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
+      ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
       stream: false as const,
       ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
     });
@@ -456,6 +458,8 @@ export class OpenAIProvider implements LLMProvider {
           temperature: merged.temperature,
           top_p: merged.topP,
           max_tokens: merged.maxTokens,
+          ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
+          ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
           stream: true,
           // Without this the OpenAI streaming protocol never sends a usage chunk at all -
           // which is why every streamed response reported 0 tokens.

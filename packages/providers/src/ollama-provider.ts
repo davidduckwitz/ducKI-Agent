@@ -127,6 +127,8 @@ export class OllamaProvider extends OpenAIProvider {
         temperature: merged.temperature,
         top_p: merged.topP,
         max_tokens: merged.maxTokens,
+        ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
+        ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
         stream: false,
         ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
       });
@@ -229,6 +231,8 @@ export class OllamaProvider extends OpenAIProvider {
       temperature: merged.temperature,
       top_p: merged.topP,
       max_tokens: merged.maxTokens,
+      ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
+      ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
       stream: true,
       ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
     });

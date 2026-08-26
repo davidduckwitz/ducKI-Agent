@@ -68,6 +68,15 @@ export class DatabaseService {
     this.logger = getRootLogger().child("Database");
   }
 
+  /**
+   * Execute raw SQL with parameters. Used for tables not yet in the Drizzle schema
+   * (e.g. task_board). Prefer typed Drizzle queries when possible.
+   */
+  async runRawSQL(sql: string, args?: unknown[]): Promise<Array<Record<string, unknown>>> {
+    const result = await this.client.execute({ sql, args: (args ?? []) as never[] });
+    return result.rows as Array<Record<string, unknown>>;
+  }
+
   async initialize(): Promise<void> {
     const dir = dirname(this.dbPath);
     if (!existsSync(dir)) {
@@ -232,6 +241,11 @@ export class DatabaseService {
     });
 
     await this.client.execute(`ALTER TABLE messages ADD COLUMN author_bot_id TEXT`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+
+    // SOUL.md per-bot personality: bot's identity text injected as slot #1 in system prompt
+    await this.client.execute(`ALTER TABLE bots ADD COLUMN soul TEXT`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
     });
 
@@ -695,6 +709,12 @@ export class DatabaseService {
    */
   async tagMessage(id: number, data: { authorBotId?: string; metadata?: string }): Promise<void> {
     await this.db.update(schema.messages).set(data).where(eq(schema.messages.id, id)).run();
+  }
+
+  /** Replaces the plain content of a message row - used when a plan artifact is edited so the
+   *  transcript stays in sync with the markdown file on disk. */
+  async updateMessage(id: number, content: string): Promise<void> {
+    await this.db.update(schema.messages).set({ content }).where(eq(schema.messages.id, id)).run();
   }
 
   async deleteMessagesAfter(conversationId: number, afterId: number): Promise<void> {

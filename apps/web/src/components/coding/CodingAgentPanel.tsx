@@ -234,7 +234,25 @@ export function CodingAgentPanel({
         groups[groups.length - 1]!.events.push(msg);
       }
     }
-    return groups;
+    // "Analysiere Ergebnisse..." (internal_instruction, kind tool_analysis/screenshot_analysis)
+    // is a status note ahead of the model's next turn - worth seeing when something needs
+    // investigating, pure noise when every tool call this iteration already succeeded (the
+    // overwhelming common case, and previously a "Hinweis" row after nearly EVERY tool call).
+    for (const group of groups) {
+      const hasFailure = group.events.some(
+        (m) => m.eventType === "tool_result" && m.eventData?.["success"] === false
+      );
+      if (!hasFailure) {
+        group.events = group.events.filter(
+          (m) =>
+            !(
+              m.eventType === "internal_instruction" &&
+              (m.eventData?.["kind"] === "tool_analysis" || m.eventData?.["kind"] === "screenshot_analysis")
+            )
+        );
+      }
+    }
+    return groups.filter((group) => group.events.length > 0);
   }, [events]);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 

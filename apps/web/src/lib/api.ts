@@ -1106,7 +1106,7 @@ export const api = {
       request<BotChatInfo>("/bot-chats", { method: "POST", body: JSON.stringify(data) }),
     getMessages: (id: number) => request<BotChatMessage[]>(`/bot-chats/${id}/messages`),
     status: (id: number) =>
-      request<{ generating: boolean; activeBot: { slug: string; name: string } | null }>(`/bot-chats/${id}/status`),
+      request<{ generating: boolean; activeBots: Array<{ slug: string; name: string; activity: string }> }>(`/bot-chats/${id}/status`),
     sendMessage: (id: number, message: string) =>
       request<{ started: boolean; userMessageId: number }>(`/bot-chats/${id}/messages`, {
         method: "POST",
@@ -1119,6 +1119,15 @@ export const api = {
     delete: (id: number) => request<{ deleted: boolean }>(`/bot-chats/${id}`, { method: "DELETE" }),
     deleteMessage: (id: number, messageId: number) =>
       request<{ deleted: boolean }>(`/bot-chats/${id}/messages/${messageId}`, { method: "DELETE" }),
+    getWorkspace: (id: number) =>
+      request<{ root: string; files: Array<{ path: string; size: number; isDirectory: boolean }> }>(`/bot-chats/${id}/workspace`),
+    getWorkspaceFile: (id: number, filePath: string) =>
+      request<{ path: string; size: number; truncated: boolean; content: string }>(`/bot-chats/${id}/workspace/${encodeURIComponent(filePath)}`),
+    updatePlan: (id: number, path: string, content: string) =>
+      request<{ path: string; updated: boolean }>(`/bot-chats/${id}/plan`, {
+        method: "PUT",
+        body: JSON.stringify({ path, content }),
+      }),
   },
 
   projectSkills: {

@@ -56,9 +56,14 @@ export class Reasoner {
     ];
 
     try {
+      // Generous headroom for reasoning models: hidden "thinking" tokens eat into the same
+      // budget before the real JSON decision is written.
       const response = await this.provider.generate(reasoningMessages, {
         temperature: 0.2,
-        maxTokens: 1000,
+        maxTokens: 4000,
+        // Discourages a weak/quantized local model from looping on the short, repetitive
+        // "Available tools: a, b, c" line instead of writing the JSON decision - see planner.ts.
+        frequencyPenalty: 0.4,
       });
 
       const result = JSON.parse(response.content) as ReasoningResult;

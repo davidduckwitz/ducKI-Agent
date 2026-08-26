@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Send, UserPlus, AlertTriangle, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, Send, UserPlus, AlertTriangle, Sparkles, Trash2, X, FolderOpen, FileText, ChevronRight, ChevronDown, ClipboardList, Pencil, Check } from "lucide-react";
 import { api, type BotChatMessage, type BotInfo } from "../../lib/api";
 import { Card, CardHeader, CardTitle } from "../ui/card";
 import { Button } from "../ui/button";
@@ -16,6 +16,12 @@ interface DisplayMessage {
   authorName?: string;
   content: string;
   needsUserDecision?: boolean;
+  /** True for the synthesized plan artifact that ends a planning exchange (metadata.plan). */
+  isPlan?: boolean;
+  /** Absolute path of the plan markdown in the group's shared workspace (metadata.planPath). */
+  planPath?: string;
+  /** True once a newer planning exchange superseded this plan (metadata.archived). */
+  archived?: boolean;
   /** Real DB row id - only set for persisted messages, which is what makes them deletable
    *  (an in-flight optimistic turn has no row yet, so there's nothing to delete server-side). */
   dbId?: number;
@@ -79,9 +85,21 @@ function toDisplayMessages(rows: BotChatMessage[], botBySlug: Map<string, BotInf
     .filter((m) => m.content.trim().length > 0)
     .map((m) => {
       let needsUserDecision = false;
+      let isPlan = false;
+      let archived = false;
+      let planPath: string | undefined;
       if (m.metadata) {
         try {
-          needsUserDecision = Boolean((JSON.parse(m.metadata) as { needsUserDecision?: boolean }).needsUserDecision);
+          const parsed = JSON.parse(m.metadata) as {
+            needsUserDecision?: boolean;
+            plan?: boolean;
+            archived?: boolean;
+            planPath?: string;
+          };
+          needsUserDecision = Boolean(parsed.needsUserDecision);
+          isPlan = Boolean(parsed.plan);
+          archived = Boolean(parsed.archived);
+          planPath = typeof parsed.planPath === "string" ? parsed.planPath : undefined;
         } catch {
           // ignore malformed metadata
         }
@@ -94,6 +112,9 @@ function toDisplayMessages(rows: BotChatMessage[], botBySlug: Map<string, BotInf
         authorName: bot?.name ?? m.authorBotId ?? undefined,
         content: m.content,
         needsUserDecision,
+        isPlan,
+        planPath,
+        archived,
         dbId: m.id,
       } satisfies DisplayMessage;
     });
@@ -113,6 +134,14 @@ export function BotChatRoom() {
   // exchange to finish before revealing anything (see routes/bot-chats.ts: the POST responds as
   // soon as the user's message is saved, then keeps running bots in the background).
   const [polling, setPolling] = useState(false);
+  const [showWorkspace, setShowWorkspace] = useState(false);
+  const [previewFile, setPreviewFile] = useState<string | null>(null);
+  // Pinned "Active Plan" strip: the latest plan artifact from a converged planning exchange,
+  // kept open so the room shows the plan that a follow-up execution message will drive from.
+  const [showActivePlan, setShowActivePlan] = useState(true);
+  // Inline plan editing: the plan card swaps its markdown for a textarea while a draft is open.
+  const [editingPlanKey, setEditingPlanKey] = useState<string | null>(null);
+  const [planDraft, setPlanDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -133,6 +162,17 @@ export function BotChatRoom() {
     queryFn: () => api.botChats.status(conversationId),
     enabled: polling,
     refetchInterval: polling ? 1200 : false,
+  });
+  const workspaceQuery = useQuery({
+    queryKey: ["botChatWorkspace", conversationId],
+    queryFn: () => api.botChats.getWorkspace(conversationId),
+    enabled: showWorkspace && Number.isFinite(conversationId),
+    refetchInterval: polling ? 3000 : false,
+  });
+  const filePreviewQuery = useQuery({
+    queryKey: ["botChatFilePreview", conversationId, previewFile],
+    queryFn: () => api.botChats.getWorkspaceFile(conversationId, previewFile!),
+    enabled: previewFile !== null && Number.isFinite(conversationId),
   });
 
   // The exchange has settled server-side: do one last refetch to catch anything written between
@@ -157,6 +197,16 @@ export function BotChatRoom() {
     ...persisted,
     ...(pendingUserText ? [{ key: "pending-user", role: "user" as const, content: pendingUserText }] : []),
   ];
+  // The "active" plan is the newest plan artifact in the transcript - the same one a follow-up
+  // execution message picks up from the shared workspace (BotChatOrchestrator.findActivePlan).
+  const latestPlan = useMemo(() => {
+    for (let index = persisted.length - 1; index >= 0; index--) {
+      const candidate = persisted[index];
+      // Skip archived (superseded) plans - only the newest, still-active one is pinned.
+      if (candidate?.isPlan && !candidate.archived) return candidate;
+    }
+    return undefined;
+  }, [persisted]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -176,8 +226,7 @@ export function BotChatRoom() {
       setPolling(true);
     },
     onError: (error: Error) => {
-      setPendingUserText(null);
-      setSendError(error.message || "Nachricht konnte nicht gesendet werden.");
+      setPendingUserText(null);              setSendError(error.message || "Message could not be sent.");
     },
   });
 
@@ -189,6 +238,16 @@ export function BotChatRoom() {
   const deleteMessageMutation = useMutation({
     mutationFn: (messageId: number) => api.botChats.deleteMessage(conversationId, messageId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["botChatMessages", conversationId] }),
+  });
+
+  const updatePlanMutation = useMutation({
+    mutationFn: ({ path, content }: { path: string; content: string }) =>
+      api.botChats.updatePlan(conversationId, path, content),
+    onSuccess: async () => {
+      setEditingPlanKey(null);
+      await messagesQuery.refetch();
+    },
+    onError: (error: Error) => setSendError(error.message || "Plan could not be saved."),
   });
 
   const deleteChatMutation = useMutation({
@@ -236,7 +295,7 @@ export function BotChatRoom() {
           <ArrowLeft className="size-4" />
         </Button>
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-bold">{chatQuery.data?.name ?? "Gruppen-Chat"}</h1>
+          <h1 className="truncate text-lg font-bold">{chatQuery.data?.name ?? "Group Chat"}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {participants.map((bot) => (
               <span key={bot.slug} className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -253,7 +312,7 @@ export function BotChatRoom() {
                 }}
               >
                 <option value="">
-                  <UserPlus className="size-3" /> + Bot hinzufügen
+                  <UserPlus className="size-3" /> + Add Bot
                 </option>
                 {availableToAdd.map((bot) => (
                   <option key={bot.slug} value={bot.slug}>
@@ -267,9 +326,18 @@ export function BotChatRoom() {
         <Button
           variant="ghost"
           size="icon"
+          onClick={() => setShowWorkspace(!showWorkspace)}
+          className={showWorkspace ? "text-primary" : ""}
+          title="Toggle workspace files"
+        >
+          <FolderOpen className="size-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
           disabled={deleteChatMutation.isPending}
           onClick={() => {
-            if (confirm(`Gruppen-Chat "${chatQuery.data?.name ?? ""}" löschen? Der gesamte Verlauf geht verloren.`)) {
+            if (confirm(`Delete group chat "${chatQuery.data?.name ?? ""}"? The entire history will be lost.`)) {
               deleteChatMutation.mutate();
             }
           }}
@@ -278,13 +346,92 @@ export function BotChatRoom() {
         </Button>
       </div>
 
+      <div className="flex flex-1 gap-3 overflow-hidden">
+      {showWorkspace ? (
+        <Card className="flex w-72 shrink-0 flex-col overflow-hidden">
+          <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+            <FolderOpen className="size-4 text-muted-foreground" />
+            <span className="text-xs font-semibold text-muted-foreground">Workspace Files</span>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2">
+            {workspaceQuery.data?.files && workspaceQuery.data.files.length > 0 ? (
+              workspaceQuery.data.files.map((f) => (
+                <div
+                  key={f.path}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded px-2 py-0.5 text-xs hover:bg-accent ${previewFile === f.path ? "bg-accent" : ""}`}
+                  onClick={() => !f.isDirectory && setPreviewFile(previewFile === f.path ? null : f.path)}
+                >
+                  {f.isDirectory ? (
+                    <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <FileText className="size-3 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="truncate font-mono" title={f.path}>{f.path}</span>
+                  {!f.isDirectory && f.size > 0 ? (
+                    <span className="ml-auto shrink-0 text-muted-foreground/60">
+                      {f.size > 1024 ? `${Math.round(f.size / 1024)}KB` : `${f.size}B`}
+                    </span>
+                  ) : null}
+                </div>
+              ))
+            ) : (
+              <p className="p-2 text-center text-xs text-muted-foreground">No files yet</p>
+            )}
+          </div>
+          {previewFile ? (
+            <div className="border-t border-border">
+              <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+                <span className="truncate text-xs font-mono text-muted-foreground">{previewFile}</span>
+                <button type="button" onClick={() => setPreviewFile(null)} className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground">
+                  <X className="size-3" />
+                </button>
+              </div>
+              <div className="max-h-72 overflow-y-auto p-2">
+                {filePreviewQuery.isLoading ? (
+                  <p className="text-xs text-muted-foreground">Loading…</p>
+                ) : filePreviewQuery.data ? (
+                  <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-foreground/80">{filePreviewQuery.data.content}</pre>
+                ) : (
+                  <p className="text-xs text-destructive">Failed to load file</p>
+                )}
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
+
       <Card className="flex flex-1 flex-col overflow-hidden">
         <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
+          {latestPlan ? (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 shadow-sm">
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left"
+                onClick={() => setShowActivePlan(!showActivePlan)}
+              >
+                <ClipboardList className="size-4 shrink-0 text-emerald-600" />
+                <span className="text-sm font-semibold">Active Plan</span>
+                <span className="truncate font-mono text-xs text-muted-foreground" title={latestPlan.planPath}>
+                  {latestPlan.planPath}
+                </span>
+                {showActivePlan ? (
+                  <ChevronDown className="ml-auto size-4 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground" />
+                )}
+              </button>
+              {showActivePlan ? (
+                <div className="border-t border-emerald-500/20 px-3 pb-3 pt-2 text-sm">
+                  <MarkdownMessage content={latestPlan.content} />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {display.map((msg) => {
             const deleteButton = msg.dbId !== undefined ? (
               <button
                 type="button"
-                title="Nachricht löschen"
+                title="Delete message"
                 className="mt-0.5 shrink-0 self-start rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-destructive group-hover:opacity-100"
                 onClick={() => {
                   if (confirm("Diese Nachricht löschen?")) deleteMessageMutation.mutate(msg.dbId!);
@@ -304,6 +451,106 @@ export function BotChatRoom() {
                 </div>
               );
             }
+
+            if (msg.isPlan) {
+              // A converged planning exchange renders as a dedicated plan card, not a regular bot
+              // bubble: the synthesized markdown plus the artifact path in the shared workspace.
+              // Superseded plans (archived by a newer planning exchange) render dimmed without an
+              // edit affordance - their file was moved to output/archive/.
+              const planBody = msg.content
+                .replace(/^##\s*📋?\s*Gemeinsamer Plan\s*\n+/, "")
+                .replace(/\n+_Plan gespeichert: .*_$/, "")
+                .trim();
+              const editing = editingPlanKey === msg.key;
+              return (
+                <div key={msg.key} className="group flex items-start gap-2">
+                  <div
+                    className={`min-w-0 flex-1 rounded-xl border px-4 py-3 shadow-sm ${
+                      msg.archived
+                        ? "border-muted-foreground/20 bg-muted/40 opacity-70"
+                        : "border-emerald-500/30 bg-emerald-500/5"
+                    }`}
+                  >
+                    <div
+                      className={`mb-1 flex items-center gap-1.5 text-xs font-semibold ${
+                        msg.archived ? "text-muted-foreground" : "text-emerald-600"
+                      }`}
+                    >
+                      <ClipboardList className="size-3.5 shrink-0" />
+                      Gemeinsamer Plan
+                      {msg.authorName ? <span className="font-normal text-muted-foreground">· {msg.authorName}</span> : null}
+                      {msg.archived ? (
+                        <span className="ml-auto rounded border border-muted-foreground/30 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          Archiviert
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          title={editing ? "Schließen" : "Plan bearbeiten"}
+                          className="ml-auto rounded p-1 text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-700"
+                          onClick={() => {
+                            if (editing) {
+                              setEditingPlanKey(null);
+                            } else {
+                              setEditingPlanKey(msg.key);
+                              setPlanDraft(planBody);
+                            }
+                          }}
+                        >
+                          <Pencil className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    {editing ? (
+                      <div className="space-y-2">
+                        <textarea
+                          className="input min-h-48 w-full resize-y font-mono text-xs leading-relaxed"
+                          value={planDraft}
+                          onChange={(e) => setPlanDraft(e.target.value)}
+                          spellCheck={false}
+                          placeholder="Plan-Markdown bearbeiten…"
+                        />
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            className="flex items-center gap-1"
+                            disabled={updatePlanMutation.isPending || !msg.planPath || !planDraft.trim()}
+                            onClick={() => msg.planPath && updatePlanMutation.mutate({ path: msg.planPath, content: planDraft })}
+                          >
+                            <Check className="size-3.5" /> Speichern
+                          </Button>
+                          <Button size="sm" variant="ghost" className="flex items-center gap-1" onClick={() => setEditingPlanKey(null)}>
+                            <X className="size-3.5" /> Abbrechen
+                          </Button>
+                          {updatePlanMutation.isPending ? (
+                            <span className="text-xs text-muted-foreground">Wird gespeichert…</span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm">
+                        <MarkdownMessage content={planBody} />
+                      </div>
+                    )}
+                    {msg.planPath && !msg.archived ? (
+                      <button
+                        type="button"
+                        title="Open plan file in the workspace"
+                        className="mt-2 block w-full truncate rounded font-mono text-xs text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
+                        onClick={() => {
+                          setPreviewFile(msg.planPath!);
+                          setShowWorkspace(true);
+                        }}
+                      >
+                        {msg.planPath}
+                      </button>
+                    ) : null}
+                  </div>
+                  {deleteButton}
+                </div>
+              );
+            }
+
             const color = botAccentColor(msg.authorBotId ?? "bot");
             return (
               <div key={msg.key} className="group flex max-w-[90%] items-start gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -315,7 +562,7 @@ export function BotChatRoom() {
                   </div>
                   {msg.needsUserDecision ? (
                     <div className="mt-1 flex items-center gap-1 text-xs font-medium text-amber-500">
-                      <AlertTriangle className="size-3.5" /> Braucht deine Entscheidung
+                      <AlertTriangle className="size-3.5" /> Needs your decision
                     </div>
                   ) : null}
                 </div>
@@ -324,16 +571,26 @@ export function BotChatRoom() {
             );
           })}
 
-          {polling || sendMutation.isPending ? (
+          {(polling || sendMutation.isPending) && (statusQuery.data?.activeBots?.length ?? 0) > 0 ? (
+            <div className="flex flex-col gap-1">
+              {statusQuery.data!.activeBots.map((bot) => (
+                <div key={bot.slug} className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <BotAvatarCircle slug={bot.slug} name={bot.name} />
+                  <span>{bot.name} {bot.activity === "thinking…" ? "is thinking…" : bot.activity}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {(polling || sendMutation.isPending) && (statusQuery.data?.activeBots?.length ?? 0) === 0 ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Sparkles className="size-3.5 animate-pulse" />
-              {statusQuery.data?.activeBot ? `${statusQuery.data.activeBot.name} schreibt…` : "Bots antworten…"}
+              Bots are responding…
             </div>
           ) : null}
 
           {display.length === 0 && !polling && !sendMutation.isPending ? (
             <p className="p-6 text-center text-sm text-muted-foreground">
-              Schreib eine Nachricht - relevante Bots antworten automatisch, oder sprich einen gezielt mit @name an.
+              Write a message - relevant bots respond automatically, or mention a specific bot with @name.
             </p>
           ) : null}
         </div>
@@ -362,7 +619,7 @@ export function BotChatRoom() {
           <div className="flex gap-2">
             <Input
               ref={inputRef}
-              placeholder="Nachricht schreiben, @ für gezielte Erwähnung…"
+              placeholder="Write a message, @ to mention a specific bot…"
               value={draft}
               onChange={(e) => handleDraftChange(e.target.value)}
               onKeyDown={(e) => {
@@ -379,6 +636,7 @@ export function BotChatRoom() {
           </div>
         </div>
       </Card>
+      </div>
     </div>
   );
 }

@@ -16,6 +16,12 @@ export interface PlanCostOptions {
   currentModel?: string;
   /** Per-run budget in USD; 0/undefined disables the downgrade suggestion. */
   budgetUsd?: number;
+  /**
+   * Execution-context override. Use this when the caller already knows which executor will
+   * consume the plan (for example CodingAgent). A mismatched model response is retried rather
+   * than letting a general/research plan drive a coding run.
+   */
+  requiredPlanType?: "coding" | "general";
 }
 
 export interface Plan {
@@ -182,6 +188,9 @@ export class Planner {
       availableTools.length > 0
         ? `\nAvailable tools: ${availableTools.join(", ")}`
         : "";
+    const requiredTypeContext = costOptions?.requiredPlanType
+      ? `\nRequired plan type: "${costOptions.requiredPlanType}". This is fixed by the execution context; return that exact planType and shape every step accordingly.`
+      : "";
 
     const truncatedGoal = goal.length > 2000
       ? goal.substring(0, 2000) + "\n[...truncated]"
@@ -196,7 +205,7 @@ export class Planner {
           { role: "system", content: PLANNER_SYSTEM_PROMPT_V2 },
           {
             role: "user",
-            content: `Create a detailed plan for: ${truncatedGoal}${toolsContext}`,
+            content: `Create a detailed plan for: ${truncatedGoal}${toolsContext}${requiredTypeContext}`,
           },
         ];
 
@@ -208,6 +217,11 @@ export class Planner {
         let parsedPlan = this.parsePlanJSON(response.content);
         if (parsedPlan) {
           parsedPlan = this.initializePlanSteps(parsedPlan);
+          if (costOptions?.requiredPlanType && parsedPlan.planType !== costOptions.requiredPlanType) {
+            throw new Error(
+              `Planner returned planType "${parsedPlan.planType}" but execution requires "${costOptions.requiredPlanType}"`
+            );
+          }
           parsedPlan = await this.analyzeDependencies(parsedPlan);
           parsedPlan = await this.validatePlan(parsedPlan);
           parsedPlan = this.computeCostAndRisk(parsedPlan, costOptions);
@@ -241,7 +255,7 @@ export class Planner {
       error: lastError?.message,
     });
 
-    return this.createFallbackPlan(goal);
+    return this.createFallbackPlan(goal, costOptions?.requiredPlanType);
   }
 
   /**
@@ -649,10 +663,10 @@ export class Planner {
     return Math.round(score * 10) / 10;
   }
 
-  private createFallbackPlan(goal: string): Plan {
+  private createFallbackPlan(goal: string, requiredPlanType?: "coding" | "general"): Plan {
     return {
       goal,
-      planType: this.classifyGoal(goal, []),
+      planType: requiredPlanType ?? this.classifyGoal(goal, []),
       steps: [
         {
           id: "step_1",

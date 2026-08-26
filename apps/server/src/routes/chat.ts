@@ -242,20 +242,22 @@ chatRouter.get("/search", async (req, res, next) => {
 chatRouter.post("/", async (req, res, next) => {
   let runId: string | undefined;
   try {
-    const createAgent = req.app.locals["createAgent"] as ((override?: { model?: string }) => Promise<Agent>) | undefined;
-    const requestedModel = typeof req.body?.model === "string" && req.body.model.trim() ? req.body.model.trim() : undefined;
-    const createRequestAgent = createAgent ? () => createAgent(requestedModel ? { model: requestedModel } : undefined) : undefined;
-    const agent = createRequestAgent ? await createRequestAgent() : (req.app.locals["agent"] as Agent);
-    const agentRegistry = req.app.locals["agentRegistry"] as {
-      register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }, controls?: { stop?: () => void }) => string;
-      unregister: (id: string) => void;
-    };
     const { message, conversationId, stream, provider, model } = req.body as {
       message: string;
       conversationId?: number;
       stream?: boolean;
       provider?: string;
       model?: string;
+    };
+    const createAgent = req.app.locals["createAgent"] as ((override?: { provider?: string; model?: string }) => Promise<Agent>) | undefined;
+    const requestedProvider = typeof provider === "string" && provider.trim() ? provider.trim() : undefined;
+    const requestedModel = typeof model === "string" && model.trim() ? model.trim() : undefined;
+    const hasOverride = requestedProvider || requestedModel;
+    const createRequestAgent = createAgent ? () => createAgent(hasOverride ? { provider: requestedProvider, model: requestedModel } : undefined) : undefined;
+    const agent = createRequestAgent ? await createRequestAgent() : (req.app.locals["agent"] as Agent);
+    const agentRegistry = req.app.locals["agentRegistry"] as {
+      register: (entry: { source: "chat_http" | "chat_ws" | "task_run"; conversationId?: number; taskId?: number; socketId?: string; label?: string }, controls?: { stop?: () => void }) => string;
+      unregister: (id: string) => void;
     };
 
     if (!message || typeof message !== "string") {
