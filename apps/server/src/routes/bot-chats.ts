@@ -2,6 +2,8 @@ import { Router, type IRouter } from "express";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
+import { readdirSync, statSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import type { BotService } from "../lib/bot-service.js";
 import { BotChatOrchestrator } from "../lib/bot-chat-orchestrator.js";
 import { sharedWorkspace } from "../lib/shared-workspace-service.js";
@@ -94,6 +96,78 @@ botChatsRouter.get("/:id", async (req, res, next) => {
   }
 });
 
+/** Recursively list files in a directory relative to a root, returning { path, size, isDirectory } entries. */
+function listWorkspaceFiles(rootDir: string, dir: string = rootDir, maxDepth: number = 5): Array<{ path: string; size: number; isDirectory: boolean }> {
+  if (maxDepth <= 0) return [];
+  const entries: Array<{ path: string; size: number; isDirectory: boolean }> = [];
+  try {
+    for (const name of readdirSync(dir)) {
+      const fullPath = join(dir, name);
+      try {
+        const stat = statSync(fullPath);
+        const relPath = relative(rootDir, fullPath).replace(/\\/g, "/");
+        if (stat.isDirectory()) {
+          entries.push({ path: relPath + "/", size: 0, isDirectory: true });
+          entries.push(...listWorkspaceFiles(rootDir, fullPath, maxDepth - 1));
+        } else {
+          entries.push({ path: relPath, size: stat.size, isDirectory: false });
+        }
+      } catch {
+        // skip unreadable entries
+      }
+    }
+  } catch {
+    // dir doesn't exist yet
+  }
+  return entries;
+}
+
+/** GET /api/bot-chats/:id/workspace - list files in this group chat's shared workspace. */
+botChatsRouter.get("/:id/workspace", (req, res) => {
+  const conversationId = parseInt(req.params["id"] ?? "0", 10);
+  try {
+    const workspaceDir = sharedWorkspace.resolveGroupWorkspace(conversationId);
+    const files = listWorkspaceFiles(workspaceDir);
+    res.json(createApiResponse({ root: workspaceDir, files }));
+  } catch (error) {
+    logger.error("Failed to list workspace files", { conversationId, error: error instanceof Error ? error.message : String(error) });
+    res.json(createApiResponse({ root: "", files: [] }));
+  }
+});
+
+/** GET /api/bot-chats/:id/workspace/:filePath - read the contents of a single file in the workspace. */
+botChatsRouter.get("/:id/workspace/*", (req, res) => {
+  const conversationId = parseInt(req.params["id"] ?? "0", 10);
+  const filePath = (req.params as Record<string, string>)["0"]; // wildcard catch-all
+  if (!filePath) {
+    res.status(400).json(createApiError("File path is required"));
+    return;
+  }
+  try {
+    const workspaceDir = sharedWorkspace.resolveGroupWorkspace(conversationId);
+    const fullPath = resolve(join(workspaceDir, filePath));
+    // Prevent path traversal: the resolved path must be inside the workspace
+    if (!fullPath.startsWith(resolve(workspaceDir))) {
+      res.status(403).json(createApiError("Access denied"));
+      return;
+    }
+    const stat = statSync(fullPath);
+    if (stat.isDirectory()) {
+      res.status(400).json(createApiError("Cannot read a directory"));
+      return;
+    }
+    // Limit preview to 100KB — large files should be downloaded, not previewed
+    if (stat.size > 100 * 1024) {
+      res.json(createApiResponse({ path: filePath, size: stat.size, truncated: true, content: readFileSync(fullPath, "utf8").slice(0, 100 * 1024) + "\n\n... (truncated at 100KB)" }));
+      return;
+    }
+    const content = readFileSync(fullPath, "utf8");
+    res.json(createApiResponse({ path: filePath, size: stat.size, truncated: false, content }));
+  } catch (error) {
+    res.status(404).json(createApiError("File not found"));
+  }
+});
+
 /** GET /api/bot-chats/:id/messages - transcript, same row shape as /api/chat/conversations/:id/messages
  *  (with authorBotId set on bot turns so the UI can render the right avatar/name per message). */
 botChatsRouter.get("/:id/messages", async (req, res, next) => {
@@ -179,18 +253,18 @@ botChatsRouter.delete("/:id/participants/:botId", async (req, res, next) => {
 /**
  * Which conversations currently have a background exchange running, and one representative bot
  * that is actively generating right now. A parallel batch can have several active bots; the UI
- * deliberately shows one of them as the typing indicator rather than exposing scheduler detail.
- * Polled via GET /:id/status so the UI knows when to stop polling for new messages. Per-process,
+ * shows all of them as individual typing indicators in the frontend. Per-process,
  * in-memory: fine for a single server instance, and it only gates polling/overlap protection,
  * never durable conversation state (a restart clears any stale reservation automatically).
  */
-const activeGenerations = new Map<number, { slug: string; name: string } | null>();
+const activeGenerations = new Map<number, { activeBots: Array<{ slug: string; name: string; activity: string }>; reserved: boolean }>();
 
-/** GET /api/bot-chats/:id/status - is a background exchange running, and which bot is active? */
+/** GET /api/bot-chats/:id/status - is a background exchange running, and which bots are active? */
 botChatsRouter.get("/:id/status", (req, res) => {
   const conversationId = parseInt(req.params["id"] ?? "0", 10);
-  const generating = activeGenerations.has(conversationId);
-  res.json(createApiResponse({ generating, activeBot: generating ? (activeGenerations.get(conversationId) ?? null) : null }));
+  const entry = activeGenerations.get(conversationId);
+  const generating = entry !== undefined;
+  res.json(createApiResponse({ generating, activeBots: generating ? (entry?.activeBots ?? []) : [] }));
 });
 
 /**
@@ -233,7 +307,7 @@ botChatsRouter.post("/:id/messages", async (req, res, next) => {
     // Reserve BEFORE the first awaited write below. Node can accept another HTTP request while
     // addMessage/listBotChatParticipants are pending; setting the flag later leaves a window where
     // two requests both pass the overlap check and start two orchestrators.
-    activeGenerations.set(conversationId, null);
+    activeGenerations.set(conversationId, { activeBots: [], reserved: true });
     generationReserved = true;
 
     const userMessage = await db.addMessage({ conversationId, role: "user", content: message });
@@ -241,8 +315,9 @@ botChatsRouter.post("/:id/messages", async (req, res, next) => {
     const botService = getBotService(req);
 
     const exchange = new BotChatOrchestrator(db, botService)
-      .handleUserMessage(conversationId, participants.map((p) => p.botId), message, (bot) => {
-        activeGenerations.set(conversationId, bot);
+      .handleUserMessage(conversationId, participants.map((p) => p.botId), message, (bots) => {
+        const entry = activeGenerations.get(conversationId);
+        if (entry) entry.activeBots = bots;
       })
       .catch((error) => {
         logger.error("Bot chat exchange failed", {

@@ -160,36 +160,19 @@ export class BotChatOrchestrator {
       return entries.map((entry) => [entry]);
     }
 
-    // CodingAgent is a mutating worker and its CodingAgent.run() wrapper reloads the shared
-    // conversation itself. Keep it deterministic and side-effect-safe by splitting the otherwise
-    // parallel round around it while still allowing contiguous non-coding peers to run in parallel.
-    const batches: Array<Array<[string, Trigger]>> = [];
-    let parallelBatch: Array<[string, Trigger]> = [];
-    const flushParallel = () => {
-      if (parallelBatch.length > 0) {
-        batches.push(parallelBatch);
-        parallelBatch = [];
-      }
-    };
-
-    for (const entry of entries) {
-      if (entry[0] === CODING_BOT_SLUG) {
-        flushParallel();
-        batches.push([entry]);
-      } else {
-        parallelBatch.push(entry);
-      }
-    }
-    flushParallel();
-
-    return batches;
+    // BROADCAST: all participants respond. Use SERIAL execution (one bot at a time) so each bot
+    // can see the previous bot's response before deciding whether to speak or pass. This mirrors
+    // Hermes "Bot Mode"'s serial-round design where bots deliberate in order — a bot that sees
+    // another bot already covered the topic passes instead of repeating. Parallel broadcast caused
+    // every bot to respond blind, leading to redundant answers.
+    return entries.map((entry) => [entry]);
   }
 
   async handleUserMessage(
     conversationId: number,
     participantSlugs: string[],
     userMessage: string,
-    onActiveBotChange?: (bot: { slug: string; name: string } | null) => void
+    onActiveBotChange?: (bots: Array<{ slug: string; name: string; activity: string }>) => void
   ): Promise<BotChatTurn[]> {
     const participants = new Map<string, BotSelect>();
     for (const slug of participantSlugs) {
@@ -261,18 +244,16 @@ export class BotChatOrchestrator {
         // still see the same immutable pre-batch history as the first chunk.
         for (let offset = 0; offset < batch.length; offset += parallelMaxConcurrent) {
           const chunk = batch.slice(offset, offset + parallelMaxConcurrent);
-          const activeBots = new Set<string>();
+          const activeBots = new Map<string, string>(); // slug -> current activity description
           const notifyActive = () => {
-            const active = [...activeBots];
-            if (active.length === 0) {
-              onActiveBotChange?.(null);
-              return;
-            }
-            const first = chunk.find(([s]) => activeBots.has(s));
-            if (first) {
-              const bot = participants.get(first[0]);
-              if (bot) onActiveBotChange?.({ slug: bot.slug, name: bot.name });
-            }
+            const activeEntries = chunk
+              .filter(([s]) => activeBots.has(s))
+              .map(([s]) => {
+                const bot = participants.get(s);
+                return bot ? { slug: bot.slug, name: bot.name, activity: activeBots.get(s) ?? "thinking…" } : undefined;
+              })
+              .filter((b): b is { slug: string; name: string; activity: string } => Boolean(b));
+            onActiveBotChange?.(activeEntries);
           };
 
           const chunkResults = await Promise.allSettled(
@@ -280,10 +261,10 @@ export class BotChatOrchestrator {
               const bot = participants.get(slug);
               if (!bot) return undefined;
 
-              activeBots.add(slug);
+              activeBots.set(slug, "thinking…");
               notifyActive();
 
-              const prompt = this.buildDelegatedPrompt(bot, trigger, buildContextHeader());
+              const prompt = this.buildDelegatedPrompt(bot, trigger, participants, buildContextHeader(), userMessage);
 
               let result: { response: string; messageId?: number; stalled: boolean };
               try {
@@ -291,6 +272,16 @@ export class BotChatOrchestrator {
                   conversationId,
                   tagPromptAsInternal: true,
                   ...(preparedAgents.has(slug) ? { preparedAgent: preparedAgents.get(slug)! } : {}),
+                  onEvent: (event) => {
+                    if (event.type === "tool_call") {
+                      const toolName = (event.data?.toolName as string) ?? (event.message?.split?.(" ")?.[0] as string) ?? "working";
+                      activeBots.set(slug, toolName);
+                      notifyActive();
+                    } else if (event.type === "tool_result") {
+                      activeBots.set(slug, "analyzing…");
+                      notifyActive();
+                    }
+                  },
                 });
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
@@ -298,12 +289,12 @@ export class BotChatOrchestrator {
                 const errorMessage = await this.db.addMessage({
                   conversationId,
                   role: "assistant",
-                  content: `⚠️ ${bot.name} konnte nicht antworten (technischer Fehler): ${message}`,
+                  content: `⚠️ ${bot.name} could not respond (technical error): ${message}`,
                   authorBotId: slug,
                 });
-                activeBots.delete(slug);
-                notifyActive();
-                return {
+              activeBots.delete(slug);
+              notifyActive();
+              return {
                   turn: {
                     round,
                     botId: slug,
@@ -396,43 +387,108 @@ export class BotChatOrchestrator {
     return new Map([...participants.keys()].map((slug) => [slug, { kind: "user_broadcast" as const }]));
   }
 
-  private buildDelegatedPrompt(bot: BotSelect, trigger: Trigger, handoffContext?: string): string {
+  /** Detect if the user's message is asking for planning/discussion rather than execution. */
+  private isPlanningIntent(userMessage: string): boolean {
+    const lower = userMessage.toLowerCase();
+    return /\b(plan|discuss|brainstorm|think|approach|how would|what do you think|strategy|outline|architecture|design|before we start|first step|roadmap|how can we|suggest|recommend|what's the best way|what are the options)\b/i.test(lower);
+  }
+
+  /** Build a roster of all participants so each bot knows who its teammates are. */
+  private buildTeammateRoster(bot: BotSelect, participants: Map<string, BotSelect>): string {
+    const lines = ["Teammates in this group chat:"];
+    for (const [slug, member] of participants) {
+      if (slug === bot.slug) continue; // skip self
+      const desc = member.description ? ` — ${member.description}` : "";
+      lines.push(`- ${member.name} (@${slug})${desc}`);
+    }
+    return lines.join("\n");
+  }
+
+  /** Build the bot-to-bot messaging protocol instructions. */
+  private buildBotModeProtocol(bot: BotSelect, participants: Map<string, BotSelect>): string {
+    const roster = this.buildTeammateRoster(bot, participants);
+    return [
+      "## How to communicate with teammates",
+      roster,
+      "",
+      "To message a teammate directly (they will receive it in their own chat):",
+      '  Use @botname in your message, e.g. "@eddy please review this code" — the message will be delivered to that bot.',
+      "",
+      "To delegate work to a specific teammate:",
+      '  Write "@botname take over <task description>" — this creates a trackable handoff.',
+      "",
+      "To escalate a decision to the user:",
+      '  Write "@user" in your message — the user will be notified that their input is needed.',
+      "",
+      "To pass (you have nothing to add):",
+      '  Reply with exactly "(pass)" — this is silent and expected. It lets others speak without noise.',
+    ].join("\n");
+  }
+
+  private buildDelegatedPrompt(
+    bot: BotSelect,
+    trigger: Trigger,
+    participants: Map<string, BotSelect>,
+    handoffContext?: string,
+    userMessage?: string,
+  ): string {
     const handoffHeader = handoffContext
-      ? ["[Offene Aufgaben für diesen Chat:]", handoffContext, ""].join("\n")
+      ? ["[Open tasks for this chat:]", handoffContext, ""].join("\n")
       : "";
+
+    const isPlanning = userMessage ? this.isPlanningIntent(userMessage) : false;
+    const protocol = this.buildBotModeProtocol(bot, participants);
+
+    const groupChatGuidelines = isPlanning
+      ? [
+          "This is a GROUP CHAT with multiple bots. You are having a CONVERSATION, not working alone.",
+          "CRITICAL: Do NOT use any tools (filesystem, shell, browser, HTTP, etc.) in this chat.",
+          "Do NOT write code, create files, or execute any actions. Instead, share your perspective, suggest an approach, or discuss how you would tackle this.",
+          "Other bots will also share their thoughts. The user wants a discussion first, then delegation to the right bot later.",
+          "Read the conversation history before responding — do not repeat what other bots already said.",
+        ].join(" ")
+      : [
+          "This is a GROUP CHAT with multiple bots. You are having a CONVERSATION, not working alone.",
+          "CRITICAL: Do NOT use any tools (filesystem, shell, browser, HTTP, etc.) in this chat unless you are explicitly given a handoff task.",
+          "Your job RIGHT NOW is to: (1) evaluate if this task is in your area of expertise, (2) claim it or pass, (3) briefly describe HOW you would approach it — but do NOT actually execute it yet.",
+          "Only the bot that receives a formal handoff task should execute. All others discuss and coordinate.",
+          "If another bot already claimed the task or gave a good answer, reply (pass).",
+        ].join(" ");
+
     const contentReminder =
-      "Schreibe das eigentliche Ergebnis (den Text, die Antwort, den Bericht - was auch immer verlangt wurde) direkt in diese Nachricht. Beschreibe nicht nur, dass du etwas erledigt oder \"gesendet\" hast - eine Beschreibung ohne Inhalt ist für die anderen im Chat unsichtbar. Kürze echte, umfangreiche Inhalte nicht künstlich, nur damit die Antwort kompakter wirkt.";
+      "Write your actual result (text, answer, report - whatever was requested) directly in this message. Do NOT just describe that you did something - a description without content is invisible to others in the chat. Do not artificially shorten real, extensive content.";
     const passReminder =
-      "Wenn du inhaltlich nichts Neues beizutragen hast, antworte NUR mit exakt \"(pass)\" (ohne alles andere). Das ist eine gute, erwünschte Antwort - sie lässt das Gespräch zur Ruhe kommen, statt es mit einer Nachricht zu füllen, die niemandem weiterhilft.";
-    const handoffReminder =
-      'Wenn du eine Aufgabe an einen anderen Bot übergibst, schreibe "@botname übernimm <aufgabe>" — das erstellt eine nachverfolgbare Aufgabe. Wenn ein anderer Bot dir eine Aufgabe zugewiesen hat und du sie erledigt hast, schreibe "@botname erledigt" oder "@botname done".';
+      'If you have nothing new to contribute, reply ONLY with exactly "(pass)" (nothing else). This is a good, expected response - it lets the conversation settle instead of filling it with a message that helps no one.';
 
     if (trigger.kind === "user_mention") {
       return [
-        `[Gruppen-Chat: Der Nutzer hat dich (@${bot.name}) in seiner letzten Nachricht direkt erwähnt.]`,
-        "Antworte darauf, so wie es deiner Rolle entspricht.",
+        `[Group Chat: The user directly mentioned you (@${bot.name}) in their last message.]`,
+        groupChatGuidelines,
+        protocol,
         handoffHeader,
         contentReminder,
-        handoffReminder,
         passReminder,
       ].filter(Boolean).join("\n");
     }
     if (trigger.kind === "bot_mention") {
       return [
-        `[Gruppen-Chat: ${trigger.sourceBotName} hat dich (@${bot.name}) in diesem Chat erwähnt und um deine Antwort gebeten.]`,
-        "Sieh dir den bisherigen Gesprächsverlauf an und antworte darauf, so wie es deiner Rolle entspricht.",
+        `[Group Chat: ${trigger.sourceBotName} mentioned you (@${bot.name}) and requested your response.]`,
+        "Review the conversation history. The other bot has asked for your input.",
+        groupChatGuidelines,
+        protocol,
         handoffHeader,
         contentReminder,
-        handoffReminder,
         passReminder,
       ].filter(Boolean).join("\n");
     }
     return [
-      `[Gruppen-Chat: Die letzte Nachricht im Verlauf richtet sich an die ganze Gruppe (keine gezielte Erwähnung).]`,
-      "Wenn du inhaltlich etwas beizutragen hast, antworte so, wie es deiner Rolle entspricht.",
+      `[Group Chat: The last message in the conversation targets the entire group (no specific mention).]`,
+      "This is NOT directed at you specifically. Only respond if the task directly matches your expertise AND no other bot has already claimed it. Otherwise reply (pass).",
+      "CRITICAL: Do NOT use any tools or write code in this response. This is a discussion turn, not an execution turn.",
+      groupChatGuidelines,
+      protocol,
       handoffHeader,
       contentReminder,
-      handoffReminder,
       passReminder,
     ].filter(Boolean).join("\n");
   }

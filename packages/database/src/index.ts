@@ -244,6 +244,11 @@ export class DatabaseService {
       // Older databases may already have the column or reject duplicate adds.
     });
 
+    // SOUL.md per-bot personality: bot's identity text injected as slot #1 in system prompt
+    await this.client.execute(`ALTER TABLE bots ADD COLUMN soul TEXT`).catch(() => {
+      // Older databases may already have the column or reject duplicate adds.
+    });
+
     // FTS5 full-text search over messages for session_search tool.
     // External-content table: content lives in `messages`, FTS only holds the index.
     // Triggers keep the FTS index in sync on insert/delete; no update trigger needed

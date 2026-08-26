@@ -489,6 +489,8 @@ const loggedSkillPoolRoots = new Set<string>();
 export class Agent {
   readonly name: string;
   private status: AgentStatus = "idle";
+  /** Bot's identity/persona text (like hermes SOUL.md). Injected as slot #1 in system prompt. */
+  private soul: string;
   private systemPrompt: string;
   private maxIterations: number;
   private timeoutMs: number;
@@ -605,6 +607,8 @@ export class Agent {
     options: AgentOptions = {}
   ) {
     this.name = options.name ?? "DucKI";
+    // Soul is the bot's identity (slot #1 in system prompt)
+    this.soul = options.soul ?? "";
     this.systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
     this.maxIterations = options.maxIterations ?? parseInt(process.env["AGENT_MAX_ITERATIONS"] ?? "50");
     // True only when the CALLER picked a per-run iteration budget (a CodingAgent from the
@@ -7121,7 +7125,11 @@ export class Agent {
     const taskRules = taskRulesGuidance();
     const platformHint = platformHintGuidance(options.channelHint as PlatformChannel | undefined);
 
+    // Soul is the bot's identity (slot #1 in system prompt), like hermes SOUL.md
+    const soulContext = this.soul ? `\n\n${this.soul}` : "";
+
     const baseSystemPrompt =
+      soulContext +
       this.systemPrompt +
       installedSkillsContext +
       requestedSkillsContext +
@@ -7133,6 +7141,7 @@ export class Agent {
       taskRules;
 
     const compactBaseSystemPrompt =
+      soulContext +
       this.systemPrompt +
       installedSkillsContext +
       compactRequestedSkillsContext +
@@ -7144,6 +7153,7 @@ export class Agent {
       taskRules;
 
     const minimalBaseSystemPrompt =
+      soulContext +
       this.systemPrompt +
       toolContext +
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +

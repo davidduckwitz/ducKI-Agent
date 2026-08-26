@@ -11,6 +11,8 @@ export type { AgentRunEventSnapshot, AgentEventEmitterV2, AgentRunEventType };
 
 export interface AgentOptions {
   name?: string;
+  /** Bot's identity/persona text (like hermes SOUL.md). Injected as slot #1 in system prompt. */
+  soul?: string;
   systemPrompt?: string;
   maxIterations?: number;
   timeoutMs?: number;

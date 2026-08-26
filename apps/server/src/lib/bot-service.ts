@@ -90,12 +90,12 @@ const STALLED_INTENT_RE =
   /^(ich werde|ich will jetzt|ich fange (jetzt )?an|ich beginne (jetzt )?|lass mich|let me|i will|i'll|i am going to|i'm going to)\b/i;
 const MAX_STALL_RECOVERY_ATTEMPTS = 2;
 const STALL_RECOVERY_NUDGE =
-  "Das war noch keine Antwort, sondern nur eine Ankündigung, was du tun wirst. Führe die angekündigte Aktion jetzt tatsächlich aus - rufe das passende Werkzeug auf, oder liefere das eigentliche Ergebnis direkt als Text. Wiederhole nicht nur die Absicht.";
+  "That was not an answer - it was only an announcement of what you will do. Actually perform the announced action now - call the appropriate tool, or deliver the actual result directly as text. Do NOT just repeat the intent.";
 /** Used only on the LAST retry attempt: a plain repeat of STALL_RECOVERY_NUDGE clearly wasn't
  *  enough if the model is still just announcing intent by then, so the final attempt is far more
  *  directive - forbid prose-only output outright rather than asking nicely again. */
 const STALL_RECOVERY_FINAL_NUDGE =
-  "Du hast bereits zweimal nur angekündigt, etwas zu tun, ohne es zu tun. Antworte in DIESER Nachricht NICHT mit einer Ankündigung. Rufe SOFORT ein Werkzeug auf (z.B. filesystem, browser oder http, je nachdem was die Aufgabe erfordert) oder schreibe das fertige Ergebnis direkt aus. Ein Satz wie \"Ich werde ... durchführen\" ist keine gültige Antwort mehr.";
+  "You have already announced your intent twice without actually doing anything. Do NOT respond with another announcement in THIS message. Call a tool IMMEDIATELY (e.g. filesystem, browser, or http, depending on what the task requires) or write the finished result directly. A sentence like 'I will ...' is no longer a valid answer.";
 
 function looksLikeStalledIntent(text: string): boolean {
   const trimmed = text.trim();
@@ -117,12 +117,13 @@ const BUILTIN_BOTS: ReadonlyArray<{
   name: string;
   description: string;
   avatar: string;
+  soul?: string;
   systemPrompt?: string;
   skillWhitelist?: string[];
   toolWhitelist?: string[];
 }> = [
-  { slug: MAIN_BOT_SLUG, name: "DucKI", description: "Der Standard-Hauptagent für allgemeine Aufgaben.", avatar: "duck-matrix" },
-  { slug: CODING_BOT_SLUG, name: "CodingAgent", description: "Spezialisiert auf Code lesen, schreiben und verifizieren.", avatar: "coding-agent" },
+  { slug: MAIN_BOT_SLUG, name: "DucKI", description: "Der Standard-Hauptagent für allgemeine Aufgaben.", avatar: "duck-matrix", soul: "Du bist DucKI, ein intelligenter KI-Assistent. Du bist hilfsreich, präzise und professionell." },
+  { slug: CODING_BOT_SLUG, name: "CodingAgent", description: "Spezialisiert auf Code lesen, schreiben und verifizieren.", avatar: "coding-agent", soul: "Du bist der CodingAgent, ein Spezialist für Code-Analyse, -schreibung und -verifikation. Du bist präzise und gründlich." },
   {
     slug: FRONTEND_DEVELOPER_BOT_SLUG,
     name: "Frontend Developer",
@@ -169,6 +170,8 @@ export interface CreateBotInput {
   name: string;
   description?: string;
   avatar?: string;
+  /** Bot's identity/persona text (like hermes SOUL.md). Injected as slot #1 in system prompt. */
+  soul?: string;
   systemPrompt?: string;
   providerId?: string;
   modelId?: string;
@@ -202,6 +205,7 @@ export class BotService {
         name: builtin.name,
         description: builtin.description,
         avatar: builtin.avatar,
+        soul: builtin.soul ?? null,
         systemPrompt: builtin.systemPrompt ?? null,
         providerId: null,
         modelId: null,
@@ -231,6 +235,7 @@ export class BotService {
       name,
       description: input.description?.trim() || null,
       avatar: input.avatar?.trim() || null,
+      soul: input.soul?.trim() || null,
       systemPrompt: input.systemPrompt?.trim() || null,
       providerId: input.providerId?.trim() || null,
       modelId: input.modelId?.trim() || null,
@@ -252,6 +257,7 @@ export class BotService {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
       ...(input.description !== undefined ? { description: input.description.trim() || null } : {}),
       ...(input.avatar !== undefined ? { avatar: input.avatar.trim() || null } : {}),
+      ...(input.soul !== undefined ? { soul: input.soul.trim() || null } : {}),
       ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt.trim() || null } : {}),
       ...(input.providerId !== undefined ? { providerId: input.providerId.trim() || null } : {}),
       ...(input.modelId !== undefined ? { modelId: input.modelId.trim() || null } : {}),
@@ -360,6 +366,7 @@ export class BotService {
       tagPromptAsInternal?: boolean;
       preparedAgent?: Agent;
       codingContext?: { sandboxRoot: string };
+      onEvent?: (event: { type: string; message: string; data?: Record<string, unknown> }) => void;
     }
   ): Promise<{ response: string; conversationId: number; messageId?: number; stalled: boolean }> {
     const conversationId = opts?.conversationId ?? (await this.resolveConversationId(bot));
@@ -379,7 +386,10 @@ export class BotService {
       opts?.tagPromptAsInternal && bot.slug !== CODING_BOT_SLUG
         ? `bot-internal-${bot.slug}-${randomUUID()}`
         : undefined;
-    const agentRunOptions = internalPromptLocalId ? { localMessageId: internalPromptLocalId } : undefined;
+    const agentRunOptions = {
+      ...(internalPromptLocalId ? { localMessageId: internalPromptLocalId, displayContent: `[Delegated to ${bot.name}]` } : {}),
+      ...(opts?.onEvent ? { onEvent: opts.onEvent } : {}),
+    };
 
     // CodingAgent does not currently expose localMessageId through its macro run() wrapper.
     // It is deliberately isolated into a sequential batch by BotChatOrchestrator, so the legacy
@@ -561,6 +571,9 @@ export class BotService {
       : "";
     const agent = new Agent(provider, this.deps.db, undefined, {
       name: bot.name,
+      // Soul is the bot's identity (slot #1 in system prompt)
+      ...(bot.soul ? { soul: bot.soul } : {}),
+      // System prompt is project-specific instructions (slot #2)
       ...(bot.systemPrompt || workspaceDirective
         ? { systemPrompt: `${bot.systemPrompt ?? ""}${workspaceDirective}`.trim() }
         : {}),
