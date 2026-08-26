@@ -58,7 +58,8 @@ function makeHarness(runResponses: string[]) {
     getSetting: vi.fn(async () => undefined),
     getConversation: vi.fn(async () => ({ id: 7, name: "group", origin: "bot_chat" })),
     updateConversation: vi.fn(async () => undefined),
-    createConversation: vi.fn(),
+    createConversation: vi.fn(async () => ({ id: 99, name: "Delegation: DucKI", origin: "coding_agent" })),
+    deleteConversation: vi.fn(async () => undefined),
     updateBot: vi.fn(),
   } as any;
 
@@ -109,6 +110,26 @@ function makeHarness(runResponses: string[]) {
 }
 
 describe("BotService prepared group turns", () => {
+  it("runs delegated work in a disposable conversation and deletes it", async () => {
+    const harness = makeHarness(["isolated result"]);
+    const chat = vi.spyOn(harness.service, "chat").mockResolvedValue({
+      response: "isolated result",
+      conversationId: 99,
+      messageId: 100,
+      stalled: false,
+    });
+
+    const result = await harness.service.chatIsolated(mainBot(), "delegated task", { sandboxRoot: "C:/project" });
+
+    expect(result.response).toBe("isolated result");
+    expect(harness.db.createConversation).toHaveBeenCalledWith(expect.objectContaining({ origin: "coding_agent" }));
+    expect(chat).toHaveBeenCalledWith(mainBot(), "delegated task", {
+      conversationId: 99,
+      codingContext: { sandboxRoot: "C:/project" },
+    });
+    expect(harness.db.deleteConversation).toHaveBeenCalledWith(99);
+  });
+
   it("does not reload a prepared Agent and keeps stall recovery on the frozen pre-round snapshot", async () => {
     const harness = makeHarness(["Ich werde die Recherche durchführen.", "Fertiges Ergebnis"]);
     const current = mainBot();

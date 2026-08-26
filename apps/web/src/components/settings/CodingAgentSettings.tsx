@@ -24,6 +24,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
     "CODING_AGENT_MAX_ITERATIONS_COMPLEX",
     "CODING_AGENT_MAX_ATTEMPTS",
     "CODING_AGENT_TIMEOUT_MS",
+    "CODING_AGENT_EXPLORE_TIMEOUT_MS",
   ];
 
   const save = useMutation({
@@ -59,7 +60,8 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_MAX_ITERATIONS_MEDIUM: "50",
       CODING_AGENT_MAX_ITERATIONS_COMPLEX: "100",
       CODING_AGENT_MAX_ATTEMPTS: "3",
-      CODING_AGENT_TIMEOUT_MS: "300000",
+      CODING_AGENT_TIMEOUT_MS: "1800000",
+      CODING_AGENT_EXPLORE_TIMEOUT_MS: "600000",
     };
     return defaults[key] ?? "";
   };
@@ -77,7 +79,9 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_MAX_ATTEMPTS:
         "Anzahl der Retry-Versuche wenn die Verifizierung fehlschlägt. 1-5 wird empfohlen.",
       CODING_AGENT_TIMEOUT_MS:
-        "Timeout in Millisekunden für den gesamten Coding Agent Run. Standard: 5 Minuten (300000ms).",
+        "Timeout in Millisekunden für den gesamten Coding Agent Run. Standard: 30 Minuten (1800000ms). Grosszügig gewählt: die eigentliche Begrenzung sind Max Iterationen x Max Retry-Versuche - dies ist nur ein äusseres Sicherheitsnetz gegen einen wirklich hängenden Lauf.",
+      CODING_AGENT_EXPLORE_TIMEOUT_MS:
+        "Timeout in Millisekunden für EINEN Aufruf des Explore-Subagenten (das read-only 'schau dir den Code an, bevor du änderst'-Tool). Standard: 10 Minuten (600000ms). Bei langsamen/lokalen Modellen erhöhen, wenn 'Exploration timed out' Fehler auftreten.",
     };
     return descriptions[key] ?? "";
   };
@@ -90,6 +94,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_MAX_ITERATIONS_COMPLEX: "Max Iterationen (komplex)",
       CODING_AGENT_MAX_ATTEMPTS: "Max Retry-Versuche",
       CODING_AGENT_TIMEOUT_MS: "Timeout (ms)",
+      CODING_AGENT_EXPLORE_TIMEOUT_MS: "Explore-Timeout (ms)",
     };
     return labels[key] ?? key;
   };
@@ -129,7 +134,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
   };
 
   const effectiveTimeoutMs = (): number =>
-    parsePositiveInt(configuredValue("CODING_AGENT_TIMEOUT_MS"), 300000);
+    parsePositiveInt(configuredValue("CODING_AGENT_TIMEOUT_MS"), 1_800_000);
 
   const effectiveAttempts = (): number =>
     parsePositiveInt(configuredValue("CODING_AGENT_MAX_ATTEMPTS"), 3);
@@ -213,6 +218,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
             {[
               "CODING_AGENT_MAX_ATTEMPTS",
               "CODING_AGENT_TIMEOUT_MS",
+              "CODING_AGENT_EXPLORE_TIMEOUT_MS",
             ].map((key: string) => (
               <div key={key} className="space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
                 <label className="flex items-center justify-between text-sm">
@@ -251,7 +257,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
               <ul className="space-y-1 pl-4 list-disc">
                 <li>Höhere Iterationen = bessere Fehlerbehandlung, aber längere Laufzeiten</li>
                 <li>Max Attempts sollte 1-5 sein. Höher = sehr lange Ausführungen</li>
-                <li>Timeout in Millisekunden: 300000 = 5 Min, 600000 = 10 Min</li>
+                <li>Timeout in Millisekunden: 300000 = 5 Min, 1800000 = 30 Min, 3600000 = 60 Min</li>
                 <li>Änderungen gelten nur für neue Plan-Ausführungen</li>
                 <li>
                   Vorrangregel Iterationsbudget: Chat-Plan „Umsetzen" = diese Tiers

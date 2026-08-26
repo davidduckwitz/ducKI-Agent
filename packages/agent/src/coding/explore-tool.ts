@@ -57,6 +57,15 @@ const EXPLORER_TOOLS: ReadonlySet<string> = new Set(["filesystem", "submit_solut
 
 export interface ExploreToolOptions {
   sandboxRoot?: string;
+  /** Optional per-call profile. This keeps the explorer disposable while allowing its provider,
+   * persona and skill access to be improved through an external bot profile. */
+  resolveProfile?: () => Promise<{
+    provider?: LLMProvider;
+    systemPrompt?: string;
+    allowedSkillSlugs?: string[];
+    maxIterations?: number;
+    timeoutMs?: number;
+  } | undefined>;
   /** Iteration budget for one exploration. Kept small on purpose - see the tool description. */
   maxIterations?: number;
   /**
@@ -118,14 +127,19 @@ export function createExploreTool(
         return { success: false, data: null, error: "question required, e.g. \"where is the coding router mounted?\"" };
       }
 
+      const profile = await options.resolveProfile?.();
       const rootHint = options.sandboxRoot
         ? `\n\nProject root: ${options.sandboxRoot}. Address every path RELATIVE to it.`
         : "";
 
-      const subAgent = new Agent(provider, db, undefined, {
+      const persona = profile?.systemPrompt?.trim()
+        ? `${EXPLORE_DIRECTIVE}\n\n## Custom explorer guidance\n${profile.systemPrompt.trim()}`
+        : EXPLORE_DIRECTIVE;
+      const subAgent = new Agent(profile?.provider ?? provider, db, undefined, {
         name: "Explorer",
-        systemPrompt: `${EXPLORE_DIRECTIVE}${rootHint}\n\n${TOOL_CALL_FORMAT_BLOCK}`,
-        maxIterations: options.maxIterations ?? 12,
+        systemPrompt: `${persona}${rootHint}\n\n${TOOL_CALL_FORMAT_BLOCK}`,
+        maxIterations: profile?.maxIterations ?? options.maxIterations ?? 12,
+        ...(profile?.allowedSkillSlugs ? { allowedSkillSlugs: profile.allowedSkillSlugs } : {}),
         disableQualityPasses: true,
       });
       subAgent.executor.registerTool(createReadOnlyFilesystemTool(options.sandboxRoot));
@@ -152,7 +166,7 @@ export function createExploreTool(
       // late rejection (the aborted sub-agent unwinding) never surfaces as unhandled.
       void runPromise.catch(() => {});
 
-      const timeoutMs = options.timeoutMs ?? 180_000;
+      const timeoutMs = profile?.timeoutMs ?? options.timeoutMs ?? 180_000;
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       const deadline = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(

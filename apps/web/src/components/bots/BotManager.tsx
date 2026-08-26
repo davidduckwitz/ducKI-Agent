@@ -18,6 +18,8 @@ interface ChatMessage {
   stalled?: boolean;
 }
 
+const EDITABLE_SYSTEM_BOTS = new Set(["frontend-developer", "backend-infrastructure", "explorer"]);
+
 export function BotManager() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -187,7 +189,7 @@ export function BotManager() {
                     </Badge>
                   ) : null}
                 </div>
-                {!bot.isBuiltIn ? (
+                {!bot.isBuiltIn || EDITABLE_SYSTEM_BOTS.has(bot.slug) ? (
                   <div className="flex shrink-0 items-center">
                     <Button
                       variant="ghost"
@@ -200,16 +202,18 @@ export function BotManager() {
                     >
                       <Pencil className="size-4" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (confirm(t("bots.confirmDelete").replace("{name}", bot.name))) deleteMutation.mutate(bot.slug);
-                      }}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
+                    {!bot.isBuiltIn ? (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(t("bots.confirmDelete").replace("{name}", bot.name))) deleteMutation.mutate(bot.slug);
+                        }}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

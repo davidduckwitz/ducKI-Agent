@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerQuery } from "../../lib/useServerQuery";
 import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
-import { Check, FolderPlus, Search, Upload, X } from "lucide-react";
+import { Check, ExternalLink, FolderPlus, Globe2, RefreshCw, Search, Upload, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useCodingSession } from "../../lib/codingSessionStore";
@@ -27,7 +27,7 @@ export function CodingSidebarPanel() {
     command,
     runCommand,
   } = useCodingSession();
-  const { filesOpen, toggleSection, setSection } = useUiStore();
+  const { filesOpen, toggleSection, setSection, openBrowserUrl } = useUiStore();
 
   const [filter, setFilter] = useState("");
   const [newFilePath, setNewFilePath] = useState("");
@@ -84,6 +84,18 @@ export function CodingSidebarPanel() {
 
   const dirtyPaths = useMemo(() => new Set(Object.keys(drafts)), [drafts]);
   const files = filesQuery.data?.files ?? [];
+  const projectIndex = files.find((file) => file.type === "file" && file.path.toLowerCase() === "index.html");
+  const projectPreviewUrl = selectedProject && projectIndex
+    ? `${api.coding.previewUrl(selectedProject, projectIndex.path)}?v=${encodeURIComponent(projectIndex.updatedAt ?? "0")}`
+    : "";
+
+  // Always open/refresh index.html in the real browser session whenever it exists —
+  // on project selection and again after every save (projectPreviewUrl changes with
+  // the file's updatedAt).
+  useEffect(() => {
+    if (!projectPreviewUrl) return;
+    openBrowserUrl(projectPreviewUrl);
+  }, [projectPreviewUrl, openBrowserUrl]);
 
   if (!codingSettingReady || !codingEnabled) return null;
 
@@ -207,6 +219,47 @@ export function CodingSidebarPanel() {
               emptyLabel={t("codingPage.noFiles")}
               noMatchLabel={t("codingPage.noMatchingFiles")}
             />
+          </div>
+
+          <div className="overflow-hidden rounded-md border border-border bg-background">
+            <div className="flex h-8 items-center gap-1 border-b border-border px-2">
+              <Globe2 className="h-3.5 w-3.5 text-primary" />
+              <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{t("codingPage.livePreview")}</span>
+              <button
+                type="button"
+                onClick={() => openBrowserUrl(projectPreviewUrl)}
+                disabled={!projectPreviewUrl}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"
+                title={t("codingPage.openInLiveBrowser")}
+              >
+                <RefreshCw className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => window.open(projectPreviewUrl, "_blank", "noopener,noreferrer")}
+                disabled={!projectPreviewUrl}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-35"
+                title={t("codingPage.realPreview")}
+              >
+                <ExternalLink className="h-3 w-3" />
+              </button>
+            </div>
+            <div className="flex h-14 items-center justify-center px-3 text-center text-[11px] text-muted-foreground">
+              {projectPreviewUrl
+                ? t("codingPage.livePreviewInSidebar")
+                : filesQuery.isLoading
+                  ? t("common.loading")
+                  : t("codingPage.noIndexHtml")}
+            </div>
+            <button
+              type="button"
+              onClick={() => openBrowserUrl(projectPreviewUrl)}
+              disabled={!projectPreviewUrl}
+              className="flex w-full items-center justify-center gap-1.5 border-t border-border px-2 py-1.5 text-[11px] font-medium text-primary transition hover:bg-accent disabled:opacity-35"
+            >
+              <Globe2 className="h-3.5 w-3.5" />
+              {t("codingPage.navigateToPreview")}
+            </button>
           </div>
 
           {!newFileOpen && (

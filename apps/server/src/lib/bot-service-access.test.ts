@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { BotService } from "./bot-service.js";
+import {
+  BACKEND_INFRASTRUCTURE_BOT_SLUG,
+  BotService,
+  FRONTEND_DEVELOPER_BOT_SLUG,
+} from "./bot-service.js";
 
 function baseDeps(db: any, runtimeTools: any[] = []) {
   return {
@@ -48,6 +52,55 @@ const probeTool = {
 } as any;
 
 describe("BotService access policy", () => {
+  it("seeds editable coding specialists once with constrained default access", async () => {
+    const rows = new Map<string, any>();
+    const db = {
+      getBot: vi.fn(async (slug: string) => rows.get(slug)),
+      createBot: vi.fn(async (row: any) => {
+        rows.set(row.slug, row);
+        return row;
+      }),
+    } as any;
+    const service = new BotService(baseDeps(db));
+
+    await service.ensureBuiltinBots();
+    await service.ensureBuiltinBots();
+
+    const frontend = rows.get(FRONTEND_DEVELOPER_BOT_SLUG);
+    const backend = rows.get(BACKEND_INFRASTRUCTURE_BOT_SLUG);
+    expect(frontend.systemPrompt).toContain("frontend specialist");
+    expect(backend.systemPrompt).toContain("backend and project-infrastructure specialist");
+    expect(JSON.parse(frontend.toolWhitelist)).toContain("filesystem");
+    const explorer = rows.get("explorer");
+    expect(explorer.systemPrompt).toContain("Search efficiently");
+    expect(JSON.parse(explorer.toolWhitelist)).toEqual(["filesystem"]);
+    expect(db.createBot).toHaveBeenCalledTimes(5);
+  });
+
+  it("allows specialist built-ins to be improved but keeps core built-ins immutable", async () => {
+    const updateBot = vi.fn(async (_slug: string, patch: any) => patch);
+    const specialist = customBot({ slug: FRONTEND_DEVELOPER_BOT_SLUG, isBuiltIn: 1 });
+    const db = { getBot: vi.fn(async () => specialist), updateBot } as any;
+    const service = new BotService(baseDeps(db));
+
+    await service.updateBot(FRONTEND_DEVELOPER_BOT_SLUG, {
+      systemPrompt: "Improved persona",
+      skillWhitelist: ["coding-system"],
+      toolWhitelist: ["filesystem"],
+    });
+    expect(updateBot).toHaveBeenCalledWith(
+      FRONTEND_DEVELOPER_BOT_SLUG,
+      expect.objectContaining({
+        systemPrompt: "Improved persona",
+        skillWhitelist: JSON.stringify(["coding-system"]),
+        toolWhitelist: JSON.stringify(["filesystem"]),
+      })
+    );
+
+    db.getBot.mockResolvedValue(customBot({ slug: "main", isBuiltIn: 1 }));
+    await expect(service.updateBot("main", { systemPrompt: "no" })).rejects.toThrow("cannot be edited");
+  });
+
   it("stores new bots fail-closed when skills/tools are omitted", async () => {
     const createBot = vi.fn(async (row: any) => ({ id: 1, ...row }));
     const db = {

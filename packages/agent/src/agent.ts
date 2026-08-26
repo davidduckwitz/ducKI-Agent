@@ -278,6 +278,9 @@ The filesystem tool's "read" action prefixes every line as "<n>: content". Those
 part of the file:
 - When passing text back to "edit" as oldString, copy only what comes AFTER "<n>: ".
 - When writing content with "write"/"append", never include them - doing so corrupts the file.
+- Write/append bodies are already delimited by [TOOL:...] and [/TOOL]. NEVER wrap file content
+  in <<< / >>>, Markdown fences, BEGIN/END markers, or quotes; those wrappers would become bytes
+  in the file.
 - Use them to target the next read (offset) and to map an error like "app.ts(42,5)" onto a line.
 - For a large file, "outline" lists its functions/classes with line numbers for a fraction of the
   tokens of a full read; read only the region you actually need afterwards.
@@ -1523,10 +1526,13 @@ export class Agent {
   }
 
   private isDateTimeIntent(input: string): boolean {
-    const normalizedInput = input.toLowerCase();
+    const normalizedInput = input.toLowerCase().trim();
     // "wieviel Uhr"/"wie spät" are at least as common as "Uhrzeit" in natural German but
     // don't contain that compound word, so they were previously invisible to this check.
-    return /(welcher\s*tag|welchen\s*tag|wochentag|heute|datum|uhrzeit|wie\s*viel\s*uhr|wie\s*spät|date|time|day\s+is\s+it|what\s+day\s+is\s+it)/.test(normalizedInput);
+    // Do not match bare "time"/"date" inside coding goals (runtime, date picker, world clock).
+    // Those used to execute the date pre-flight on every CodingAgent macro attempt.
+    return /(?:^|\b)(?:welcher\s+tag|welchen\s+tag|welcher\s+wochentag|heute(?:s\s+datum)?|aktuelles?\s+datum|aktuelle\s+uhrzeit|wie\s+viel\s+uhr|wie\s+spät|what(?:'s|\s+is)\s+(?:the\s+)?(?:current\s+)?(?:date|time|day)|what\s+day\s+is\s+it|current\s+(?:date|time)|time\s+now|today(?:'s\s+date)?)(?:\b|$)/i.test(normalizedInput)
+      || /^(?:date|time|now|today|datum|uhrzeit|wochentag)[?!.\s]*$/i.test(normalizedInput);
   }
 
   private tokenOverlapCount(input: string, skill: SkillManifest): number {
@@ -4794,52 +4800,25 @@ export class Agent {
     // This ensures the agent has ground truth before reasoning
 
     // Detect queries needing current date/time
-    const dateTimePattern = /\b(current|today|what is the|what time)?\s*(date|time|now|today's date)\b/i;
-    const needsDateTime = dateTimePattern.test(userInput);
+    const needsDateTime = this.isDateTimeIntent(userInput);
 
     if (needsDateTime) {
       try {
-        // Execute 'date' command automatically for time queries
-        // Use the executor which handles tool invocation properly
-        const dateResult = await this.executor.execute("shell", { command: "date" });
+        // Node reads the host clock directly. Spawning the generic shell here routed through
+        // WSL on Windows, added seconds to every attempt, and polluted otherwise valid output
+        // with PATH-translation warnings such as "Failed to translate B:\\Zed\\bin".
+        const now = new Date();
+        const dateOutput = `${now.toString()}\nISO: ${now.toISOString()}`;
+        const dateMessage: LLMMessage = {
+          role: "system",
+          content: `GROUND TRUTH - CURRENT SYSTEM DATE/TIME (captured before reasoning):\n${dateOutput}`,
+        };
+        await this.conversation.addMessage(dateMessage);
 
-        if (dateResult) {
-          // Handle different result formats from executor
-          let dateOutput = "";
-
-          if (typeof dateResult === "string") {
-            dateOutput = dateResult;
-          } else if (typeof dateResult === "object") {
-            const result = dateResult as any;
-            // Executor returns {output, exitCode, shell} for shell commands
-            if (result.output && typeof result.output === "string") {
-              dateOutput = result.output;
-            } else if (result.data && typeof result.data === "string") {
-              dateOutput = result.data;
-            } else if (result.stdout && typeof result.stdout === "string") {
-              dateOutput = result.stdout;
-            } else if (result.result && typeof result.result === "string") {
-              dateOutput = result.result;
-            } else if (result.success === true && result.data) {
-              // If it's a ToolResult object with success flag
-              dateOutput = typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2);
-            }
-          }
-
-          if (dateOutput.trim()) {
-            // Add the date/time result to conversation BEFORE LLM sees it
-            const dateMessage: LLMMessage = {
-              role: "system",
-              content: `GROUND TRUTH - CURRENT SYSTEM DATE/TIME (executed before reasoning):\n${dateOutput.trim()}`,
-            };
-            await this.conversation.addMessage(dateMessage);
-
-            this.logger.info("[PRE-FLIGHT] Injected current date/time before LLM inference", {
-              output: dateOutput,
-              query: userInput,
-            });
-          }
-        }
+        this.logger.info("[PRE-FLIGHT] Injected current date/time before LLM inference", {
+          output: dateOutput,
+          query: userInput,
+        });
       } catch (error) {
         this.logger.warn("[PRE-FLIGHT] Failed to execute date tool", {
           error: error instanceof Error ? error.message : String(error),
@@ -5351,7 +5330,7 @@ export class Agent {
     if (toolCalls.length === 0) {
       this.logger.info("[TOOL-CALLS] No tool calls found, skipping execution");
       // Still clean the response to remove any markers (even if unparsed)
-      const cleanedResponse = response
+      const cleanedResponse = this.stripLeakedToolCallJson(response
         .replace(/\[TOOL:[A-Za-z_][A-Za-z0-9_\-]*[^\]\n(){}]*\]\r?\n[\s\S]*?\r?\n?\[\/TOOL\]/g, "") // Remove heredoc write blocks
         .replace(/\[\/TOOL\]/g, "")                           // Remove any stray heredoc terminators
         .replace(/\[TOOL:[^\]]*\]/g, "")                     // Remove [TOOL:...] markers
@@ -5360,7 +5339,7 @@ export class Agent {
         .replace(/<channel\|>/g, "")                          // Remove <channel|> end markers
         .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
         .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove other <|...> markers
-        .trim();
+        .trim());
       return { resultMap, cleanedResponse, browserToolsCount: 0, journalEntries, executedCalls: [] };
     }
 
@@ -5968,7 +5947,7 @@ export class Agent {
       toolCallMarkerCount: (response.match(/<\|tool_call>|<tool_call\|>/g) || []).length,
     });
 
-    const cleanedResponse = response
+    const cleanedResponse = this.stripLeakedToolCallJson(response
       .replace(/\[TOOL:[A-Za-z_][A-Za-z0-9_\-]*[^\]\n(){}]*\]\r?\n[\s\S]*?\r?\n?\[\/TOOL\]/g, "") // Remove heredoc write blocks
       .replace(/\[\/TOOL\]/g, "")                           // Remove any stray heredoc terminators
       .replace(/\[TOOL:[^\]]*\]/g, "")                     // Remove [TOOL:...] markers
@@ -5977,7 +5956,7 @@ export class Agent {
       .replace(/<channel\|>/g, "")                          // Remove <channel|> end markers
       .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
       .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove remaining <|...> markers
-      .trim();
+      .trim());
 
     this.logger.info("[TOOL-CALLS] Response cleanup complete", {
       cleanedLength: cleanedResponse.length,
@@ -6017,6 +5996,27 @@ export class Agent {
   private meetsMinComplexity(complexity: "low" | "medium" | "high", min: "low" | "medium" | "high"): boolean {
     const rank = { low: 1, medium: 2, high: 3 };
     return rank[complexity] >= rank[min];
+  }
+
+  /**
+   * Some models, instead of using the supported native tool_calls or the `[TOOL:...]` heredoc
+   * marker, occasionally emit a bare `{"function": "name", "arguments": {...}}` JSON object as
+   * their entire response - imitating the OpenAI tool_calls wire shape in plain text. Neither
+   * marker-stripping regex above recognises that shape, so it used to pass straight through as
+   * "cleaned" text and get shown/persisted as if the model had actually replied in prose (see
+   * the "Reasoning" event rows showing raw `{"function": ...}` JSON). It is unrecognised, not
+   * executed - a whole-response match is stripped to empty rather than executed as a real tool
+   * call, since a lenient partial-text match would risk firing on a JSON example embedded in
+   * otherwise legitimate prose.
+   */
+  private stripLeakedToolCallJson(cleanedResponse: string): string {
+    if (!/^\{[\s\S]*\}$/.test(cleanedResponse)) return cleanedResponse;
+    const match = /^\{\s*"function"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*\}\s*\}$/.exec(cleanedResponse);
+    if (!match) return cleanedResponse;
+    this.logger.warn("Stripped a leaked bare tool-call JSON from the model's response - it used neither native tool_calls nor the [TOOL:...] marker", {
+      response: cleanedResponse.slice(0, 300),
+    });
+    return "";
   }
 
   /** Compile evidence (assistant text + tool results) for verifying one checklist step.
@@ -6544,7 +6544,7 @@ export class Agent {
       content: await this.buildUserTurnContent(effectiveInput, options.attachments),
       metadata: Object.keys(userMetadata).length > 0 ? userMetadata : undefined,
     };
-    await this.conversation.addMessage(userMessage);
+    await this.conversation.addMessage(userMessage, options.displayContent);
     this.history.add(userMessage);
 
     let activeSkills: SkillSummary[];
@@ -6782,7 +6782,7 @@ export class Agent {
     let conversationSummaryContext = "";
     if (effectiveMode === "full") {
       const allConversationMessages = this.conversation.getMessages();
-      if (this.conversationCompressor.shouldCompress(allConversationMessages.length)) {
+      if (this.conversationCompressor.shouldCompress(allConversationMessages)) {
         try {
           const { summaries } = await this.conversationCompressor.buildCompressedContext(allConversationMessages, 20);
           if (summaries.length > 0) {
@@ -7713,7 +7713,12 @@ export class Agent {
 
       // CRITICAL: Detect and handle empty responses after tool execution
       // This is a common issue with smaller/local models that go silent after seeing tool results
-      const responseIsEmpty = response.trim().length === 0;
+      // Native function-calling models normally return content:"" together with toolCalls.
+      // That is an actionable response, not silence. Retrying here used to overwrite
+      // currentNativeToolCalls inside generateFromMessages(), silently dropping the first call;
+      // the replacement call then looked like "the second one works" in the timeline.
+      const hasNativeToolCalls = (currentNativeToolCalls?.length ?? 0) > 0;
+      const responseIsEmpty = response.trim().length === 0 && !hasNativeToolCalls;
       if (responseIsEmpty && toolsJustExecuted && !emptyResponseAfterTools && iterations < adjustedControls.maxIterations) {
         this.logger.warn("[RUNLOOP] Model returned empty response after tool execution, attempting recovery", {
           iteration: iterations,
@@ -7803,10 +7808,24 @@ export class Agent {
       if (options.localMessageId) {
         assistantMetadata.localMessageId = options.localMessageId;
       }
+      // Echo native calls in the assistant history with the SAME ids used by the execution
+      // pipeline below. OpenAI-compatible providers require this assistant->tool linkage;
+      // otherwise tool results are downgraded to generic user text and are easier for small
+      // models to ignore. Native calls precede text-parsed calls in the merged/deduped list,
+      // so their batch ids are deterministic here.
+      const protocolNativeToolCalls = currentNativeToolCalls && currentNativeToolCalls.length > 0
+        ? currentNativeToolCalls
+            .filter((call, index, all) => all.findIndex((candidate) =>
+              candidate.function.name === call.function.name &&
+              candidate.function.arguments === call.function.arguments
+            ) === index)
+            .map((call, index) => ({ ...call, id: `batch_${iterations}_${index}` }))
+        : undefined;
       const assistantMessage: LLMMessage = {
         role: "assistant",
         content: response,
         metadata: assistantMetadata,
+        ...(protocolNativeToolCalls ? { toolCalls: protocolNativeToolCalls } : {}),
       };
       await this.conversation.addMessage(assistantMessage);
       this.history.add(assistantMessage);
@@ -8287,8 +8306,9 @@ export class Agent {
             `[TOOL:filesystem action=list path="."]\n[/TOOL]\n` +
             `or:\n` +
             `[TOOL:filesystem action=read path=<the file path>]\n[/TOOL]\n\n` +
-            `If you need to edit a file:\n` +
-            `[TOOL:filesystem action=edit path=<the file path>]\n<<<\n<the exact oldString to replace>\n>>>\n<the newString replacement>\n[/TOOL]\n\n` +
+            `If you need to edit a file, use a structured call (the old/new strings are fields, not wrapper blocks):\n` +
+            `[TOOL:filesystem({"action":"edit","path":"<the file path>","oldString":"<exact existing text>","newString":"<replacement text>"})]\n` +
+            `For write/append, NEVER place <<< or >>> around the file content.\n\n` +
             `If you need to check your status:\n` +
             `[TOOL:status]\n[/TOOL]\n\n` +
             `Do not announce, do not preview, do not promise — EXECUTE now.`;

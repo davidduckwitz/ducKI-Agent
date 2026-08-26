@@ -3,11 +3,12 @@ import type { CodingAgent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import type { AgentEventEmitter } from "@ducki/agent";
-import { isAbortError } from "@ducki/providers";
+import { isAbortError, type LLMProvider } from "@ducki/providers";
 import { EventEmitter } from "node:events";
 import { agentRegistry } from "../lib/agent-registry.js";
 import { registerCodingRun, unregisterCodingRun } from "../lib/coding-run-registry.js";
 import { notifyCodingRunFinished } from "../lib/coding-notify.js";
+import { loadProviderFromSettings } from "../lib/provider-settings.js";
 
 export const codingAgentRouter: IRouter = Router();
 
@@ -66,10 +67,11 @@ codingAgentRouter.use(async (req, res, next) => {
 codingAgentRouter.post("/run", async (req, res, next) => {
   try {
     const createCodingAgent = req.app.locals["createCodingAgent"] as
-      | ((options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: AgentEventEmitter }) => CodingAgent)
+      | ((options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: AgentEventEmitter; provider?: LLMProvider; exploreTimeoutMs?: number }) => CodingAgent)
       | undefined;
     const io = req.app.locals["io"];
     const db = req.app.locals["db"] as DatabaseService;
+    const logger = req.app.locals["logger"] as { warn: (msg: string, meta?: unknown) => void } | undefined;
 
     if (!createCodingAgent) {
       res.status(500).json(createApiError("Coding agent factory is not configured"));
@@ -87,6 +89,9 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       maxIterations?: number;
       stepCount?: number;
       conversationId?: number;
+      /** From the coding chat's LLM selector - unset means "use the system default provider". */
+      provider?: string;
+      model?: string;
     };
     const goal = String(body.goal ?? "").trim();
     if (!goal) {
@@ -94,15 +99,43 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       return;
     }
 
+    // Same settings-backed resolution the /provider-models list and the main chat agent use
+    // (loadProviderFromSettings) - NOT a bare createProvider(), which has no baseUrl/apiKey and
+    // would silently fall back to http://localhost:1234 regardless of what LM Studio/Ollama/etc.
+    // is actually configured to run on, sending the request to the wrong (or no) server.
+    // Unresolvable falls back to the system default rather than failing the run.
+    let providerOverride: LLMProvider | undefined;
+    if (body.provider && body.model) {
+      try {
+        providerOverride = (await loadProviderFromSettings(db, { providerName: body.provider, model: body.model })).provider;
+      } catch (error) {
+        logger?.warn("Could not create coding-agent provider override, falling back to the system default", {
+          provider: body.provider,
+          model: body.model,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     // Iteration/attempt/timeout budgets come from the persisted /settings > Agenten values so the
     // settings page is authoritative. stepCount (sent by the frontend) picks the tier; a client
     // maxIterations is only a last-resort fallback for older clients.
     const maxIterationsPerAttempt = await resolveCodingIterations(db, body.stepCount, body.maxIterations);
     const maxAttempts = parseIntSetting(await db.getSetting("CODING_AGENT_MAX_ATTEMPTS"), body.maxAttempts ?? 3);
-    // Default 5 minutes (300000ms) - the same value the settings UI displays as the standard.
-    // Previously the fallback was 0 (= no wall-clock limit at all), so a run that never
-    // converged could loop for hours unless the user had explicitly saved the setting.
-    const timeoutMs = parseIntSetting(await db.getSetting("CODING_AGENT_TIMEOUT_MS"), 300000);
+    // Default 30 minutes (1800000ms) - generous on purpose. Previously 5 minutes, which a slow
+    // local model could burn through inside a SINGLE attempt (each iteration is a full LLM
+    // round-trip plus tool calls), killing the whole run before CodingAgent's own guardrail-
+    // triggered retry (a corrected attempt 2) ever got to run. maxAttempts/maxIterations already
+    // bound how much work happens; this is meant as an outer safety net against a truly hung
+    // run, not a tight per-minute budget - see agent-model-profiles.ts for the same reasoning
+    // applied to the profile-specific values.
+    const timeoutMs = parseIntSetting(await db.getSetting("CODING_AGENT_TIMEOUT_MS"), 1_800_000);
+    // Same reasoning as timeoutMs above, applied to the explore sub-agent's own per-call budget:
+    // this used to be hardcoded to 3 minutes (DUCKI_EXPLORE_TIMEOUT_MS env var or 180000), never
+    // actually wired to a DB setting at all, so a slow local model routinely hit "Exploration
+    // timed out after 180000ms" mid-run regardless of the CODING_AGENT_TIMEOUT_MS/profile tuning
+    // above. Default raised to 10 minutes.
+    const exploreTimeoutMs = parseIntSetting(await db.getSetting("CODING_AGENT_EXPLORE_TIMEOUT_MS"), 600_000);
 
     // A run started from an existing chat continues IN that chat instead of opening a second
     // session for it. Validated here rather than trusted: a bogus id would otherwise surface
@@ -143,7 +176,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         // still land in the DB via persistEvent and appear on reload.
         const cid = emitConversationId;
         if (io && cid !== undefined) {
-          io.to(`chat:${cid}`).emit("chat:event", {
+          io.to(`conversation:${cid}`).emit("chat:event", {
             type: event.type,
             message: event.message,
             data: event.data,
@@ -155,12 +188,14 @@ codingAgentRouter.post("/run", async (req, res, next) => {
     };
 
     const codingAgent = createCodingAgent({
+      ...(providerOverride ? { provider: providerOverride } : {}),
       // When only the project slug is provided (follow-up chat), use it as sandboxRoot;
       // the factory resolves it against CODING_ROOT. An explicit sandboxRoot from a plan
       // execution or initial run still wins.
       sandboxRoot: body.sandboxRoot ?? body.project,
       maxIterations: maxIterationsPerAttempt,
       eventEmitter: phaseEventEmitter,
+      exploreTimeoutMs,
     });
 
     // Same registration this route lacked entirely before: without it, this run was invisible
@@ -175,6 +210,15 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         maxAttempts,
         ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),
         ...(timeoutMs > 0 ? { timeoutMs } : {}),
+        // Same chat:chunk channel/room the regular chat agent streams into - the frontend
+        // store already accumulates these into `streamingContent` and shows them in the
+        // "currently writing" bubble, with no coding-specific UI changes needed for this.
+        onChunk: (chunk) => {
+          const cid = emitConversationId;
+          if (io && cid !== undefined) {
+            io.to(`conversation:${cid}`).emit("chat:chunk", { content: chunk, conversationId: cid });
+          }
+        },
         onConversationStarted: (conversationId) => {
           emitConversationId = conversationId;
           runConversationId = conversationId;
@@ -186,8 +230,8 @@ codingAgentRouter.post("/run", async (req, res, next) => {
           });
           // Emit chat:start so the frontend store's isLoading flips to true.
           if (io) {
-            io.to(`chat:${conversationId}`).emit("coding_agent_started", { conversationId });
-            io.to(`chat:${conversationId}`).emit("chat:start", {
+            io.to(`conversation:${conversationId}`).emit("coding_agent_started", { conversationId });
+            io.to(`conversation:${conversationId}`).emit("chat:start", {
               timestamp: new Date().toISOString(),
               conversationId,
             });
@@ -197,7 +241,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
 
       // Emit chat:complete so the frontend store's isLoading flips back to false.
       if (io && emitConversationId !== undefined) {
-        io.to(`chat:${emitConversationId}`).emit("chat:complete", {
+        io.to(`conversation:${emitConversationId}`).emit("chat:complete", {
           response: result.summary,
           conversationId: emitConversationId,
         });

@@ -44,7 +44,7 @@ export function CodingPlanPanel({
   const [refinedPlan, setRefinedPlan] = useState<Plan | null>(null);
   const settingsQuery = useSettings();
   const autoExecuteEnabled = readFlag(settingsQuery.data, "PLAN_MODE_AUTO_EXECUTE");
-  const codingTimeoutMs = readNumber(settingsQuery.data, "CODING_AGENT_TIMEOUT_MS", 300000);
+  const codingTimeoutMs = readNumber(settingsQuery.data, "CODING_AGENT_TIMEOUT_MS", 1_800_000);
 
   const { plan: derivedPlan } = useMemo<{ plan: Plan | null; planIndex: number }>(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {

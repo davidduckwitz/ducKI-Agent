@@ -7,6 +7,7 @@ import { getPluginLLMProviders, listActiveProviderModels, loadProviderFromSettin
 interface Model {
   id: string;
   name: string;
+  contextLength?: number;
 }
 
 export function createProviderModelsRouter(db: DatabaseService): IRouter {

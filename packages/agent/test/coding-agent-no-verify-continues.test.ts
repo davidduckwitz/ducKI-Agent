@@ -64,6 +64,94 @@ afterEach(() => {
 });
 
 describe("CodingAgent continues when there's no verifyCommand and the checklist is unfinished", () => {
+  it("does not loop on the same ungrounded step announcement or run date preflight for coding-time text", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-repeated-announcement-"));
+    sandboxes.push(sandbox);
+    const provider = scriptedProvider([
+      PLAN_JSON,
+      "Step 2: Create main.js with a world-clock runtime",
+      "Step 2: Create main.js with a world-clock runtime",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    expect((codingAgent as any).agent.isDateTimeIntent("Create a world clock that displays time")).toBe(false);
+    expect((codingAgent as any).agent.isDateTimeIntent("What is the current time?")).toBe(true);
+
+    const result = await codingAgent.run("Create a world clock that displays time", { maxAttempts: 3 });
+
+    expect(result.attempts).toBe(2);
+    expect(result.verified).toBe(false);
+  }, 20000);
+
+  it("continues an explicit EXPLORE-to-EDIT transition before the first file change", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-explore-edit-transition-"));
+    sandboxes.push(sandbox);
+    const provider = scriptedProvider([
+      PLAN_JSON,
+      "Step 2: Create main.js with Phaser config and BootScene",
+      "[TOOL:filesystem action=write path=main.js]\nconst game = {};\n[/TOOL]",
+      '[TOOL:todo({"action":"write","items":[{"title":"Write index.html","status":"done"},{"title":"Verify it works","status":"done"}]})]',
+      "Fertig.",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    const result = await codingAgent.run("build a static world clock page", { maxAttempts: 3 });
+
+    expect(result.attempts).toBe(2);
+    expect(result.success).toBe(true);
+    expect(result.summary).toContain("Fertig");
+  }, 20000);
+
+  it("reconciles an explicit next-step transition with the checklist and plan", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-step-reconcile-"));
+    sandboxes.push(sandbox);
+    const prompts: string[] = [];
+    const scripted = [
+      PLAN_JSON,
+      "[TOOL:filesystem action=write path=index.html]\n<html></html>\n[/TOOL]",
+      "Step 2: Verify it works",
+      "[TOOL:todo action=update id=2 status=done]",
+      "Fertig.",
+    ];
+    let index = 0;
+    const provider = {
+      model: "test-model",
+      generate: async (messages: Array<{ role: string; content: string }>) => {
+        prompts.push(
+          messages
+            .filter((message) => message.role === "user")
+            .map((message) => message.content)
+            .join("\n\n"),
+        );
+        return {
+          content: scripted[Math.min(index++, scripted.length - 1)]!,
+          model: "test-model",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+        };
+      },
+      supportsStreaming: () => false,
+    } as any;
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    const result = await codingAgent.run("build a static world clock page", { maxAttempts: 3 });
+
+    expect(result.attempts).toBe(2);
+    const todos = (codingAgent as any).todos.snapshot();
+    expect(todos.map((item: { status: string }) => item.status)).toEqual(["done", "done"]);
+    expect((codingAgent as any).currentPlan.steps.map((step: { status: string }) => step.status)).toEqual([
+      "completed",
+      "completed",
+    ]);
+    const continuation = prompts.find((prompt) => prompt.includes("structured checklist steps were still open"));
+    expect(continuation).toContain("[x] 1. Write index.html");
+    expect(continuation).toContain("[~] 2. Verify it works");
+    expect(continuation).not.toContain("did not pass verification");
+  }, 20000);
+
   it("does not finalize while the checklist still has open steps", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-no-verify-"));
     sandboxes.push(sandbox);

@@ -82,6 +82,20 @@ export function getApiBaseUrl(config: BackendConfig = readBackendConfig()): stri
 }
 
 /**
+ * getApiBaseUrl() as a fully absolute URL, even in browser+local mode where it normally
+ * returns the relative "/api" (fine for same-origin `fetch`, but not for a URL handed to
+ * something outside the page's own resolution context - e.g. the server's internal browser
+ * session, navigated via a backend Playwright/CDP call that has no "current page" to resolve
+ * a relative URL against).
+ */
+export function getAbsoluteApiBaseUrl(config: BackendConfig = readBackendConfig()): string {
+  const base = getApiBaseUrl(config);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(base)) return base;
+  if (typeof window === "undefined") return base;
+  return `${window.location.origin}${base}`;
+}
+
+/**
  * Absolute (or same-origin) URL for a plugin's embedded UI page. Must be built from the
  * resolved API base, not a hardcoded "/api/…": in the desktop app a relative "/api/…" iframe
  * src resolves against the Tauri app origin (tauri://localhost) and loads the bundled SPA

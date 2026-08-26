@@ -168,6 +168,7 @@ export async function loadProviderFromSettings(db: DatabaseService, override: Pr
 export interface AvailableProviderModel {
   id: string;
   name: string;
+  contextLength?: number;
 }
 
 /**
@@ -187,7 +188,10 @@ export async function listActiveProviderModels(db: DatabaseService): Promise<{
   }
 
   const listed = await provider.listModels();
-  const byId = new Map(listed.map((entry) => [entry.id.trim(), { id: entry.id.trim(), name: entry.name?.trim() || entry.id.trim() }]));
+  const byId = new Map(listed.map((entry) => [
+    entry.id.trim(),
+    { id: entry.id.trim(), name: entry.name?.trim() || entry.id.trim(), ...(entry.contextLength ? { contextLength: entry.contextLength } : {}) },
+  ]));
   if (activeModel && !byId.has(activeModel)) byId.set(activeModel, { id: activeModel, name: activeModel });
 
   return {

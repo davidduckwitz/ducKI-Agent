@@ -251,11 +251,20 @@ export function ChatContainer() {
   }, [conversationId]);
 
   useEffect(() => {
-    const total = messages.reduce((sum, msg) => {
-      const tokens = (msg.eventData?.totalTokens as number | undefined) ?? 0;
-      return sum + tokens;
-    }, 0);
-    setTotalTokens(total);
+    // eventData.totalTokens ("Cost usage updated") is the cost governor's RUNNING total across
+    // every call so far, not a per-call delta - summing it across every message that carries it
+    // added each iteration's cumulative total to the next, inflating the chip far past the real
+    // count (worse still if an iteration ever emits the event more than once). The latest one
+    // already IS the total.
+    let latest = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const tokens = messages[i]?.eventData?.totalTokens as number | undefined;
+      if (typeof tokens === "number") {
+        latest = tokens;
+        break;
+      }
+    }
+    setTotalTokens(latest);
   }, [messages]);
 
   useEffect(() => {

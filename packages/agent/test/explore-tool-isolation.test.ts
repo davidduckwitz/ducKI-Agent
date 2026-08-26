@@ -38,6 +38,29 @@ function stubProvider() {
  * Discord/Telegram messages) and the script tools (execute code).
  */
 describe("explore sub-agent isolation", () => {
+  it("loads a custom profile for each disposable run without granting extra tools", async () => {
+    const resolveProfile = vi.fn(async () => ({
+      provider: stubProvider(),
+      systemPrompt: "Prefer package boundaries.",
+      allowedSkillSlugs: ["coding-system"],
+    }));
+    const seenToolSets: string[][] = [];
+    const spy = vi.spyOn(Agent.prototype, "run").mockImplementation(async function (this: Agent) {
+      seenToolSets.push(this.executor.listTools().map((tool) => tool.name).sort());
+      return { response: "answer", iterations: 1, toolsUsed: [] } as any;
+    });
+
+    try {
+      const tool = createExploreTool(stubProvider(), stubDb(), { resolveProfile });
+      await tool.execute({ question: "where is the router?" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(resolveProfile).toHaveBeenCalledOnce();
+    expect(seenToolSets[0]).toEqual(["filesystem", "submit_solution"]);
+  });
+
   it("holds only filesystem and the completion tool", async () => {
     const seenToolSets: string[][] = [];
     const realRun = Agent.prototype.run;

@@ -134,6 +134,8 @@ export type { CodingFailureReflection, CodingFailureSnapshot, VerifyFailureUpdat
 export { CodingFailureReflector } from "./coding/failure-reflector.js";
 export type { CodingFailureReflectionInput } from "./coding/failure-reflector.js";
 export { createScopedFilesystemTool, sanitizeCodeContent } from "./coding/scoped-filesystem-tool.js";
+export { createScopedShellTool } from "./coding/scoped-shell-tool.js";
+export { createScopedDiagnosticsTool } from "./coding/scoped-diagnostics-tool.js";
 export { CODING_ALLOWED_SHELL_COMMANDS, condenseVerifyOutput } from "./coding/coding-agent.js";
 export {
   ensureCheckpointRepo,

@@ -192,6 +192,19 @@ export function extractFileContent(
 }
 
 /**
+ * Removes a model-invented outer file wrapper only when both markers occupy their own boundary
+ * lines. `<<<`/`>>>` inside source code, prose, comparison expressions, or incomplete wrappers
+ * are preserved. Some small models learned these delimiters from an old edit-recovery prompt and
+ * then incorrectly included them in every native/heredoc write payload.
+ */
+export function stripOuterFileBlockMarkers(content: string): string {
+  const wrapped = content.match(
+    /^[ \t]*(?:\r?\n[ \t]*)*<<<[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*>>>[ \t]*(?:\r?\n[ \t]*)*$/
+  );
+  return wrapped?.[1] ?? content;
+}
+
+/**
  * An empty file body is almost never what the model meant.
  *
  * The dominant producer is a TRUNCATED call: the model runs out of output budget partway
@@ -730,6 +743,9 @@ export const filesystemTool: ToolExecutor = {
       // second line of defense for native tool_call content that never went through the
       // heredoc boundary scanner in the first place.
       content = stripStopMarkers(content) as string;
+      if (action === "write" || action === "append") {
+        content = stripOuterFileBlockMarkers(content);
+      }
     }
 
     try {

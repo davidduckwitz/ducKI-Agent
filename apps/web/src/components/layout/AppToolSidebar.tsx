@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AppWindow, ArrowLeft, ArrowRight, ChevronRight, Clipboard, Download, Globe2, History, Loader2, PanelRightClose, Play, RefreshCw, RotateCw, TerminalSquare, Trash2 } from "lucide-react";
+import { AppWindow, ArrowLeft, ArrowRight, Bug, ChevronRight, Circle, Clipboard, Download, Globe2, History, Loader2, PanelRightClose, Play, RefreshCw, RotateCw, TerminalSquare, Trash2 } from "lucide-react";
 import { usePlugins, frontendPlugins } from "../../lib/usePlugins";
 import { useAppStore } from "../../lib/store";
 import { useUiStore, type AppSidebarTool } from "../../lib/uiStore";
@@ -28,18 +28,52 @@ function AppsList() {
 
 function BrowserTool() {
   const { socket, browserSessions, refreshBrowserSessions, controlBrowserSession } = useAppStore();
+  const navigationRequest = useUiStore((s) => s.browserNavigationRequest);
   const [selected, setSelected] = useState("");
   const [url, setUrl] = useState("https://");
   const [frame, setFrame] = useState<{ data: string; format: string; width?: number; height?: number }>();
   const [busy, setBusy] = useState(false);
   const [showTimeline, setShowTimeline] = useState(true);
+  const [showConsole, setShowConsole] = useState(false);
+  const [consoleBusy, setConsoleBusy] = useState(false);
+  const [consoleData, setConsoleData] = useState<{
+    pageErrors: Array<{ type: string; text: string; url: string; timestamp: string }>;
+    networkErrors: Array<{ url: string; method: string; error: string; timestamp: string }>;
+  }>({ pageErrors: [], networkErrors: [] });
   const pointerStart = useRef<{ x: number; y: number }>();
+  const handledNavigationNonce = useRef(0);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const activities = useBrowserActivityStore((s) => s.activities);
   const clearActivities = useBrowserActivityStore((s) => s.clearActivities);
+  const recordingEnabled = useBrowserActivityStore((s) => s.recordingEnabled);
+  const setRecordingEnabled = useBrowserActivityStore((s) => s.setRecordingEnabled);
   const sessionId = selected === "__new__" ? "" : selected || browserSessions[0]?.tabId || "";
   const timeline = activities.filter((item) => !sessionId || item.sessionId === sessionId);
   useEffect(() => { void refreshBrowserSessions(); }, [socket, refreshBrowserSessions]);
+  useEffect(() => {
+    if (!navigationRequest || navigationRequest.nonce === handledNavigationNonce.current) return;
+    handledNavigationNonce.current = navigationRequest.nonce;
+    let cancelled = false;
+    void (async () => {
+      setBusy(true);
+      setUrl(navigationRequest.url);
+      await refreshBrowserSessions();
+      if (cancelled) return;
+      const sessions = useAppStore.getState().browserSessions;
+      const preferredId = selected && selected !== "__new__" ? selected : sessions[0]?.tabId ?? "";
+      if (preferredId) {
+        await controlBrowserSession(preferredId, "goto", { url: navigationRequest.url });
+        if (!cancelled) setSelected(preferredId);
+      } else {
+        const result = await controlBrowserSession("default", "launch", { url: navigationRequest.url });
+        const id = String((result.data as { sessionId?: string } | undefined)?.sessionId ?? "");
+        if (!cancelled && id) setSelected(id);
+      }
+      await refreshBrowserSessions();
+      if (!cancelled) setBusy(false);
+    })().catch(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, [navigationRequest, selected, refreshBrowserSessions, controlBrowserSession]);
   useEffect(() => {
     if (!socket || !sessionId) return;
     const onFrame = (next: { sessionId: string; data: string; format: string; width?: number; height?: number }) => { if (next.sessionId === sessionId) setFrame(next); };
@@ -73,6 +107,23 @@ function BrowserTool() {
     if (["history_back", "history_forward", "reload"].includes(action)) await refreshBrowserSessions();
     return result;
   };
+  // Pulls the same error buffer (console errors, page errors, failed requests) the coding
+  // agent reads via its browser tool's get_page_errors action - same session, so what the
+  // agent sees while testing and what this panel shows are identical.
+  const fetchConsole = async () => {
+    if (!sessionId) return;
+    setConsoleBusy(true);
+    const result = await browserAction("get_page_errors", {});
+    const data = result?.data as typeof consoleData | undefined;
+    if (data) setConsoleData({ pageErrors: data.pageErrors ?? [], networkErrors: data.networkErrors ?? [] });
+    setConsoleBusy(false);
+  };
+  const toggleConsole = () => {
+    const next = !showConsole;
+    setShowConsole(next);
+    if (next) void fetchConsole();
+  };
+  const consoleErrorCount = consoleData.pageErrors.length + consoleData.networkErrors.length;
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     event.currentTarget.focus(); pointerStart.current = point(event); event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -102,7 +153,44 @@ function BrowserTool() {
     <form onSubmit={(e) => { e.preventDefault(); void go(); }} className="flex gap-2 border-b border-border p-2"><input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" className="min-w-0 flex-1 rounded border border-border bg-background px-3 py-2 text-sm"/><button disabled={busy} className="rounded bg-primary px-3 text-primary-foreground disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Los"}</button></form>
     <div className="flex shrink-0 items-center gap-3 border-b border-cyan-500/20 bg-cyan-500/5 p-2"><span className="relative flex h-14 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-black/70">{frame ? <img src={`data:image/${frame.format};base64,${frame.data}`} alt="Das sieht dein Browser" className="h-full w-full object-cover"/> : <Globe2 className="h-5 w-5 text-cyan-300"/>}<span className="absolute right-1 top-1 h-2 w-2 animate-pulse rounded-full bg-cyan-400"/></span><span className="min-w-0"><span className="block text-xs font-semibold text-cyan-100">Das sieht dein Browser</span><span className="block truncate text-[10px] text-cyan-300/70">{current?.url || url || "Noch keine Seite"}</span><span className="block text-[10px] text-muted-foreground">Gemeinsame Session für dich und den Agenten</span></span></div>
     <div ref={surfaceRef} role="application" aria-label="Interaktiver Browser" tabIndex={0} onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onWheel={(event) => { event.preventDefault(); void browserAction("scroll_by", { deltaX: event.deltaX, deltaY: event.deltaY }); }} onKeyDown={handleKeyDown} onPaste={(event) => { const text = event.clipboardData.getData("text"); if (text) { event.preventDefault(); void browserAction("keyboard_type", { text }); } }} className="relative flex min-h-0 flex-1 cursor-default touch-none items-center justify-center overflow-hidden bg-black/80 outline-none focus:ring-2 focus:ring-primary/60">{frame ? <img draggable={false} src={`data:image/${frame.format};base64,${frame.data}`} className="pointer-events-none h-full w-full select-none object-contain" alt="Live Browser" /> : <div className="px-6 text-center text-sm text-muted-foreground">{sessionId ? "Browser wird verbunden …" : "URL eingeben, um eine gemeinsame Browser-Session zu starten."}</div>}<span className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/70 px-2 py-1 text-[10px] text-white/70">Klicken, ziehen, scrollen und tippen</span></div>
-    <div className="shrink-0 border-t border-border bg-card"><div className="flex items-center gap-1 px-2 py-1.5"><button onClick={() => setShowTimeline((value) => !value)} className="flex items-center gap-1.5 text-xs font-medium"><History className="h-3.5 w-3.5"/>Timeline <span className="rounded bg-muted px-1.5">{timeline.length}</span></button><div className="ml-auto flex gap-1"><button onClick={() => void navigator.clipboard.writeText(JSON.stringify(automationSteps, null, 2))} className="rounded p-1.5 hover:bg-accent" title="Automation kopieren"><Clipboard className="h-3.5 w-3.5"/></button><button onClick={exportAutomation} className="rounded p-1.5 hover:bg-accent" title="Automation exportieren"><Download className="h-3.5 w-3.5"/></button><button onClick={() => void replay()} disabled={busy || automationSteps.length === 0} className="rounded p-1.5 hover:bg-accent disabled:opacity-30" title="Timeline wiederholen"><Play className="h-3.5 w-3.5"/></button><button onClick={() => clearActivities(sessionId || undefined)} className="rounded p-1.5 hover:bg-accent" title="Timeline löschen"><Trash2 className="h-3.5 w-3.5"/></button></div></div>{showTimeline && <div className="max-h-36 overflow-auto border-t border-border px-2 py-1">{timeline.length === 0 ? <p className="py-2 text-center text-[11px] text-muted-foreground">Browseraktionen werden hier automatisch aufgezeichnet.</p> : timeline.slice().reverse().map((item: BrowserActivity) => <div key={item.id} className="flex items-start gap-2 border-b border-border/50 py-1 text-[10px]"><span className={`mt-0.5 rounded px-1 ${item.actor === "agent" ? "bg-violet-500/15 text-violet-400" : "bg-blue-500/15 text-blue-400"}`}>{item.actor === "agent" ? "Agent" : "Du"}</span><span className="min-w-0 flex-1 truncate" title={JSON.stringify(item.params)}>{item.action}</span><time className="text-muted-foreground">{new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>)}</div>}</div>
+    <div className="shrink-0 border-t border-border bg-card">
+      <div className="flex items-center gap-1 px-2 py-1.5">
+        <button onClick={() => setShowTimeline((value) => !value)} className="flex items-center gap-1.5 text-xs font-medium"><History className="h-3.5 w-3.5"/>Timeline <span className="rounded bg-muted px-1.5">{timeline.length}</span></button>
+        <button
+          onClick={() => setRecordingEnabled(!recordingEnabled)}
+          className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${recordingEnabled ? "text-red-500" : "text-muted-foreground"}`}
+          title={recordingEnabled ? "Aufzeichnung läuft - klicken zum Pausieren" : "Aufzeichnung pausiert - klicken zum Fortsetzen"}
+        >
+          <Circle className={`h-2.5 w-2.5 ${recordingEnabled ? "fill-current" : ""}`}/>
+          {recordingEnabled ? "Aufzeichnung an" : "Pausiert"}
+        </button>
+        <div className="ml-auto flex gap-1">
+          <button onClick={() => void navigator.clipboard.writeText(JSON.stringify(automationSteps, null, 2))} className="rounded p-1.5 hover:bg-accent" title="Automation kopieren"><Clipboard className="h-3.5 w-3.5"/></button>
+          <button onClick={exportAutomation} className="rounded p-1.5 hover:bg-accent" title="Automation exportieren"><Download className="h-3.5 w-3.5"/></button>
+          <button onClick={() => void replay()} disabled={busy || automationSteps.length === 0} className="rounded p-1.5 hover:bg-accent disabled:opacity-30" title="Timeline wiederholen"><Play className="h-3.5 w-3.5"/></button>
+          <button onClick={() => clearActivities(sessionId || undefined)} className="rounded p-1.5 hover:bg-accent" title="Timeline löschen"><Trash2 className="h-3.5 w-3.5"/></button>
+        </div>
+      </div>
+      {showTimeline && <div className="max-h-36 overflow-auto border-t border-border px-2 py-1">{timeline.length === 0 ? <p className="py-2 text-center text-[11px] text-muted-foreground">Browseraktionen werden hier automatisch aufgezeichnet.</p> : timeline.slice().reverse().map((item: BrowserActivity) => <div key={item.id} className="flex items-start gap-2 border-b border-border/50 py-1 text-[10px]"><span className={`mt-0.5 rounded px-1 ${item.actor === "agent" ? "bg-violet-500/15 text-violet-400" : "bg-blue-500/15 text-blue-400"}`}>{item.actor === "agent" ? "Agent" : "Du"}</span><span className="min-w-0 flex-1 truncate" title={JSON.stringify(item.params)}>{item.action}</span><time className="text-muted-foreground">{new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>)}</div>}
+      <div className="flex items-center gap-1 border-t border-border px-2 py-1.5">
+        <button onClick={toggleConsole} disabled={!sessionId} className="flex items-center gap-1.5 text-xs font-medium disabled:opacity-40">
+          <Bug className="h-3.5 w-3.5"/>Konsole {consoleErrorCount > 0 && <span className="rounded bg-red-500/15 px-1.5 text-red-500">{consoleErrorCount}</span>}
+        </button>
+        <div className="ml-auto flex gap-1">
+          <button onClick={() => void fetchConsole()} disabled={!sessionId || consoleBusy} className="rounded p-1.5 hover:bg-accent disabled:opacity-30" title="Konsole aktualisieren">{consoleBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin"/> : <RefreshCw className="h-3.5 w-3.5"/>}</button>
+        </div>
+      </div>
+      {showConsole && <div className="max-h-36 overflow-auto border-t border-border px-2 py-1 font-mono">
+        {consoleErrorCount === 0 ? (
+          <p className="py-2 text-center text-[11px] text-muted-foreground">Keine Konsolenfehler erfasst - der Agent liest denselben Puffer beim Testen.</p>
+        ) : (
+          <>
+            {consoleData.pageErrors.map((err, i) => <div key={`page-${i}`} className="border-b border-border/50 py-1 text-[10px]"><div className="flex items-start gap-2"><span className="mt-0.5 shrink-0 rounded bg-red-500/15 px-1 text-red-500">{err.type}</span><span className="min-w-0 flex-1 break-words text-foreground">{err.text}</span></div><div className="mt-0.5 flex items-center gap-2 text-muted-foreground"><span className="truncate">{err.url}</span><time className="shrink-0">{new Date(err.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div></div>)}
+            {consoleData.networkErrors.map((err, i) => <div key={`net-${i}`} className="border-b border-border/50 py-1 text-[10px]"><div className="flex items-start gap-2"><span className="mt-0.5 shrink-0 rounded bg-amber-500/15 px-1 text-amber-500">{err.method}</span><span className="min-w-0 flex-1 break-words text-foreground">{err.error}</span></div><div className="mt-0.5 flex items-center gap-2 text-muted-foreground"><span className="truncate">{err.url}</span><time className="shrink-0">{new Date(err.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div></div>)}
+          </>
+        )}
+      </div>}
+    </div>
   </div>;
 }
 

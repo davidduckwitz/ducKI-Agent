@@ -108,7 +108,7 @@ export function CodingWorkspace() {
   const { t } = useI18n();
   const qc = useQueryClient();
   const { resolvedMode } = useTheme();
-  const { messages, sendMessage, stopMessage, isLoading, streamingContent, setConversationId, setMessages } = useAppStore();
+  const { messages, sendMessage, stopMessage, isLoading, streamingContent, setConversationId, setMessages, chatProvider, chatModel } = useAppStore();
   // One in-flight promise per project slug. A boolean "am I creating?" flag only ever
   // protected the effect below from itself; the other two callers (sendCodingPrompt,
   // executePlan) checked the resolved map instead and happily started a SECOND create while
@@ -742,6 +742,8 @@ export function CodingWorkspace() {
     void api.coding
       .runFollowUp(selectedProject, text, ensuredConversationId, {
         includeFile: options.includeFile,
+        provider: chatProvider,
+        model: chatModel,
       })
       .catch((error) => {
         console.error("[sendCodingPrompt] Follow-up failed:", error);

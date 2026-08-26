@@ -13,7 +13,7 @@ import {
   clearIncompletePartSequences,
 } from "@ducki/tools";
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve, isAbsolute } from "node:path";
+import { join, resolve, isAbsolute, basename } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, AgentRunEventType, RunJournalEntry } from "../config/interfaces_types.js";
 import { AGENT_HOOK_NAMES, type AgentHook } from "../hooks/index.js";
@@ -25,7 +25,7 @@ import { withAutoDiagnostics } from "./auto-diagnostics.js";
 import { TodoList, createTodoTool, type TodoItem, type TodoStatus } from "./todo-tool.js";
 import { createCheckpoint, diffCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
 import { withPerEditCheckpoints } from "./checkpoint-on-write.js";
-import { createExploreTool } from "./explore-tool.js";
+import { createExploreTool, type ExploreToolOptions } from "./explore-tool.js";
 import { createStatusTool, type StatusProvider } from "./status-tool.js";
 import { Planner, type Plan, type PlanStep } from "../planner/planner.js";
 import { formatPlanAsMarkdown, toPlanEventPayload } from "../planner/plan-tool.js";
@@ -66,6 +66,14 @@ If locating something will take several greps and reads, hand it to the "explore
 specific question. It searches in its own context and returns only the answer, so the dozen file
 dumps it took never enter this conversation. Use it for "where is X?" - not for a file you already
 know, and never for making changes.
+
+## Delegate substantial specialist work
+If a "delegate_to_bot" tool is available, use it selectively for a clearly bounded, substantial
+frontend or backend work package. Use frontend-developer for HTML/CSS/browser JS/TS/UI work and
+backend-infrastructure for project structure, Node.js/backend TS, PHP, Python, APIs, databases, and
+repository infrastructure. Do small or tightly coupled edits yourself. Delegation is synchronous:
+wait for the specialist, then inspect the actual files/diff and independently verify the result.
+Never accept a specialist's prose claim as proof that its edits or tests succeeded.
 
 ## Diagnostics beat builds
 If a "diagnostics" tool is available, run it on the files you just changed instead of a full build.
@@ -137,6 +145,7 @@ export interface CodingAgentOptions {
    * times without touching the quality of the actual edits. Falls back to the main provider.
    */
   explorerProvider?: LLMProvider;
+  explorerProfileResolver?: ExploreToolOptions["resolveProfile"];
   /**
    * Hard wall-clock budget for ONE explore call, in milliseconds. The explore sub-agent shares
    * the run loop's stale-read loop guardrail, but a slow-but-busy exploration could otherwise
@@ -144,6 +153,15 @@ export interface CodingAgentOptions {
    * DUCKI_EXPLORE_TIMEOUT_MS or 3 minutes.
    */
   exploreTimeoutMs?: number;
+  /**
+   * This server's own origin (e.g. "http://127.0.0.1:3001"), used to tell the model the real
+   * HTTP URL for previewing/testing this project in the browser tool. Without it, a model asked
+   * to "look at the project in the browser" has only `sandboxRoot` (an absolute filesystem path)
+   * to go on and improvises a `file://` URL - which loads (Puppeteer does not block it), but ES
+   * module scripts and fetch() are blocked under file: by the browser's own CORS rules, so the
+   * page silently fails in ways that look identical to a real bug in the project.
+   */
+  previewBaseUrl?: string;
 }
 
 export interface CodingRunOptions {
@@ -182,6 +200,14 @@ export interface CodingRunOptions {
    * can find it) have no other way to learn the id early enough to matter.
    */
   onConversationStarted?: (conversationId: number) => void;
+  /**
+   * Streams each attempt's response text as it arrives from the model, instead of the caller
+   * only finding out once the WHOLE iteration (LLM call + any tool calls) has finished. Without
+   * this CodingAgent never passed `stream: true` down to Agent.run() at all - every coding run,
+   * unlike the regular chat, always used the blocking generate() path, so the UI's "it's writing
+   * live" indicator only ever had something to show once a full response had already landed.
+   */
+  onChunk?: (chunk: string) => void;
 }
 
 export interface CodingRunResult {
@@ -298,6 +324,7 @@ export class CodingAgent {
   private readonly eventEmitter: AgentEventEmitter | undefined;
   private readonly defaultMaxAttempts: number;
   private readonly sandboxRoot: string | undefined;
+  private readonly previewBaseUrl: string | undefined;
   private filesRead = new Set<string>(); // Track files read during this run
   /** How often read-before-edit refused a given file this run (see the hook for why it is bounded). */
   private readBeforeEditRefusals = new Map<string, number>();
@@ -378,6 +405,7 @@ export class CodingAgent {
   ) {
     this.defaultMaxAttempts = Math.max(1, options.maxAttempts ?? 4);
     this.sandboxRoot = options.sandboxRoot;
+    this.previewBaseUrl = options.previewBaseUrl;
     this.eventEmitter = eventEmitter;
     this.db = db;
     this.logger = getRootLogger().child(`CodingAgent:${options.name ?? "CodingAgent"}`);
@@ -391,10 +419,12 @@ export class CodingAgent {
           todo_items: items,
           open: items.filter((item) => item.status === "pending" || item.status === "in_progress").length,
         });
+        // Status is part of the plan's ground truth too. Previously only todo:write (structural
+        // replacement) reached the Plan object, while ordinary todo:update calls changed only
+        // the checklist. That let the Plan panel say "pending" after the checklist said "done".
+        this.syncPlanFromTodos(items);
       },
-      // Structural change (todo:write) - mirror it back into the Plan the UI's Plan tab
-      // actually renders, see syncPlanFromTodos for why this exists.
-      (items) => this.syncPlanFromTodos(items)
+      undefined
     );
 
     // The text-based [TOOL:...] format block is only relevant when the provider falls back to
@@ -693,6 +723,7 @@ export class CodingAgent {
     const dxTool = options.sandboxRoot ? createScopedDiagnosticsTool(options.sandboxRoot) : diagnosticsTool;
     const exploreTool = createExploreTool(options.explorerProvider ?? provider, db, {
       ...(options.sandboxRoot ? { sandboxRoot: options.sandboxRoot } : {}),
+      ...(options.explorerProfileResolver ? { resolveProfile: options.explorerProfileResolver } : {}),
       timeoutMs: options.exploreTimeoutMs ?? parseInt(process.env["DUCKI_EXPLORE_TIMEOUT_MS"] ?? "180000", 10),
     });
 
@@ -1012,6 +1043,10 @@ export class CodingAgent {
     const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
 
     let lastSummary = "";
+    let nextAttemptReason: "verification_failed" | "checklist_open" | "guardrail" = "verification_failed";
+    // A model may narrate the same next step forever without calling a tool. One retry is useful
+    // for EXPLORE -> EDIT; repeating the identical ungrounded transition is a stall, not progress.
+    const retriedUngroundedAnnouncements = new Set<number>();
     // Carried across attempts (not reset per attempt) so a retry after a failed verify still
     // remembers what earlier attempts already did - each this.agent.run() call would otherwise
     // start its own runLoop's journal empty, discarding it the moment this attempt's response
@@ -1071,7 +1106,7 @@ export class CodingAgent {
       const prompt =
         attempt === 1
           ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan, isResuming)
-          : this.buildFollowUpPrompt(goal, lastSummary);
+          : this.buildFollowUpPrompt(goal, lastSummary, nextAttemptReason);
       // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
       // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
       // (possibly still "explore" if it timed out early) would permanently lock every retry
@@ -1095,6 +1130,19 @@ export class CodingAgent {
           getCurrentStepId: () => this.todos.currentStepId(),
           onModelResponse: (response) => this.updatePhaseFromResponse(response),
           ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
+          // CodingAgent never opted into this before - every run always used the blocking
+          // generate() path, so the UI had nothing to show for the iteration currently in
+          // flight (just the "thinking" indicator) until it fully finished. Agent.run() still
+          // only forwards a whole iteration's cleaned text as one chunk (not per-token - partial
+          // [TOOL:...] marker syntax can't safely be shown mid-generation), same as the regular
+          // chat, but that is still a real live-ness improvement over emitting nothing at all.
+          ...(opts.onChunk ? { stream: true, onChunk: opts.onChunk } : {}),
+          // `prompt` is the full machine-facing scaffold (path rules, phase contract, plan,
+          // ...) built above - only `goal` (what the caller actually asked for) belongs in the
+          // conversation transcript. Same for every retry attempt: they all re-prompt for the
+          // same goal, so the transcript should keep showing that goal, not the internal
+          // "diagnose and fix" retry instructions.
+          displayContent: goal,
         });
       } catch (error) {
         // Agent.run() surfaces its progress timeout as a THROWN error (the race in run()
@@ -1166,6 +1214,7 @@ export class CodingAgent {
           `${lastSummary}\n\n[Attempt ${attempt} was aborted: ${stallNote} On this next attempt, do NOT repeat that exact action again. ` +
           `Either make a concrete, different change, or - if you are confident the work is already correct - say so explicitly ONCE ` +
           `("<< VERIFY COMPLETE - looks correct") and move on. Do not re-check the same thing twice.]`;
+        nextAttemptReason = "guardrail";
         continue;
       }
 
@@ -1181,9 +1230,11 @@ export class CodingAgent {
       // legitimately done without touching another file - demoting those on an empty diff would
       // punish entirely normal steps and could never converge (each such demotion re-opens the
       // checklist, which re-triggers the "checklist not finished" continuation below, forever).
+      let attemptChangedFileCount = 0;
       if (this.sandboxRoot && checkpoint) {
         const attemptDiff = await diffCheckpoint(this.sandboxRoot, checkpoint.sha);
         const changedFileCount = attemptDiff?.files.length ?? 0;
+        attemptChangedFileCount = changedFileCount;
         if (changedFileCount > 0) anyFileChangedThisRun = true;
         if (changedFileCount === 0 && !anyFileChangedThisRun) {
           const newlyDone = this.todos
@@ -1211,6 +1262,13 @@ export class CodingAgent {
         }
       }
 
+      // Small/local models frequently narrate a correct transition ("Step 2: ...") after
+      // completing step 1 but omit the todo:update call. Reconcile that explicit transition
+      // only when this attempt has a real checkpoint diff: prose alone is never enough. This
+      // prevents the outer decision loop from treating already-finished predecessors as open.
+      const announcedWorkStep = this.findAnnouncedWorkStep(lastSummary);
+      this.reconcileAnnouncedStep(lastSummary, attemptChangedFileCount);
+
       if (!verifyCommand) {
         // No shell command to grade against, but the model's OWN checklist may still list
         // unfinished steps (typically VERIFY/REPORT) - accepting the run here regardless is
@@ -1228,19 +1286,32 @@ export class CodingAgent {
         // and retrying would just burn the whole attempt budget for nothing. Real file changes
         // are the actual signal that the model was doing the task and got cut off mid-checklist.
         const openItems = this.todos.snapshot().filter((item) => item.status === "pending" || item.status === "in_progress");
-        if (openItems.length > 0 && attempt < maxAttempts && anyFileChangedThisRun) {
+        // "Step N: <work>" is an explicit continuation signal even before the first edit.
+        // That is the normal EXPLORE -> EDIT transition, so requiring a file diff here would
+        // incorrectly finalize precisely when the model announces the work it will do next.
+        const hasGroundedOpenWork = openItems.length > 0 && anyFileChangedThisRun;
+        const hasExplicitContinuation = announcedWorkStep !== undefined && (
+          attemptChangedFileCount > 0 || !retriedUngroundedAnnouncements.has(announcedWorkStep)
+        );
+        if ((hasGroundedOpenWork || hasExplicitContinuation) && attempt < maxAttempts) {
+          if (hasExplicitContinuation && announcedWorkStep !== undefined && attemptChangedFileCount === 0) {
+            retriedUngroundedAnnouncements.add(announcedWorkStep);
+          }
           this.emit(
             "decision",
-            `Keine Verifikation moeglich, aber ${openItems.length} Checklisten-Schritt(e) noch offen - fordere Fortsetzung an.`,
-            { attempt, openItems: openItems.map((item) => item.title) }
+            hasExplicitContinuation
+              ? `Keine Verifikation moeglich, aber Schritt ${announcedWorkStep} wurde als naechste Arbeit angekuendigt - fordere Fortsetzung an.`
+              : `Keine Verifikation moeglich, aber ${openItems.length} Checklisten-Schritt(e) noch offen - fordere Fortsetzung an.`,
+            { attempt, announcedWorkStep, openItems: openItems.map((item) => item.title) }
           );
           lastSummary =
             `${lastSummary}\n\nNo verification command exists for this project, but your own checklist still has ` +
-            `open step(s): ${openItems.map((item) => item.title).join(", ")}. Finish them - in particular VERIFY ` +
+            `open step(s): ${openItems.map((item) => item.title).join(", ") || `the explicitly announced step ${announcedWorkStep}`}. Finish them - in particular VERIFY ` +
             `(if you have NOT already read the file(s) you wrote in this attempt, read them ONCE now, or run/open ` +
             `them via the shell or browser tool if possible; if you already read them, do NOT read them again - ` +
             `just judge what you already saw) and REPORT (summarize what changed and what you checked) - then STOP. ` +
             `State a clear PASS/FAIL conclusion in words; do not repeat any check you already performed this attempt.`;
+          nextAttemptReason = "checklist_open";
           continue;
         }
         // Nothing to check against - report honestly that the result is unverified
@@ -1299,6 +1370,7 @@ export class CodingAgent {
       lastSummary = isIdenticalToPreviousFailure
         ? `${lastSummary}\n\nVerification command "${verifyCommand}" failed with the EXACT SAME error as your previous attempt - your last change had NO effect on this outcome. Do not repeat it. Diagnose why that edit didn't fix this specific error, or try a fundamentally different approach:\n${verifyError}`
         : `${lastSummary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`;
+      nextAttemptReason = "verification_failed";
 
       if (attempt === maxAttempts) {
         return finalize({
@@ -1419,6 +1491,56 @@ export class CodingAgent {
     blocked: "failed",
   };
 
+  /** Returns the last explicit current-work transition ("Step N: ..."), if present. */
+  private findAnnouncedWorkStep(response: string): number | undefined {
+    const matches = [...response.matchAll(/\b(?:step|schritt)\s*(\d+)\s*[:.\-]\s*\S/gi)];
+    const announced = Number(matches[matches.length - 1]?.[1]);
+    return Number.isInteger(announced) && announced > 0 ? announced : undefined;
+  }
+
+  /**
+   * Reconciles an explicit model transition such as "Step 2: Create BootScene" with the
+   * structured checklist. This is deliberately conservative: it requires a real file diff in
+   * the same attempt and only closes predecessors of the announced step. It never infers
+   * completion from generic prose such as "done" and never closes the announced/current step.
+   */
+  private reconcileAnnouncedStep(response: string, changedFileCount: number): void {
+    if (changedFileCount <= 0) return;
+    const announcedNumber = this.findAnnouncedWorkStep(response);
+    if (announcedNumber === undefined) return;
+    const items = this.todos.snapshot();
+    if (!Number.isInteger(announcedNumber) || announcedNumber < 2 || announcedNumber > items.length) return;
+
+    const predecessorIndex = announcedNumber - 2;
+    const announcedIndex = announcedNumber - 1;
+    const predecessor = items[predecessorIndex];
+    const announced = items[announcedIndex];
+    if (!predecessor || !announced || items.slice(0, announcedIndex).some((item) => item.status === "blocked")) return;
+
+    let changed = false;
+    // A transition to step N is evidence only for the contiguous predecessor. Earlier steps are
+    // closed as well when still open because a sequential numbered transition necessarily passed
+    // them; blocked steps stop reconciliation above rather than being silently overridden.
+    for (let index = 0; index <= predecessorIndex; index++) {
+      const item = items[index];
+      if (item && item.status !== "done" && item.status !== "blocked") {
+        this.todos.update(item.id, "done", `Automatisch konsolidiert: Modell wechselte nach Dateiänderung zu Schritt ${announcedNumber}.`);
+        changed = true;
+      }
+    }
+    if (announced.status === "pending") {
+      this.todos.update(announced.id, "in_progress", `Vom Modell als aktueller Schritt ${announcedNumber} angekündigt.`);
+      changed = true;
+    }
+    if (changed) {
+      this.emit("decision", `Fortschritt mit Checkliste konsolidiert: Schritt ${announcedNumber - 1} abgeschlossen, Schritt ${announcedNumber} aktiv.`, {
+        announcedStep: announcedNumber,
+        changedFileCount,
+        todo_items: this.todos.snapshot(),
+      });
+    }
+  }
+
   /**
    * Mirrors a checklist REWRITE (todo:write, i.e. TodoList.replace - see the TodoList
    * constructor wiring above) back into the Plan object the UI's Plan tab actually renders.
@@ -1431,9 +1553,8 @@ export class CodingAgent {
    * Plan tab either showed stale steps forever or failed to match up statuses for the new ones -
    * exactly the "plan looks like it reset / forgot to check something off" symptom this fixes.
    *
-   * Deliberately narrow: only fires on a STRUCTURAL rewrite, never on a plain status tick
-   * (see TodoList's onReplace vs onChange) - a plain todo:update is not a plan change and must
-   * not re-emit/re-persist a "plan" event for every single status flip.
+   * Runs for structural rewrites and ordinary status ticks so the Plan panel and checklist use
+   * one state. The initial plan seed is guarded by suppressPlanSync to avoid duplicate events.
    */
   private syncPlanFromTodos(items: TodoItem[]): void {
     if (this.suppressPlanSync) return;
@@ -1734,7 +1855,7 @@ export class CodingAgent {
   /** Shared with buildFollowUpPrompt (see there for why this must not be initial-attempt-only). */
   private pathHandlingBlock(): string[] {
     if (!this.sandboxRoot) return [];
-    return [
+    const lines = [
       `Project root: ${this.sandboxRoot}`,
       "",
       "CRITICAL PATH HANDLING:",
@@ -1746,6 +1867,20 @@ export class CodingAgent {
       `- Examples of WRONG paths: '/apps/server/...', 'shared-workspace/...', 'coding/...'`,
       "",
     ];
+    if (this.previewBaseUrl) {
+      const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot)}/serve/index.html`;
+      lines.push(
+        "BROWSER PREVIEW / TESTING:",
+        `- To look at or test this project in the browser tool, navigate to: ${previewUrl}`,
+        `- NEVER use a 'file://' URL for this project - it looks like it works, but Chromium blocks`,
+        `  ES module scripts and fetch() under file:, so the page silently fails in ways that look`,
+        `  like a real bug. The URL above is a real HTTP server and serves the project correctly.`,
+        `- Do NOT pass newSession/sessionId - omitting both reuses the one shared browser session`,
+        `  (the same one the user may already have open), instead of opening a second, separate one.`,
+        "",
+      );
+    }
+    return lines;
   }
 
   private buildInitialPrompt(
@@ -1830,18 +1965,27 @@ export class CodingAgent {
     return parts.join("\n");
   }
 
-  private buildFollowUpPrompt(goal: string, previousSummaryWithVerification: string): string {
+  private buildFollowUpPrompt(
+    goal: string,
+    previousSummaryWithVerification: string,
+    reason: "verification_failed" | "checklist_open" | "guardrail"
+  ): string {
     // The checklist carries across attempts. Each attempt is a fresh agent.run(), so without
     // replaying it here the agent would re-plan from scratch and redo steps it already finished.
     const checklist = this.todos.render();
+    const opening = reason === "verification_failed"
+      ? "Your previous attempt failed its verification command. Diagnose the ACTUAL failure below and fix it - do not repeat the same approach blindly."
+      : reason === "guardrail"
+        ? "Your previous attempt was stopped by a loop guardrail. Continue from structured state without repeating the blocked action."
+        : "The previous attempt made progress but ended while structured checklist steps were still open. Continue with the first open step; do not redo completed steps.";
     return [
-      "Your previous attempt did not pass verification. Diagnose the ACTUAL failure below and fix it - do not repeat the same approach blindly.",
+      opening,
       "",
       "BEFORE YOU ACT, call the status tool. It tells you in one call what normally takes several reads: which steps are already done (from the checklist), what files you actually changed (from the checkpoint diff - not your memory), and whether any diagnostics are still failing. Your conversation context may have been trimmed and earlier results may no longer be visible, so do NOT rely on what you remember - ask the status tool for ground truth.",
       this.pathHandlingBlock().join("\n"),
       `Original goal: ${goal}`,
       checklist ? `Your checklist so far (keep updating it, do not start it over):\n${checklist}` : "",
-      "Previous attempt summary and verification output:",
+      reason === "verification_failed" ? "Previous attempt summary and verification output:" : "Continuation context:",
       previousSummaryWithVerification,
     ].filter((part) => part !== "").join("\n\n");
   }

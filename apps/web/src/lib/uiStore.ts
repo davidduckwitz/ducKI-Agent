@@ -43,6 +43,8 @@ interface UiState {
   appSidebarOpen: boolean;
   appSidebarWidth: number;
   appSidebarTool: AppSidebarTool;
+  /** Transient navigation command consumed by the shared BrowserTool. */
+  browserNavigationRequest: { url: string; nonce: number } | null;
 
   codingAgentOpen: boolean;
   codingAgentWidth: number;
@@ -73,6 +75,7 @@ interface UiState {
   toggleAppSidebar: () => void;
   setAppSidebarWidth: (width: number) => void;
   setAppSidebarTool: (tool: AppSidebarTool) => void;
+  openBrowserUrl: (url: string) => void;
   setCodingAgentOpen: (open: boolean) => void;
   setCodingAgentWidth: (width: number) => void;
   setCodingAgentTab: (tab: CodingAgentTab) => void;
@@ -96,6 +99,7 @@ export const useUiStore = create<UiState>()(
       appSidebarOpen: false,
       appSidebarWidth: APP_SIDEBAR_DEFAULT_WIDTH,
       appSidebarTool: "apps",
+      browserNavigationRequest: null,
       codingAgentOpen: true,
       codingAgentWidth: 380,
       codingAgentTab: "chat",
@@ -149,6 +153,11 @@ export const useUiStore = create<UiState>()(
       setAppSidebarWidth: (width) =>
         set({ appSidebarWidth: Math.min(Math.max(Math.round(width), APP_SIDEBAR_MIN_WIDTH), APP_SIDEBAR_MAX_WIDTH) }),
       setAppSidebarTool: (appSidebarTool) => set({ appSidebarTool, appSidebarOpen: true }),
+      openBrowserUrl: (url) => set((state) => ({
+        appSidebarTool: "browser",
+        appSidebarOpen: true,
+        browserNavigationRequest: { url, nonce: (state.browserNavigationRequest?.nonce ?? 0) + 1 },
+      })),
 
       setCodingAgentOpen: (codingAgentOpen) => set({ codingAgentOpen }),
       setCodingAgentWidth: (width) =>
@@ -167,7 +176,7 @@ export const useUiStore = create<UiState>()(
       name: "ducki.ui.v1",
       version: 1,
       // The mobile drawer must never come back open on reload - it would cover the app.
-      partialize: ({ mobileNavOpen: _ignored, ...rest }) => rest,
+      partialize: ({ mobileNavOpen: _ignored, browserNavigationRequest: _browserNavigationRequest, ...rest }) => rest,
     }
   )
 );

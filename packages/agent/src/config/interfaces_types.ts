@@ -140,6 +140,13 @@ export interface AgentRunOptions {
   visionOnly?: boolean;
   /** Client-side UUID for message deduplication */
   localMessageId?: string;
+  /** What to persist/show as this turn's user message instead of `userInput` itself. For a
+   *  plain chat turn userInput already IS what the user typed, but CodingAgent wraps a short
+   *  goal in a large machine-facing prompt (path rules, phase contract, plan, ...) before
+   *  calling run() - without this, that whole scaffold would be persisted and shown as if the
+   *  user had typed it. Only affects what gets written to the conversation transcript; the
+   *  model still receives the full `userInput`. */
+  displayContent?: string;
   /** A plan the caller already built (e.g. the user-approved plan from the UI's Plan tab).
    *  When set, the run loop uses this INSTEAD OF calling the internal Planner - the agent
    *  otherwise always re-derives its own plan from the prompt text, discarding whatever

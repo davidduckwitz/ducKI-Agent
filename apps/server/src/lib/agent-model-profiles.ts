@@ -114,6 +114,7 @@ const LEGACY_SETTINGS: Readonly<Record<string, string>> = {
   CODING_AGENT_MAX_ITERATIONS_COMPLEX: "100",
   CODING_AGENT_MAX_ATTEMPTS: "3",
   CODING_AGENT_TIMEOUT_MS: "300000",
+  CODING_AGENT_EXPLORE_TIMEOUT_MS: "180000",
 };
 
 const SMALL_SETTINGS: Readonly<Record<string, string>> = {
@@ -152,7 +153,17 @@ const SMALL_SETTINGS: Readonly<Record<string, string>> = {
   CODING_AGENT_MAX_ITERATIONS_MEDIUM: "24",
   CODING_AGENT_MAX_ITERATIONS_COMPLEX: "32",
   CODING_AGENT_MAX_ATTEMPTS: "2",
-  CODING_AGENT_TIMEOUT_MS: "480000",
+  // A slow/small local model is exactly what this profile targets - 8 minutes total for up to
+  // 2 attempts x 24 iterations each was routinely exhausted by attempt 1 ALONE (each iteration
+  // is a full LLM round-trip plus tool calls, both slower on a small local model), so the
+  // guardrail-triggered "retry attempt 2 with a correction hint" recovery never got to run at
+  // all - the deadline check killed the whole run first. maxAttempts/maxIterations are already
+  // the real bound on how much work happens; this is just a generous outer safety net against a
+  // truly hung run, not a tight per-minute budget.
+  CODING_AGENT_TIMEOUT_MS: "2400000",
+  // Same reasoning as CODING_AGENT_TIMEOUT_MS above - a small/slow local model needs MORE time
+  // for the explore sub-agent's own tool-call loop, not the previous flat 3-minute default.
+  CODING_AGENT_EXPLORE_TIMEOUT_MS: "600000",
 };
 
 const BALANCED_SETTINGS: Readonly<Record<string, string>> = {
@@ -190,7 +201,8 @@ const BALANCED_SETTINGS: Readonly<Record<string, string>> = {
   CODING_AGENT_MAX_ITERATIONS_MEDIUM: "36",
   CODING_AGENT_MAX_ITERATIONS_COMPLEX: "48",
   CODING_AGENT_MAX_ATTEMPTS: "3",
-  CODING_AGENT_TIMEOUT_MS: "540000",
+  CODING_AGENT_TIMEOUT_MS: "3000000",
+  CODING_AGENT_EXPLORE_TIMEOUT_MS: "480000",
 };
 
 const LARGE_SETTINGS: Readonly<Record<string, string>> = {
@@ -228,7 +240,8 @@ const LARGE_SETTINGS: Readonly<Record<string, string>> = {
   CODING_AGENT_MAX_ITERATIONS_MEDIUM: "50",
   CODING_AGENT_MAX_ITERATIONS_COMPLEX: "70",
   CODING_AGENT_MAX_ATTEMPTS: "3",
-  CODING_AGENT_TIMEOUT_MS: "600000",
+  CODING_AGENT_TIMEOUT_MS: "3600000",
+  CODING_AGENT_EXPLORE_TIMEOUT_MS: "360000",
 };
 
 export const AGENT_MODEL_PROFILES: Readonly<Record<AgentModelProfileName, AgentModelProfileDefinition>> = {

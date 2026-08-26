@@ -11,6 +11,19 @@ export interface ConversationSummary {
   createdAt: string;
 }
 
+/** ~3.6 chars/token - same constant packages/providers/token-estimate.ts uses, kept in sync
+ *  by hand since duplicating one constant is simpler than a shared dependency for it. */
+const CHARS_PER_TOKEN = 3.6;
+/**
+ * Trigger point in ESTIMATED tokens, not raw message count. Message count was a poor proxy for
+ * context pressure - 50 short tool-result messages triggered compression well before they
+ * threatened the context window, while a handful of huge file-content messages could blow past
+ * it without ever compressing. ~11k tokens is a reasonable "the older half of this conversation
+ * is worth summarizing" point for typical local-model context windows (8k-32k) without firing
+ * on every short run.
+ */
+const COMPRESSION_THRESHOLD_TOKENS = 11_000;
+
 /**
  * Compresses conversation history by summarizing message ranges.
  * Enables long-running conversations without LLM context overflow.
@@ -18,17 +31,25 @@ export interface ConversationSummary {
 export class ConversationCompressor {
   private logger: Logger;
   private summaryCache = new Map<string, ConversationSummary>();
-  private readonly compressionThreshold = 50; // Summarize after 50 messages
+  private readonly compressionThresholdChars = COMPRESSION_THRESHOLD_TOKENS * CHARS_PER_TOKEN;
 
   constructor(private readonly provider: LLMProvider) {
     this.logger = getRootLogger().child("ConversationCompressor");
   }
 
-  /**
-   * Check if a message range should be compressed.
-   */
-  shouldCompress(totalMessages: number): boolean {
-    return totalMessages > this.compressionThreshold;
+  private messageChars(message: LLMMessage): number {
+    return typeof message.content === "string" ? message.content.length : 0;
+  }
+
+  /** Cheap (no LLM call) - a running char count the caller already has to build the prompt
+   *  anyway, so this costs nothing extra to check on every iteration. */
+  shouldCompress(messages: LLMMessage[]): boolean {
+    let chars = 0;
+    for (const m of messages) {
+      chars += this.messageChars(m);
+      if (chars > this.compressionThresholdChars) return true;
+    }
+    return false;
   }
 
   /**
@@ -41,6 +62,11 @@ export class ConversationCompressor {
 
   /**
    * Summarize a range of messages into a brief summary.
+   *
+   * One LLM call, not two: this used to fire a separate "extract key decisions" request after
+   * the "write 2-3 sentences" request, on the same conversationText, for every chunk - doubling
+   * the cost and latency of every compression for no benefit a single structured-JSON request
+   * doesn't already give.
    */
   async summarizeRange(messages: LLMMessage[], startIndex: number, endIndex: number): Promise<ConversationSummary> {
     const cacheKey = `${startIndex}_${endIndex}`;
@@ -53,36 +79,38 @@ export class ConversationCompressor {
       .join("\n\n");
 
     try {
-      const summaryResponse = await this.provider.generate([
+      const response = await this.provider.generate([
         {
           role: "system",
           content:
-            "Compress the following conversation into 2-3 sentences. Preserve key decisions, accomplishments, and context.",
+            "Summarize the following conversation excerpt. Respond with ONLY a JSON object of the shape " +
+            '{"summary": string, "keyDecisions": string[]} - no prose before or after it. ' +
+            '"summary" is 2-3 sentences preserving key decisions, accomplishments, and context. ' +
+            '"keyDecisions" is 3-5 short bullet-point strings for the most important decisions or outcomes.',
         },
         { role: "user", content: conversationText },
-      ], { maxTokens: 500 });
+      ], { maxTokens: 600 });
 
-      const decisionsResponse = await this.provider.generate([
-        {
-          role: "system",
-          content:
-            "Extract 3-5 key decisions or important points from this conversation. Return as JSON array of strings.",
-        },
-        { role: "user", content: conversationText },
-      ], { maxTokens: 300 });
-
+      let parsedSummary = "";
       let keyDecisions: string[] = [];
       try {
-        const parsed = JSON.parse(decisionsResponse.content);
-        keyDecisions = Array.isArray(parsed) ? parsed.slice(0, 5) : [];
+        // Models occasionally wrap JSON in a code fence or add a leading/trailing sentence
+        // despite the instruction - pull out the first {...} block rather than requiring an
+        // exact-match parse, which failed silently on every minor deviation.
+        const match = /\{[\s\S]*\}/.exec(response.content);
+        const parsed = JSON.parse(match ? match[0] : response.content) as { summary?: unknown; keyDecisions?: unknown };
+        parsedSummary = typeof parsed.summary === "string" ? parsed.summary : "";
+        keyDecisions = Array.isArray(parsed.keyDecisions) ? parsed.keyDecisions.filter((d): d is string => typeof d === "string").slice(0, 5) : [];
       } catch {
-        keyDecisions = [];
+        // Fallback: the model answered in prose instead of JSON - still usable as the summary,
+        // just without a separate key-decisions breakdown.
+        parsedSummary = response.content.trim();
       }
 
       const summary: ConversationSummary = {
         messageRangeStart: startIndex,
         messageRangeEnd: endIndex,
-        summary: summaryResponse.content.trim(),
+        summary: parsedSummary || response.content.trim(),
         keyDecisions,
         createdAt: new Date().toISOString(),
       };

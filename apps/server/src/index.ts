@@ -543,16 +543,36 @@ async function bootstrap(): Promise<void> {
 		}
 	})();
 
-	const createCodingAgentFactory = (options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: any }): CodingAgent => {
+	// Late-bound because BotService itself depends on this factory. The delegation tool only
+	// dereferences the service when a CodingAgent actually invokes it.
+	const botServiceRef: { current?: BotService } = {};
+	// Told to CodingAgent so it can give the model a real HTTP preview URL instead of the model
+	// improvising a file:// path from the sandboxRoot it's given for path-handling purposes -
+	// file:// loads in the browser tool but silently breaks ES module scripts and fetch() under
+	// Chromium's CORS rules. Read once here (not deferred to the later `port`/`host` consts near
+	// the httpServer.listen call) since those are declared much further down this function.
+	const previewBaseUrl = `http://${process.env["HOST"] ?? "127.0.0.1"}:${process.env["PORT"] ?? "3001"}`;
+	const createCodingAgentFactory = (options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: any; provider?: import("@ducki/providers").LLMProvider; exploreTimeoutMs?: number }): CodingAgent => {
 		// If sandboxRoot is provided, combine it with CODING_ROOT
 		// Frontend sends just the project slug, server combines it with CODING_ROOT
 		let resolvedSandboxRoot = CODING_ROOT;
 		if (options?.sandboxRoot) {
 			resolvedSandboxRoot = resolve(CODING_ROOT, options.sandboxRoot);
 		}
-		return createCodingAgent(providerRef.current, db, options?.eventEmitter, {
+		const codingDelegationTool = createDelegateToBotTool(() => botServiceRef.current, {
+			mode: "coding",
+			sandboxRoot: resolvedSandboxRoot,
+			isEnabled: async () => (await db.getSetting("CODING_MULTI_BOT_ENABLED"))?.trim().toLowerCase() !== "false",
+		});
+		// A per-run override (chat's LLM selector) takes precedence over the system default -
+		// falls back to providerRef.current, same as every other coding run.
+		return createCodingAgent(options?.provider ?? providerRef.current, db, options?.eventEmitter, {
 			sandboxRoot: resolvedSandboxRoot,
 			maxIterations: options?.maxIterations,
+			extraTools: [codingDelegationTool],
+			explorerProfileResolver: async () => botServiceRef.current?.resolveExplorerProfile(),
+			previewBaseUrl,
+			...(options?.exploreTimeoutMs ? { exploreTimeoutMs: options.exploreTimeoutMs } : {}),
 			...(explorerProvider ? { explorerProvider } : {}),
 		});
 	};
@@ -573,7 +593,6 @@ async function bootstrap(): Promise<void> {
 	// Same lazy-ref pattern as wikiServiceRef: BotService is constructed after buildAgentFactory
 	// (it needs createAgent/createCodingAgentFactory), but the delegate_to_bot tool it wires only
 	// dereferences this when a run actually calls the tool.
-	const botServiceRef: { current?: BotService } = {};
 	const promptManager = new PromptManager(db, logger.child("PromptManager"));
 	await promptManager.initialize();
 	const createAgent = buildAgentFactory(providerRef, db, workflowEngineRef, runtimeTools, wikiServiceRef, pluginManager, connectorRegistryProxy, promptManager, botServiceRef);

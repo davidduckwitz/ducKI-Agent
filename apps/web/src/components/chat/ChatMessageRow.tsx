@@ -10,6 +10,7 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { ReasoningDisplay } from "./ReasoningDisplay";
 import { ThinkBlockDisplay } from "./ThinkBlockDisplay";
 import { VoicePlayback } from "./VoicePlayback";
+import { useSmoothedText } from "../../hooks/useSmoothedText";
 
 /** Parsed think block with metadata */
 interface ThinkBlock {
@@ -467,6 +468,9 @@ export function StreamingRow({
   streamingContent,
   t,
 }: RowCommonProps & { streamingContent: string; t: (key: string) => string }) {
+  // Only this live-preview box animates - once text lands as a permanent message (see
+  // store.ts's assistant_text handling) it renders as plain MarkdownMessage, no smoothing.
+  const smoothed = useSmoothedText(streamingContent);
   return (
     <div className={ANIMATE_IN}>
       <div className="mb-1.5 flex items-center gap-2">
@@ -474,9 +478,9 @@ export function StreamingRow({
         <span className="text-xs font-semibold text-muted-foreground">{t("chat.roleAgent")}</span>
       </div>
       <div className={`min-w-0 text-foreground ${compactMode ? "text-[13px]" : "text-sm"} leading-relaxed`}>
-        {streamingContent ? (
+        {smoothed ? (
           <>
-            <MarkdownMessage content={streamingContent} />
+            <MarkdownMessage content={smoothed} />
             <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse rounded-sm bg-primary align-text-bottom" />
           </>
         ) : (

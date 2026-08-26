@@ -40,6 +40,7 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
     BOT_CHAT_PARALLEL_MAX_CONCURRENT: "4",
     BOT_AGENT_MAX_ITERATIONS: "50",
     BOT_AGENT_TIMEOUT_MS: "600000",
+    CODING_MULTI_BOT_ENABLED: "true",
   };
 
   const labels: Record<string, string> = {
@@ -49,6 +50,7 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
     BOT_CHAT_PARALLEL_MAX_CONCURRENT: "Max. gleichzeitige Bots",
     BOT_AGENT_MAX_ITERATIONS: "Max. Iterationen pro Bot-Zug",
     BOT_AGENT_TIMEOUT_MS: "Timeout pro Bot-Zug (ms)",
+    CODING_MULTI_BOT_ENABLED: "CodingAgent Multi-Bot-Unterstützung",
   };
 
   const descriptions: Record<string, string> = {
@@ -64,6 +66,8 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
       "Wie viele Werkzeug-Aufrufe/Denkschritte ein einzelner Bot innerhalb EINES Zuges (einer Antwort) durchführen darf, bevor er abbrechen muss. Zu niedrig = der Bot bricht mitten in einer mehrstufigen Aufgabe (z.B. Recherche + Bericht) ab.",
     BOT_AGENT_TIMEOUT_MS:
       "Wie lange ein einzelner Bot-Zug maximal laufen darf, bevor er als fehlgeschlagen gilt (dann erscheint eine sichtbare Fehlermeldung im Chat statt endlosem Warten). In Millisekunden: 300000 = 5 Min, 600000 = 10 Min.",
+    CODING_MULTI_BOT_ENABLED:
+      "Erlaubt dem CodingAgent, größere klar abgegrenzte Aufgaben an die editierbaren Spezialisten Frontend Developer und Backend Infrastructure zu delegieren und auf deren Ergebnis zu warten.",
   };
 
   const getDisplayValue = (key: string): string => edits[key] ?? settingsMap.get(key) ?? defaults[key] ?? "";
@@ -75,8 +79,9 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
 
   const handleToggle = (key: string) => {
     const current = getDisplayValue(key).toLowerCase() !== "false";
-    setEdits((prev) => ({ ...prev, [key]: String(!current) }));
-    handleSaveField(key);
+    const next = String(!current);
+    setEdits((prev) => ({ ...prev, [key]: next }));
+    save.mutate({ key, value: next });
     setToggleAnimating(true);
     setTimeout(() => setToggleAnimating(false), 400);
   };
@@ -134,6 +139,27 @@ export function BotsSettings({ settingsMap }: BotsSettingsProps) {
       </div>
 
       <div className="space-y-4 rounded-lg border border-border bg-card/50 p-4">
+        <div className="space-y-3">
+          <h4 className="text-sm font-medium">CodingAgent-Spezialisten</h4>
+          <div className="flex items-center justify-between pl-4 border-b border-border pb-3">
+            <div className="space-y-1 pr-4">
+              <span className="text-sm font-medium text-foreground">{labels["CODING_MULTI_BOT_ENABLED"]}</span>
+              <p className="text-xs text-muted-foreground">{descriptions["CODING_MULTI_BOT_ENABLED"]}</p>
+            </div>
+            <button
+              onClick={() => handleToggle("CODING_MULTI_BOT_ENABLED")}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
+                getDisplayValue("CODING_MULTI_BOT_ENABLED").toLowerCase() !== "false" ? "bg-emerald-600" : "bg-muted"
+              }`}
+              title={getDisplayValue("CODING_MULTI_BOT_ENABLED").toLowerCase() !== "false" ? "Deaktivieren" : "Aktivieren"}
+            >
+              <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+                getDisplayValue("CODING_MULTI_BOT_ENABLED").toLowerCase() !== "false" ? "translate-x-6" : "translate-x-1"
+              }`} />
+            </button>
+          </div>
+        </div>
+
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <h4 className="text-sm font-medium">Gruppen-Chat</h4>

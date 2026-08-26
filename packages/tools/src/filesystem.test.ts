@@ -144,6 +144,30 @@ describe("filesystem tool - __contentTrusted content is never re-escaped", () =>
     const result = await run({ action: "write", path, content: "hi", __contentTrusted: true });
     expect(JSON.stringify(result)).not.toContain("__contentTrusted");
   });
+
+  it("strips an accidental outer <<< / >>> wrapper from write content", async () => {
+    const path = join(root, "wrapped.js");
+    const code = "class BootScene {}\nexport default BootScene;";
+    const result = await run({
+      action: "write",
+      path,
+      content: `<<<\n${code}\n>>>`,
+      __contentTrusted: true,
+    });
+
+    expect(result.success).toBe(true);
+    const read = await run({ action: "read", path, raw: true });
+    expect(read.data).toBe(code);
+  });
+
+  it("preserves <<< / >>> when they are genuine content rather than outer marker lines", async () => {
+    const path = join(root, "operators.txt");
+    const code = 'const markers = ["<<<", ">>>"];\nvalue >>> 1;';
+    await run({ action: "write", path, content: code, __contentTrusted: true });
+
+    const read = await run({ action: "read", path, raw: true });
+    expect(read.data).toBe(code);
+  });
 });
 
 /**

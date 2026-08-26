@@ -85,6 +85,34 @@ export class TodoList {
     return { ...item };
   }
 
+  /**
+   * Applies several status updates as ONE change instead of N. A model with e.g. two steps to
+   * close out in the same turn had to call the tool twice (a real observed pattern: two
+   * consecutive `todo:update` calls, each producing its own "Checkliste aktualisiert" + Plan-sync
+   * event pair, doubling both LLM round-trips and Activity-tab noise for one logical change).
+   * `onChange` fires once, after every update in the batch has been applied, so the checklist and
+   * Plan panel both see the final state directly instead of two intermediate ones.
+   */
+  updateMany(updates: Array<{ id: number; status: TodoStatus; note?: string }>): {
+    updated: TodoItem[];
+    missingIds: number[];
+  } {
+    const updated: TodoItem[] = [];
+    const missingIds: number[] = [];
+    for (const { id, status, note } of updates) {
+      const item = this.items.find((candidate) => candidate.id === id);
+      if (!item) {
+        missingIds.push(id);
+        continue;
+      }
+      item.status = status;
+      if (note !== undefined) item.note = note;
+      updated.push({ ...item });
+    }
+    if (updated.length > 0) this.onChange?.(this.snapshot());
+    return { updated, missingIds };
+  }
+
   /** Compact rendering for a prompt block: short enough to send every iteration. */
   render(): string {
     if (this.items.length === 0) return "";
@@ -124,7 +152,9 @@ export function createTodoTool(list: TodoList): ToolExecutor {
         "Maintain the plan for this task as a checklist. Call action:'write' ONCE after exploring, with the " +
         "concrete steps you intend to take. Then call action:'update' to mark a step in_progress before you " +
         "start it and done as soon as it is verified. This is the record the user sees - keep it accurate, " +
-        "and never mark a step done before its change is actually verified.",
+        "and never mark a step done before its change is actually verified. If you are closing out more than " +
+        "one step in the same turn, pass `updates` (a list) instead of `id`/`status` and do it in ONE call - " +
+        "do not call this tool twice in a row for two separate steps.",
       parameters: {
         type: "object",
         properties: {
@@ -133,7 +163,7 @@ export function createTodoTool(list: TodoList): ToolExecutor {
             enum: ["write", "update", "list"],
             description:
               "write: replace the whole checklist with a new list of steps. " +
-              "update: change one step's status. list: read the current checklist back.",
+              "update: change one step's status (or several, via `updates`). list: read the current checklist back.",
           },
           items: {
             type: "array",
@@ -147,13 +177,28 @@ export function createTodoTool(list: TodoList): ToolExecutor {
               required: ["title"],
             },
           },
-          id: { type: "number", description: "For update: the step id shown in the checklist." },
+          id: { type: "number", description: "For update (single step): the step id shown in the checklist." },
           status: {
             type: "string",
             enum: ["pending", "in_progress", "done", "blocked"],
-            description: "For update: the step's new status.",
+            description: "For update (single step): the step's new status.",
           },
-          note: { type: "string", description: "For update: one short line on what happened (e.g. why it is blocked)." },
+          note: { type: "string", description: "For update (single step): one short line on what happened (e.g. why it is blocked)." },
+          updates: {
+            type: "array",
+            description:
+              "For update: change SEVERAL steps in one call instead of calling this tool once per step. " +
+              "Use this instead of `id`/`status` whenever more than one step changes in the same turn.",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "number", description: "The step id shown in the checklist." },
+                status: { type: "string", enum: ["pending", "in_progress", "done", "blocked"] },
+                note: { type: "string", description: "One short line on what happened (e.g. why it is blocked)." },
+              },
+              required: ["id", "status"],
+            },
+          },
         },
         required: ["action"],
       },
@@ -189,6 +234,43 @@ export function createTodoTool(list: TodoList): ToolExecutor {
       }
 
       if (action === "update") {
+        const rawUpdates = input["updates"];
+        if (Array.isArray(rawUpdates) && rawUpdates.length > 0) {
+          const parsed: Array<{ id: number; status: TodoStatus; note?: string }> = [];
+          const invalid: unknown[] = [];
+          for (const entry of rawUpdates) {
+            const record = (entry ?? {}) as Record<string, unknown>;
+            const id = Number(record["id"]);
+            const status = String(record["status"] ?? "");
+            if (!Number.isFinite(id) || !VALID_STATUSES.has(status)) {
+              invalid.push(entry);
+              continue;
+            }
+            const note = typeof record["note"] === "string" ? (record["note"] as string) : undefined;
+            parsed.push({ id, status: status as TodoStatus, note });
+          }
+          if (parsed.length === 0) {
+            return {
+              success: false,
+              data: null,
+              error: `updates must be a non-empty list of {"id": number, "status": "${[...VALID_STATUSES].join('"|"')}"}`,
+            };
+          }
+          const { updated, missingIds } = list.updateMany(parsed);
+          return {
+            success: updated.length > 0,
+            data: { updatedItems: updated, items: list.snapshot(), open: list.openCount },
+            ...(missingIds.length > 0 || invalid.length > 0
+              ? {
+                  error: [
+                    missingIds.length > 0 ? `No step with id ${missingIds.join(", ")}.` : undefined,
+                    invalid.length > 0 ? `${invalid.length} update(s) had a missing/invalid id or status and were skipped.` : undefined,
+                  ].filter(Boolean).join(" "),
+                }
+              : {}),
+          };
+        }
+
         const id = Number(input["id"]);
         const status = String(input["status"] ?? "");
         if (!Number.isFinite(id)) {

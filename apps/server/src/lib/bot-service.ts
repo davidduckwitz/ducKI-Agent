@@ -1,4 +1,10 @@
-import { Agent, type CodingAgent } from "@ducki/agent";
+import {
+  Agent,
+  createScopedDiagnosticsTool,
+  createScopedFilesystemTool,
+  createScopedShellTool,
+  type CodingAgent,
+} from "@ducki/agent";
 import type { BotInsert, BotSelect, DatabaseService } from "@ducki/database";
 import { createProvider, type LLMProvider, type ProviderName } from "@ducki/providers";
 import type { ToolExecutor } from "@ducki/shared";
@@ -12,6 +18,14 @@ import { deriveConversationTitle } from "./conversation-title.js";
  *  as ordinary rows in the bots list/UI alongside user-created bots. */
 export const MAIN_BOT_SLUG = "main";
 export const CODING_BOT_SLUG = "coding";
+export const FRONTEND_DEVELOPER_BOT_SLUG = "frontend-developer";
+export const BACKEND_INFRASTRUCTURE_BOT_SLUG = "backend-infrastructure";
+export const EXPLORER_BOT_SLUG = "explorer";
+export const CODING_SPECIALIST_BOT_SLUGS = new Set([
+  FRONTEND_DEVELOPER_BOT_SLUG,
+  BACKEND_INFRASTRUCTURE_BOT_SLUG,
+]);
+export const EDITABLE_SYSTEM_BOT_SLUGS = new Set([...CODING_SPECIALIST_BOT_SLUGS, EXPLORER_BOT_SLUG]);
 
 /** Settings-page keys (Settings > Bots) controlling a single custom bot's own Agent.run() budget
  *  - see BotsSettings.tsx for the matching frontend fields. Falls back to the same defaults the
@@ -88,9 +102,54 @@ function looksLikeStalledIntent(text: string): boolean {
   return trimmed.length > 0 && trimmed.length <= 200 && STALLED_INTENT_RE.test(trimmed);
 }
 
-const BUILTIN_BOTS: ReadonlyArray<{ slug: string; name: string; description: string; avatar: string }> = [
+const FRONTEND_DEVELOPER_PROMPT = `You are the frontend specialist for a parent CodingAgent.
+Implement the delegated task in the supplied project workspace. Focus on HTML, CSS/SCSS, browser JavaScript/TypeScript, React, responsive design, accessibility, and visual consistency.
+Reuse existing components and design tokens. Do not make unrelated backend or infrastructure changes. Inspect files before editing, perform the requested verification where possible, and finish with a concise summary of changed files and checks. Never delegate to another bot.`;
+
+const BACKEND_INFRASTRUCTURE_PROMPT = `You are the backend and project-infrastructure specialist for a parent CodingAgent.
+Implement the delegated task in the supplied project workspace. Focus on project/file structure, Node.js, backend TypeScript, PHP, Python, APIs, databases, configuration, and repository-local infrastructure.
+Respect the existing architecture and avoid unrelated UI or styling changes. Inspect files before editing, perform the requested verification where possible, and finish with a concise summary of changed files and checks. Never delegate to another bot.`;
+
+const EXPLORER_PROMPT = `Search efficiently: start with grep, glob, or outline, then read only the relevant regions. Prefer exact file paths, symbols, and line numbers. Stop as soon as the specific question is answered. Keep the final report short and factual.`;
+
+const BUILTIN_BOTS: ReadonlyArray<{
+  slug: string;
+  name: string;
+  description: string;
+  avatar: string;
+  systemPrompt?: string;
+  skillWhitelist?: string[];
+  toolWhitelist?: string[];
+}> = [
   { slug: MAIN_BOT_SLUG, name: "DucKI", description: "Der Standard-Hauptagent für allgemeine Aufgaben.", avatar: "duck-matrix" },
   { slug: CODING_BOT_SLUG, name: "CodingAgent", description: "Spezialisiert auf Code lesen, schreiben und verifizieren.", avatar: "coding-agent" },
+  {
+    slug: FRONTEND_DEVELOPER_BOT_SLUG,
+    name: "Frontend Developer",
+    description: "CodingAgent-Spezialist für CSS, HTML, JavaScript/TypeScript, React, Responsive Design und Accessibility.",
+    avatar: "coding-agent",
+    systemPrompt: FRONTEND_DEVELOPER_PROMPT,
+    skillWhitelist: ["coding-system", "test-driven-development", "code-review"],
+    toolWhitelist: ["filesystem", "shell", "git", "diagnostics"],
+  },
+  {
+    slug: BACKEND_INFRASTRUCTURE_BOT_SLUG,
+    name: "Backend Infrastructure",
+    description: "CodingAgent-Spezialist für Projektstruktur, Node.js, PHP, Python, APIs, Datenbanken und Infrastruktur.",
+    avatar: "coding-agent",
+    systemPrompt: BACKEND_INFRASTRUCTURE_PROMPT,
+    skillWhitelist: ["coding-system", "test-driven-development", "code-review"],
+    toolWhitelist: ["filesystem", "shell", "git", "diagnostics"],
+  },
+  {
+    slug: EXPLORER_BOT_SLUG,
+    name: "Code Explorer",
+    description: "Kurzlebiger, technisch read-only Repository-Suchagent des CodingAgent.",
+    avatar: "coding-agent",
+    systemPrompt: EXPLORER_PROMPT,
+    skillWhitelist: [],
+    toolWhitelist: ["filesystem"],
+  },
 ];
 
 export interface BotServiceDeps {
@@ -143,11 +202,11 @@ export class BotService {
         name: builtin.name,
         description: builtin.description,
         avatar: builtin.avatar,
-        systemPrompt: null,
+        systemPrompt: builtin.systemPrompt ?? null,
         providerId: null,
         modelId: null,
-        skillWhitelist: null,
-        toolWhitelist: null,
+        skillWhitelist: builtin.skillWhitelist ? JSON.stringify(builtin.skillWhitelist) : null,
+        toolWhitelist: builtin.toolWhitelist ? JSON.stringify(builtin.toolWhitelist) : null,
         isBuiltIn: 1,
         conversationId: null,
       } satisfies Omit<BotInsert, "createdAt" | "updatedAt">);
@@ -186,7 +245,9 @@ export class BotService {
 
   async updateBot(slug: string, input: UpdateBotInput): Promise<BotSelect> {
     const bot = await this.requireBot(slug);
-    if (bot.isBuiltIn) throw new Error("Built-in bots cannot be edited");
+    if (bot.isBuiltIn && !EDITABLE_SYSTEM_BOT_SLUGS.has(bot.slug)) {
+      throw new Error("Built-in bots cannot be edited");
+    }
     const updated = await this.deps.db.updateBot(slug, {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
       ...(input.description !== undefined ? { description: input.description.trim() || null } : {}),
@@ -226,6 +287,23 @@ export class BotService {
    *  built Agent - their persona/tool access is not user-configurable through this service. */
   isBuiltinRunnable(slug: string): boolean {
     return slug === MAIN_BOT_SLUG || slug === CODING_BOT_SLUG;
+  }
+
+  /** Returns the editable profile used by the disposable read-only explorer. Tool access is
+   * intentionally not returned: explore-tool enforces its one read-only filesystem tool in code. */
+  async resolveExplorerProfile(): Promise<{
+    provider: LLMProvider;
+    systemPrompt?: string;
+    allowedSkillSlugs?: string[];
+  } | undefined> {
+    const bot = await this.deps.db.getBot(EXPLORER_BOT_SLUG);
+    if (!bot) return undefined;
+    const allowedSkillSlugs = parseAccessList(bot.skillWhitelist);
+    return {
+      provider: this.resolveProvider(bot),
+      ...(bot.systemPrompt ? { systemPrompt: bot.systemPrompt } : {}),
+      ...(allowedSkillSlugs !== undefined ? { allowedSkillSlugs } : {}),
+    };
   }
 
   /**
@@ -277,7 +355,12 @@ export class BotService {
   async chat(
     bot: BotSelect,
     message: string,
-    opts?: { conversationId?: number; tagPromptAsInternal?: boolean; preparedAgent?: Agent }
+    opts?: {
+      conversationId?: number;
+      tagPromptAsInternal?: boolean;
+      preparedAgent?: Agent;
+      codingContext?: { sandboxRoot: string };
+    }
   ): Promise<{ response: string; conversationId: number; messageId?: number; stalled: boolean }> {
     const conversationId = opts?.conversationId ?? (await this.resolveConversationId(bot));
     if (!opts?.conversationId) {
@@ -350,7 +433,7 @@ export class BotService {
           }
         } else {
           const { result } = await runAgentWithRepairRetry(
-            () => this.createAgentForBot(bot),
+            () => this.createAgentForBot(bot, opts?.codingContext),
             currentMessage,
             (errorMessage) => runtimeRetryPrompt(errorMessage, currentMessage),
             async (runAgent) => {
@@ -430,10 +513,38 @@ export class BotService {
     return { response, conversationId, messageId: displayMessage.id, stalled };
   }
 
+  /**
+   * Runs a delegated specialist in a fresh, disposable conversation.
+   *
+   * A coding delegation must never load the specialist bot's persistent home chat: that history
+   * may contain unrelated user work and would then contaminate the parent CodingAgent through the
+   * returned tool result. The temporary conversation is also deleted after the synchronous reply,
+   * so no auxiliary bot message can surface in the Coding UI or later quality passes.
+   */
+  async chatIsolated(
+    bot: BotSelect,
+    message: string,
+    codingContext?: { sandboxRoot: string }
+  ): Promise<{ response: string; stalled: boolean }> {
+    const conversation = await this.deps.db.createConversation({
+      name: `Delegation: ${bot.name}`,
+      origin: "coding_agent",
+    });
+    try {
+      const result = await this.chat(bot, message, {
+        conversationId: conversation.id,
+        ...(codingContext ? { codingContext } : {}),
+      });
+      return { response: result.response, stalled: result.stalled };
+    } finally {
+      await this.deps.db.deleteConversation(conversation.id);
+    }
+  }
+
   /** Builds (or reuses) the Agent that should run this bot. Not valid for the "coding" bot,
    *  which uses a differently-shaped CodingAgent - callers must special-case that slug first
    *  (see routes/bots.ts) and call deps.createCodingAgentFactory() instead. */
-  async createAgentForBot(bot: BotSelect): Promise<Agent> {
+  async createAgentForBot(bot: BotSelect, codingContext?: { sandboxRoot: string }): Promise<Agent> {
     if (bot.slug === MAIN_BOT_SLUG) return this.deps.createAgent();
     if (bot.slug === CODING_BOT_SLUG) {
       throw new Error("The coding bot must be run via createCodingAgentFactory(), not createAgentForBot()");
@@ -445,9 +556,14 @@ export class BotService {
       this.deps.db.getSetting(BOT_AGENT_MAX_ITERATIONS_SETTING),
       this.deps.db.getSetting(BOT_AGENT_TIMEOUT_MS_SETTING),
     ]);
+    const workspaceDirective = codingContext
+      ? `\n\n## Delegated coding workspace\nThe project root is exactly: ${codingContext.sandboxRoot}\nFor every filesystem call, set basePath to that exact project root and use paths relative to it. Never read or write outside it.`
+      : "";
     const agent = new Agent(provider, this.deps.db, undefined, {
       name: bot.name,
-      ...(bot.systemPrompt ? { systemPrompt: bot.systemPrompt } : {}),
+      ...(bot.systemPrompt || workspaceDirective
+        ? { systemPrompt: `${bot.systemPrompt ?? ""}${workspaceDirective}`.trim() }
+        : {}),
       ...(allowedSkillSlugs !== undefined ? { allowedSkillSlugs } : {}),
       // Configurable per Settings > Bots instead of only the env-var defaults every other agent
       // falls back to - a bot stuck failing tool calls mid-task (see the filesystem path bug
@@ -482,7 +598,27 @@ export class BotService {
     const registerScoped = (tool: ToolExecutor) => {
       if (!allowedTools || allowedTools.has(tool.name)) agent.executor.registerTool(tool);
     };
-    for (const tool of wrapTools(this.deps.runtimeTools)) registerScoped(tool);
+    const runtimeTools = codingContext
+      ? this.deps.runtimeTools.map((tool) => {
+          if (tool.name === "filesystem") return createScopedFilesystemTool(codingContext.sandboxRoot);
+          if (tool.name === "shell") return createScopedShellTool(codingContext.sandboxRoot);
+          if (tool.name === "diagnostics") return createScopedDiagnosticsTool(codingContext.sandboxRoot);
+          if (tool.name === "git") {
+            return {
+              ...tool,
+              async execute(input: Record<string, unknown>) {
+                const action = String(input["action"] ?? "");
+                if (!["status", "diff", "log"].includes(action)) {
+                  return { success: false, data: null, error: "Delegated specialists have read-only git access." };
+                }
+                return tool.execute({ ...input, path: codingContext.sandboxRoot });
+              },
+            } satisfies ToolExecutor;
+          }
+          return tool;
+        })
+      : this.deps.runtimeTools;
+    for (const tool of wrapTools(runtimeTools)) registerScoped(tool);
     for (const tool of wrapTools(this.deps.pluginManager.getTools())) registerScoped(tool);
 
     return agent;

@@ -56,28 +56,60 @@ export class ConversationManager {
             // Keep as string if parsing fails
           }
         }
+        let metadata: string | Record<string, unknown> | undefined;
+        let toolCalls: LLMMessage["toolCalls"];
+        if (m.metadata) {
+          try {
+            const parsed = JSON.parse(m.metadata);
+            metadata = parsed;
+            if (Array.isArray(parsed?.nativeToolCalls)) toolCalls = parsed.nativeToolCalls;
+          } catch {
+            metadata = m.metadata;
+          }
+        }
         return {
           role: m.role as LLMMessage["role"],
           content,
           toolCallId: m.toolCallId ?? undefined,
+          ...(metadata !== undefined ? { metadata } : {}),
+          ...(toolCalls ? { toolCalls } : {}),
         };
       });
 
     this.logger.info("Conversation loaded", { id: conversationId, messages: this.messages.length });
   }
 
-  async addMessage(message: LLMMessage): Promise<void> {
+  /**
+   * @param displayContent Overrides what gets PERSISTED for this message, without affecting
+   *   the in-memory copy used to build this run's actual LLM context (`this.messages`, still
+   *   `message` as given). CodingAgent wraps a short goal in a large machine-facing prompt
+   *   before calling Agent.run() - without this, the whole scaffold would be written to the
+   *   conversation transcript and later shown as if the user had typed it. Safe to lose on
+   *   reload: each new attempt/run rebuilds its own full instruction prompt from scratch, it
+   *   never depends on a past turn's exact scaffolding text still being in history.
+   */
+  async addMessage(message: LLMMessage, displayContent?: string): Promise<void> {
     this.messages.push(message);
 
     if (this.conversationId !== undefined) {
-      const metadata = message.metadata === undefined
-        ? undefined
-        : typeof message.metadata === "string"
-          ? message.metadata
-          : JSON.stringify(message.metadata);
-      const content = typeof message.content === "string"
+      let metadataRecord: Record<string, unknown> | undefined;
+      if (typeof message.metadata === "object" && message.metadata !== null) {
+        metadataRecord = { ...message.metadata };
+      } else if (typeof message.metadata === "string") {
+        try {
+          const parsed = JSON.parse(message.metadata);
+          metadataRecord = typeof parsed === "object" && parsed !== null ? parsed : { value: parsed };
+        } catch {
+          metadataRecord = { value: message.metadata };
+        }
+      }
+      if (message.toolCalls?.length) {
+        metadataRecord = { ...(metadataRecord ?? {}), nativeToolCalls: message.toolCalls };
+      }
+      const metadata = metadataRecord === undefined ? undefined : JSON.stringify(metadataRecord);
+      const content = displayContent ?? (typeof message.content === "string"
         ? message.content
-        : JSON.stringify(message.content);
+        : JSON.stringify(message.content));
       await this.db.addMessage({
         conversationId: this.conversationId,
         role: message.role,

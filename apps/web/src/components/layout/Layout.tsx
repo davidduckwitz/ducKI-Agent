@@ -191,7 +191,7 @@ export function Layout() {
         <UpdateStatusBar />
       </div>
 
-      {location.pathname !== "/coding" && <AppToolSidebar />}
+      <AppToolSidebar />
 
       <SetupWizardModal
         open={setupModalOpen}

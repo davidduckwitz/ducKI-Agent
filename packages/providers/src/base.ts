@@ -24,6 +24,11 @@ export interface LLMProvider {
 export interface LLMModel {
   id: string;
   name: string;
+  /** Context window size in tokens, when the server reports one. The OpenAI API itself never
+   *  does; local OpenAI-compatible servers (LM Studio in particular) often include it as an
+   *  extra, non-standard field on each /v1/models entry. Undefined, not 0, when unknown - the
+   *  UI must be able to tell "no data" apart from "context window is zero". */
+  contextLength?: number;
 }
 
 export interface ProviderOptions {

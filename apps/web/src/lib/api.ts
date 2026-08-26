@@ -1,4 +1,4 @@
-import { getApiBaseUrl } from "./backendUrl";
+import { getApiBaseUrl, getAbsoluteApiBaseUrl } from "./backendUrl";
 import type { Plan } from "../components/chat/PlanExecutionPanel";
 import type { AgentQuestion } from "../components/chat/AgentQuestionBox";
 
@@ -577,9 +577,14 @@ export const api = {
      * URL/origin, so relative asset references inside the file (<script src="./app.js">, <link
      * href="style.css">, fetch("data.json")) resolve correctly. Each path segment is encoded on
      * its own so a literal "/" still separates directories instead of becoming %2F.
+     *
+     * Always absolute (getAbsoluteApiBaseUrl, not getApiBaseUrl): this URL is also handed to the
+     * server's internal browser session (openBrowserUrl -> Playwright `goto`), which has no page
+     * to resolve a relative "/api/..." against - it ended up loading the frontend's own dev
+     * index.html instead of the project's.
      */
     previewUrl: (project: string, path: string): string =>
-      `${getApiBaseUrl()}/coding/projects/${encodeURIComponent(project)}/serve/${path
+      `${getAbsoluteApiBaseUrl()}/coding/projects/${encodeURIComponent(project)}/serve/${path
         .split("/")
         .map((segment) => encodeURIComponent(segment))
         .join("/")}`,
@@ -646,7 +651,15 @@ export const api = {
       project: string,
       goal: string,
       conversationId: number,
-      options?: { includeFile?: string | null; maxAttempts?: number; timeoutMs?: number }
+      options?: {
+        includeFile?: string | null;
+        maxAttempts?: number;
+        timeoutMs?: number;
+        /** Unset (undefined) means "use the system default provider/model" - same
+         *  convention as the regular chat's LLM selector (chatProvider/chatModel). */
+        provider?: string;
+        model?: string;
+      }
     ) =>
       request<{
         success: boolean;
@@ -663,6 +676,8 @@ export const api = {
           conversationId,
           maxAttempts: options?.maxAttempts,
           timeoutMs: options?.timeoutMs,
+          provider: options?.provider,
+          model: options?.model,
         }),
       }),
   },
@@ -1043,8 +1058,18 @@ export const api = {
         models: Array<{
           id: string;
           name: string;
+          contextLength?: number;
         }>;
       }>(`/provider-models/${provider}`),
+    /** The provider/model actually in effect right now (DEFAULT_PROVIDER + its configured
+     *  model) plus that provider's full catalog - used to show context-window usage even
+     *  when the user hasn't picked an explicit override in the LLM selector. */
+    active: () =>
+      request<{
+        providerName: string;
+        activeModel: string;
+        models: Array<{ id: string; name: string; contextLength?: number }>;
+      }>("/provider-models/active"),
   },
 
   artifacts: {

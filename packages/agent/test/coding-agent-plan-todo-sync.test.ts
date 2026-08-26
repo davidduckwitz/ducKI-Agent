@@ -115,7 +115,7 @@ describe("CodingAgent syncs the Plan when the model rewrites the checklist", () 
     expect(stepA.description).toBe("original description A");
   });
 
-  it("a plain status update (todo:update) does NOT re-emit a new plan event", async () => {
+  it("a plain status update keeps the persisted plan status in sync", async () => {
     const { db, messages } = makeMemoryDb();
     const provider = scriptedProvider([PLAN_JSON, "[TOOL:todo action=update id=1 status=done]", "Fertig."]);
     const agent = new CodingAgent(provider, db, undefined, {});
@@ -130,8 +130,9 @@ describe("CodingAgent syncs the Plan when the model rewrites the checklist", () 
         return false;
       }
     });
-    // Exactly the ONE initial plan event - a status-only update must not trigger a resync.
-    expect(planRows).toHaveLength(1);
+    expect(planRows).toHaveLength(2);
+    const latest = JSON.parse(String(planRows.at(-1)?.["toolResult"]));
+    expect(latest.data.__rawPlan.steps[0].status).toBe("completed");
   });
 
   it("does not emit a redundant second plan event for CodingAgent's own initial checklist seed", async () => {

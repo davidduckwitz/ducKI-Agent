@@ -406,19 +406,30 @@ export class OpenAIProvider implements LLMProvider {
     const choice = completion.choices[0];
     if (!choice) throw new Error("No completion choice returned");
 
+    // Same "count when the server reports it, estimate only when it doesn't" contract as
+    // generateStream() below - this used to silently report 0/0/0 with no `estimated` flag
+    // whenever a server (several local OpenAI-compat backends among them) omitted `usage` on
+    // a non-streaming response, which looked like a confirmed zero-token reply instead of an
+    // unknown one.
+    const reportedUsage = (completion.usage?.prompt_tokens ?? 0) > 0 || (completion.usage?.completion_tokens ?? 0) > 0;
+    const usage = reportedUsage
+      ? {
+          promptTokens: completion.usage?.prompt_tokens ?? 0,
+          completionTokens: completion.usage?.completion_tokens ?? 0,
+          totalTokens: completion.usage?.total_tokens ?? 0,
+          // Reported by OpenAI and by OpenRouter for cache-capable models. Included in
+          // prompt_tokens already, so this is a breakdown, not an addition.
+          cachedInputTokens:
+            (completion.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)
+              ?.prompt_tokens_details?.cached_tokens ?? 0,
+          estimated: false,
+        }
+      : { ...estimateUsage(buildRequest(useNativeTools).messages, choice.message.content ?? ""), estimated: true };
+
     return {
       content: choice.message.content ?? "",
       toolCalls: fromOpenAIToolCalls(choice.message.tool_calls),
-      usage: {
-        promptTokens: completion.usage?.prompt_tokens ?? 0,
-        completionTokens: completion.usage?.completion_tokens ?? 0,
-        totalTokens: completion.usage?.total_tokens ?? 0,
-        // Reported by OpenAI and by OpenRouter for cache-capable models. Included in
-        // prompt_tokens already, so this is a breakdown, not an addition.
-        cachedInputTokens:
-          (completion.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)
-            ?.prompt_tokens_details?.cached_tokens ?? 0,
-      },
+      usage,
       model: completion.model,
       finishReason: choice.finish_reason ?? undefined,
     };
@@ -588,11 +599,19 @@ export class OpenAIProvider implements LLMProvider {
     return true;
   }
 
-  async listModels(): Promise<Array<{ id: string; name: string }>> {
+  async listModels(): Promise<Array<{ id: string; name: string; contextLength?: number }>> {
     const page = await this.client.models.list();
     return page.data.flatMap((model) => {
       const id = model.id?.trim();
-      return id ? [{ id, name: id }] : [];
+      if (!id) return [];
+      // Not part of the OpenAI API/SDK type - LM Studio's /v1/models response adds this as an
+      // extra field per entry (seen as `max_context_length` and, on older builds, `loaded_context_length`).
+      // Read defensively; every other OpenAI-compatible server just omits it.
+      const raw = model as unknown as { max_context_length?: unknown; loaded_context_length?: unknown };
+      const contextLength = [raw.max_context_length, raw.loaded_context_length]
+        .map((v) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined))
+        .find((v) => v !== undefined);
+      return [{ id, name: id, ...(contextLength ? { contextLength } : {}) }];
     });
   }
 

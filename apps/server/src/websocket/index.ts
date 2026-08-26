@@ -64,6 +64,7 @@ const ALLOWED_UI_BROWSER_ACTIONS = new Set([
   "history_back",
   "history_forward",
   "reload",
+  "get_page_errors",
 ]);
 
 
