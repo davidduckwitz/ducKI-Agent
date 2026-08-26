@@ -1,3 +1,4 @@
+import { jsonrepair } from "jsonrepair";
 import type { LLMProvider } from "@ducki/providers";
 import type { LLMMessage } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
@@ -57,7 +58,12 @@ Rules:
     ];
 
     try {
-      const response = await this.provider.generate(messages, { temperature: 0.2, maxTokens: 600 });
+      // Generous on purpose: a reasoning model spends a large chunk of its budget on hidden
+      // "thinking" tokens before ever emitting the actual JSON - a tight cap here cut the real
+      // answer off (finish_reason "length") before it was written at all, and this call's
+      // result silently degrading to "no constraints" (see the catch below) looked identical to
+      // the model genuinely having nothing to say.
+      const response = await this.provider.generate(messages, { temperature: 0.2, maxTokens: 4000 });
       const parsed = this.parseJSON<{ constraints?: { description?: string }[] }>(response.content);
       const items = parsed?.constraints ?? [];
       return items
@@ -179,7 +185,8 @@ Return JSON only.`,
     ];
 
     try {
-      const response = await this.provider.generate(messages, { temperature: 0.1, maxTokens: 1200 });
+      // Generous headroom for reasoning models - see deriveConstraints above.
+      const response = await this.provider.generate(messages, { temperature: 0.1, maxTokens: 4000 });
       const parsed = this.parseJSON<{ results?: { id?: string; status?: string; detail?: string }[] }>(
         response.content
       );
@@ -222,15 +229,24 @@ Return JSON only.`,
   }
 
   private parseJSON<T>(content: string): T | null {
+    const cleaned = content
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/, "")
+      .replace(/```\s*$/, "")
+      .trim();
     try {
-      const cleaned = content
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/, "")
-        .replace(/```\s*$/, "")
-        .trim();
       return JSON.parse(cleaned) as T;
     } catch {
-      return null;
+      // Weak/quantized local models routinely emit near-miss JSON - a stray trailing
+      // backtick, a duplicate key, a missing comma - that a strict parse rejects outright,
+      // silently degrading this pass to "no constraints" (see the catch in deriveConstraints)
+      // even though the model's intent was perfectly readable. jsonrepair fixes exactly this
+      // class of error; only fall back to null if the content isn't recoverable at all.
+      try {
+        return JSON.parse(jsonrepair(cleaned)) as T;
+      } catch {
+        return null;
+      }
     }
   }
 }

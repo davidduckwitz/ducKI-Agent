@@ -120,6 +120,14 @@ export interface GenerateOptions {
   maxTokens?: number;
   tools?: ToolDefinition[];
   stream?: boolean;
+  /** OpenAI-style `frequency_penalty` (-2..2). Discourages a model from repeating tokens it has
+   *  already emitted - set this on structured-output calls (planner/reasoner/verifier) that hand
+   *  a small/quantized local model a short, repetitive prompt (e.g. "Available tools: a, b, c"),
+   *  which is exactly the shape that triggers degenerate repetition loops in weaker models with
+   *  nothing else to break the pattern. Ignored by providers that don't support it (e.g. Claude). */
+  frequencyPenalty?: number;
+  /** OpenAI-style `presence_penalty` (-2..2). See frequencyPenalty. */
+  presencePenalty?: number;
   /** Aborts the in-flight LLM request (e.g. user clicked Stop, or the run timed out).
    *  Providers that support it forward this to their underlying HTTP client so the
    *  request is actually cancelled instead of running to completion unseen. */

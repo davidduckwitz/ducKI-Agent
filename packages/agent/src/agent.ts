@@ -1018,6 +1018,9 @@ export class Agent {
       // Remove orphan XML-style tool-call tags
       .replace(/<\/?tool_calls?[^>]*>/gi, "")
       .replace(/<\/?tool_call[^>]*>/gi, "")
+      // Remove stray/unpaired <think> or </think> tags that ThinkBlockParser's paired-match
+      // regex left behind (e.g. a model that repeats the closing tag with no opener).
+      .replace(/<\/?think>/gi, "")
       // Remove leading/trailing whitespace that may remain
       .trim();
   }
@@ -4157,7 +4160,11 @@ export class Agent {
         },
       ];
 
-      const response = await this.provider.generate(messages, { temperature: 0, maxTokens: 500 });
+      // Generous on purpose: a reasoning model spends a large chunk of its budget on hidden
+      // "thinking" tokens before ever emitting the actual JSON fix, so a tight cap here cut the
+      // real answer off (finish_reason "length") before it was ever written - see the same
+      // reasoning at every other internal helper call's maxTokens in this file.
+      const response = await this.provider.generate(messages, { temperature: 0, maxTokens: 4000 });
       const parsed = this.extractJsonObject(response.content);
       const correctedInput = parsed?.["input"];
       if (!correctedInput || typeof correctedInput !== "object" || Array.isArray(correctedInput)) return undefined;
@@ -5339,6 +5346,12 @@ export class Agent {
         .replace(/<channel\|>/g, "")                          // Remove <channel|> end markers
         .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
         .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove other <|...> markers
+        // Remove stray/unpaired <think> or </think> tags. ThinkBlockParser (called earlier)
+        // only strips a matched pair; a model that opens thinking in a separate
+        // reasoning_content channel and then degenerately repeats the closing tag in the
+        // visible content (seen with some LM Studio speculative-decoding models) leaves
+        // bare </think> lines with no opener, which this regex catches directly.
+        .replace(/<\/?think>/gi, "")
         .trim());
       return { resultMap, cleanedResponse, browserToolsCount: 0, journalEntries, executedCalls: [] };
     }
@@ -5791,119 +5804,137 @@ export class Agent {
           });
         }
 
-        // A successful browser screenshot carries the actual image as base64 in
-        // data.screenshot. Remove it from the tool result to save tokens (the actual
-        // screenshot is added to the conversation as a separate vision message by
-        // handleScreenshotCapture, so the model can analyze it). A multi-KB/MB base64
-        // blob in the tool result would waste tokens and add nothing since the model
-        // will see the same image in the vision message with better context.
-        const rawResultData = executed.result.data as Record<string, unknown> | undefined;
-        const screenshotBase64 = this.isBrowserTool(toolCall?.toolName) && executed.result.success
-          ? (rawResultData?.["screenshot"] as string | undefined)
-          : undefined;
+        // Lead with what ran, not with the internal call id: "call_1a2b3c: Success" told the
+        // reader nothing about which tool produced it. Computed up front, before the try block
+        // below, so it is available even if something in there throws.
+        const resultSummary = toolCall ? summarizeToolCall(toolCall.toolName, toolCall.input) : "tool";
 
-        if (screenshotBase64) {
-          const screenshotFormat = (rawResultData?.["metadata"] as { format?: string } | undefined)?.format ?? "jpeg";
-          emit("browser_preview", `Screenshot: ${(rawResultData?.["url"] as string | undefined) ?? "preview"}`, {
-            toolBatchId,
-            tabId: rawResultData?.["sessionId"],
-            url: rawResultData?.["url"],
-            screenshot: screenshotBase64,
-            format: screenshotFormat,
-            isStreaming: false,
+        // Everything in this block is PERIPHERAL to the call's own success/failure (already
+        // decided, in executed.result): shaping/truncating the result for the LLM, extracting a
+        // screenshot for vision, tracking the browser sessionId. A failure in here must never
+        // swallow this call's own tool_result event below - the "repeated identical tool error"
+        // guardrail (and the UI) read exactly that event, so a call that actually SUCCEEDED but
+        // hit an exception in this unrelated post-processing would otherwise silently vanish
+        // from the transcript instead of being reported for what it was.
+        try {
+          // A successful browser screenshot carries the actual image as base64 in
+          // data.screenshot. Remove it from the tool result to save tokens (the actual
+          // screenshot is added to the conversation as a separate vision message by
+          // handleScreenshotCapture, so the model can analyze it). A multi-KB/MB base64
+          // blob in the tool result would waste tokens and add nothing since the model
+          // will see the same image in the vision message with better context.
+          const rawResultData = executed.result.data as Record<string, unknown> | undefined;
+          const screenshotBase64 = this.isBrowserTool(toolCall?.toolName) && executed.result.success
+            ? (rawResultData?.["screenshot"] as string | undefined)
+            : undefined;
+
+          if (screenshotBase64) {
+            const screenshotFormat = (rawResultData?.["metadata"] as { format?: string } | undefined)?.format ?? "jpeg";
+            emit("browser_preview", `Screenshot: ${(rawResultData?.["url"] as string | undefined) ?? "preview"}`, {
+              toolBatchId,
+              tabId: rawResultData?.["sessionId"],
+              url: rawResultData?.["url"],
+              screenshot: screenshotBase64,
+              format: screenshotFormat,
+              isStreaming: false,
+            });
+          }
+
+          const resultForLlm = screenshotBase64
+            ? {
+                ...executed.result,
+                data: {
+                  ...rawResultData,
+                  screenshot: `[screenshot image, ${screenshotBase64.length} base64 chars - shown to the user directly, not included here]`,
+                },
+              }
+            : executed.result;
+
+          // Add tool result to conversation so LLM sees it in next iteration
+          // Truncate very large results to avoid API token limits
+          const maxResultSize = 8000; // 8KB limit per tool result
+          const { json: truncatedJson, truncated, originalSize } = this.boundToolResultJson(
+            resultForLlm,
+            maxResultSize
+          );
+
+          // Format tool result: extract actual output for readability, keep full JSON as fallback
+          let resultContent = truncatedJson;
+          try {
+            const parsed = JSON.parse(truncatedJson);
+            if (parsed.data) {
+              // If there's an output field, present it clearly
+              if (typeof parsed.data === "object" && "output" in parsed.data) {
+                resultContent = `Tool Result: ${parsed.data.output}\n\n[Full result: ${truncatedJson}]`;
+              } else if (typeof parsed.data === "string") {
+                resultContent = `Tool Result: ${parsed.data}`;
+              }
+            }
+          } catch {
+            // If parsing fails, use the raw JSON
+          }
+
+          // On failure, append an actionable recovery hint so the model self-corrects on the
+          // next iteration instead of blindly repeating the same failing call (or giving up).
+          // Previously deriveToolRecoveryHint existed but was never wired into this path, so its
+          // guidance never reached the model — the gateway/Discord config failures in particular
+          // left the agent stuck with only a raw error string.
+          if (!executed.result.success && executed.result.error && toolCall) {
+            const hint = this.deriveToolRecoveryHint(toolCall.toolName, toolCall.input, executed.result.error);
+            if (hint) {
+              resultContent = `${resultContent}\n\n[Recovery hint] ${hint}`;
+            }
+          }
+
+          const toolResultMessage: LLMMessage = {
+            role: "tool",
+            content: resultContent,
+            toolCallId: executed.id,
+          };
+          // Stamp read-only results with an identity so the context builder can drop superseded
+          // copies of the same read instead of paying for the file twice (see buildToolResultDedupeKey).
+          const dedupeKey = toolCall ? buildToolResultDedupeKey(toolCall.toolName, toolCall.input) : undefined;
+          if (dedupeKey) {
+            toolResultMessage.metadata = { toolName: toolCall!.toolName, dedupeKey };
+          }
+          await this.conversation.addMessage(toolResultMessage);
+          this.history.add(toolResultMessage, toolCall?.toolName ?? "unknown");
+
+          this.logger.info("[TOOL-CALLS] Added tool result to conversation", {
+            callId: executed.id,
+            toolName: toolCall?.toolName,
+            resultSize: originalSize,
+            truncated,
+          });
+
+          // Handle screenshot capture: extract image data and add as visual message to conversation
+          await this.handleScreenshotCapture(
+            toolCall?.toolName ?? "unknown",
+            toolCall?.input ?? {},
+            executed.result
+          );
+
+          // Extract and track the latest browser sessionId from results
+          if (toolCall?.toolName === "browser" && executed.result.success) {
+            const data = executed.result.data as Record<string, unknown> | undefined;
+            const sessionId = data?.sessionId as string | undefined;
+            if (sessionId) {
+              latestBrowserSessionId = sessionId;
+              this.logger.info("[TOOL-CALLS] Tracked browser sessionId from tool result", {
+                sessionId,
+                callId: executed.id,
+              });
+            }
+          }
+        } catch (error) {
+          this.logger.error("[TOOL-CALLS] Post-processing failed for a tool result - the call's own success/failure recorded above is unaffected by this", {
+            callId: executed.id,
+            toolName: toolCall?.toolName,
+            callSucceeded: executed.result.success,
+            error: error instanceof Error ? error.message : String(error),
           });
         }
 
-        const resultForLlm = screenshotBase64
-          ? {
-              ...executed.result,
-              data: {
-                ...rawResultData,
-                screenshot: `[screenshot image, ${screenshotBase64.length} base64 chars - shown to the user directly, not included here]`,
-              },
-            }
-          : executed.result;
-
-        // Add tool result to conversation so LLM sees it in next iteration
-        // Truncate very large results to avoid API token limits
-        const maxResultSize = 8000; // 8KB limit per tool result
-        const { json: truncatedJson, truncated, originalSize } = this.boundToolResultJson(
-          resultForLlm,
-          maxResultSize
-        );
-
-        // Format tool result: extract actual output for readability, keep full JSON as fallback
-        let resultContent = truncatedJson;
-        try {
-          const parsed = JSON.parse(truncatedJson);
-          if (parsed.data) {
-            // If there's an output field, present it clearly
-            if (typeof parsed.data === "object" && "output" in parsed.data) {
-              resultContent = `Tool Result: ${parsed.data.output}\n\n[Full result: ${truncatedJson}]`;
-            } else if (typeof parsed.data === "string") {
-              resultContent = `Tool Result: ${parsed.data}`;
-            }
-          }
-        } catch {
-          // If parsing fails, use the raw JSON
-        }
-
-        // On failure, append an actionable recovery hint so the model self-corrects on the
-        // next iteration instead of blindly repeating the same failing call (or giving up).
-        // Previously deriveToolRecoveryHint existed but was never wired into this path, so its
-        // guidance never reached the model — the gateway/Discord config failures in particular
-        // left the agent stuck with only a raw error string.
-        if (!executed.result.success && executed.result.error && toolCall) {
-          const hint = this.deriveToolRecoveryHint(toolCall.toolName, toolCall.input, executed.result.error);
-          if (hint) {
-            resultContent = `${resultContent}\n\n[Recovery hint] ${hint}`;
-          }
-        }
-
-        const toolResultMessage: LLMMessage = {
-          role: "tool",
-          content: resultContent,
-          toolCallId: executed.id,
-        };
-        // Stamp read-only results with an identity so the context builder can drop superseded
-        // copies of the same read instead of paying for the file twice (see buildToolResultDedupeKey).
-        const dedupeKey = toolCall ? buildToolResultDedupeKey(toolCall.toolName, toolCall.input) : undefined;
-        if (dedupeKey) {
-          toolResultMessage.metadata = { toolName: toolCall!.toolName, dedupeKey };
-        }
-        await this.conversation.addMessage(toolResultMessage);
-        this.history.add(toolResultMessage, toolCall?.toolName ?? "unknown");
-
-        this.logger.info("[TOOL-CALLS] Added tool result to conversation", {
-          callId: executed.id,
-          toolName: toolCall?.toolName,
-          resultSize: originalSize,
-          truncated,
-        });
-
-        // Handle screenshot capture: extract image data and add as visual message to conversation
-        await this.handleScreenshotCapture(
-          toolCall?.toolName ?? "unknown",
-          toolCall?.input ?? {},
-          executed.result
-        );
-
-        // Extract and track the latest browser sessionId from results
-        if (toolCall?.toolName === "browser" && executed.result.success) {
-          const data = executed.result.data as Record<string, unknown> | undefined;
-          const sessionId = data?.sessionId as string | undefined;
-          if (sessionId) {
-            latestBrowserSessionId = sessionId;
-            this.logger.info("[TOOL-CALLS] Tracked browser sessionId from tool result", {
-              sessionId,
-              callId: executed.id,
-            });
-          }
-        }
-
-        // Lead with what ran, not with the internal call id: "call_1a2b3c: Success" told
-        // the reader nothing about which tool produced it.
-        const resultSummary = toolCall ? summarizeToolCall(toolCall.toolName, toolCall.input) : "tool";
         const stepId = options.getCurrentStepId?.();
         journalEntries.push({
           iteration: iterations,
@@ -5956,6 +5987,8 @@ export class Agent {
       .replace(/<channel\|>/g, "")                          // Remove <channel|> end markers
       .replace(/<\|tool_call>.*?<tool_call\|>/gs, "")      // Remove <|tool_call>...<tool_call|> blocks
       .replace(/<\|[a-zA-Z_]+>/g, "")                       // Remove remaining <|...> markers
+      // See the identical fix in the "no tool calls" branch above for why this is needed.
+      .replace(/<\/?think>/gi, "")
       .trim());
 
     this.logger.info("[TOOL-CALLS] Response cleanup complete", {
@@ -8751,7 +8784,11 @@ export class Agent {
               },
             ];
             const fixResponse = await this.withTimeout(
-              this.provider.generate(fixMessages, { temperature: 0.3, maxTokens: 2000 }),
+              // Generous headroom for reasoning models (hidden "thinking" tokens eat into the
+              // same budget before the real corrected answer is written) - see agent-wide note.
+              // frequencyPenalty guards against a weak local model looping instead of writing
+              // the corrected answer - see planner.ts's createPlan for the failure this covers.
+              this.provider.generate(fixMessages, { temperature: 0.3, maxTokens: 8000, frequencyPenalty: 0.4 }),
               adjustedControls.qualityPassTimeoutMs,
               "verify-fix"
             );

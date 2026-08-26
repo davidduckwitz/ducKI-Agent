@@ -109,7 +109,7 @@ describe("agent model profiles", () => {
     expect(result.profile).toBe("small");
     expect(result.appliedKeys.length).toBe(Object.keys(AGENT_MODEL_PROFILES.small.settings).length);
     expect(setSetting).toHaveBeenCalledWith("AGENT_MAX_ITERATIONS", "18");
-    expect(setSetting).toHaveBeenCalledWith("AGENT_CODING_ENABLE_VERIFY", "true");
+    expect(setSetting).toHaveBeenCalledWith("AGENT_CODING_ENABLE_VERIFY", "false");
     expect(setSetting).not.toHaveBeenCalledWith("AGENT_ENABLE_VISION", expect.anything());
     expect(setSetting).not.toHaveBeenCalledWith("AGENT_AUTO_SKILL_SELECTION", expect.anything());
     expect(setSetting).not.toHaveBeenCalledWith("ENABLED_SKILLS", expect.anything());

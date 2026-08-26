@@ -121,7 +121,9 @@ export function createArtifactTool(db: DatabaseService, getProvider: () => LLMPr
           const messages: LLMMessage[] = [
             { role: "user", content: [...imageBlocks, { type: "text", text: `${transcriptLine}${question}` }] },
           ];
-          const response = await getProvider().generate(messages, { temperature: 0.2, maxTokens: 1200 });
+          // Generous headroom for reasoning models: hidden "thinking" tokens eat into the same
+          // budget before the real answer is written.
+          const response = await getProvider().generate(messages, { temperature: 0.2, maxTokens: 4000 });
           return ok({ answer: response.content });
         }
 
