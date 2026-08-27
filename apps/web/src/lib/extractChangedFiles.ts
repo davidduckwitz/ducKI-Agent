@@ -25,3 +25,15 @@ export function extractChangedFiles(content: string): string[] {
   }
   return files;
 }
+
+/** Cuts a raw assistant message off at its first tool-call marker, leaving only the prose the
+ *  model actually said - the marker's own JSON/args are machine-facing, not something to show
+ *  as a human-readable summary. Shared by the coding chat and the plan completion summary. */
+export function stripToolMarkers(text: string): string {
+  let out = text;
+  for (const marker of ["[TOOL:", "<|tool_call>", "<tool_call>"]) {
+    const idx = out.indexOf(marker);
+    if (idx >= 0) out = out.slice(0, idx);
+  }
+  return out.trim();
+}

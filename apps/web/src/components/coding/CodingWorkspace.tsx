@@ -24,7 +24,7 @@ import { useCodingSession } from "../../lib/codingSessionStore";
 import { useUiStore, CODING_AGENT_MIN_WIDTH, CODING_AGENT_MAX_WIDTH } from "../../lib/uiStore";
 import { useIsMobile } from "../../lib/useMediaQuery";
 import { useTheme } from "../theme/ThemeProvider";
-import { extractChangedFiles } from "../../lib/extractChangedFiles";
+import { extractChangedFiles, stripToolMarkers } from "../../lib/extractChangedFiles";
 import { toastManager } from "../../lib/toast";
 import { PanelEmpty } from "../ui/panel";
 import { SplitHandle } from "../ui/split-handle";
@@ -474,7 +474,7 @@ export function CodingWorkspace() {
   );
 
   // Extract current plan from messages for modal display
-  const currentPlan = useMemo(() => {
+  const { plan: currentPlan, planIndex: currentPlanIndex } = useMemo(() => {
     const msgs = messages ?? [];
     for (let i = msgs.length - 1; i >= 0; i -= 1) {
       const msg = msgs[i];
@@ -485,10 +485,36 @@ export function CodingWorkspace() {
         ...(raw["id"] === undefined && Number.isFinite(Number(raw["planId"])) ? { id: Number(raw["planId"]) } : {}),
         ...(raw["version"] === undefined && Number.isFinite(Number(raw["planVersion"])) ? { version: Number(raw["planVersion"]) } : {}),
       } as unknown as Plan;
-      if (data.goal && Array.isArray(data.steps) && data.steps.length > 0) return data;
+      if (data.goal && Array.isArray(data.steps) && data.steps.length > 0) return { plan: data, planIndex: i };
     }
-    return null;
+    return { plan: null as Plan | null, planIndex: -1 };
   }, [messages]);
+
+  // Once the agent stops working on this plan (isLoading flips false, having been true for
+  // this same plan - see wasExecutingPlanRef below), collect what actually happened: the
+  // agent's own final report text and every file its tool calls touched, scanned from the
+  // messages produced AFTER the plan appeared. Lets a user who left the Plan modal open (now
+  // always closable - see PlanExecutionPanel) see a real result instead of a progress bar stuck
+  // at 100% with no further information.
+  const wasExecutingPlanRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (isLoading && currentPlan?.id !== undefined) wasExecutingPlanRef.current = currentPlan.id;
+  }, [isLoading, currentPlan?.id]);
+  const planCompletion = useMemo(() => {
+    if (isLoading || currentPlanIndex === -1 || !currentPlan) return null;
+    if (wasExecutingPlanRef.current === undefined || wasExecutingPlanRef.current !== currentPlan.id) return null;
+    const changedFiles = new Set<string>();
+    let lastAssistantText = "";
+    for (let i = currentPlanIndex + 1; i < messages.length; i += 1) {
+      const msg = messages[i];
+      if (!msg || msg.role !== "assistant" || typeof msg.content !== "string") continue;
+      for (const file of extractChangedFiles(msg.content)) changedFiles.add(file);
+      const stripped = stripToolMarkers(msg.content);
+      if (stripped) lastAssistantText = stripped;
+    }
+    if (changedFiles.size === 0 && !lastAssistantText) return null;
+    return { summary: lastAssistantText, changedFiles: [...changedFiles] };
+  }, [messages, currentPlan, currentPlanIndex, isLoading]);
 
   useEffect(() => {
     setRenaming(false);
@@ -749,6 +775,7 @@ export function CodingWorkspace() {
         includeFile: options.includeFile,
         provider: chatProvider,
         model: chatModel,
+        planOnly: options.planMode,
       })
       .catch((error) => {
         console.error("[sendCodingPrompt] Follow-up failed:", error);
@@ -1298,7 +1325,10 @@ export function CodingWorkspace() {
         </div>
       )}
 
-      {/* Plan Execution Panel Modal - only show before execution starts */}
+      {/* Plan Execution Panel Modal. Auto-opens once per newly-created plan and stays open
+          through execution and completion unless the user closes it (always possible now -
+          see PlanExecutionPanel) - showing the agent's own summary and changed files once the
+          run for THIS plan finishes (planCompletion). */}
       {showPlanPanel && currentPlan && (
         <PlanExecutionPanel
           plan={currentPlan}
@@ -1321,6 +1351,9 @@ export function CodingWorkspace() {
           }}
           onClose={() => setShowPlanPanel(false)}
           isExecuting={isLoading}
+          isCompleted={Boolean(planCompletion)}
+          completionSummary={planCompletion?.summary}
+          changedFiles={planCompletion?.changedFiles}
         />
       )}
     </div>

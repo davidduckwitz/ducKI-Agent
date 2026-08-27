@@ -50,11 +50,20 @@ interface PlanExecutionPanelProps {
   /** Every step has already been completed (live or replayed from a past conversation) -
    *  hides "Umsetzen" (nothing left to run) and relabels "Plan verbessern" accordingly. */
   isCompleted?: boolean;
+  /** The agent's own final report text once the run has finished - shown alongside
+   *  changedFiles so a user who kept the panel open sees what actually happened instead of
+   *  just a bare progress bar stuck at 100%. */
+  completionSummary?: string;
+  /** Files the completed run actually wrote/edited, for display next to completionSummary. */
+  changedFiles?: string[];
 }
 
 export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
   try {
-    const { plan, onRefine, onExecute, onClose, isExecuting = false, executionProgress, isCompleted = false } = props;
+    const {
+      plan, onRefine, onExecute, onClose, isExecuting = false, executionProgress, isCompleted = false,
+      completionSummary, changedFiles,
+    } = props;
 
     if (!plan?.goal) {
       return null;
@@ -71,7 +80,10 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
           {/* Header */}
           <div className="sticky top-0 bg-card border-b border-border p-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">{plan.title || "Plan"}</h2>
-            <button onClick={onClose} className="text-muted-foreground hover:text-foreground" disabled={isExecuting}>
+            {/* Always closable, even mid-run: the agent keeps working in the background
+                regardless of whether this modal is open - see CodingWorkspace's isLoading,
+                which is not tied to this panel's visibility. */}
+            <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -178,14 +190,36 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
                 </p>
               </div>
             )}
+
+            {isCompleted && (completionSummary || (changedFiles && changedFiles.length > 0)) && (
+              <div className="rounded border border-border bg-background/40 p-3">
+                <p className="text-sm text-muted-foreground">Ergebnis:</p>
+                {completionSummary && (
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-foreground/90">{completionSummary}</p>
+                )}
+                {changedFiles && changedFiles.length > 0 && (
+                  <div className="mt-2">
+                    <p className="text-xs text-muted-foreground">
+                      Geänderte Dateien ({changedFiles.length}):
+                    </p>
+                    <ul className="mt-1 space-y-0.5">
+                      {changedFiles.map((path) => (
+                        <li key={path} className="truncate font-mono text-xs text-foreground/80">
+                          {path}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Footer */}
           <div className="bg-muted border-t border-border p-4 flex gap-3 justify-end">
             <button
               onClick={onClose}
-              disabled={isExecuting}
-              className="px-4 py-2 bg-muted hover:bg-accent rounded text-sm disabled:opacity-50"
+              className="px-4 py-2 bg-muted hover:bg-accent rounded text-sm"
             >
               Schließen
             </button>

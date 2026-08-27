@@ -140,6 +140,42 @@ function findLatestTodoSnapshot(messages: RenderedChatMessage[], scope?: PlanEve
   return null;
 }
 
+/** PlanStep.status (packages/agent/src/planner/planner.ts) -> this module's vocabulary - the
+ *  inverse of CodingAgent's own TODO_TO_PLAN_STATUS map (coding-agent.ts), kept in sync with it. */
+const PLAN_STEP_STATUS_MAP: Record<string, string> = {
+  pending: "pending",
+  running: "in_progress",
+  completed: "done",
+  failed: "failed",
+};
+
+/**
+ * Fallback per-step status built directly from a persisted Plan's own steps (see
+ * CodingPlanPanel's latestPersistedPlan) - used only when neither a "checklist" event nor a
+ * CodingAgent "decision"/todo_items event survives in the currently-loaded (paginated) message
+ * window anymore. CodingAgent keeps the plans-table row's steps in sync with the live TodoList
+ * on every checklist change (see syncPlanFromTodos in coding-agent.ts), so this stays current
+ * even once nothing about it is visible in messages - just coarser than the live sources (no
+ * separate "skipped" status; PlanStep.status has no such state).
+ */
+export function checklistFromPlanSteps(
+  steps: Array<{ id?: string; title: string; status?: string }>
+): ChecklistSnapshot | null {
+  if (steps.length === 0) return null;
+  const statusByIndex = new Map<number, string>();
+  const statusById = new Map<string, string>();
+  const statusByTitle = new Map<string, string>();
+  let doneCount = 0;
+  steps.forEach((step, index) => {
+    const mapped = PLAN_STEP_STATUS_MAP[String(step.status ?? "pending")] ?? "pending";
+    if (mapped === "done") doneCount++;
+    statusByIndex.set(index, mapped);
+    if (step.id) statusById.set(step.id, mapped);
+    if (step.title?.trim()) statusByTitle.set(step.title.trim().toLowerCase(), mapped);
+  });
+  return { statusByIndex, statusById, statusByTitle, doneCount, total: steps.length };
+}
+
 export function resolveStepStatus(
   snapshot: ChecklistSnapshot | null,
   step: { id?: string; title: string },

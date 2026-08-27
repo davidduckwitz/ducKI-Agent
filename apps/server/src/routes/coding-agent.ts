@@ -92,6 +92,9 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       /** From the coding chat's LLM selector - unset means "use the system default provider". */
       provider?: string;
       model?: string;
+      /** "Plan Mode" from the coding chat composer: create/refresh the plan and report it, never
+       *  enter the EXPLORE/EDIT/VERIFY loop - see CodingRunOptions.planOnly. */
+      planOnly?: boolean;
     };
     const goal = String(body.goal ?? "").trim();
     if (!goal) {
@@ -210,6 +213,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         maxAttempts,
         ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),
         ...(timeoutMs > 0 ? { timeoutMs } : {}),
+        ...(body.planOnly === true ? { planOnly: true } : {}),
         // Same chat:chunk channel/room the regular chat agent streams into - the frontend
         // store already accumulates these into `streamingContent` and shows them in the
         // "currently writing" bubble, with no coding-specific UI changes needed for this.

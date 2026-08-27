@@ -13,7 +13,7 @@ import { PartWriteBanner } from "./PartWriteBanner";
 import { ToolSkillSelector } from "../chat/ToolSkillSelector";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import type { Plan } from "../chat/PlanExecutionPanel";
-import { extractChangedFiles } from "../../lib/extractChangedFiles";
+import { extractChangedFiles, stripToolMarkers } from "../../lib/extractChangedFiles";
 import { PanelEmpty } from "../ui/panel";
 import { CodingPlanPanel } from "./CodingPlanPanel";
 import { CodingChangesPanel } from "./CodingChangesPanel";
@@ -26,15 +26,6 @@ import { CodingTodoStrip, type CodingTodoItem } from "./CodingTodoStrip";
  * conversation. Tool calls end the turn, so cutting from the first marker keeps the
  * agent's narrative and drops the raw call. (Activity tab is untouched.)
  */
-function stripToolMarkers(text: string): string {
-  let out = text;
-  for (const marker of ["[TOOL:", "<|tool_call>", "<tool_call>"]) {
-    const idx = out.indexOf(marker);
-    if (idx >= 0) out = out.slice(0, idx);
-  }
-  return out.trim();
-}
-
 /** Compact "12.3k" style formatting for a token count - matches how the rest of the chat UI
  *  abbreviates large numbers (see the ⚡ total-tokens chip in ChatComposer). */
 function formatTokenCount(n: number): string {

@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2, Circle, ListChecks, Loader2, Play, Sparkles 
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
-import { findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "../../lib/planChecklist";
+import { checklistFromPlanSteps, findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "../../lib/planChecklist";
 import { findLatestPhaseProgress, CODING_PHASES, CODING_PHASE_LABEL, type CodingPhase } from "../../lib/planPhase";
 import { useSettings, readFlag, readNumber } from "../../lib/useSettings";
 import type { Plan } from "../chat/PlanExecutionPanel";
@@ -68,10 +68,21 @@ export function CodingPlanPanel({
     return { plan: null, planIndex: -1 };
   }, [messages]);
 
+  // The most recently updated plan actually persisted to the `plans` table for this
+  // conversation (listPlans orders by updatedAt desc - see packages/database). Independent of
+  // which page of the (paginated) message list happens to be loaded, unlike derivedPlan below -
+  // see the next comment.
+  const latestPersistedPlan = planHistory[0] ?? null;
+
   // A refined plan (just returned by POST /plans/refine) takes priority; otherwise prefer a
-  // plan from this conversation's messages; fall back to a plan handed over from the chat page
-  // (which lives in a different conversation).
-  const plan = refinedPlan ?? derivedPlan ?? overridePlan ?? null;
+  // plan derived live from this conversation's messages. That message scan only sees whatever
+  // page of (paginated, 40-per-page) history is currently loaded though - a plan announced early
+  // in a long run falls out of that window as later messages accumulate, which used to blank the
+  // whole tab mid-run even though the agent was still actively working from that exact plan.
+  // latestPersistedPlan doesn't have that problem (it's a direct DB lookup by conversationId), so
+  // it's the fallback once the live-derived one disappears - overridePlan (handed over from a
+  // different conversation, e.g. chat->coding handoff) is the last resort.
+  const plan = refinedPlan ?? derivedPlan ?? latestPersistedPlan ?? overridePlan ?? null;
 
   useEffect(() => {
     if (!conversationId) return;
@@ -80,7 +91,11 @@ export function CodingPlanPanel({
       if (active) setPlanHistory(items as Plan[]);
     }).catch(() => undefined);
     return () => { active = false; };
-  }, [conversationId, refinedPlan?.id]);
+    // Re-fetches whenever a refinement lands (existing behavior) AND whenever the live-derived
+    // plan gets a new id (a fresh plan was just created this session) - otherwise planHistory
+    // would only ever reflect whatever existed at mount time and never pick up a plan created
+    // after that without a full remount.
+  }, [conversationId, refinedPlan?.id, derivedPlan?.id]);
 
   useEffect(() => {
     if (derivedPlan?.id && refinedPlan?.parentPlanId !== derivedPlan.id && (derivedPlan.version ?? 0) > (refinedPlan?.version ?? 0)) {
@@ -104,8 +119,16 @@ export function CodingPlanPanel({
   const completionEvidence = latestRun?.["completionEvidence"] as { changedFiles?: string[]; openChecklistItems?: string[] } | undefined;
 
   // Real per-step state from the agent's own checklist (see lib/planChecklist for why this
-  // replaced a tool-call counter, and why the logic lives in a testable module).
-  const checklist = useMemo(() => findLatestChecklist(messages, eventScope), [messages, eventScope?.runId, eventScope?.planId]);
+  // replaced a tool-call counter, and why the logic lives in a testable module). Falls back to
+  // the persisted plan's own step statuses (checklistFromPlanSteps) once the live "checklist"/
+  // "decision" events fall out of the currently-loaded (paginated) message window - same
+  // rationale as latestPersistedPlan above, just for per-step progress instead of plan identity.
+  // Without this a long-running plan would keep showing (plan identity is now stable) but its
+  // progress would appear to reset to "nothing done yet" as soon as the live events aged out.
+  const checklist = useMemo(
+    () => findLatestChecklist(messages, eventScope) ?? checklistFromPlanSteps(latestPersistedPlan?.steps ?? []),
+    [messages, eventScope?.runId, eventScope?.planId, latestPersistedPlan]
+  );
 
   // The phase the agent declares it is in (see lib/planPhase). This is the same state the
   // phase-lock hook steers by, surfaced so the user can see whether the agent is exploring,

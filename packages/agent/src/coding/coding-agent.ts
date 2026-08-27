@@ -127,6 +127,28 @@ export const CODING_ALLOWED_SHELL_COMMANDS: readonly string[] = [
   "git",
 ];
 
+/**
+ * Further-restricted subset of CODING_ALLOWED_SHELL_COMMANDS with zero filesystem/state side
+ * effects - used only during CodingAgent's Plan-Mode exploration (see planOnlyExploreActive).
+ * Excludes mkdir/touch (create files/dirs) and every toolchain runner (npm/npx/pnpm/tsc/...),
+ * any of which can install packages, write build output, or run an arbitrary project script -
+ * exactly what "Plan Mode changes nothing" promises never happens.
+ */
+const PLAN_ONLY_EXPLORE_READONLY_SHELL_COMMANDS = new Set([
+  "ls", "dir", "pwd", "cd", "cat", "type", "grep", "rg", "find", "head", "tail", "wc", "echo", "which", "where",
+]);
+
+/** Git actions with no repository side effects - used the same way as the shell allowlist above.
+ *  Excludes add/commit/push/pull/clone/checkout/init, all of which mutate the working tree,
+ *  history, or (checkout) which files are even present. */
+const PLAN_ONLY_EXPLORE_READONLY_GIT_ACTIONS = new Set(["status", "diff", "log", "branch"]);
+
+/** How many EXPLORE-phase tool-call iterations Plan-Mode's investigation sub-run gets before it
+ *  is cut off and the Planner is called with whatever was learned so far. Small on purpose: this
+ *  is meant to ground the plan in a quick look at the project, not to run a full exploration -
+ *  a goal that genuinely needs more than this benefits more from actually being executed. */
+const PLAN_ONLY_EXPLORE_MAX_ITERATIONS = 12;
+
 export interface CodingAgentOptions {
   name?: string;
   systemPrompt?: string;
@@ -216,6 +238,14 @@ export interface CodingRunOptions {
    * cannot complete successfully until the checkpoint diff proves that one happened.
    */
   mutationExpected?: boolean;
+  /**
+   * "Plan Mode": create/refresh the plan, seed the checklist, report it - then return WITHOUT
+   * ever entering the EXPLORE/EDIT/VERIFY attempt loop. No filesystem/shell tool call happens at
+   * all, so nothing about the project can change. Implies mutationExpected:false unless the
+   * caller explicitly overrides it (a plan-only run was never going to touch a file, so the
+   * completion contract must not demand one).
+   */
+  planOnly?: boolean;
 }
 
 export interface CodingRunResult {
@@ -369,6 +399,18 @@ export class CodingAgent {
    *  the phase marker would deadlock the run instead of ever letting it edit anything. */
   private phaseLockRefusals = 0;
   /**
+   * True only while Plan-Mode's own investigation sub-run (see run()'s planOnly branch) is in
+   * flight - read by the coding-plan-only-explore-lock hook below. Unlike the normal phase lock,
+   * this has no bypass-after-N-refusals escape hatch: "Plan Mode changed nothing" is a promise
+   * made to the user, not just an internal discipline nudge a stubborn model may eventually
+   * override.
+   */
+  private planOnlyExploreActive = false;
+  /** Tool-call budget consumed so far during the CURRENT Plan-Mode investigation sub-run - reset
+   *  each time one starts. Counts every tool call (not just refused ones) so a model that keeps
+   *  investigating forever still gets cut off - see PLAN_ONLY_EXPLORE_MAX_ITERATIONS. */
+  private planOnlyExploreToolCalls = 0;
+  /**
    * The most advanced phase-event already emitted per phase this run, used to deduplicate the
    * live emission path (updatePhaseFromResponse) against the end-of-attempt backfill
    * (extractAndEmitPhaseEvents). Ranks: started=1, completed=2. A lower rank is never emitted
@@ -409,6 +451,12 @@ export class CodingAgent {
    *  syncPlanFromTodos can update it in place when the model rewrites the checklist. Undefined
    *  before run() computes/rehydrates a plan. */
   private currentPlan: Plan | undefined;
+  /** The `plans` table row id/version currentPlan was persisted as (see persistPlan in run()) -
+   *  undefined when persistence failed or the plan came from opts.existingPlan (already has its
+   *  own id from wherever it was loaded, and this instance never re-persists someone else's
+   *  row). Read by syncPlanFromTodos to keep that row's step statuses live as the checklist
+   *  changes - see this.currentPlanDbId's doc comment there for why that matters. */
+  private currentPlanDb: { id: number; version: number } | undefined;
 
   private buildRepositorySnapshot(): Record<string, unknown> | undefined {
     if (!this.sandboxRoot || !existsSync(this.sandboxRoot)) return undefined;
@@ -543,6 +591,65 @@ export class CodingAgent {
             }
           }
 
+          return { proceed: true };
+        },
+      },
+      {
+        // Runs before every other discipline hook (highest priority) so nothing else - not the
+        // phase lock's one-time bypass, not the shell-approval allowlist - gets a chance to let
+        // a call through first. Only active during CodingAgent's own Plan-Mode investigation
+        // sub-run (see run()); a completely inert no-op the rest of the time.
+        name: "coding-plan-only-explore-lock",
+        priority: 100,
+        handler: async (context: any) => {
+          if (!this.planOnlyExploreActive) return { proceed: true };
+          const toolName = context.toolName as string;
+          const input = (context.input as Record<string, unknown>) ?? {};
+
+          this.planOnlyExploreToolCalls++;
+          if (this.planOnlyExploreToolCalls > PLAN_ONLY_EXPLORE_MAX_ITERATIONS) {
+            return {
+              proceed: false,
+              reason:
+                "Plan-Modus: Recherche-Budget aufgebraucht. Rufe kein weiteres Tool auf - fasse jetzt " +
+                "in Worten zusammen, was du fuer die Planung herausgefunden hast.",
+            };
+          }
+
+          if (toolName === "filesystem") {
+            const action = String(input["action"] ?? "").toLowerCase();
+            if (MUTATING_FILESYSTEM_ACTIONS.has(action)) {
+              return {
+                proceed: false,
+                reason:
+                  `Plan-Modus: nur Recherche, keine Ausfuehrung - dieser Lauf erstellt nur einen Plan und ` +
+                  `aendert keine Dateien. Verwende "read"/"grep"/"glob"/"outline"/"list" statt "${action}".`,
+              };
+            }
+            return { proceed: true };
+          }
+          if (toolName === "git") {
+            const action = String(input["action"] ?? "").toLowerCase();
+            if (!PLAN_ONLY_EXPLORE_READONLY_GIT_ACTIONS.has(action)) {
+              return {
+                proceed: false,
+                reason: `Plan-Modus: git-Aktion "${action}" ist hier read-only-beschraenkt (erlaubt: status, diff, log, branch).`,
+              };
+            }
+            return { proceed: true };
+          }
+          if (toolName === "shell") {
+            const command = String(input["command"] ?? "").trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+            if (!PLAN_ONLY_EXPLORE_READONLY_SHELL_COMMANDS.has(command)) {
+              return {
+                proceed: false,
+                reason:
+                  `Plan-Modus: Shell-Befehl "${command}" ist hier nicht erlaubt - nur reine Lesebefehle ` +
+                  `(ls, cat, grep, find, ...), kein Build/Install/Test.`,
+              };
+            }
+            return { proceed: true };
+          }
           return { proceed: true };
         },
       },
@@ -1039,6 +1146,7 @@ export class CodingAgent {
     this.pendingDiagnosticErrors = new Map<string, { count: number; errors: string[] }>();
     this.diagnosticGuardRefusals = 0;
     this.currentPlan = undefined;
+    this.currentPlanDb = undefined;
     this.suppressPlanSync = false;
     this.todos.reset();
     // A new goal on this instance must re-select skills, not reuse the previous goal's - see
@@ -1084,7 +1192,7 @@ export class CodingAgent {
     // evidence; only checkpoint diffs (and the bounded parted-write healer) update these facts.
     // CodingAgent is an execution surface, so mutation is the safe default. Deliberately
     // read-only review callers must opt out explicitly.
-    const mutationExpected = opts.mutationExpected ?? true;
+    const mutationExpected = opts.mutationExpected ?? !opts.planOnly;
     let fileChangesObserved = false;
     const changedFiles = new Set<string>();
 
@@ -1232,6 +1340,40 @@ export class CodingAgent {
     // the checklist status (what was already done) carries over — not the plan steps.
     const persisted = isResuming && !opts.existingPlan ? await this.loadPersistedState(conversationId) : undefined;
 
+    // Plan Mode's own bounded investigation: reads/browses/read-only-shells the project so the
+    // Planner call below is grounded in what's actually there instead of only a bare file listing
+    // (buildRepositorySnapshot). Model-driven, not mandatory - a trivial goal the model already
+    // understands can just skip straight to a final answer with zero tool calls, exactly like the
+    // normal EXPLORE phase already behaves. Bounded by PLAN_ONLY_EXPLORE_MAX_ITERATIONS via the
+    // coding-plan-only-explore-lock hook, which also hard-blocks every mutating call for the
+    // whole sub-run - no bypass, since "Plan Mode changed nothing" must hold regardless of what
+    // the model tries.
+    let explorationNotes: string | undefined;
+    if (opts.planOnly && !opts.existingPlan) {
+      this.emit("decision", "Plan-Modus: Recherche vor der Planerstellung.", { plan_only_explore: true });
+      this.planOnlyExploreToolCalls = 0;
+      this.planOnlyExploreActive = true;
+      try {
+        const exploreResult = await this.agent.run(
+          `Goal to plan for: ${goal}\n\n` +
+            "Before you plan, investigate the project as needed: read relevant files, browse the " +
+            "running preview if useful, or run read-only shell inspection commands. You may call " +
+            "zero tools if the goal is already clear. You CANNOT edit, write, install, build, run " +
+            "tests, or make any git changes this turn - every such call will be refused. Stop as " +
+            "soon as you have enough context and answer with a short, concrete summary of what you " +
+            "found that is relevant to planning (existing structure, conventions, relevant files) - " +
+            "do not propose the plan itself, that happens separately.",
+          {
+            ...(opts.onChunk ? { stream: true, onChunk: opts.onChunk } : {}),
+            displayContent: `[Plan-Modus] Recherche fuer: ${goal}`,
+          }
+        );
+        explorationNotes = exploreResult.response;
+      } finally {
+        this.planOnlyExploreActive = false;
+      }
+    }
+
     // Real planning subagent: a structured, detailed plan from the Planner instead of letting
     // the model invent one in free text during the PLAN phase (see buildInitialPrompt). A
     // caller-supplied plan (already reviewed/refined by the user, e.g. via the Plan panel) is
@@ -1243,12 +1385,23 @@ export class CodingAgent {
     // downgrade that explicit context into a general/research plan: such a plan can write a
     // Markdown research artifact, create a real checkpoint diff, and then make this run look
     // successful without ever implementing the requested software.
+    const repositoryContext = { ...this.buildRepositorySnapshot(), ...(explorationNotes ? { explorationNotes } : {}) };
     const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames, {
       requiredPlanType: "coding",
-      repositoryContext: this.buildRepositorySnapshot(),
+      repositoryContext,
     }));
     this.currentPlan = plan;
-    this.emitPlanEvent(plan);
+    // A plan this call just created itself (not one the caller already had - opts.existingPlan
+    // came with its own id from wherever it was loaded) is persisted to the `plans` table right
+    // here, not only broadcast as an event. Without this row, the ONLY record of the plan was
+    // the "plan" event message - and the coding chat's message list is paginated (most recent
+    // 40), so a run with enough follow-up iterations pushes that one early event out of the
+    // loaded window and the Plan tab goes blank mid-run even though the agent is still working
+    // from it. GET /plans?conversationId=... lets the frontend look the plan up independently of
+    // which page of messages happens to be loaded - see the id/version passed to emitPlanEvent
+    // below. Best-effort: a failed write degrades the Plan tab, never the run itself.
+    this.currentPlanDb = opts.existingPlan ? undefined : await this.persistPlan(plan, repositoryContext, conversationId);
+    this.emitPlanEvent(plan, this.currentPlanDb);
     // Pre-seeds the checklist with the planner's steps so the UI shows real progress from the
     // very first tool call, instead of an empty list until the model gets around to calling
     // todo:write itself. Title-matched merge (see TodoList.replace) keeps these ids stable if
@@ -1278,6 +1431,28 @@ export class CodingAgent {
       })));
     } finally {
       this.suppressPlanSync = false;
+    }
+
+    if (opts.planOnly) {
+      // Plan Mode: report the plan and stop here - the attempt loop below is exactly where
+      // EXPLORE/EDIT/VERIFY (and every filesystem/shell tool call) happens, so never entering it
+      // is what actually guarantees "nothing was executed", not a prompt instruction the model
+      // could ignore.
+      //
+      // Deliberately bypasses finalize()/enforceCompletionContract(): the checklist is freshly
+      // seeded as all-pending (nothing has executed yet, by design), and the open-checklist-items
+      // check in enforceCompletionContract exists to catch a run that CLAIMED completion without
+      // finishing its steps - a category error here, since this run never claimed to finish them.
+      const stepList = plan.steps.map((step, i) => `${i + 1}. ${step.title}`).join("\n");
+      this.emit("decision", "Plan-Modus: nur Plan erstellt, keine Ausfuehrung.", { plan_only: true });
+      return {
+        success: true,
+        verified: false,
+        completionStatus: "completed_unverified",
+        summary: `Plan erstellt (${plan.steps.length} Schritt${plan.steps.length === 1 ? "" : "e"}), noch nicht ausgefuehrt:\n\n${stepList}`,
+        attempts: 0,
+        conversationId,
+      };
     }
 
     const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
@@ -1902,7 +2077,24 @@ export class CodingAgent {
     });
 
     this.currentPlan = { ...plan, steps };
-    this.emitPlanEvent(this.currentPlan);
+    this.emitPlanEvent(this.currentPlan, this.currentPlanDb);
+    // Keeps the persisted plans-table row's step statuses live too, not just the freshly-created
+    // shape from persistPlan() - otherwise GET /plans?conversationId=... (the Plan tab's fallback
+    // once the live "plan"/"decision" events fall out of its paginated message window - see
+    // CodingPlanPanel's latestPersistedPlan) would keep answering with the ORIGINAL all-pending
+    // steps forever, showing the plan but resetting its progress. Fire-and-forget: this handler
+    // runs synchronously off TodoList's onChange, and a lost status update here degrades the
+    // Plan tab's resilience, never the run itself - the live event path (just emitted above)
+    // remains the primary, faster source whenever its message is still in the loaded window.
+    if (this.currentPlanDb) {
+      const dbId = this.currentPlanDb.id;
+      void this.db.updatePlan(dbId, { steps: JSON.stringify(steps) }).catch((error) => {
+        this.logger.warn("Failed to sync plan step statuses to the plans table", {
+          planId: dbId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
   }
 
   private async loadPersistedState(
@@ -2001,10 +2193,55 @@ export class CodingAgent {
     this.persistEvent(eventType, message, data, timestamp);
   }
 
+  /**
+   * Writes a freshly-created Plan into the `plans` table (the same table/shape the `/plans`
+   * REST routes and the Plan panel's version history already use), so it is discoverable by
+   * GET /plans?conversationId=... independent of the coding chat's paginated message window -
+   * see emitPlanEvent's doc comment for why that matters. version is always 1: CodingAgent
+   * itself never revises a plan in place (that only happens via POST /plans/refine, which
+   * already persists its own row), so every plan this creates is the first version of a new
+   * plan lineage. Swallows write failures - a missing row degrades the Plan tab, never the run.
+   */
+  private async persistPlan(
+    plan: Plan,
+    repositoryContext: Record<string, unknown> | undefined,
+    conversationId: number
+  ): Promise<{ id: number; version: number } | undefined> {
+    try {
+      const row = await this.db.createPlan({
+        conversationId,
+        projectId: null,
+        goal: plan.goal,
+        title: plan.goal.slice(0, 200),
+        complexity: plan.estimatedComplexity === "high" ? 5 : plan.estimatedComplexity === "medium" ? 3 : 1,
+        steps: JSON.stringify(plan.steps),
+        tools: JSON.stringify([...new Set(plan.steps.flatMap((step) => step.toolsNeeded ?? []))]),
+        markdown: formatPlanAsMarkdown(plan),
+        status: "draft",
+        version: 1,
+        parentPlanId: null,
+        repositorySnapshot: repositoryContext ? JSON.stringify(repositoryContext) : null,
+      });
+      return { id: row.id, version: row.version };
+    } catch (error) {
+      this.logger.warn("Failed to persist plan to the plans table", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   /** Emits the Planner's structured plan as a "plan" event, the same payload shape agent.ts's
    *  plan mode uses - CodingPlanPanel filters only on eventType==="plan" with goal+steps, not on
-   *  `source`, so this is picked up without any UI change. */
-  private emitPlanEvent(plan: Plan): void {
+   *  `source`, so this is picked up without any UI change.
+   *
+   *  @param dbPlan The `plans` table row this Plan was just persisted as (see run() - every
+   *    freshly-created plan is written to the DB before this is called). Its id/version ride
+   *    along in the event payload so the frontend can look the SAME plan up independently via
+   *    GET /plans?conversationId=... - which does not depend on this event still being inside
+   *    the client's currently-loaded (paginated) message window. Undefined only for a
+   *    caller-supplied opts.existingPlan, which already has an id from wherever it came from. */
+  private emitPlanEvent(plan: Plan, dbPlan?: { id: number; version: number }): void {
     const payload = toPlanEventPayload(plan, formatPlanAsMarkdown(plan));
     // __rawPlan carries the exact internal Plan object (dependsOn/riskLevel/toolsNeeded, the
     // step id scheme, everything) alongside the UI-shaped payload above - so a later run() on
@@ -2012,7 +2249,12 @@ export class CodingAgent {
     // instead of reconstructing an approximation from the flattened UI fields, or re-planning
     // from scratch and losing whatever the user already saw progress on. The UI ignores the
     // extra field; it never had a reason to look for it.
-    const data = { ...payload, source: "coding_agent", __rawPlan: plan };
+    const data = {
+      ...payload,
+      source: "coding_agent",
+      __rawPlan: plan,
+      ...(dbPlan ? { id: dbPlan.id, version: dbPlan.version } : {}),
+    };
     const message = `Plan: ${plan.goal}`;
     const timestamp = new Date().toISOString();
     try {

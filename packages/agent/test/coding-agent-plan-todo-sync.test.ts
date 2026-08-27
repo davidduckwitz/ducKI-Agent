@@ -15,8 +15,10 @@ import { CodingAgent } from "../src/coding/coding-agent";
 function makeMemoryDb() {
   let nextConversationId = 1;
   let nextMessageId = 1;
+  let nextPlanId = 1;
   const conversations = new Map<number, { id: number; name: string }>();
   const messages: Array<Record<string, unknown>> = [];
+  const plans: Array<Record<string, unknown>> = [];
   const known: Record<string, (...args: any[]) => any> = {
     getAllSettings: async () => [],
     getDynamicToolByName: async () => undefined,
@@ -33,9 +35,21 @@ function makeMemoryDb() {
       return row;
     },
     getMessages: async (conversationId: number) => messages.filter((m) => m["conversationId"] === conversationId),
+    createPlan: async (data: Record<string, unknown>) => {
+      const now = new Date().toISOString();
+      const row = { id: nextPlanId++, createdAt: now, updatedAt: now, ...data };
+      plans.push(row);
+      return row;
+    },
+    updatePlan: async (id: number, data: Record<string, unknown>) => {
+      const row = plans.find((p) => p["id"] === id);
+      if (!row) return undefined;
+      Object.assign(row, data, { updatedAt: new Date().toISOString() });
+      return row;
+    },
   };
   const db = new Proxy(known, { get: (t, p: string) => (p in t ? t[p] : async () => undefined) }) as any;
-  return { db, messages };
+  return { db, messages, plans };
 }
 
 function scriptedProvider(contents: string[]) {
@@ -168,5 +182,24 @@ describe("CodingAgent syncs the Plan when the model rewrites the checklist", () 
     const data = lastPlanRow(messages);
     expect(data.__rawPlan.steps.find((s: any) => s.title === "Step A").status).toBe("completed");
     expect(data.__rawPlan.steps.find((s: any) => s.title === "Step B").status).toBe("failed");
+  });
+
+  it("keeps the persisted plans-table row's step statuses in sync too, not just the event", async () => {
+    // Regression: the Plan tab falls back to the plans-table row (GET /plans?conversationId=)
+    // once the live "plan"/"decision" events age out of the paginated message window - see
+    // checklistFromPlanSteps (apps/web/src/lib/planChecklist.ts). If this row's steps stayed
+    // frozen at their original all-pending shape, that fallback would show the plan but with
+    // progress reset to nothing done, even though the run had completed steps.
+    const { db, plans } = makeMemoryDb();
+    const provider = scriptedProvider([PLAN_JSON, "[TOOL:todo action=update id=1 status=done]", "Fertig."]);
+    const agent = new CodingAgent(provider, db, undefined, {});
+    (agent as any).agent.enablePlanning = false;
+
+    await agent.run("build the thing", { maxAttempts: 1 });
+
+    expect(plans).toHaveLength(1);
+    const steps = JSON.parse(plans[0]!["steps"] as string);
+    expect(steps.find((s: any) => s.title === "Step A").status).toBe("completed");
+    expect(steps.find((s: any) => s.title === "Step B").status).toBe("pending");
   });
 });

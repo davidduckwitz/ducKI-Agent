@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "./planChecklist";
+import { checklistFromPlanSteps, findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "./planChecklist";
 import type { RenderedChatMessage } from "../components/chat/chatTypes";
 
 let nextId = 0;
@@ -244,5 +244,38 @@ describe("the regression this replaced", () => {
     const snapshot = findLatestChecklist(messages)!;
     expect(snapshot.doneCount).toBe(1);
     expect(firstOpenStepIndex(snapshot, steps)).toBe(1);
+  });
+});
+
+describe("checklistFromPlanSteps", () => {
+  // Regression: the Plan tab's progress used to reset to "nothing done" once a long run pushed
+  // every live checklist/decision event out of the paginated message window, even though the
+  // plan itself was still visible (via latestPersistedPlan). This is the fallback source that
+  // keeps step progress in sync with the persisted plans-table row instead.
+  it("maps PlanStep.status onto the checklist vocabulary and counts done steps", () => {
+    const snapshot = checklistFromPlanSteps([
+      { id: "step_1", title: "Schritt 1", status: "completed" },
+      { id: "step_2", title: "Schritt 2", status: "running" },
+      { id: "step_3", title: "Schritt 3", status: "pending" },
+      { id: "step_4", title: "Schritt 4", status: "failed" },
+    ]);
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.doneCount).toBe(1);
+    expect(snapshot!.total).toBe(4);
+    expect(snapshot!.statusById.get("step_1")).toBe("done");
+    expect(snapshot!.statusById.get("step_2")).toBe("in_progress");
+    expect(snapshot!.statusById.get("step_3")).toBe("pending");
+    expect(snapshot!.statusById.get("step_4")).toBe("failed");
+    expect(snapshot!.statusByIndex.get(1)).toBe("in_progress");
+    expect(snapshot!.statusByTitle.get("schritt 1")).toBe("done");
+  });
+
+  it("returns null for an empty step list instead of a fake empty snapshot", () => {
+    expect(checklistFromPlanSteps([])).toBeNull();
+  });
+
+  it("defaults a step with no status to pending", () => {
+    const snapshot = checklistFromPlanSteps([{ title: "Schritt 1" }]);
+    expect(snapshot!.statusByIndex.get(0)).toBe("pending");
   });
 });
