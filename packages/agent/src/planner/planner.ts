@@ -22,6 +22,8 @@ export interface PlanCostOptions {
    * than letting a general/research plan drive a coding run.
    */
   requiredPlanType?: "coding" | "general";
+  /** Bounded, trusted repository facts collected by the caller before planning. */
+  repositoryContext?: Record<string, unknown>;
 }
 
 export interface Plan {
@@ -64,6 +66,9 @@ export interface PlanStep {
   estimatedTokens?: number;
   estimatedCostUsd?: number;
   riskLevel?: RiskLevel;
+  expectedFiles?: string[];
+  acceptanceCriteria?: string[];
+  verificationCommands?: string[];
 }
 
 export interface PlanSubtask {
@@ -129,6 +134,9 @@ Return ONLY valid JSON with this exact structure (no markdown, no extra text):
       "estimatedDuration": 300,
       "estimatedTokens": 1500,
       "riskLevel": "low|medium|high",
+      "expectedFiles": ["relative/path.ext"],
+      "acceptanceCriteria": ["observable condition proving the step is complete"],
+      "verificationCommands": ["safe command that verifies the result"],
       "subtasks": [
         {
           "id": "step_1_a",
@@ -154,7 +162,10 @@ CRITICAL RULES:
 8. Estimate total LLM tokens each step will consume (input+output), realistic per step
 9. Assess riskLevel per step: "high" = irreversible/destructive/external side effects or high uncertainty, "medium" = moderate, "low" = safe/read-only
 10. Always return valid, parseable JSON
-11. "planType" MUST be "coding" or "general" and every step must match it (no file/build/test steps in a general plan)`;
+11. "planType" MUST be "coding" or "general" and every step must match it (no file/build/test steps in a general plan)
+12. Every coding step must have observable acceptanceCriteria; implementation steps should name expectedFiles when known
+13. A coding plan must end with explicit verification using real build/test/lint commands when the repository context provides them
+14. Never claim a file or command exists unless it is present in the supplied repository context`;
 
 const VALIDATION_PROMPT = `Validate this plan and suggest improvements:
 ${JSON.stringify({}, null, 2)}
@@ -191,6 +202,9 @@ export class Planner {
     const requiredTypeContext = costOptions?.requiredPlanType
       ? `\nRequired plan type: "${costOptions.requiredPlanType}". This is fixed by the execution context; return that exact planType and shape every step accordingly.`
       : "";
+    const repositoryContext = costOptions?.repositoryContext
+      ? `\nRepository context (facts; do not invent beyond these):\n${JSON.stringify(costOptions.repositoryContext).slice(0, 12_000)}`
+      : "";
 
     const truncatedGoal = goal.length > 2000
       ? goal.substring(0, 2000) + "\n[...truncated]"
@@ -205,7 +219,7 @@ export class Planner {
           { role: "system", content: PLANNER_SYSTEM_PROMPT_V2 },
           {
             role: "user",
-            content: `Create a detailed plan for: ${truncatedGoal}${toolsContext}${requiredTypeContext}`,
+            content: `Create a detailed plan for: ${truncatedGoal}${toolsContext}${requiredTypeContext}${repositoryContext}`,
           },
         ];
 
@@ -326,7 +340,7 @@ export class Planner {
     }
   }
 
-  async refinePlan(plan: Plan, feedback: string): Promise<Plan> {
+  async refinePlan(plan: Plan, feedback: string, costOptions?: PlanCostOptions): Promise<Plan> {
     this.logger.info("Refining plan", { feedback: feedback.substring(0, 100) });
 
     try {
@@ -342,7 +356,13 @@ export class Planner {
       const refined = this.parsePlanJSON(response.content);
 
       if (refined) {
-        return await this.analyzeDependencies(this.initializePlanSteps(refined));
+        let normalized = this.initializePlanSteps(refined);
+        if (costOptions?.requiredPlanType && normalized.planType !== costOptions.requiredPlanType) {
+          throw new Error(`Refined plan type ${normalized.planType} does not match required type ${costOptions.requiredPlanType}`);
+        }
+        normalized = await this.analyzeDependencies(normalized);
+        normalized = await this.validatePlan(normalized);
+        return this.computeCostAndRisk(normalized, costOptions);
       }
 
       return plan;
@@ -573,6 +593,16 @@ export class Planner {
       if (!step.description || step.description.trim().length === 0) {
         validation.warnings.push(`Step ${step.id} has no description`);
       }
+      if (plan.planType === "coding" && (!step.acceptanceCriteria || step.acceptanceCriteria.length === 0)) {
+        validation.warnings.push(`Coding step ${step.id} has no observable acceptance criteria`);
+      }
+    }
+
+    if (plan.planType === "coding" && !plan.steps.some((step) =>
+      (step.verificationCommands?.length ?? 0) > 0 || /test|build|verify|prüf|valid/i.test(`${step.title} ${step.description}`)
+    )) {
+      validation.isValid = false;
+      validation.issues.push("Coding plan has no explicit verification step");
     }
 
     const stepIds = new Set(plan.steps.map((s) => s.id));

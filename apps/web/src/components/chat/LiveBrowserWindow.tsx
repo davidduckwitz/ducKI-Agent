@@ -26,6 +26,7 @@ function LiveBrowserWindow({ win }: { win: LiveBrowserWindowState }) {
 
   const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
   const resizeRef = useRef<{ startX: number; startY: number; startWidth: number; startHeight: number } | null>(null);
+  const streamViewerIdRef = useRef(`window-${crypto.randomUUID()}`);
 
   // Join the session's stream room and (re)start the CDP screencast on mount; leave/stop on
   // unmount. A brand-new browser session takes a moment to accept CDP commands, so
@@ -33,10 +34,10 @@ function LiveBrowserWindow({ win }: { win: LiveBrowserWindowState }) {
   // stays in "connecting" state, which is an accurate reflection of reality.
   useEffect(() => {
     socket?.emit("browser:stream:join", { sessionId: win.sessionId });
-    void controlBrowserSession(win.sessionId, "stream_start", {});
+    void controlBrowserSession(win.sessionId, "stream_start", { viewerId: streamViewerIdRef.current });
     return () => {
       socket?.emit("browser:stream:leave", { sessionId: win.sessionId });
-      void controlBrowserSession(win.sessionId, "stream_stop", {});
+      void controlBrowserSession(win.sessionId, "stream_stop", { viewerId: streamViewerIdRef.current });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [win.sessionId]);

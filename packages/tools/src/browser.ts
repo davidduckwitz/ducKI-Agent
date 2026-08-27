@@ -58,7 +58,11 @@ type BrowserAction =
   | "drag_drop"
   | "select"
   | "upload"
-  | "switch_tab";
+  | "switch_tab"
+  // Marks the session as having changed underneath the browser (e.g. the coding agent just
+  // wrote a file the page depends on) without forcing an immediate reload - see
+  // "dirtySinceLastCheck" on BrowserSession for why this is separate from actually reloading.
+  | "mark_dirty";
 
 interface BrowserSession {
   browser: import("puppeteer-core").Browser;
@@ -75,6 +79,20 @@ interface BrowserSession {
   pageErrors: Array<{ type: string; text: string; url: string; timestamp: string }>;
   /** Failed network requests captured since the session started. See attachPageListeners(). */
   networkErrors: Array<{ url: string; method: string; error: string; timestamp: string }>;
+  /**
+   * Set by action=mark_dirty (the coding agent calls this right after a successful filesystem
+   * write/edit/append) whenever something the page depends on changed since the last time it was
+   * inspected. Consumed by the read-only inspection actions (evaluate, get_content,
+   * get_page_errors, screenshot, snapshot, expect): they reload the page once before reading if
+   * this is true, then clear it.
+   *
+   * Deliberately NOT "reload before every inspection call" - the agent also uses these actions to
+   * observe a session the USER started (e.g. watching an already-running page), and forcing a
+   * reload on every single call would blow away that session's live state on every look. Only an
+   * actual known change (this flag) earns a reload; repeated inspection of an unchanged page never
+   * reloads, no matter how many times it's checked.
+   */
+  dirtySinceLastCheck: boolean;
 }
 
 interface BrowserWorkerRequest {
@@ -124,7 +142,7 @@ let defaultSessionId: string | undefined;
 // Worker-local: sessions currently live-streaming via CDP screencast, and the most recent
 // frame received for each (so a `screenshot` call can return it instantly instead of paying
 // for a brand-new page.screenshot() capture - see resolveScreenshot()).
-const activeStreams = new Map<string, { client: import("puppeteer-core").CDPSession; onFrame: (...args: any[]) => void }>();
+const activeStreams = new Map<string, { client: import("puppeteer-core").CDPSession; onFrame: (...args: any[]) => void; consumers: Set<string> }>();
 const lastFrames = new Map<string, { data: string; format: string; width: number; height: number; timestampMs: number }>();
 
 /** A buffered live frame is only useful if it's actually recent - an active stream should
@@ -141,9 +159,13 @@ function getFreshLiveFrame(sessionId: string): { data: string; format: string; w
 
 /** Stops the CDP screencast for a session, if one is running. Safe to call on a session that
  *  isn't streaming (no-op) - used by action=stream_stop, action=close, and session cleanup. */
-async function stopStream(sessionId: string): Promise<boolean> {
+async function stopStream(sessionId: string, force = false, viewerId = "legacy"): Promise<boolean> {
   const stream = activeStreams.get(sessionId);
   if (!stream) return false;
+  if (!force) {
+    stream.consumers.delete(viewerId);
+    if (stream.consumers.size > 0) return false;
+  }
   activeStreams.delete(sessionId);
   lastFrames.delete(sessionId);
   try {
@@ -158,6 +180,31 @@ async function stopStream(sessionId: string): Promise<boolean> {
   }
   console.info(`[browser] Live stream stopped: ${sessionId}`);
   return true;
+}
+
+async function startStream(
+  sessionId: string,
+  session: BrowserSession,
+  input: Record<string, unknown>,
+  initialConsumers?: Set<string>
+): Promise<{ format: "jpeg" | "png"; maxWidth: number; maxHeight: number; consumers: number }> {
+  const client = await session.page.target().createCDPSession();
+  const format = (String(input["screenshotFormat"] ?? "jpeg").trim().toLowerCase() === "png" ? "png" : "jpeg") as "jpeg" | "png";
+  const quality = format === "png" ? undefined : Math.max(1, Math.min(100, Number(input["screenshotQuality"] ?? 60)));
+  const maxWidth = Math.max(1, Number(input["maxWidth"] ?? 960));
+  const maxHeight = Math.max(1, Number(input["maxHeight"] ?? 720));
+  const consumers = initialConsumers ?? new Set([String(input["viewerId"] ?? "legacy")]);
+  const onFrame = (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
+    lastFrames.set(sessionId, { data: event.data, format, width: event.metadata?.deviceWidth ?? maxWidth, height: event.metadata?.deviceHeight ?? maxHeight, timestampMs: Date.now() });
+    if (typeof process.send === "function") {
+      process.send({ kind: "frame", sessionId, data: event.data, format, width: event.metadata?.deviceWidth ?? maxWidth, height: event.metadata?.deviceHeight ?? maxHeight, timestamp: new Date().toISOString() } satisfies BrowserWorkerFrame);
+    }
+    client.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => {});
+  };
+  client.on("Page.screencastFrame", onFrame as (...args: unknown[]) => void);
+  await client.send("Page.startScreencast", { format, ...(quality !== undefined ? { quality } : {}), maxWidth, maxHeight });
+  activeStreams.set(sessionId, { client, onFrame: onFrame as (...args: unknown[]) => void, consumers });
+  return { format, maxWidth, maxHeight, consumers: consumers.size };
 }
 const pending = new Map<
   string,
@@ -450,6 +497,7 @@ async function createSession(options: {
     headless: options.headless ?? true,
     pageErrors: [],
     networkErrors: [],
+    dirtySinceLastCheck: false,
   };
   sessions.set(sessionId, session);
 
@@ -457,6 +505,13 @@ async function createSession(options: {
   // uncaught page errors and failed requests are recorded per session (bounded buffers).
   // Attached to the initial page and to every tab the browser opens afterwards.
   attachPageListeners(session, page);
+  // NOTE: this only wires up error capture for every tab - it must NOT bring a new target to
+  // the front or reassign session.page/restart the stream. Real pages constantly spawn new
+  // page-type targets that have nothing to do with the content being watched (ad popups,
+  // tracker/consent iframes opened via window.open, ...). Auto-following each one used to tear
+  // down and restart the live screencast against whatever that incidental target was, which
+  // looked like the preview jumping back to an earlier/blank state on a loop. Deliberately
+  // switching tabs is what action=switch_tab is for.
   browser.on("targetcreated", async (target) => {
     const newPage = await target.page().catch(() => null);
     if (newPage) attachPageListeners(session, newPage);
@@ -502,7 +557,7 @@ async function resolveOrLaunchSession(
       console.info(
         `[browser] Default session '${defaultSessionId}' is headless=${existing.headless} but headless=${requestedHeadless} was requested - relaunching`
       );
-      await stopStream(defaultSessionId);
+      await stopStream(defaultSessionId, true);
       try {
         await existing.browser.close();
       } catch {
@@ -553,20 +608,27 @@ async function ensureSession(input: Record<string, unknown>): Promise<{ sessionI
     return { sessionId: requestedSessionId, session };
   }
 
-  // Fallback: If requested session not found, use the most recent/first active session
-  const availableIds = Array.from(sessions.keys());
-  console.warn(`[browser] Requested session '${requestedSessionId}' not found. Available sessions: ${availableIds.join(", ")}`);
-
-  if (availableIds.length > 0) {
-    const fallbackSessionId = availableIds[0] as string;
-    const fallbackSession = sessions.get(fallbackSessionId);
-    if (fallbackSession) {
-      console.info(`[browser] Using fallback session: ${fallbackSessionId}`);
-      return { sessionId: fallbackSessionId, session: fallbackSession };
-    }
+  // Only the explicit "default" alias may resolve to another id. Silently redirecting an
+  // arbitrary stale id made the UI display one session while clicks controlled another.
+  if (requestedSessionId === "default") {
+    const fallbackId = defaultSessionId ?? Array.from(sessions.keys())[0];
+    const fallback = fallbackId ? sessions.get(fallbackId) : undefined;
+    if (fallback && fallbackId) return { sessionId: fallbackId, session: fallback };
   }
+  throw new Error(`Browser session '${requestedSessionId}' not found`);
+}
 
-  throw new Error(`Browser session '${requestedSessionId}' not found (no fallback sessions available)`);
+/**
+ * Reloads the session's page once if it was marked dirty (action=mark_dirty) since the last
+ * inspection, then clears the flag. Called at the top of every read-only inspection action
+ * (evaluate, get_content, get_page_errors, screenshot, snapshot, expect) so those actions never
+ * read state from before the agent's own most recent file change - see "dirtySinceLastCheck" on
+ * BrowserSession for why this is conditional instead of an unconditional reload.
+ */
+async function reloadIfDirty(session: BrowserSession): Promise<void> {
+  if (!session.dirtySinceLastCheck) return;
+  session.dirtySinceLastCheck = false;
+  await session.page.reload({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +686,7 @@ function attachPageListeners(session: BrowserSession, page: import("puppeteer-co
  */
 function collectInteractiveElements(opts: {
   maxNodes: number;
+  viewportOnly?: boolean;
   match?: { text?: string; role?: string; exact?: boolean };
 }): unknown {
   const buildSelector = (el: Element): string => {
@@ -657,7 +720,6 @@ function collectInteractiveElements(opts: {
   const isVisible = (el: Element): boolean => {
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) return false;
-    if (r.bottom < 0 || r.top > window.innerHeight) return false;
     const style = window.getComputedStyle(el);
     if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
     return true;
@@ -720,6 +782,9 @@ function collectInteractiveElements(opts: {
   const out: Array<Record<string, unknown>> = [];
   for (const el of els) {
     if (!isVisible(el)) continue;
+    const bounds = el.getBoundingClientRect();
+    const inViewport = bounds.bottom >= 0 && bounds.right >= 0 && bounds.top <= window.innerHeight && bounds.left <= window.innerWidth;
+    if (opts.viewportOnly && !inViewport) continue;
     const role = (el.getAttribute("role") || implicitRole(el)).toLowerCase();
     const name = nameOf(el);
     if (!name && !role) continue;
@@ -730,6 +795,8 @@ function collectInteractiveElements(opts: {
       continue;
     }
     const record: Record<string, unknown> = { tag: el.tagName.toLowerCase(), role: role || "unknown" };
+    record.inViewport = inViewport;
+    record.bounds = { x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) };
     if (name) record.name = name.slice(0, 120);
     record.selector = buildSelector(el);
     if (el instanceof HTMLInputElement) {
@@ -922,8 +989,10 @@ export const browserTool: ToolExecutor = {
         fullPage: { type: "boolean", description: "For action=screenshot: capture the full scrollable page. This always forces a fresh screenshot. Fresh captures default to true." },
         maxWidth: { type: "number", description: "For action=stream_start: max frame width in px", default: 960 },
         maxHeight: { type: "number", description: "For action=stream_start: max frame height in px", default: 720 },
+        viewerId: { type: "string", description: "Stable viewer id for stream_start/stream_stop so multiple UI surfaces can share one screencast safely" },
         // snapshot
         maxNodes: { type: "number", description: "For action=snapshot: max interactive elements to return", default: 120 },
+        viewportOnly: { type: "boolean", description: "For action=snapshot: restrict results to the current viewport. Default false, allowing off-screen controls to be found and clicked." },
         // get_page_errors
         clear: { type: "boolean", description: "For action=get_page_errors: clear the captured errors after reading", default: false },
         // expect
@@ -964,7 +1033,7 @@ export const browserTool: ToolExecutor = {
         });
       }
 
-      const result = await callWorker(input);
+      const result = await enqueueWorkerCall(input);
 
       // Track sessions in main process
       if (action === "launch" && result.success) {
@@ -989,6 +1058,8 @@ export const browserTool: ToolExecutor = {
           params,
           success: result.success,
           error: result.error,
+          url: String((result.data as Record<string, unknown> | undefined)?.["url"] ?? (result.data as Record<string, unknown> | undefined)?.["currentUrl"] ?? ""),
+          title: String((result.data as Record<string, unknown> | undefined)?.["title"] ?? ""),
           timestamp: new Date().toISOString(),
         });
       }
@@ -1070,8 +1141,15 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       }
       case "get_content": {
         const { sessionId, session } = await ensureSession(input);
+        await reloadIfDirty(session);
         const html = await session.page.content();
-        return ok({ sessionId, html, length: html.length, url: session.page.url() });
+        const state = await session.page.evaluate(() => ({
+          text: (document.body?.innerText ?? "").slice(0, 20_000),
+          scroll: { x: window.scrollX, y: window.scrollY, width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+          activeElement: document.activeElement ? { tag: document.activeElement.tagName.toLowerCase(), id: (document.activeElement as HTMLElement).id || undefined } : null,
+        }));
+        return ok({ sessionId, html, length: html.length, ...state, url: session.page.url(), title: await session.page.title().catch(() => "") });
       }
       case "goto": {
         const { sessionId, session } = await ensureSession(input);
@@ -1081,7 +1159,19 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         const waitUntil = String(input["waitUntil"] ?? "domcontentloaded") as "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
         await session.page.goto(url, { waitUntil, timeout });
         session.targetUrl = session.page.url();
+        session.dirtySinceLastCheck = false;
         return ok({ sessionId, url: session.page.url(), title: await session.page.title() });
+      }
+      case "mark_dirty": {
+        try {
+          const { sessionId, session } = await ensureSession(input);
+          session.dirtySinceLastCheck = true;
+          return ok({ sessionId, dirty: true });
+        } catch {
+          // No active browser session yet - nothing to mark. The next real inspection will see
+          // fresh state anyway since there's no stale page to begin with.
+          return ok({ dirty: false });
+        }
       }
       case "set_default": {
         const { sessionId, session } = await ensureSession(input);
@@ -1097,6 +1187,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         else if (action === "history_forward") await session.page.goForward({ waitUntil: "domcontentloaded", timeout }).catch(() => null);
         else await session.page.reload({ waitUntil: "domcontentloaded", timeout });
         session.targetUrl = session.page.url();
+        session.dirtySinceLastCheck = false;
         return ok({ sessionId, url: session.page.url(), title: await session.page.title() });
       }
       case "mouse_click":
@@ -1122,8 +1213,37 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         const { sessionId, session } = await ensureSession(input);
         const deltaX = Number(input["deltaX"] ?? 0);
         const deltaY = Number(input["deltaY"] ?? 0);
-        await session.page.evaluate(({ x, y }) => window.scrollBy(x, y), { x: deltaX, y: deltaY });
-        return ok({ sessionId, deltaX, deltaY, url: session.page.url() });
+        const hasPoint = Number.isFinite(Number(input["xRatio"])) && Number.isFinite(Number(input["yRatio"]));
+        if (hasPoint) {
+          const viewport = session.page.viewport() ?? { width: 1280, height: 720 };
+          const clamp = (value: unknown) => Math.max(0, Math.min(1, Number(value) || 0));
+          await session.page.mouse.move(clamp(input["xRatio"]) * viewport.width, clamp(input["yRatio"]) * viewport.height);
+          // CDP wheel dispatch targets the element under the pointer, so nested editors,
+          // dialogs and panels scroll correctly instead of always moving window.document.
+          await session.page.mouse.wheel({ deltaX, deltaY });
+          // mouse.wheel() resolves once CDP acks the input event, not once the resulting
+          // scroll is committed - the compositor applies it a couple of frames later. Without
+          // this, a caller that reads scroll position (or takes a snapshot) right after this
+          // call can observe the pre-scroll state. Every browser action is serialized through
+          // one queue per worker (see workerRequestQueue), so this wait MUST be bounded - a
+          // backgrounded/occluded tab can throttle or entirely pause rAF, and an unbounded
+          // wait here would then deadlock every future action on every session forever.
+          await Promise.race([
+            session.page.evaluate(
+              () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+            ),
+            new Promise((resolve) => setTimeout(resolve, 250)),
+          ]).catch(() => undefined);
+        } else {
+          await session.page.evaluate(({ x, y }) => {
+            const active = document.activeElement as HTMLElement | null;
+            const target = active && active !== document.body ? active : document.scrollingElement;
+            if (target && "scrollBy" in target) (target as Element).scrollBy(x, y);
+            else window.scrollBy(x, y);
+          }, { x: deltaX, y: deltaY });
+        }
+        const scroll = await session.page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+        return ok({ sessionId, deltaX, deltaY, scroll, url: session.page.url() });
       }
       case "keyboard_type": {
         const { sessionId, session } = await ensureSession(input);
@@ -1184,10 +1304,16 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       }
       case "snapshot": {
         const { sessionId, session } = await ensureSession(input);
+        await reloadIfDirty(session);
+        const { ctx, label } = await targetContext(session, input);
         const maxNodes = Math.max(1, Math.min(200, Number(input["maxNodes"] ?? 120) || 120));
-        const elements = (await session.page.evaluate(collectInteractiveElements, { maxNodes })) as Array<Record<string, unknown>>;
+        const elements = (await ctx.evaluate(collectInteractiveElements, {
+          maxNodes,
+          viewportOnly: input["viewportOnly"] === true || input["viewportOnly"] === "true",
+        })) as Array<Record<string, unknown>>;
         return ok({
           sessionId,
+          context: label,
           url: session.page.url(),
           title: await session.page.title().catch(() => ""),
           count: elements.length,
@@ -1197,6 +1323,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       }
       case "get_page_errors": {
         const { sessionId, session } = await ensureSession(input);
+        await reloadIfDirty(session);
         const clear = input["clear"] === true || input["clear"] === "true";
         const pageErrors = session.pageErrors.slice();
         const networkErrors = session.networkErrors.slice();
@@ -1215,6 +1342,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       }
       case "expect": {
         const { sessionId, session } = await ensureSession(input);
+        await reloadIfDirty(session);
         const { ctx } = await targetContext(session, input);
         const condition = String(input["condition"] ?? "").trim();
         const timeout = Math.max(200, Number(input["timeout"] ?? 5000) || 5000);
@@ -1387,6 +1515,12 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         await target.bringToFront();
         session.page = target;
         attachPageListeners(session, target);
+        const stream = activeStreams.get(sessionId);
+        if (stream) {
+          const viewers = new Set(stream.consumers);
+          await stopStream(sessionId, true);
+          await startStream(sessionId, session, {}, viewers);
+        }
         return ok({ sessionId, index: pages.indexOf(target), url: target.url(), title: await target.title().catch(() => "") });
       }
       case "press": {
@@ -1409,6 +1543,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       }
       case "screenshot": {
         const { sessionId, session } = await ensureSession(input);
+        await reloadIfDirty(session);
 
         const filePath = String(input["filePath"] ?? "").trim();
         const explicitlyPreferLive = input["preferLive"] === true || input["preferLive"] === "true";
@@ -1495,53 +1630,19 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         // AND buffered here so action=screenshot with preferLive:true can return it instantly.
         const { sessionId, session } = await ensureSession(input);
         const existing = activeStreams.get(sessionId);
-        if (existing) return ok({ sessionId, streaming: true, alreadyStreaming: true });
+        const viewerId = String(input["viewerId"] ?? "legacy");
+        if (existing) {
+          existing.consumers.add(viewerId);
+          return ok({ sessionId, streaming: true, alreadyStreaming: true, consumers: existing.consumers.size });
+        }
 
-        const client = await session.page.target().createCDPSession();
-        const format = (String(input["screenshotFormat"] ?? "jpeg").trim().toLowerCase() === "png" ? "png" : "jpeg") as "jpeg" | "png";
-        const quality = format === "png" ? undefined : Math.max(1, Math.min(100, Number(input["screenshotQuality"] ?? 60)));
-        const maxWidth = Math.max(1, Number(input["maxWidth"] ?? 960));
-        const maxHeight = Math.max(1, Number(input["maxHeight"] ?? 720));
-
-        const onFrame = (event: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
-          lastFrames.set(sessionId, {
-            data: event.data,
-            format,
-            width: event.metadata?.deviceWidth ?? maxWidth,
-            height: event.metadata?.deviceHeight ?? maxHeight,
-            timestampMs: Date.now(),
-          });
-          if (typeof process.send === "function") {
-            process.send({
-              kind: "frame",
-              sessionId,
-              data: event.data,
-              format,
-              width: event.metadata?.deviceWidth ?? maxWidth,
-              height: event.metadata?.deviceHeight ?? maxHeight,
-              timestamp: new Date().toISOString(),
-            } satisfies BrowserWorkerFrame);
-          }
-          // CDP pauses the screencast after each frame until acknowledged - without this
-          // the stream sends exactly one frame and then stalls forever.
-          client.send("Page.screencastFrameAck", { sessionId: event.sessionId }).catch(() => {});
-        };
-        client.on("Page.screencastFrame", onFrame as (...args: unknown[]) => void);
-
-        await client.send("Page.startScreencast", {
-          format,
-          ...(quality !== undefined ? { quality } : {}),
-          maxWidth,
-          maxHeight,
-        });
-
-        activeStreams.set(sessionId, { client, onFrame: onFrame as (...args: unknown[]) => void });
+        const started = await startStream(sessionId, session, input, new Set([viewerId]));
         console.info(`[browser] Live stream started: ${sessionId}`);
-        return ok({ sessionId, streaming: true, format, maxWidth, maxHeight });
+        return ok({ sessionId, streaming: true, ...started });
       }
       case "stream_stop": {
         const { sessionId } = await ensureSession(input);
-        const stopped = await stopStream(sessionId);
+        const stopped = await stopStream(sessionId, false, String(input["viewerId"] ?? "legacy"));
         return ok({ sessionId, streaming: false, wasStreaming: stopped });
       }
       case "screenshot_url": {
@@ -1579,7 +1680,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
 
         const shouldClose = input["close"] === true || input["close"] === "true";
         if (shouldClose) {
-          await stopStream(sessionId);
+          await stopStream(sessionId, true);
           await session.browser.close();
           sessions.delete(sessionId);
           if (defaultSessionId === sessionId) defaultSessionId = undefined;
@@ -1603,6 +1704,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       }
       case "evaluate": {
         const { sessionId, session } = await ensureSession(input);
+        await reloadIfDirty(session);
         const script = String(input["script"] ?? "").trim();
         if (!script) return fail("script is required");
         const result = await session.page.evaluate(script);
@@ -1856,7 +1958,7 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         if (!sessionId) return fail("sessionId is required");
         const session = sessions.get(sessionId);
         if (!session) return fail(`Browser session '${sessionId}' not found`);
-        await stopStream(sessionId);
+        await stopStream(sessionId, true);
         await session.browser.close();
         sessions.delete(sessionId);
         if (defaultSessionId === sessionId) defaultSessionId = undefined;
@@ -1870,15 +1972,32 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
   }
 }
 
+let workerRequestQueue: Promise<void> = Promise.resolve();
+
 function startWorkerLoop(): void {
-  process.on("message", async (payload: unknown) => {
+  process.on("message", (payload: unknown) => {
     const message = payload as BrowserWorkerRequest;
     if (!message?.id || !message?.input) return;
-    const result = await executeInWorker(message.input);
-    if (typeof process.send === "function") {
-      process.send({ id: message.id, result } satisfies BrowserWorkerResponse);
-    }
+    // Puppeteer Page operations are stateful. Serializing them prevents a wheel burst from
+    // overtaking a click/navigation and guarantees snapshots observe all preceding actions.
+    workerRequestQueue = workerRequestQueue.then(async () => {
+      const result = await executeInWorker(message.input);
+      if (typeof process.send === "function") {
+        process.send({ id: message.id, result } satisfies BrowserWorkerResponse);
+      }
+    }).catch((error) => {
+      if (typeof process.send === "function") {
+        process.send({ id: message.id, result: fail(error instanceof Error ? error.message : String(error)) } satisfies BrowserWorkerResponse);
+      }
+    });
   });
+}
+
+let mainOperationQueue: Promise<unknown> = Promise.resolve();
+function enqueueWorkerCall(input: Record<string, unknown>): Promise<ToolResult> {
+  const task = mainOperationQueue.then(() => callWorker(input), () => callWorker(input));
+  mainOperationQueue = task.then(() => undefined, () => undefined);
+  return task;
 }
 
 if (isWorkerMode()) {

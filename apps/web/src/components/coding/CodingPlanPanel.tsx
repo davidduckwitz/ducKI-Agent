@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, Circle, ListChecks, Loader2, Play, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
@@ -39,6 +39,8 @@ export function CodingPlanPanel({
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefinement, setShowRefinement] = useState(false);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [planHistory, setPlanHistory] = useState<Plan[]>([]);
   // A plan that came back from POST /plans/refine (see PlanRefinementDialog) - takes priority
   // over a plan derived from messages/handoff since it's the most recently reviewed version.
   const [refinedPlan, setRefinedPlan] = useState<Plan | null>(null);
@@ -50,7 +52,12 @@ export function CodingPlanPanel({
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const msg = messages[i];
       if (!msg || msg.eventType !== "plan" || !msg.eventData) continue;
-      const data = msg.eventData as unknown as Plan;
+      const raw = msg.eventData as Record<string, unknown>;
+      const data = {
+        ...raw,
+        ...(raw["id"] === undefined && Number.isFinite(Number(raw["planId"])) ? { id: Number(raw["planId"]) } : {}),
+        ...(raw["version"] === undefined && Number.isFinite(Number(raw["planVersion"])) ? { version: Number(raw["planVersion"]) } : {}),
+      } as unknown as Plan;
       if (data.goal && Array.isArray(data.steps) && data.steps.length > 0) return { plan: data, planIndex: i };
       // Some planners only emit markdown - reuse the chat page's parser for those.
       if (typeof data.markdown === "string") {
@@ -66,14 +73,44 @@ export function CodingPlanPanel({
   // (which lives in a different conversation).
   const plan = refinedPlan ?? derivedPlan ?? overridePlan ?? null;
 
+  useEffect(() => {
+    if (!conversationId) return;
+    let active = true;
+    void api.plans.list(conversationId).then((items) => {
+      if (active) setPlanHistory(items as Plan[]);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [conversationId, refinedPlan?.id]);
+
+  useEffect(() => {
+    if (derivedPlan?.id && refinedPlan?.parentPlanId !== derivedPlan.id && (derivedPlan.version ?? 0) > (refinedPlan?.version ?? 0)) {
+      setRefinedPlan(null);
+    }
+  }, [derivedPlan?.id, derivedPlan?.version]);
+
+  const latestRun = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const data = messages[i]?.eventData;
+      if (data?.["plan_event"] !== "run_status" || typeof data["runId"] !== "string") continue;
+      if (plan?.id !== undefined && Number(data["planId"]) !== plan.id) continue;
+      return data;
+    }
+    return undefined;
+  }, [messages, plan?.id]);
+  const eventScope: { runId?: string; planId?: number } | undefined = latestRun ? {
+    runId: String(latestRun["runId"]),
+    ...(Number.isFinite(Number(latestRun["planId"])) ? { planId: Number(latestRun["planId"]) } : {}),
+  } : plan?.id !== undefined ? { planId: plan.id } : undefined;
+  const completionEvidence = latestRun?.["completionEvidence"] as { changedFiles?: string[]; openChecklistItems?: string[] } | undefined;
+
   // Real per-step state from the agent's own checklist (see lib/planChecklist for why this
   // replaced a tool-call counter, and why the logic lives in a testable module).
-  const checklist = useMemo(() => findLatestChecklist(messages), [messages]);
+  const checklist = useMemo(() => findLatestChecklist(messages, eventScope), [messages, eventScope?.runId, eventScope?.planId]);
 
   // The phase the agent declares it is in (see lib/planPhase). This is the same state the
   // phase-lock hook steers by, surfaced so the user can see whether the agent is exploring,
   // planning, editing, verifying or reporting - not just "a spinner somewhere".
-  const phaseProgress = useMemo(() => findLatestPhaseProgress(messages), [messages]);
+  const phaseProgress = useMemo(() => findLatestPhaseProgress(messages, eventScope), [messages, eventScope?.runId, eventScope?.planId]);
 
   // Attempt / budget context from the latest iteration event, so a long run shows
   // "Versuch 2/3" instead of an unqualified "Wird ausgeführt" while it is retrying.
@@ -91,7 +128,7 @@ export function CodingPlanPanel({
     : undefined;
 
   const steps = plan?.steps ?? [];
-  const statusOf = (step: { title: string }, index: number) => resolveStepStatus(checklist, step, index);
+  const statusOf = (step: { id?: string; title: string }, index: number) => resolveStepStatus(checklist, step, index);
   const runningIndex = useMemo(() => firstOpenStepIndex(checklist, steps), [checklist, steps]);
   const doneCount = checklist?.doneCount ?? 0;
 
@@ -150,6 +187,22 @@ export function CodingPlanPanel({
           {typeof plan.complexity === "number" && (
             <span className="chip">{COMPLEXITY_LABEL[plan.complexity] ?? plan.complexity}</span>
           )}
+          {plan.version && <span className="chip">V{plan.version}</span>}
+          {latestRun && <span className="chip">{String(latestRun["status"] ?? "running")}</span>}
+          {planHistory.length > 1 && <span className="chip" title="Gespeicherte Planversionen">{planHistory.length} Versionen</span>}
+          {planHistory.length > 1 && (
+            <select
+              className="h-6 rounded border border-border bg-background px-1 text-[10px]"
+              value={plan.id ?? ""}
+              onChange={(event) => {
+                const selected = planHistory.find((item) => item.id === Number(event.target.value));
+                if (selected) setRefinedPlan(selected);
+              }}
+              aria-label="Planversion auswählen"
+            >
+              {planHistory.map((item) => <option key={item.id} value={item.id}>V{item.version ?? 1} · {item.status ?? "draft"}</option>)}
+            </select>
+          )}
           {isLoading && (
             <span className="chip text-amber-400">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -197,9 +250,20 @@ export function CodingPlanPanel({
             })}
           </div>
         )}
+        {completionEvidence && (
+          <div className="mt-2 rounded border border-border bg-background/40 p-2 text-[10px] text-muted-foreground">
+            {completionEvidence.changedFiles?.length ? <div>Geänderte Dateien: {completionEvidence.changedFiles.join(", ")}</div> : <div>Keine Dateiänderung nachgewiesen.</div>}
+            {completionEvidence.openChecklistItems?.length ? <div className="mt-1 text-amber-500">Offen: {completionEvidence.openChecklistItems.join(", ")}</div> : null}
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-3">
+        {doneCount > 0 && (
+          <button type="button" className="mb-1 text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setShowCompleted((value) => !value)}>
+            {showCompleted ? "Erledigte Schritte einklappen" : `Erledigte Schritte anzeigen (${doneCount})`}
+          </button>
+        )}
         {steps.map((step, index) => {
           const status = statusOf(step, index);
           const done = status === "done";
@@ -211,10 +275,11 @@ export function CodingPlanPanel({
           // positional guess only when the model never marks in_progress.
           const inProgress = status === "in_progress";
           const running = isLoading && !done && !failed && !skipped && (inProgress || index === runningIndex);
+          if (done && !showCompleted) return null;
 
           return (
             <div
-              key={`${step.title}-${index}`}
+              key={step.id ?? `${step.title}-${index}`}
               className={`rounded-lg border p-2 transition-colors ${
                 running
                   ? "border-primary/50 bg-primary/5"
@@ -263,15 +328,24 @@ export function CodingPlanPanel({
                       {step.description}
                     </p>
                   )}
-                  {step.tools && step.tools.length > 0 && (
+                  {(step.toolsNeeded ?? step.tools)?.length ? (
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {step.tools.map((tool) => (
+                      {(step.toolsNeeded ?? step.tools ?? []).map((tool) => (
                         <span key={tool} className="chip">
                           {tool}
                         </span>
                       ))}
                     </div>
-                  )}
+                  ) : null}
+                  {step.acceptanceCriteria?.length ? (
+                    <div className="mt-1 text-[10px] text-muted-foreground">Kriterien: {step.acceptanceCriteria.join(" · ")}</div>
+                  ) : null}
+                  {step.expectedFiles?.length ? (
+                    <div className="mt-1 text-[10px] text-muted-foreground">Dateien: {step.expectedFiles.join(", ")}</div>
+                  ) : null}
+                  {step.verificationCommands?.length ? (
+                    <div className="mt-1 font-mono text-[10px] text-muted-foreground">Prüfung: {step.verificationCommands.join(" && ")}</div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -302,13 +376,13 @@ export function CodingPlanPanel({
           disabled={executing || isLoading}
         >
           <Play className="mr-1 inline h-3.5 w-3.5" />
-          {t("codingPage.executePlan")}
+          {doneCount > 0 ? "Offene Schritte ausführen" : t("codingPage.executePlan")}
         </button>
       </div>
 
       {showRefinement && (
         <PlanRefinementDialog
-          plan={plan}
+          plan={{ ...plan, conversationId: plan.conversationId ?? conversationId }}
           onRefined={(newPlan) => {
             setShowRefinement(false);
             setRefinedPlan(newPlan);

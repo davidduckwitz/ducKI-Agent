@@ -44,8 +44,17 @@ export class CodingRunState {
   private previousVerifyError: string | undefined;
   private identicalFailureStreak = 0;
   private verifyFailures = 0;
-  private reflectionUsed = false;
   private reflection: CodingFailureReflection | undefined;
+
+  /**
+   * @param maxIdenticalVerifyFailures How many consecutive attempts may fail verification with
+   *   the EXACT SAME error before the run is considered non-converging. Mirrors the
+   *   AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES setting enforced by CodingAgent's own macro
+   *   loop - kept in sync explicitly (rather than duplicated as a separate hardcoded constant)
+   *   so this state's `shouldStopForNonConvergence` reports the same threshold the run will
+   *   actually stop at. Default 3 matches the historical hardcoded behavior.
+   */
+  constructor(private readonly maxIdenticalVerifyFailures: number = 3) {}
 
   markFileChanges(changedFileCount: number): void {
     if (changedFileCount > 0) this.anyFileChanged = true;
@@ -62,8 +71,12 @@ export class CodingRunState {
 
     // identicalFailureStreak is "number of repeats AFTER the first occurrence":
     // 0 = first/different failure, 1 = same failure twice, 2 = same failure three times.
-    const shouldStopForNonConvergence = this.identicalFailureStreak >= 2;
-    const shouldReflect = identicalToPrevious && !shouldStopForNonConvergence && !this.reflectionUsed;
+    const shouldStopForNonConvergence = this.identicalFailureStreak >= this.maxIdenticalVerifyFailures - 1;
+    // Reflect on EVERY new repeat, not just the first - a higher maxIdenticalVerifyFailures
+    // budget means more attempts sit between "first repeat" and the stop threshold, and each of
+    // those deserves its own fresh diagnosis rather than coasting on one stale reflection from
+    // several attempts back.
+    const shouldReflect = identicalToPrevious && !shouldStopForNonConvergence;
 
     return {
       ...this.failureSnapshot(),
@@ -74,7 +87,6 @@ export class CodingRunState {
   }
 
   markReflectionAttempted(reflection?: CodingFailureReflection): void {
-    this.reflectionUsed = true;
     if (reflection) this.reflection = reflection;
   }
 

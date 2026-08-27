@@ -9,6 +9,8 @@ export interface BrowserActivity {
   params: Record<string, unknown>;
   success: boolean;
   error?: string;
+  url?: string;
+  title?: string;
   timestamp: string;
 }
 

@@ -744,6 +744,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     socket.on("browser:activity", (activity: Omit<BrowserActivity, "id">) => {
       useBrowserActivityStore.getState().addActivity(activity);
+      const sessionId = String(activity.sessionId ?? "");
+      if (sessionId) {
+        const known = get().browserSessions.some((session) => session.tabId === sessionId);
+        if (known) {
+          get().updateBrowserSession(sessionId, {
+            ...(activity.url ? { url: activity.url } : {}),
+            ...(activity.title ? { title: activity.title } : {}),
+            lastUsed: activity.timestamp,
+            isActive: activity.action !== "close" || !activity.success,
+          });
+          if (activity.action === "close" && activity.success) get().removeBrowserSession(sessionId);
+        } else if (activity.success) {
+          void get().refreshBrowserSessions();
+        }
+      }
     });
 
     // Tool call tracking
@@ -1010,6 +1025,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const socket = get().socket;
     if (!socket) return Promise.resolve();
     return new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
+      const timeout = window.setTimeout(finish, 15_000);
       socket.emit(
         "browser:list",
         {},
@@ -1017,6 +1035,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           success: boolean;
           data?: { sessions?: Array<{ sessionId: string; url: string; title?: string; launchedAt: string; isDefault: boolean }> };
         }) => {
+          if (settled) return;
+          window.clearTimeout(timeout);
           if (result?.success && result.data?.sessions) {
             const sessions: BrowserSession[] = result.data.sessions.map((s) => ({
               tabId: s.sessionId,
@@ -1028,7 +1048,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             }));
             set({ browserSessions: sessions });
           }
-          resolve();
+          finish();
         }
       );
     });
@@ -1037,11 +1057,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     const socket = get().socket;
     if (!socket) return Promise.resolve({ success: false, error: "Not connected" });
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result: { success: boolean; data?: unknown; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const timeout = window.setTimeout(() => finish({ success: false, error: `Browser action '${action}' timed out` }), 125_000);
       socket.emit(
         "browser:control",
         { sessionId, action, ...params },
         (result: { success: boolean; data?: unknown; error?: string }) => {
-          resolve(result ?? { success: false, error: "No response from server" });
+          window.clearTimeout(timeout);
+          finish(result ?? { success: false, error: "No response from server" });
         }
       );
     });

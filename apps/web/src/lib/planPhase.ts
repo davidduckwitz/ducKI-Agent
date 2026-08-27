@@ -29,12 +29,14 @@ const PHASE_EVENTS = new Set(["phase_started", "phase_completed", "phase_failed"
  * Extracted from the component for the same reason planChecklist.ts exists: the inline version
  * was untestable, and a phase display is exactly the kind of logic that regresses silently.
  */
-export function findLatestPhaseProgress(messages: RenderedChatMessage[]): PhaseProgress {
+export function findLatestPhaseProgress(messages: RenderedChatMessage[], scope?: { runId?: string; planId?: number }): PhaseProgress {
   const lastStatus = new Map<CodingPhase, string>();
   let attempt: number | undefined;
 
   for (const message of messages) {
     if (!message || message.eventType !== "internal_instruction" || !message.eventData) continue;
+    if (scope?.runId && message.eventData["runId"] !== scope.runId) continue;
+    if (scope?.planId !== undefined && Number(message.eventData["planId"]) !== scope.planId) continue;
 
     const phase = message.eventData["phase"];
     const phaseEvent = message.eventData["phase_event"];

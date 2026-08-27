@@ -33,6 +33,15 @@ const steps = [
 ];
 
 describe("findLatestChecklist", () => {
+  it("isolates snapshots by plan run instead of leaking the newest conversation-wide checklist", () => {
+    const olderRun = checklistEvent(["done", "pending"]);
+    const newerRun = event("checklist", {
+      runId: "run-2", total: 2, doneCount: 2,
+      items: [{ index: 0, title: "Schritt 1", status: "done" }, { index: 1, title: "Schritt 2", status: "done" }],
+    });
+    const snapshot = findLatestChecklist([olderRun, newerRun], { runId: "run-1" });
+    expect(snapshot?.doneCount).toBe(1);
+  });
   it("returns null when the run produced no checklist", () => {
     // A plain coding chat has no plan execution and therefore no per-step truth. The panel
     // must show nothing rather than invent progress - which is what the old tool-call counter

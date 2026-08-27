@@ -167,6 +167,8 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS crypto_portfolio_history (id INTEGER PRIMARY KEY AUTOINCREMENT, total_value_usd REAL NOT NULL, btc_balance TEXT, btc_value_usd REAL, eth_balance TEXT, eth_value_usd REAL, xrp_balance TEXT, xrp_value_usd REAL, timestamp INTEGER NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS crypto_price_history (id INTEGER PRIMARY KEY AUTOINCREMENT, currency TEXT NOT NULL, price REAL NOT NULL, price_usd REAL NOT NULL, change_24h REAL, market_cap REAL, volume_24h REAL, timestamp INTEGER NOT NULL, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS session_checklist (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER NOT NULL REFERENCES conversations(id), run_id TEXT, step_index INTEGER NOT NULL, title TEXT NOT NULL, description TEXT, acceptance_criteria TEXT, constraint_kind TEXT, status TEXT NOT NULL DEFAULT 'pending', confidence TEXT, verify_state TEXT, attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS plans (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id INTEGER REFERENCES conversations(id), project_id INTEGER REFERENCES projects(id), goal TEXT NOT NULL, title TEXT, complexity INTEGER, steps TEXT NOT NULL, tools TEXT, markdown TEXT, status TEXT NOT NULL DEFAULT 'draft', version INTEGER NOT NULL DEFAULT 1, parent_plan_id INTEGER, repository_snapshot TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS plan_runs (id TEXT PRIMARY KEY, plan_id INTEGER REFERENCES plans(id), plan_version INTEGER NOT NULL DEFAULT 1, conversation_id INTEGER REFERENCES conversations(id), project_id INTEGER REFERENCES projects(id), project_slug TEXT, status TEXT NOT NULL DEFAULT 'queued', attempt INTEGER NOT NULL DEFAULT 1, result TEXT, started_at TEXT, finished_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS skill_usage (slug TEXT PRIMARY KEY, total_uses INTEGER NOT NULL DEFAULT 0, successful_uses INTEGER NOT NULL DEFAULT 0, avg_iterations REAL NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active')`,
       `CREATE TABLE IF NOT EXISTS artifacts (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL, mime_type TEXT, size_bytes INTEGER, path TEXT, source_url TEXT, platform TEXT, transcript TEXT, frames_json TEXT, thumbnail_data_url TEXT, duration_sec REAL, conversation_id INTEGER REFERENCES conversations(id), source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready', error TEXT, created_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS bots (slug TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, avatar TEXT, system_prompt TEXT, provider_id TEXT, model_id TEXT, skill_whitelist TEXT, tool_whitelist TEXT, is_built_in INTEGER NOT NULL DEFAULT 0, conversation_id INTEGER REFERENCES conversations(id), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
@@ -180,6 +182,13 @@ export class DatabaseService {
     await this.client.execute(`ALTER TABLE messages ADD COLUMN metadata TEXT`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
     });
+    for (const sql of [
+      `ALTER TABLE plans ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+      `ALTER TABLE plans ADD COLUMN parent_plan_id INTEGER`,
+      `ALTER TABLE plans ADD COLUMN repository_snapshot TEXT`,
+    ]) {
+      await this.client.execute(sql).catch(() => undefined);
+    }
 
     await this.client.execute(`ALTER TABLE memories ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'`).catch(() => {
       // Older databases may already have the column or reject duplicate adds.
@@ -458,6 +467,9 @@ export class DatabaseService {
     await this.forEachExistingTable("plans", () =>
       this.db.update(schema.plans).set({ conversationId: null }).where(eq(schema.plans.conversationId, id)).run()
     );
+    await this.forEachExistingTable("plan_runs", () =>
+      this.db.update(schema.planRuns).set({ conversationId: null }).where(eq(schema.planRuns.conversationId, id)).run()
+    );
     await this.forEachExistingTable("cron_jobs", () =>
       this.db.update(schema.cronJobs).set({ conversationId: null }).where(eq(schema.cronJobs.conversationId, id)).run()
     );
@@ -505,6 +517,53 @@ export class DatabaseService {
       .where(and(eq(schema.messages.id, messageId), eq(schema.messages.conversationId, conversationId)))
       .run();
     return Number((result as { rowsAffected?: number } | undefined)?.rowsAffected ?? 0) > 0;
+  }
+
+  // ============================================================
+  // Plans and execution runs
+  // ============================================================
+  async createPlan(data: Omit<schema.PlanInsert, "id" | "createdAt" | "updatedAt">): Promise<schema.PlanSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db.insert(schema.plans).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+    if (!result) throw new Error("Failed to create plan");
+    return result;
+  }
+
+  async getPlan(id: number): Promise<schema.PlanSelect | undefined> {
+    return this.db.select().from(schema.plans).where(eq(schema.plans.id, id)).get();
+  }
+
+  async listPlans(filters: { conversationId?: number; projectId?: number } = {}): Promise<schema.PlanSelect[]> {
+    const conditions = [];
+    if (filters.conversationId !== undefined) conditions.push(eq(schema.plans.conversationId, filters.conversationId));
+    if (filters.projectId !== undefined) conditions.push(eq(schema.plans.projectId, filters.projectId));
+    const query = this.db.select().from(schema.plans);
+    return (conditions.length ? query.where(and(...conditions)) : query).orderBy(desc(schema.plans.updatedAt)).all();
+  }
+
+  async updatePlan(id: number, data: Partial<Omit<schema.PlanInsert, "id" | "createdAt">>): Promise<schema.PlanSelect | undefined> {
+    return this.db.update(schema.plans).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(schema.plans.id, id)).returning().get();
+  }
+
+  async deletePlan(id: number): Promise<boolean> {
+    await this.db.delete(schema.planRuns).where(eq(schema.planRuns.planId, id)).run();
+    const result = await this.db.delete(schema.plans).where(eq(schema.plans.id, id)).run();
+    return Number((result as { rowsAffected?: number }).rowsAffected ?? 0) > 0;
+  }
+
+  async createPlanRun(data: Omit<schema.PlanRunInsert, "createdAt" | "updatedAt">): Promise<schema.PlanRunSelect> {
+    const now = new Date().toISOString();
+    const result = await this.db.insert(schema.planRuns).values({ ...data, createdAt: now, updatedAt: now }).returning().get();
+    if (!result) throw new Error("Failed to create plan run");
+    return result;
+  }
+
+  async updatePlanRun(id: string, data: Partial<Omit<schema.PlanRunInsert, "id" | "createdAt">>): Promise<schema.PlanRunSelect | undefined> {
+    return this.db.update(schema.planRuns).set({ ...data, updatedAt: new Date().toISOString() }).where(eq(schema.planRuns.id, id)).returning().get();
+  }
+
+  async listPlanRuns(planId: number): Promise<schema.PlanRunSelect[]> {
+    return this.db.select().from(schema.planRuns).where(eq(schema.planRuns.planId, planId)).orderBy(desc(schema.planRuns.createdAt)).all();
   }
 
   // ============================================================
@@ -801,6 +860,13 @@ export class DatabaseService {
     if (shouldDeleteTasks) {
       await this.db.delete(schema.tasks).where(eq(schema.tasks.projectId, id)).run();
     }
+
+    await this.forEachExistingTable("plan_runs", () =>
+      this.db.update(schema.planRuns).set({ projectId: null }).where(eq(schema.planRuns.projectId, id)).run()
+    );
+    await this.forEachExistingTable("plans", () =>
+      this.db.update(schema.plans).set({ projectId: null }).where(eq(schema.plans.projectId, id)).run()
+    );
 
     await this.db.delete(schema.projects).where(eq(schema.projects.id, id)).run();
   }

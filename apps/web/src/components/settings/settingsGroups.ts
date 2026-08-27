@@ -284,6 +284,7 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       icon: Terminal,
       keys: [
         "AGENT_CODING_MAX_ITERATIONS",
+        "AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES",
         "AGENT_CODING_ENABLE_REFLECTION",
         "AGENT_CODING_ENABLE_VERIFY",
       ],

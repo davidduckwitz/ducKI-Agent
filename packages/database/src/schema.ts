@@ -338,6 +338,25 @@ export const plans = sqliteTable("plans", {
   tools: text("tools"), // JSON array of tool names needed
   markdown: text("markdown"), // Rendered markdown version
   status: text("status").notNull().default("draft"), // draft, active, completed, archived
+  version: integer("version").notNull().default(1),
+  parentPlanId: integer("parent_plan_id"),
+  repositorySnapshot: text("repository_snapshot"), // JSON planning context
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const planRuns = sqliteTable("plan_runs", {
+  id: text("id").primaryKey(),
+  planId: integer("plan_id").references(() => plans.id),
+  planVersion: integer("plan_version").notNull().default(1),
+  conversationId: integer("conversation_id").references(() => conversations.id),
+  projectId: integer("project_id").references(() => projects.id),
+  projectSlug: text("project_slug"),
+  status: text("status").notNull().default("queued"),
+  attempt: integer("attempt").notNull().default(1),
+  result: text("result"),
+  startedAt: text("started_at"),
+  finishedAt: text("finished_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -570,6 +589,8 @@ export type DynamicToolInsert = typeof dynamicTools.$inferInsert;
 export type DynamicToolSelect = typeof dynamicTools.$inferSelect;
 export type PlanInsert = typeof plans.$inferInsert;
 export type PlanSelect = typeof plans.$inferSelect;
+export type PlanRunInsert = typeof planRuns.$inferInsert;
+export type PlanRunSelect = typeof planRuns.$inferSelect;
 export type CryptoAddressInsert = typeof cryptoAddresses.$inferInsert;
 export type CryptoAddressSelect = typeof cryptoAddresses.$inferSelect;
 export type CryptoTransactionInsert = typeof cryptoTransactions.$inferInsert;

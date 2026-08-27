@@ -12,7 +12,7 @@ import {
   listIncompletePartSequences,
   clearIncompletePartSequences,
 } from "@ducki/tools";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve, isAbsolute, basename } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, AgentRunEventType, RunJournalEntry } from "../config/interfaces_types.js";
@@ -186,6 +186,7 @@ export interface CodingRunOptions {
    * asking first is wasted if the answer gets thrown away and re-derived.
    */
   existingPlan?: Plan;
+  planRunContext?: { planId?: number | null; planVersion?: number; runId: string };
   /**
    * Wall-clock budget for the whole run, in milliseconds. Enforced as a soft deadline checked at
    * each attempt boundary (never aborts an in-flight LLM/tool call mid-way), so the run stops
@@ -208,6 +209,13 @@ export interface CodingRunOptions {
    * live" indicator only ever had something to show once a full response had already landed.
    */
   onChunk?: (chunk: string) => void;
+  /**
+   * Whether this run is expected to persist a project change. Coding runs default to true;
+   * callers that deliberately use CodingAgent for a read-only audit/review must opt out.
+   * This is an execution contract, not a hint to the model: a run that expects a mutation
+   * cannot complete successfully until the checkpoint diff proves that one happened.
+   */
+  mutationExpected?: boolean;
 }
 
 export interface CodingRunResult {
@@ -221,6 +229,15 @@ export interface CodingRunResult {
   verifyCommand?: string;
   /** True only when a verification command actually ran and passed. */
   verified: boolean;
+  /** Machine-readable terminal state. `success` is retained for API compatibility. */
+  completionStatus?: "completed_verified" | "completed_unverified" | "incomplete" | "failed";
+  /** Evidence used by the controller for the completion decision. Never model-authored. */
+  completionEvidence?: {
+    mutationExpected: boolean;
+    fileChangesObserved: boolean;
+    changedFiles: string[];
+    openChecklistItems: string[];
+  };
 }
 
 export interface CodingPhaseEvent {
@@ -382,6 +399,7 @@ export class CodingAgent {
    *  emit()/emitPlanEvent() so they don't need conversationId threaded through every call site
    *  (mirrors currentAttempt/currentPhase above). Undefined before the first run() call. */
   private currentConversationId: number | undefined;
+  private currentPlanRunContext: CodingRunOptions["planRunContext"];
   /** Serializes this instance's own event-persistence writes so row order in the DB matches
    *  emission order, without making any emit() call itself await the write - same pattern as
    *  Agent.run()'s internal eventPersistQueue (agent.ts), applied here because CodingAgent now
@@ -391,6 +409,32 @@ export class CodingAgent {
    *  syncPlanFromTodos can update it in place when the model rewrites the checklist. Undefined
    *  before run() computes/rehydrates a plan. */
   private currentPlan: Plan | undefined;
+
+  private buildRepositorySnapshot(): Record<string, unknown> | undefined {
+    if (!this.sandboxRoot || !existsSync(this.sandboxRoot)) return undefined;
+    const ignored = new Set(["node_modules", ".git", "dist", "build", "coverage", ".next"]);
+    const files: string[] = [];
+    const walk = (dir: string, depth: number) => {
+      if (depth > 3 || files.length >= 300) return;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (ignored.has(entry.name) || files.length >= 300) continue;
+        const absolute = join(dir, entry.name);
+        const relative = absolute.slice(this.sandboxRoot!.length + 1).replace(/\\/g, "/");
+        if (entry.isDirectory()) walk(absolute, depth + 1);
+        else files.push(relative);
+      }
+    };
+    try { walk(this.sandboxRoot, 0); } catch { /* partial snapshot is still useful */ }
+    let packageInfo: Record<string, unknown> | undefined;
+    const packagePath = join(this.sandboxRoot, "package.json");
+    if (existsSync(packagePath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
+        packageInfo = { name: parsed["name"], scripts: parsed["scripts"], dependencies: parsed["dependencies"], devDependencies: parsed["devDependencies"] };
+      } catch { /* malformed package.json will be discovered during execution */ }
+    }
+    return { root: this.sandboxRoot, files, package: packageInfo, hasTsconfig: existsSync(join(this.sandboxRoot, "tsconfig.json")) };
+  }
   /** True while CodingAgent itself is seeding/reseeding the checklist (initial seed from the
    *  plan, or rehydration on resume) rather than the MODEL deciding to rewrite it. Those internal
    *  replace() calls would otherwise trigger syncPlanFromTodos right after the plan they were
@@ -679,6 +723,32 @@ export class CodingAgent {
               });
             }
           }
+          return { proceed: true };
+        },
+      },
+      {
+        // A live browser session (the model's own, or one the user started and the agent is
+        // only observing) can go stale the moment a file it depends on changes on disk - the
+        // page keeps showing whatever it rendered on its last load/reload. Marking the session
+        // dirty here (instead of forcing an immediate reload) lets the browser tool's read-only
+        // inspection actions (evaluate, get_content, get_page_errors, screenshot, snapshot,
+        // expect - see reloadIfDirty in packages/tools/src/browser.ts) reload exactly once,
+        // right before the NEXT time something actually looks at the page. A session nobody is
+        // currently inspecting, or one the agent only watches without ever touching its files,
+        // is never reloaded - a user's live session stays untouched unless the agent's own edit
+        // is what invalidated it.
+        name: "coding-browser-staleness-tracker",
+        priority: 50,
+        handler: async (context: any) => {
+          const toolName = context.toolName as string;
+          if (toolName !== "filesystem") return { proceed: true };
+          const result = context.result as { success: boolean } | undefined;
+          if (!result?.success) return { proceed: true };
+          const action = String((context.input as Record<string, unknown> | undefined)?.["action"] ?? "");
+          if (action !== "write" && action !== "edit" && action !== "append") return { proceed: true };
+          // Best-effort: no browser session may exist yet, and that's fine (mark_dirty no-ops
+          // in that case) - a coding run must never fail or slow down because of this signal.
+          await this.agent.executor.execute("browser", { action: "mark_dirty" }).catch(() => undefined);
           return { proceed: true };
         },
       },
@@ -982,6 +1052,13 @@ export class CodingAgent {
     clearIncompletePartSequences(this.sandboxFilter());
 
     const maxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
+    // How many consecutive attempts may fail verification with the EXACT SAME error before the
+    // run gives up as non-converging (see the identicalFailureStreak check below). Settings key:
+    // AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES. Default 3 preserves the previous hardcoded behavior.
+    const rawIdenticalVerifyLimit = parseInt((await this.db.getSetting("AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES")) ?? "", 10);
+    const maxIdenticalVerifyFailures = Number.isFinite(rawIdenticalVerifyLimit)
+      ? Math.min(20, Math.max(1, rawIdenticalVerifyLimit))
+      : 3;
 
     // Join the caller's conversation when there is one; only open a new one otherwise.
     // The callback fires either way - callers use it to register the run so the Stop button
@@ -1001,6 +1078,65 @@ export class CodingAgent {
     // Everything emit()/emitPlanEvent()/emitPhase() persist from here on targets this run's
     // conversation - see persistEvent().
     this.currentConversationId = conversationId;
+    this.currentPlanRunContext = opts.planRunContext;
+
+    // Controller-owned completion evidence. Model prose and todo status are not execution
+    // evidence; only checkpoint diffs (and the bounded parted-write healer) update these facts.
+    // CodingAgent is an execution surface, so mutation is the safe default. Deliberately
+    // read-only review callers must opt out explicitly.
+    const mutationExpected = opts.mutationExpected ?? true;
+    let fileChangesObserved = false;
+    const changedFiles = new Set<string>();
+
+    const enforceCompletionContract = (candidate: CodingRunResult): CodingRunResult => {
+      const openChecklistItems = this.todos
+        .snapshot()
+        .filter((item) => item.status === "pending" || item.status === "in_progress")
+        .map((item) => item.title);
+      const completionEvidence = {
+        mutationExpected,
+        fileChangesObserved,
+        changedFiles: [...changedFiles].sort(),
+        openChecklistItems,
+      };
+
+      let result = candidate;
+      if (candidate.success && mutationExpected && !fileChangesObserved) {
+        const reason =
+          "this coding run required a project mutation, but no checkpoint diff recorded a file change; prose and checklist claims are not execution evidence";
+        this.emit("decision", "Abschluss abgelehnt: keine belegte Dateiänderung.", {
+          completion_contract: "mutation_missing",
+        });
+        result = {
+          ...candidate,
+          success: false,
+          summary: `${candidate.summary}\n\n[Incomplete: ${reason}.]`,
+        };
+      } else if (candidate.success && openChecklistItems.length > 0) {
+        const reason = `${openChecklistItems.length} required checklist step(s) remain open: ${openChecklistItems.join(", ")}`;
+        this.emit("decision", "Abschluss abgelehnt: Pflichtschritte sind noch offen.", {
+          completion_contract: "checklist_open",
+          openItems: openChecklistItems,
+        });
+        result = {
+          ...candidate,
+          success: false,
+          summary: `${candidate.summary}\n\n[Incomplete: ${reason}.]`,
+        };
+      }
+
+      return {
+        ...result,
+        completionStatus: result.success
+          ? result.verified
+            ? "completed_verified"
+            : "completed_unverified"
+          : candidate.success
+            ? "incomplete"
+            : "failed",
+        completionEvidence,
+      };
+    };
 
     // End-of-run guard: if a parted write (totalParts/partNumber) was started during this run
     // but not all parts arrived, the run must NOT end silently - the file(s) on disk are
@@ -1011,7 +1147,7 @@ export class CodingAgent {
     // this wrapper.
     const finalize = async (result: CodingRunResult): Promise<CodingRunResult> => {
       const incomplete = listIncompletePartSequences(this.sandboxFilter());
-      if (incomplete.length === 0) return result;
+      if (incomplete.length === 0) return enforceCompletionContract(result);
 
       // After an explicit Stop, auto-starting more LLM calls would be surprising - warn only.
       const stopped = (this.agent as unknown as { stopRequested: boolean }).stopRequested === true;
@@ -1019,16 +1155,18 @@ export class CodingAgent {
 
       const stillIncomplete = listIncompletePartSequences(this.sandboxFilter());
       if (stillIncomplete.length === 0) {
+        fileChangesObserved = true;
+        for (const item of incomplete) changedFiles.add(item.path);
         this.emit("decision", "Self-Healing: fehlende Datei-Teile nachgeschrieben.", {
           part_healed: true,
           files: incomplete,
         });
-        return {
+        return enforceCompletionContract({
           ...result,
           summary:
             `${result.summary}\n\n[Self-Healing: die fehlenden Datei-Teile wurden automatisch ` +
             `nachgeschrieben.${healDetail ? ` ${healDetail}` : ""}]`,
-        };
+        });
       }
 
       const lines = stillIncomplete.map(
@@ -1048,7 +1186,11 @@ export class CodingAgent {
         part_warning: true,
         files: stillIncomplete,
       });
-      return { ...result, summary: `${result.summary}\n\nWARNUNG: ${warning}` };
+      return enforceCompletionContract({
+        ...result,
+        success: false,
+        summary: `${result.summary}\n\nWARNUNG: ${warning}`,
+      });
     };
 
     const detectedSkill = this.autoSelectCodingSkill(goal);
@@ -1103,6 +1245,7 @@ export class CodingAgent {
     // successful without ever implementing the requested software.
     const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames, {
       requiredPlanType: "coding",
+      repositoryContext: this.buildRepositorySnapshot(),
     }));
     this.currentPlan = plan;
     this.emitPlanEvent(plan);
@@ -1122,10 +1265,17 @@ export class CodingAgent {
     // should trigger that.
     this.suppressPlanSync = true;
     try {
-      // Always seed from the fresh plan. The old checklist (persisted.todoItems) was for a
-      // different goal — carrying those statuses onto new, unrelated steps would show a fake
-      // "already done" checklist for what is actually a brand-new task.
-      this.todos.replace(plan.steps.map((step) => ({ title: step.title })));
+      // A newly generated plan starts pending. A caller-supplied, versioned plan may contain
+      // controller-owned completion state from an earlier run; preserve that so "run open
+      // steps" does not redo verified work. Persisted conversation todos are still ignored,
+      // because they may belong to a different goal.
+      this.todos.replace(plan.steps.map((step) => ({
+        title: step.title,
+        ...(opts.existingPlan ? {
+          status: step.status === "completed" ? "done" : step.status === "failed" ? "blocked" : step.status === "running" ? "in_progress" : "pending",
+          ...(step.result ? { note: step.result } : {}),
+        } : {}),
+      })));
     } finally {
       this.suppressPlanSync = false;
     }
@@ -1195,8 +1345,8 @@ export class CodingAgent {
 
       const prompt =
         attempt === 1
-          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan, isResuming)
-          : this.buildFollowUpPrompt(goal, lastSummary, nextAttemptReason);
+          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan, isResuming, mutationExpected)
+          : this.buildFollowUpPrompt(goal, lastSummary, nextAttemptReason, mutationExpected);
       // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
       // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
       // (possibly still "explore" if it timed out early) would permanently lock every retry
@@ -1257,6 +1407,22 @@ export class CodingAgent {
         throw error;
       }
       journal = runResult.runJournal ?? journal;
+      // Checkpoints are the strongest evidence, but they are intentionally best-effort (git
+      // may be unavailable). Preserve a narrower fallback from successful filesystem journal
+      // entries so a real write is not reported as a no-op merely because checkpoint setup
+      // failed. Shell commands are deliberately excluded: their text does not prove a file was
+      // persisted, even when the command itself exited successfully.
+      for (const entry of journal) {
+        if (
+          entry.success &&
+          entry.toolName === "filesystem" &&
+          /^(write|append|edit|edit_lines|delete|move|copy)\b/i.test(entry.summary)
+        ) {
+          fileChangesObserved = true;
+          const path = entry.summary.replace(/^\S+\s+/, "").trim();
+          if (path) changedFiles.add(path);
+        }
+      }
       lastSummary = runResult.response;
 
       // Extract and emit phase events from response
@@ -1332,8 +1498,12 @@ export class CodingAgent {
         const attemptDiff = await diffCheckpoint(this.sandboxRoot, checkpoint.sha);
         const changedFileCount = attemptDiff?.files.length ?? 0;
         attemptChangedFileCount = changedFileCount;
-        if (changedFileCount > 0) anyFileChangedThisRun = true;
-        if (changedFileCount === 0 && !anyFileChangedThisRun) {
+        if (changedFileCount > 0) {
+          anyFileChangedThisRun = true;
+          fileChangesObserved = true;
+          for (const file of attemptDiff?.files ?? []) changedFiles.add(file.path);
+        }
+        if (mutationExpected && changedFileCount === 0 && !anyFileChangedThisRun) {
           const newlyDone = this.todos
             .snapshot()
             .filter(
@@ -1446,6 +1616,7 @@ export class CodingAgent {
           });
       if (verifyResult.success) {
         this.emit("decision", `Verifikation "${verifyCommand}" erfolgreich.`, { attempt, verifyCommand });
+        this.reconcileFinalStepAfterVerification(lastSummary);
         return finalize({
           success: true,
           verified: true,
@@ -1467,14 +1638,16 @@ export class CodingAgent {
       identicalFailureStreak = isIdenticalToPreviousFailure ? identicalFailureStreak + 1 : 0;
       previousVerifyError = verifyError;
 
-      if (identicalFailureStreak >= 2) {
-        // Three attempts in a row produced the exact same verify error: the model's edits are
-        // provably not changing the outcome. Burning the rest of maxAttempts would just repeat
-        // this - stop now with a clear, honest diagnosis instead of a generic "failed" summary.
-        this.emit("decision", "Abgebrochen: drei Versuche in Folge mit identischem Verifikationsfehler - keine Konvergenz erkennbar.", {
-          attempt,
-          verifyCommand,
-        });
+      if (identicalFailureStreak >= maxIdenticalVerifyFailures - 1) {
+        // maxIdenticalVerifyFailures attempts in a row produced the exact same verify error: the
+        // model's edits are provably not changing the outcome. Burning the rest of maxAttempts
+        // would just repeat this - stop now with a clear, honest diagnosis instead of a generic
+        // "failed" summary.
+        this.emit(
+          "decision",
+          `Abgebrochen: ${maxIdenticalVerifyFailures} Versuche in Folge mit identischem Verifikationsfehler - keine Konvergenz erkennbar.`,
+          { attempt, verifyCommand }
+        );
         return finalize({
           success: false,
           verified: false,
@@ -1660,6 +1833,44 @@ export class CodingAgent {
   }
 
   /**
+   * A numbered transition can close step N only when the model moves on to N+1. The final step
+   * has no successor, so a run that finishes with "Step 5 ... READY FOR DEPLOYMENT" used to
+   * return verified:true while leaving that row in_progress forever. Close only the sole open,
+   * final item, only after the outer verification gate passed, and only when the response names
+   * that exact step with an explicit terminal status. This avoids treating generic "done" prose
+   * as checklist evidence or hiding an earlier unfinished/blocked step.
+   */
+  private reconcileFinalStepAfterVerification(response: string): void {
+    const items = this.todos.snapshot();
+    if (items.length === 0 || items.some((item) => item.status === "blocked")) return;
+
+    const open = items.filter((item) => item.status === "pending" || item.status === "in_progress");
+    const finalItem = items[items.length - 1];
+    if (open.length !== 1 || !finalItem || open[0]?.id !== finalItem.id) return;
+    if (items.slice(0, -1).some((item) => item.status !== "done")) return;
+
+    const finalStepNumber = items.length;
+    const explicitTerminalLine = response.split(/\r?\n/).some((line) => {
+      const namesFinalStep = new RegExp(`\\b(?:step|schritt)\\s*${finalStepNumber}\\s*[:.\\-]`, "i").test(line);
+      if (!namesFinalStep || /\b(?:not|nicht)\s+(?:complete|completed|done|verified|fertig|abgeschlossen|verifiziert)\b/i.test(line)) {
+        return false;
+      }
+      return /\b(?:completed?|done|verified|ready\s+for\s+deployment|fertig|abgeschlossen|verifiziert|einsatzbereit)\b/i.test(line);
+    });
+    if (!explicitTerminalLine) return;
+
+    this.todos.update(
+      finalItem.id,
+      "done",
+      `Automatisch abgeschlossen: Schritt ${finalStepNumber} wurde explizit als fertig gemeldet und die Verifikation war erfolgreich.`
+    );
+    this.emit("decision", `Finalen Checklisten-Schritt ${finalStepNumber} nach erfolgreicher Verifikation abgeschlossen.`, {
+      finalStep: finalStepNumber,
+      todo_items: this.todos.snapshot(),
+    });
+  }
+
+  /**
    * Mirrors a checklist REWRITE (todo:write, i.e. TodoList.replace - see the TodoList
    * constructor wiring above) back into the Plan object the UI's Plan tab actually renders.
    *
@@ -1766,7 +1977,8 @@ export class CodingAgent {
   private persistEvent(eventType: string, message: string, data: Record<string, unknown> | undefined, timestamp: string): void {
     if (this.currentConversationId === undefined) return;
     const conversationId = this.currentConversationId;
-    const toolResult = JSON.stringify({ eventType, data, timestamp });
+    const contextualData = this.currentPlanRunContext ? { ...(data ?? {}), ...this.currentPlanRunContext } : data;
+    const toolResult = JSON.stringify({ eventType, data: contextualData, timestamp });
     this.eventPersistQueue = this.eventPersistQueue.then(() =>
       this.db
         .addMessage({ conversationId, role: "event", content: message, toolResult, createdAt: timestamp })
@@ -2006,6 +2218,15 @@ export class CodingAgent {
         `  like a real bug. The URL above is a real HTTP server and serves the project correctly.`,
         `- Do NOT pass newSession/sessionId - omitting both reuses the one shared browser session`,
         `  (the same one the user may already have open), instead of opening a second, separate one.`,
+        `- Use browser snapshot before clicking. Prefer role/name targeting over coordinate guesses;`,
+        `  snapshots include rendered off-screen controls and Puppeteer will scroll them into view.`,
+        `- After click/type/scroll, read a fresh snapshot or use expect/get_content before deciding`,
+        `  what happened. Never infer success from an old screenshot or from the click result alone.`,
+        `- If you add a favicon, link it with a RELATIVE href (e.g. <link rel="icon" href="favicon.ico">),`,
+        `  never a leading-slash absolute path ('/favicon.ico'). The project is served under a`,
+        `  per-project path, not the site root - an absolute href (and the browser's own automatic`,
+        `  '/favicon.ico' probe when no <link> exists at all) resolves against the site root and 404s`,
+        `  even when the file exists in this project, exactly like './app.js' would if it were absolute.`,
         "",
       );
     }
@@ -2017,7 +2238,8 @@ export class CodingAgent {
     verifyCommand: string | undefined,
     detectedSkill: string | undefined,
     plan: Plan,
-    isResuming: boolean
+    isResuming: boolean,
+    mutationExpected: boolean
   ): string {
     const parts: string[] = [`Goal: ${goal}`, "", ...this.pathHandlingBlock()];
 
@@ -2038,6 +2260,16 @@ export class CodingAgent {
     }
 
     parts.push(
+      "EXECUTION CONTRACT:",
+      ...(mutationExpected
+        ? [
+            "- This is a coding execution run. Describing or announcing a write does not change the project.",
+            "- At least one real filesystem mutation must be recorded before the controller can accept success.",
+          ]
+        : ["- This is an explicitly read-only coding review; do not mutate project files."]),
+      "- A final answer while required checklist steps are still open is rejected as incomplete.",
+      "- When you know the next action, emit its tool call immediately; do not spend a turn promising it.",
+      "",
       "Track your progress with the todo tool: it already contains the plan below as pending steps.",
       "Mark a step in_progress before starting it and done once it is verified. That checklist is what",
       "the user sees, so keep it truthful - never mark a step done on the strength of an edit alone,",
@@ -2097,7 +2329,8 @@ export class CodingAgent {
   private buildFollowUpPrompt(
     goal: string,
     previousSummaryWithVerification: string,
-    reason: "verification_failed" | "checklist_open" | "guardrail"
+    reason: "verification_failed" | "checklist_open" | "guardrail",
+    mutationExpected: boolean
   ): string {
     // The checklist carries across attempts. Each attempt is a fresh agent.run(), so without
     // replaying it here the agent would re-plan from scratch and redo steps it already finished.
@@ -2109,6 +2342,10 @@ export class CodingAgent {
         : "The previous attempt made progress but ended while structured checklist steps were still open. Continue with the first open step; do not redo completed steps.";
     return [
       opening,
+      "",
+      mutationExpected
+        ? "The controller will reject success unless a real filesystem mutation is recorded and every required checklist step is closed. Prose claims do not count. Call the next tool immediately instead of announcing it."
+        : "This run is explicitly read-only. The controller still requires every checklist step to be closed; prose claims do not count as evidence.",
       "",
       "BEFORE YOU ACT, call the status tool. It tells you in one call what normally takes several reads: which steps are already done (from the checklist), what files you actually changed (from the checkpoint diff - not your memory), and whether any diagnostics are still failing. Your conversation context may have been trimmed and earlier results may no longer be visible, so do NOT rely on what you remember - ask the status tool for ground truth.",
       this.pathHandlingBlock().join("\n"),

@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { resolve } from "node:path";
 import { existsSync, mkdirSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { Agent, AgentRunResult, Plan, PlanStep } from "@ducki/agent";
 import { formatPlanAsMarkdown, Planner } from "@ducki/agent";
 import { createApiResponse, createApiError } from "@ducki/shared";
@@ -10,6 +11,19 @@ import { getRootLogger } from "@ducki/logger";
 import { notifyCodingRunFinished } from "../lib/coding-notify.js";
 
 export const plansRouter: IRouter = Router();
+
+function parseJson<T>(value: string | null | undefined, fallback: T): T {
+  try { return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
+}
+
+function presentPlan(row: import("@ducki/database").PlanSelect) {
+  return {
+    ...row,
+    steps: parseJson<PlanStep[]>(row.steps, []),
+    tools: parseJson<string[]>(row.tools, []),
+    repositorySnapshot: parseJson<Record<string, unknown> | null>(row.repositorySnapshot, null),
+  };
+}
 
 /** Validates and normalizes the loosely-typed `plan` field a client sends back (its own copy of
  *  a Plan object round-tripped through JSON) into what the Planner expects. */
@@ -70,7 +84,25 @@ plansRouter.post("/refine", async (req, res, next) => {
     }
     const planner = new Planner(provider, getRootLogger().child("PlanRefine"));
     const refined = await planner.refinePlan(plan, feedback);
-    res.json(createApiResponse({ plan: refined, markdown: formatPlanAsMarkdown(refined) }));
+    const markdown = formatPlanAsMarkdown(refined);
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
+    const sourceId = Number((body["plan"] as Record<string, unknown>)?.["id"]);
+    const sourceVersion = Number((body["plan"] as Record<string, unknown>)?.["version"] ?? 1);
+    const saved = db ? await db.createPlan({
+      conversationId: Number.isFinite(Number((body["plan"] as Record<string, unknown>)?.["conversationId"])) ? Number((body["plan"] as Record<string, unknown>)["conversationId"]) : null,
+      projectId: Number.isFinite(Number((body["plan"] as Record<string, unknown>)?.["projectId"])) ? Number((body["plan"] as Record<string, unknown>)["projectId"]) : null,
+      goal: refined.goal,
+      title: String((body["plan"] as Record<string, unknown>)?.["title"] ?? refined.goal).slice(0, 200),
+      complexity: refined.estimatedComplexity === "high" ? 5 : refined.estimatedComplexity === "medium" ? 3 : 1,
+      steps: JSON.stringify(refined.steps),
+      tools: JSON.stringify([...new Set(refined.steps.flatMap((step) => step.toolsNeeded ?? []))]),
+      markdown,
+      status: "draft",
+      version: Number.isFinite(sourceVersion) ? sourceVersion + 1 : 2,
+      parentPlanId: Number.isFinite(sourceId) ? sourceId : null,
+      repositorySnapshot: typeof (body["plan"] as Record<string, unknown>)?.["repositorySnapshot"] === "object" ? JSON.stringify((body["plan"] as Record<string, unknown>)["repositorySnapshot"]) : null,
+    }) : null;
+    res.json(createApiResponse({ plan: saved ? { ...refined, ...presentPlan(saved) } : refined, markdown }));
   } catch (error) {
     next(error);
   }
@@ -78,7 +110,14 @@ plansRouter.post("/refine", async (req, res, next) => {
 
 plansRouter.get("/", async (req, res, next) => {
   try {
-    res.json(createApiResponse([]));
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService;
+    const conversationId = Number(req.query.conversationId);
+    const projectId = Number(req.query.projectId);
+    const rows = await db.listPlans({
+      ...(Number.isFinite(conversationId) ? { conversationId } : {}),
+      ...(Number.isFinite(projectId) ? { projectId } : {}),
+    });
+    res.json(createApiResponse(rows.map(presentPlan)));
   } catch (error) {
     next(error);
   }
@@ -112,7 +151,11 @@ plansRouter.post("/import/markdown", async (req, res, next) => {
 
 plansRouter.get("/:id", async (req, res, next) => {
   try {
-    res.status(404).json(createApiError("Plan not found"));
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService;
+    const row = await db.getPlan(Number(req.params.id));
+    if (!row) return void res.status(404).json(createApiError("Plan not found"));
+    const runs = await db.listPlanRuns(row.id);
+    res.json(createApiResponse({ ...presentPlan(row), runs: runs.map((run) => ({ ...run, result: parseJson(run.result, null) })) }));
   } catch (error) {
     next(error);
   }
@@ -125,14 +168,18 @@ plansRouter.post("/", async (req, res, next) => {
       res.status(400).json(createApiError("goal is required"));
       return;
     }
-    const mockPlan = {
-      id: 1,
-      ...body,
-      status: "draft",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    res.json(createApiResponse(mockPlan));
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService;
+    const steps = Array.isArray(body.steps) ? body.steps : [];
+    const row = await db.createPlan({
+      conversationId: Number.isFinite(Number(body.conversationId)) ? Number(body.conversationId) : null,
+      projectId: Number.isFinite(Number(body.projectId)) ? Number(body.projectId) : null,
+      goal: String(body.goal), title: typeof body.title === "string" ? body.title : String(body.goal).slice(0, 200),
+      complexity: Number.isFinite(Number(body.complexity)) ? Number(body.complexity) : null,
+      steps: JSON.stringify(steps), tools: JSON.stringify(Array.isArray(body.tools) ? body.tools : []),
+      markdown: typeof body.markdown === "string" ? body.markdown : null, status: "draft", version: 1,
+      parentPlanId: null, repositorySnapshot: body.repositorySnapshot ? JSON.stringify(body.repositorySnapshot) : null,
+    });
+    res.status(201).json(createApiResponse(presentPlan(row)));
   } catch (error) {
     next(error);
   }
@@ -140,7 +187,16 @@ plansRouter.post("/", async (req, res, next) => {
 
 plansRouter.patch("/:id", async (req, res, next) => {
   try {
-    res.status(404).json(createApiError("Plan not found"));
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService;
+    const body = req.body as Record<string, unknown>;
+    const row = await db.updatePlan(Number(req.params.id), {
+      ...(typeof body.status === "string" ? { status: body.status } : {}),
+      ...(typeof body.title === "string" ? { title: body.title } : {}),
+      ...(Array.isArray(body.steps) ? { steps: JSON.stringify(body.steps) } : {}),
+      ...(typeof body.markdown === "string" ? { markdown: body.markdown } : {}),
+    });
+    if (!row) return void res.status(404).json(createApiError("Plan not found"));
+    res.json(createApiResponse(presentPlan(row)));
   } catch (error) {
     next(error);
   }
@@ -148,7 +204,11 @@ plansRouter.patch("/:id", async (req, res, next) => {
 
 plansRouter.delete("/:id", async (req, res, next) => {
   try {
-    res.status(404).json(createApiError("Plan not found"));
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService;
+    const id = Number(req.params.id);
+    const deleted = await db.deletePlan(id);
+    if (!deleted) return void res.status(404).json(createApiError("Plan not found"));
+    res.json(createApiResponse({ deleted, id }));
   } catch (error) {
     next(error);
   }
@@ -156,7 +216,7 @@ plansRouter.delete("/:id", async (req, res, next) => {
 
 interface ExecutePlanBody {
   goal?: string;
-  steps?: Array<{ title?: string; description?: string; tools?: string[] }>;
+  steps?: Array<Partial<PlanStep> & { tools?: string[] }>;
   markdown?: string;
   conversationId?: number;
   projectId?: number;
@@ -215,14 +275,25 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
     const body = (req.body ?? {}) as ExecutePlanBody;
     const rawId = Number(req.params.id);
-    const planId = Number.isFinite(rawId) && rawId > 0 ? rawId : null;
+    let planId = Number.isFinite(rawId) && rawId > 0 ? rawId : null;
 
     const goal = String(body.goal ?? "").trim();
     const steps = (Array.isArray(body.steps) ? body.steps : [])
-      .map((step) => ({
+      .map((step, index) => ({
+        id: typeof step?.id === "string" && step.id ? step.id : `step_${index + 1}`,
         title: String(step?.title ?? "").trim(),
         description: String(step?.description ?? "").trim(),
-        tools: Array.isArray(step?.tools) ? step.tools.map(String) : [],
+        toolsNeeded: Array.isArray(step?.toolsNeeded) ? step.toolsNeeded.map(String) : Array.isArray(step?.tools) ? step.tools.map(String) : [],
+        dependsOn: Array.isArray(step?.dependsOn) ? step.dependsOn.map(String) : [],
+        canParallelizeWith: Array.isArray(step?.canParallelizeWith) ? step.canParallelizeWith.map(String) : [],
+        expectedFiles: Array.isArray(step?.expectedFiles) ? step.expectedFiles.map(String) : [],
+        acceptanceCriteria: Array.isArray(step?.acceptanceCriteria) ? step.acceptanceCriteria.map(String) : [],
+        verificationCommands: Array.isArray(step?.verificationCommands) ? step.verificationCommands.map(String) : [],
+        priority: step?.priority ?? "medium",
+        riskLevel: step?.riskLevel,
+        estimatedDuration: step?.estimatedDuration,
+        status: step?.status === "completed" || step?.status === "failed" || step?.status === "running" ? step.status : "pending",
+        result: typeof step?.result === "string" ? step.result : undefined,
       }))
       .filter((step) => step.title.length > 0);
 
@@ -237,7 +308,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
     const stepList = steps
       .map((step, index) => {
-        const toolHint = step.tools.length > 0 ? `\n   Suggested tools: ${step.tools.join(", ")}` : "";
+        const toolHint = step.toolsNeeded.length > 0 ? `\n   Suggested tools: ${step.toolsNeeded.join(", ")}` : "";
         const description = step.description ? `\n   ${step.description}` : "";
         return `${index + 1}. ${step.title}${description}${toolHint}`;
       })
@@ -291,12 +362,9 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       goal,
       planType: codingSandboxRoot ? "coding" : "general",
       steps: steps.map((step, index): PlanStep => ({
-        id: `step_${index + 1}`,
-        title: step.title,
-        description: step.description,
-        toolsNeeded: step.tools,
-        status: "pending",
-        priority: "medium",
+        ...step,
+        id: step.id || `step_${index + 1}`,
+        status: step.status === "completed" ? "completed" : "pending",
       })),
       // Not used for gating here (a caller-supplied plan always gets checklist tracking
       // regardless of complexity, see AgentRunOptions.existingPlan) - just a reasonable
@@ -335,6 +403,54 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     }
 
     const conversationId = body.conversationId;
+    let planVersion = 1;
+    if (db) {
+      const current = planId ? await db.getPlan(planId) : undefined;
+      if (current) {
+        planVersion = current.version;
+        await db.updatePlan(current.id, { status: "active", conversationId, projectId: codingProjectDbId ?? current.projectId });
+      } else {
+        const saved = await db.createPlan({
+          conversationId,
+          projectId: codingProjectDbId ?? null,
+          goal,
+          title: goal.slice(0, 200),
+          complexity: existingPlan.estimatedComplexity === "high" ? 5 : existingPlan.estimatedComplexity === "medium" ? 3 : 1,
+          steps: JSON.stringify(existingPlan.steps),
+          tools: JSON.stringify([...new Set(existingPlan.steps.flatMap((step) => step.toolsNeeded ?? []))]),
+          markdown: body.markdown ?? formatPlanAsMarkdown(existingPlan),
+          status: "active",
+          version: 1,
+          parentPlanId: null,
+          repositorySnapshot: null,
+        });
+        planId = saved.id;
+      }
+    }
+    const runId = randomUUID();
+    await db?.createPlanRun({
+      id: runId, planId, planVersion, conversationId, projectId: codingProjectDbId ?? null,
+      projectSlug: body.projectSlug ?? null, status: "queued", attempt: 1, result: null,
+      startedAt: null, finishedAt: null,
+    });
+
+    const withRunContext = (event: import("@ducki/agent").AgentRunEvent) => ({
+      ...event,
+      data: { ...(event.data ?? {}), planId, planVersion, runId },
+      conversationId,
+    });
+    const emitRunState = (status: string, extra: Record<string, unknown> = {}) => {
+      const timestamp = new Date().toISOString();
+      const data = { plan_event: "run_status", status, planId, planVersion, runId, ...extra };
+      io?.emit("chat:event", {
+        type: "internal_instruction", message: `Plan run ${status}`,
+        data, timestamp, conversationId,
+      });
+      void db?.addMessage({
+        conversationId, role: "event", content: `Plan run ${status}`,
+        toolResult: JSON.stringify({ eventType: "internal_instruction", data, timestamp }), createdAt: timestamp,
+      }).catch(() => undefined);
+    };
 
     // Writes the plan back to its markdown file with each step's current status checked
     // off (EXECUTION_MODE_UPDATE_PLAN_FILE). Keyed by conversationId so re-executing the
@@ -388,6 +504,8 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     // Start async execution - don't wait for it
     (async () => {
       try {
+        await db?.updatePlanRun(runId, { status: "running", startedAt: new Date().toISOString() });
+        emitRunState("running");
         if (codingSandboxRoot && createCodingAgent) {
           // Use CodingAgent scoped to the resolved sandbox (from projectId OR slug),
           // on the same conversation + execution prompt.
@@ -417,8 +535,8 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
               emitChunk: (chunk: string) => {
                 io?.emit("chat:chunk", { content: chunk, conversationId });
               },
-              emitEvent: (event: unknown) => {
-                io?.emit("chat:event", { ...(event as Record<string, unknown>), conversationId });
+              emitEvent: (event) => {
+                io?.emit("chat:event", withRunContext(event));
               },
             };
             const codingAgent = createCodingAgent({ sandboxRoot, eventEmitter: codingEventEmitter });
@@ -431,10 +549,20 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             const result = await codingAgent.run(executionPrompt, {
               conversationId,
               existingPlan,
+              planRunContext: { planId, planVersion, runId },
               maxAttempts: maxRetries,
               timeoutMs: timeoutMsOverride,
             });
             await savePlanProgress(result, codingAgent);
+            const terminalStatus = result.success ? "completed" : result.completionStatus === "incomplete" ? "completed_with_warnings" : "failed";
+            await db?.updatePlanRun(runId, { status: terminalStatus, result: JSON.stringify(result), finishedAt: new Date().toISOString() });
+            const openTitles = new Set(result.completionEvidence?.openChecklistItems ?? []);
+            const persistedSteps = existingPlan.steps.map((step) => ({
+              ...step,
+              status: (openTitles.has(step.title) ? (terminalStatus === "failed" ? "failed" : "pending") : "completed") as PlanStep["status"],
+            }));
+            if (planId) await db?.updatePlan(planId, { status: result.success ? "completed" : "active", steps: JSON.stringify(persistedSteps) });
+            emitRunState(terminalStatus, { completionEvidence: result.completionEvidence, summary: result.summary });
             if (db) notifyCodingRunFinished(db, req.app.locals["logger"] || console, existingPlan.goal.slice(0, 60), result);
 
             // Emit completion event
@@ -471,11 +599,15 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
           onChunk: (chunk) => {
             io?.emit("chat:chunk", { content: chunk, conversationId });
           },
-          onEvent: (event) => {
-            io?.emit("chat:event", { ...event, conversationId });
+            onEvent: (event) => {
+              io?.emit("chat:event", withRunContext(event));
           },
         });
         await savePlanProgress(result, agent);
+        const terminalStatus = result.abortedReason ? "failed" : "completed";
+        await db?.updatePlanRun(runId, { status: terminalStatus, result: JSON.stringify(result), finishedAt: new Date().toISOString() });
+        if (planId) await db?.updatePlan(planId, { status: terminalStatus === "completed" ? "completed" : "active" });
+        emitRunState(terminalStatus, { response: result.response });
 
         // Emit completion event
         if (io) {
@@ -486,6 +618,8 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
         }
       } catch (error) {
         console.error("Plan execution error:", error);
+        await db?.updatePlanRun(runId, { status: "failed", result: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), finishedAt: new Date().toISOString() });
+        emitRunState("failed", { error: error instanceof Error ? error.message : String(error) });
         if (io) {
           io.emit("chat:error", {
             error: error instanceof Error ? error.message : String(error),
@@ -499,6 +633,8 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     res.json(createApiResponse({
       message: "Plan execution started",
       planId,
+      runId,
+      planVersion,
     }));
   } catch (error) {
     next(error);

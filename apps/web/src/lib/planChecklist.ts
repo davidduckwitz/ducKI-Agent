@@ -4,12 +4,22 @@ import type { RenderedChatMessage } from "../components/chat/chatTypes";
 const CLOSED_STATUSES = new Set(["done", "failed", "skipped"]);
 
 export interface ChecklistSnapshot {
+  statusById: Map<string, string>;
   /** stepIndex -> status. The primary link: checklist items are derived from the plan steps in order. */
   statusByIndex: Map<number, string>;
   /** Lowercased title -> status. Fallback for a plan whose steps were re-derived out of order. */
   statusByTitle: Map<string, string>;
   doneCount: number;
   total: number;
+}
+
+export interface PlanEventScope { runId?: string; planId?: number; }
+
+function inScope(message: RenderedChatMessage, scope?: PlanEventScope): boolean {
+  if (!scope) return true;
+  if (scope.runId && message.eventData?.["runId"] !== scope.runId) return false;
+  if (scope.planId !== undefined && Number(message.eventData?.["planId"]) !== scope.planId) return false;
+  return true;
 }
 
 /**
@@ -26,20 +36,23 @@ export interface ChecklistSnapshot {
  * once finished, the count was a number of tool calls, which has no relation to how many steps
  * actually succeeded.
  */
-export function findLatestChecklist(messages: RenderedChatMessage[]): ChecklistSnapshot | null {
+export function findLatestChecklist(messages: RenderedChatMessage[], scope?: PlanEventScope): ChecklistSnapshot | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
-    if (!message || message.eventType !== "checklist" || !message.eventData) continue;
+    if (!message || message.eventType !== "checklist" || !message.eventData || !inScope(message, scope)) continue;
 
     const items = message.eventData["items"];
     if (!Array.isArray(items)) continue;
 
     const statusByIndex = new Map<number, string>();
+    const statusById = new Map<string, string>();
     const statusByTitle = new Map<string, string>();
     for (const raw of items) {
-      const item = (raw ?? {}) as { index?: number; title?: string; status?: string };
+      const item = (raw ?? {}) as { id?: string; stepId?: string; index?: number; title?: string; status?: string };
       const status = String(item.status ?? "pending");
       if (typeof item.index === "number") statusByIndex.set(item.index, status);
+      const stepId = item.stepId ?? item.id;
+      if (typeof stepId === "string" && stepId) statusById.set(stepId, status);
       if (typeof item.title === "string" && item.title.trim()) {
         statusByTitle.set(item.title.trim().toLowerCase(), status);
       }
@@ -50,6 +63,7 @@ export function findLatestChecklist(messages: RenderedChatMessage[]): ChecklistS
     const total = Number(message.eventData["total"]);
     return {
       statusByIndex,
+      statusById,
       statusByTitle,
       doneCount: Number.isFinite(doneCount)
         ? doneCount
@@ -63,7 +77,7 @@ export function findLatestChecklist(messages: RenderedChatMessage[]): ChecklistS
   // back to CodingAgent's OWN live per-step source instead of giving up: see
   // findLatestTodoSnapshot below. Priority is deliberate - a real "checklist" event, when
   // present, is left completely untouched by this fallback.
-  return findLatestTodoSnapshot(messages);
+  return findLatestTodoSnapshot(messages, scope);
 }
 
 /**
@@ -94,15 +108,16 @@ const TODO_STATUS_MAP: Record<string, string> = {
  * fell back to "pending" regardless of how far the agent's own checklist had actually progressed,
  * looking like the plan had reset even though the run continued correctly underneath.
  */
-function findLatestTodoSnapshot(messages: RenderedChatMessage[]): ChecklistSnapshot | null {
+function findLatestTodoSnapshot(messages: RenderedChatMessage[], scope?: PlanEventScope): ChecklistSnapshot | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
-    if (!message || message.eventType !== "decision" || !message.eventData) continue;
+    if (!message || message.eventType !== "decision" || !message.eventData || !inScope(message, scope)) continue;
 
     const items = message.eventData["todo_items"];
     if (!Array.isArray(items)) continue;
 
     const statusByIndex = new Map<number, string>();
+    const statusById = new Map<string, string>();
     const statusByTitle = new Map<string, string>();
     let doneCount = 0;
     for (const raw of items) {
@@ -120,18 +135,18 @@ function findLatestTodoSnapshot(messages: RenderedChatMessage[]): ChecklistSnaps
     }
     if (statusByIndex.size === 0 && statusByTitle.size === 0) continue;
 
-    return { statusByIndex, statusByTitle, doneCount, total: items.length };
+    return { statusById, statusByIndex, statusByTitle, doneCount, total: items.length };
   }
   return null;
 }
 
 export function resolveStepStatus(
   snapshot: ChecklistSnapshot | null,
-  step: { title: string },
+  step: { id?: string; title: string },
   index: number
 ): string | undefined {
   if (!snapshot) return undefined;
-  return snapshot.statusByIndex.get(index) ?? snapshot.statusByTitle.get(step.title.trim().toLowerCase());
+  return (step.id ? snapshot.statusById.get(step.id) : undefined) ?? snapshot.statusByIndex.get(index) ?? snapshot.statusByTitle.get(step.title.trim().toLowerCase());
 }
 
 /**

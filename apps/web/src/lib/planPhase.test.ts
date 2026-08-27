@@ -3,16 +3,25 @@ import { findLatestPhaseProgress } from "./planPhase";
 import type { RenderedChatMessage } from "../components/chat/chatTypes";
 
 let nextId = 0;
-const phaseEvent = (phase: string, phase_event: string, attempt = 1): RenderedChatMessage => ({
+const phaseEvent = (phase: string, phase_event: string, attempt = 1, runId?: string): RenderedChatMessage => ({
   id: `e${nextId++}`,
   role: "event",
   content: "",
   timestamp: new Date().toISOString(),
   eventType: "internal_instruction",
-  eventData: { phase, phase_event, attempt },
+  eventData: { phase, phase_event, attempt, ...(runId ? { runId } : {}) },
 });
 
 describe("findLatestPhaseProgress", () => {
+  it("does not combine phases from different plan runs", () => {
+    const messages = [
+      phaseEvent("explore", "phase_completed", 1, "run-1"),
+      phaseEvent("edit", "phase_started", 1, "run-2"),
+    ];
+    const progress = findLatestPhaseProgress(messages, { runId: "run-2" });
+    expect(progress.completed.has("explore")).toBe(false);
+    expect(progress.current).toBe("edit");
+  });
   it("returns no current phase for a run with no phase events", () => {
     const messages: RenderedChatMessage[] = [
       { id: "1", role: "event", content: "", timestamp: "", eventType: "plan" },

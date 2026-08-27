@@ -16,6 +16,8 @@ const HTML = `<!doctype html><html><body>
 <select id="land"><option value="de">Deutschland</option><option value="at">Österreich</option></select>
 <input type="checkbox" id="cb"><label for="cb">Zustimmen</label>
 <div id="drop" style="width:120px;height:60px;border:1px solid #999">Dropzone</div>
+<div id="scroller" style="height:120px;overflow:auto;border:1px solid #333"><div style="height:700px"><button id="nested-bottom" style="margin-top:620px">Unten im Panel</button></div></div>
+<div style="height:900px"></div><button id="page-bottom">Unten auf Seite</button>
 </body></html>`;
 const PAGE_URL = `data:text/html;charset=utf-8,${encodeURIComponent(HTML)}`;
 
@@ -52,6 +54,9 @@ describe.skipIf(!browserAvailable)("browser tool - snapshot / text-based targeti
       (e) => e.role === "textbox" && String(e.name).includes("Name")
     );
     expect(input).toBeTruthy();
+    const offscreen = data.elements.find((e) => e.name === "Unten auf Seite");
+    expect(offscreen).toBeTruthy();
+    expect(offscreen?.inViewport).toBe(false);
   }, 30000);
 
   it("clicks by accessible name (no CSS selector) and the page reacts", async () => {
@@ -102,6 +107,34 @@ describe.skipIf(!browserAvailable)("browser tool - snapshot / text-based targeti
     expect((await executeInWorker({ action: "scroll_by", sessionId, deltaY: 120 })).success).toBe(true);
     expect((await executeInWorker({ action: "reload", sessionId })).success).toBe(true);
     expect((await executeInWorker({ action: "keyboard_press", sessionId, key: "Tab" })).success).toBe(true);
+  }, 30000);
+
+  it("scrolls the nested element under the UI pointer and can click off-screen controls by name", async () => {
+    const rect = await executeInWorker({ action: "evaluate", sessionId, script: "(() => { const r=document.querySelector('#scroller').getBoundingClientRect(); return {x:(r.left+r.width/2)/innerWidth,y:(r.top+r.height/2)/innerHeight}; })()" });
+    const point = (rect.data as { result: { x: number; y: number } }).result;
+    const scrolled = await executeInWorker({ action: "scroll_by", sessionId, deltaY: 350, xRatio: point.x, yRatio: point.y });
+    expect(scrolled.success).toBe(true);
+    const nestedOffset = await executeInWorker({ action: "evaluate", sessionId, script: "document.querySelector('#scroller').scrollTop" });
+    expect(Number((nestedOffset.data as { result: unknown }).result)).toBeGreaterThan(0);
+    const clicked = await executeInWorker({ action: "click", sessionId, text: "Unten auf Seite", role: "button" });
+    expect(clicked.success).toBe(true);
+  }, 30000);
+
+  it("does not silently redirect a stale session id to another live session", async () => {
+    const result = await executeInWorker({ action: "get_content", sessionId: "stale-session-id" });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("stale-session-id");
+  });
+
+  it("keeps a shared screencast alive until its final viewer leaves", async () => {
+    const first = await executeInWorker({ action: "stream_start", sessionId, viewerId: "test-a" });
+    const second = await executeInWorker({ action: "stream_start", sessionId, viewerId: "test-b" });
+    expect(first.success).toBe(true);
+    expect((second.data as { consumers: number }).consumers).toBe(2);
+    const oneLeft = await executeInWorker({ action: "stream_stop", sessionId, viewerId: "test-a" });
+    expect((oneLeft.data as { streaming: boolean; wasStreaming: boolean }).wasStreaming).toBe(false);
+    const finalLeft = await executeInWorker({ action: "stream_stop", sessionId, viewerId: "test-b" });
+    expect((finalLeft.data as { streaming: boolean; wasStreaming: boolean }).wasStreaming).toBe(true);
   }, 30000);
 
   it("lets the UI select the exact shared default session used by agent calls", async () => {
@@ -189,4 +222,34 @@ describe.skipIf(!browserAvailable)("browser tool - snapshot / text-based targeti
     // Clean up for the next run: clear the captured errors.
     await executeInWorker({ action: "get_page_errors", sessionId, clear: true });
   }, 30000);
+
+  it("mark_dirty forces exactly one reload on the next inspection, not on every repeated call", async () => {
+    // A page-scoped global is wiped by navigation but survives ordinary JS execution - a cheap,
+    // unambiguous signal for "did the page actually reload".
+    await executeInWorker({ action: "evaluate", sessionId, script: "window.__marker = 'still-here'" });
+
+    const untouched1 = await executeInWorker({ action: "evaluate", sessionId, script: "window.__marker" });
+    expect(untouched1.data).toMatchObject({ result: "still-here" });
+    const untouched2 = await executeInWorker({ action: "evaluate", sessionId, script: "window.__marker" });
+    expect(untouched2.data).toMatchObject({ result: "still-here" });
+
+    const marked = await executeInWorker({ action: "mark_dirty", sessionId });
+    expect(marked.success).toBe(true);
+    expect((marked.data as { dirty: boolean }).dirty).toBe(true);
+
+    // The next inspection reloads once - the marker set via evaluate() does not survive that.
+    const afterDirty = await executeInWorker({ action: "evaluate", sessionId, script: "window.__marker" });
+    expect((afterDirty.data as { result: unknown }).result).toBeUndefined();
+
+    // Re-seed and confirm the flag was consumed: a second evaluate right after must NOT reload.
+    await executeInWorker({ action: "evaluate", sessionId, script: "window.__marker = 'still-here'" });
+    const afterDirtyAgain = await executeInWorker({ action: "evaluate", sessionId, script: "window.__marker" });
+    expect(afterDirtyAgain.data).toMatchObject({ result: "still-here" });
+  }, 30000);
+
+  it("mark_dirty on a nonexistent session is a harmless no-op instead of an error", async () => {
+    const r = await executeInWorker({ action: "mark_dirty", sessionId: "does-not-exist" });
+    expect(r.success).toBe(true);
+    expect((r.data as { dirty: boolean }).dirty).toBe(false);
+  }, 10000);
 });

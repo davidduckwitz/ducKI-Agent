@@ -48,6 +48,7 @@ function scriptedProvider(contents: string[]) {
 
 const PLAN_JSON = JSON.stringify({
   goal: "add a health endpoint",
+  planType: "coding",
   estimatedComplexity: "low",
   steps: [{ id: "step_1", title: "Add the endpoint", description: "..." }],
 });
@@ -67,12 +68,18 @@ describe("CodingAgent checklist grounding against the checkpoint diff", () => {
     const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
     (codingAgent as any).agent.enablePlanning = false;
 
-    await codingAgent.run("add a health endpoint", { maxAttempts: 1 });
+    const result = await codingAgent.run("add a health endpoint", { maxAttempts: 1 });
 
     const todos = (codingAgent as any).todos.snapshot();
     expect(todos).toHaveLength(1);
     expect(todos[0].status).toBe("in_progress");
     expect(todos[0].note).toContain("Checkpoint-Diff");
+    expect(result.success).toBe(false);
+    expect(result.completionStatus).toBe("incomplete");
+    expect(result.completionEvidence).toMatchObject({
+      mutationExpected: true,
+      fileChangesObserved: false,
+    });
   });
 
   it("keeps a step marked done when the attempt actually wrote a file", async () => {
@@ -122,5 +129,31 @@ describe("CodingAgent checklist grounding against the checkpoint diff", () => {
     // Ran a second attempt rather than stopping after the first - scriptedProvider clamps to
     // its last scripted content once exhausted, so `attempts` > 1 is the signal that matters.
     expect(result.attempts).toBeGreaterThan(1);
+  });
+
+  it("allows an explicitly read-only run to complete without inventing a mutation requirement", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-read-only-contract-"));
+    sandboxes.push(sandbox);
+    const provider = scriptedProvider([
+      PLAN_JSON,
+      "[TOOL:todo action=update id=1 status=done]",
+      "Review complete.",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    const result = await codingAgent.run("review the health endpoint", {
+      maxAttempts: 1,
+      mutationExpected: false,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.verified).toBe(false);
+    expect(result.completionStatus).toBe("completed_unverified");
+    expect(result.completionEvidence).toMatchObject({
+      mutationExpected: false,
+      fileChangesObserved: false,
+      openChecklistItems: [],
+    });
   });
 });

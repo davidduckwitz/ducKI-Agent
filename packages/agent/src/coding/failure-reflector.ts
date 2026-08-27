@@ -8,6 +8,20 @@ const DEFAULT_FAILURE_REFLECTION_TIMEOUT_MS = 15_000;
 const MAX_ERROR_CHARS = 3500;
 const MAX_SUMMARY_CHARS = 1800;
 const MAX_JOURNAL_ENTRIES = 8;
+const MAX_EDIT_DIFFS = 5;
+const MAX_DIFF_CHARS = 600;
+
+/** One filesystem write/edit/append made during the failing attempt, so the reflector can see
+ *  WHAT actually changed instead of guessing from a one-line journal summary like "edit a.ts". */
+export interface CodingFailureEditDiff {
+  path: string;
+  /** "write" | "edit" | "append" - the filesystem action that produced this diff. */
+  action: string;
+  /** Removed text for an "edit" action; absent for write/append (nothing to remove). */
+  before?: string;
+  /** Inserted/written text. */
+  after: string;
+}
 
 export interface CodingFailureReflectionInput {
   goal: string;
@@ -15,6 +29,15 @@ export interface CodingFailureReflectionInput {
   verifyError: string;
   previousSummary: string;
   journal: RunJournalEntry[];
+  /** Edits made during the attempt that just failed - the direct evidence of what was tried. */
+  recentEdits?: CodingFailureEditDiff[];
+  /**
+   * "avoid" hints from EARLIER reflections this run, so a repeat reflection doesn't re-suggest an
+   * approach a prior diagnosis already ruled out - without this, two reflections spaced a few
+   * attempts apart have no memory of each other and can send the model back and forth between the
+   * same two wrong fixes.
+   */
+  previouslyRuledOut?: string[];
 }
 
 function clamp(text: string, maxChars: number): string {
@@ -57,6 +80,15 @@ export class CodingFailureReflector {
       return `- ${entry.toolName}: ${entry.success ? "ok" : "failed"} | ${entry.summary}${error}`;
     });
 
+    const recentEdits = (input.recentEdits ?? []).slice(-MAX_EDIT_DIFFS).map((edit) => {
+      const parts = [`--- ${edit.action} ${edit.path} ---`];
+      if (edit.before) parts.push(`removed:\n${clamp(edit.before, MAX_DIFF_CHARS)}`);
+      parts.push(`${edit.before ? "inserted" : "content"}:\n${clamp(edit.after, MAX_DIFF_CHARS)}`);
+      return parts.join("\n");
+    });
+
+    const ruledOut = (input.previouslyRuledOut ?? []).filter((entry, i, arr) => arr.indexOf(entry) === i);
+
     const messages: LLMMessage[] = [
       {
         role: "system",
@@ -65,9 +97,11 @@ export class CodingFailureReflector {
           "Return ONLY a compact JSON object with this exact shape:",
           '{"diagnosis":"one grounded root-cause hypothesis","avoid":["approach not to repeat"],"nextActions":["specific next check or change"]}',
           "Rules:",
-          "- Base the diagnosis ONLY on the supplied verifier error, prior attempt summary and tool journal.",
+          "- Base the diagnosis ONLY on the supplied verifier error, edit diffs, prior attempt summary and tool journal.",
           "- Do not invent file contents, APIs, commands or facts that are not present.",
           "- Focus on why the previous change had no effect on THIS verifier error.",
+          "- If edit diffs are provided, reason about them directly - e.g. whether the edited file is even the one the error points at.",
+          "- Do not repeat any approach listed under 'Already ruled out' - propose something genuinely different.",
           "- Prefer 1-3 concrete next actions; no prose outside JSON; no code fences; no chain-of-thought.",
         ].join("\n"),
       },
@@ -80,7 +114,13 @@ export class CodingFailureReflector {
           clamp(input.verifyError, MAX_ERROR_CHARS),
           "Previous attempt summary:",
           clamp(input.previousSummary, MAX_SUMMARY_CHARS),
+          recentEdits.length > 0
+            ? `Edits made in the failing attempt:\n${recentEdits.join("\n\n")}`
+            : "Edits made in the failing attempt: (none captured)",
           recentJournal.length > 0 ? `Recent tool journal:\n${recentJournal.join("\n")}` : "Recent tool journal: (empty)",
+          ruledOut.length > 0
+            ? `Already ruled out by earlier reflections this run (do NOT repeat):\n${ruledOut.map((a) => `- ${a}`).join("\n")}`
+            : "Already ruled out by earlier reflections this run: (none yet)",
         ].join("\n\n"),
       },
     ];

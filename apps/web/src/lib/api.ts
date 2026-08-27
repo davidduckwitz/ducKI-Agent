@@ -393,14 +393,14 @@ export const api = {
       id: number | undefined,
       payload: {
         goal: string;
-        steps: Array<{ title: string; description: string; tools?: string[] }>;
+        steps: unknown[];
         markdown?: string;
         conversationId?: number;
         projectId?: number;
         projectSlug?: string;
       }
     ) =>
-      request<{ message: string; planId: number | null; executionResult?: unknown }>(
+      request<{ message: string; planId: number | null; runId: string; planVersion: number; executionResult?: unknown }>(
         `/plans/${id ?? "draft"}/execute`,
         { method: "POST", body: JSON.stringify(payload) }
       ),
@@ -416,8 +416,13 @@ export const api = {
       }),
     refine: (
       plan: {
+        id?: number;
+        version?: number;
+        parentPlanId?: number | null;
+        conversationId?: number | null;
+        projectId?: number | null;
         goal: string;
-        steps: Array<{ title: string; description?: string; tools?: string[] }>;
+        steps?: Array<{ title: string; description?: string; tools?: string[] }>;
         markdown?: string;
       },
       feedback: string

@@ -62,6 +62,24 @@ describe("deleteConversation", () => {
     expect(await db.getChecklist(conv.id, "run-1")).toHaveLength(0);
   });
 
+  it("keeps persisted plans and runs readable while unlinking a deleted conversation", async () => {
+    const conv = await db.createConversation({ name: "[Coding] versioned plan" });
+    const plan = await db.createPlan({
+      conversationId: conv.id, projectId: null, goal: "Implement feature", title: "Feature",
+      complexity: 3, steps: JSON.stringify([{ id: "step_1", title: "Implement", status: "pending" }]),
+      tools: "[]", markdown: null, status: "active", version: 1, parentPlanId: null, repositorySnapshot: null,
+    });
+    await db.createPlanRun({
+      id: "run-1", planId: plan.id, planVersion: 1, conversationId: conv.id, projectId: null,
+      projectSlug: "feature", status: "running", attempt: 1, result: null, startedAt: new Date().toISOString(), finishedAt: null,
+    });
+
+    await expect(db.deleteConversation(conv.id)).resolves.toBeUndefined();
+
+    expect((await db.getPlan(plan.id))?.conversationId).toBeNull();
+    expect((await db.listPlanRuns(plan.id))[0]?.conversationId).toBeNull();
+  });
+
   it("keeps a cron job alive and just unlinks it", async () => {
     // Deleting a user's scheduled job because the chat it was created in went away would be a
     // considerably worse bug than the one this fixes.

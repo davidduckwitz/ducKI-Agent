@@ -479,7 +479,12 @@ export function CodingWorkspace() {
     for (let i = msgs.length - 1; i >= 0; i -= 1) {
       const msg = msgs[i];
       if (!msg || msg.eventType !== "plan" || !msg.eventData) continue;
-      const data = msg.eventData as unknown as Plan;
+      const raw = msg.eventData as Record<string, unknown>;
+      const data = {
+        ...raw,
+        ...(raw["id"] === undefined && Number.isFinite(Number(raw["planId"])) ? { id: Number(raw["planId"]) } : {}),
+        ...(raw["version"] === undefined && Number.isFinite(Number(raw["planVersion"])) ? { version: Number(raw["planVersion"]) } : {}),
+      } as unknown as Plan;
       if (data.goal && Array.isArray(data.steps) && data.steps.length > 0) return data;
     }
     return null;
@@ -771,9 +776,10 @@ export function CodingWorkspace() {
     setConversationId(convId);
 
     const steps = (plan.steps ?? []).map((s) => ({
+      ...s,
       title: s.title,
       description: s.description ?? "",
-      tools: s.tools,
+      toolsNeeded: s.toolsNeeded ?? s.tools,
     }));
 
     await api.plans.execute(plan.id, {
@@ -1308,8 +1314,10 @@ export function CodingWorkspace() {
           }}
           onExecute={() => {
             setShowPlanPanel(false);
-            // The plan execution is handled by the agent sending the command
-            sendMessage("Umsetzen", undefined, undefined, "");
+            void executePlan(currentPlan).catch((error) => {
+              console.error("Deterministic plan execution failed:", error);
+              setShowPlanPanel(true);
+            });
           }}
           onClose={() => setShowPlanPanel(false)}
           isExecuting={isLoading}

@@ -103,7 +103,12 @@ export class Executor {
     let executionInput = input;
     if (toolName === "browser") {
       const action = String(input["action"] ?? "").trim().toLowerCase();
-      if (action !== "launch" && !input["sessionId"]) {
+      // mark_dirty only records "the coding agent changed a file on disk" for whichever session
+      // (if any) later gets inspected - launching a fresh browser just to set a flag on it would
+      // start Chrome on every single file write of every coding run, including plain
+      // backend/CLI projects that never touch a browser. It intentionally no-ops when there is no
+      // session yet (see the mark_dirty case in packages/tools/src/browser.ts).
+      if (action !== "launch" && action !== "mark_dirty" && !input["sessionId"]) {
         if (!this.lastBrowserSessionId) {
           // No session exists yet - auto-launch a browser before this action
           this.logger.info("Browser tool: auto-launching before action", { action });

@@ -31,7 +31,7 @@ function BrowserTool() {
   const navigationRequest = useUiStore((s) => s.browserNavigationRequest);
   const [selected, setSelected] = useState("");
   const [url, setUrl] = useState("https://");
-  const [frame, setFrame] = useState<{ data: string; format: string; width?: number; height?: number }>();
+  const [frame, setFrame] = useState<{ data: string; format: string; width?: number; height?: number; timestamp?: string }>();
   const [busy, setBusy] = useState(false);
   const [showTimeline, setShowTimeline] = useState(true);
   const [showConsole, setShowConsole] = useState(false);
@@ -43,6 +43,11 @@ function BrowserTool() {
   const pointerStart = useRef<{ x: number; y: number }>();
   const handledNavigationNonce = useRef(0);
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const streamViewerIdRef = useRef(`sidebar-${crypto.randomUUID()}`);
+  const actionQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const latestFrameAtRef = useRef(0);
+  const scrollInFlightRef = useRef(false);
+  const pendingWheelRef = useRef<{ deltaX: number; deltaY: number; xRatio: number; yRatio: number }>({ deltaX: 0, deltaY: 0, xRatio: 0.5, yRatio: 0.5 });
   const activities = useBrowserActivityStore((s) => s.activities);
   const clearActivities = useBrowserActivityStore((s) => s.clearActivities);
   const recordingEnabled = useBrowserActivityStore((s) => s.recordingEnabled);
@@ -50,6 +55,14 @@ function BrowserTool() {
   const sessionId = selected === "__new__" ? "" : selected || browserSessions[0]?.tabId || "";
   const timeline = activities.filter((item) => !sessionId || item.sessionId === sessionId);
   useEffect(() => { void refreshBrowserSessions(); }, [socket, refreshBrowserSessions]);
+  useEffect(() => {
+    if (!selected || selected === "__new__") return;
+    if (browserSessions.length === 0) return;
+    if (browserSessions.some((entry) => entry.tabId === selected)) return;
+    setSelected(browserSessions.find((entry) => entry.isDefault)?.tabId ?? browserSessions[0]?.tabId ?? "__new__");
+    setFrame(undefined);
+    latestFrameAtRef.current = 0;
+  }, [browserSessions, selected]);
   useEffect(() => {
     if (!navigationRequest || navigationRequest.nonce === handledNavigationNonce.current) return;
     handledNavigationNonce.current = navigationRequest.nonce;
@@ -76,9 +89,15 @@ function BrowserTool() {
   }, [navigationRequest, selected, refreshBrowserSessions, controlBrowserSession]);
   useEffect(() => {
     if (!socket || !sessionId) return;
-    const onFrame = (next: { sessionId: string; data: string; format: string; width?: number; height?: number }) => { if (next.sessionId === sessionId) setFrame(next); };
-    socket.on("browser:frame", onFrame); socket.emit("browser:stream:join", { sessionId }); void controlBrowserSession(sessionId, "set_default"); void controlBrowserSession(sessionId, "stream_start");
-    return () => { socket.off("browser:frame", onFrame); socket.emit("browser:stream:leave", { sessionId }); void controlBrowserSession(sessionId, "stream_stop"); };
+    const onFrame = (next: { sessionId: string; data: string; format: string; width?: number; height?: number; timestamp?: string }) => {
+      if (next.sessionId !== sessionId) return;
+      const receivedAt = next.timestamp ? Date.parse(next.timestamp) : Date.now();
+      if (Number.isFinite(receivedAt) && receivedAt < latestFrameAtRef.current) return;
+      latestFrameAtRef.current = Number.isFinite(receivedAt) ? receivedAt : Date.now();
+      setFrame(next);
+    };
+    socket.on("browser:frame", onFrame); socket.emit("browser:stream:join", { sessionId }); void controlBrowserSession(sessionId, "set_default"); void controlBrowserSession(sessionId, "stream_start", { viewerId: streamViewerIdRef.current });
+    return () => { socket.off("browser:frame", onFrame); socket.emit("browser:stream:leave", { sessionId }); void controlBrowserSession(sessionId, "stream_stop", { viewerId: streamViewerIdRef.current }); };
   }, [socket, sessionId, controlBrowserSession]);
   const go = async () => {
     const target = url.trim() || "about:blank"; setBusy(true);
@@ -91,7 +110,7 @@ function BrowserTool() {
   const current = browserSessions.find((s) => s.tabId === sessionId);
   useEffect(() => { if (current?.url) setUrl(current.url); }, [current?.url]);
 
-  const point = (event: React.PointerEvent<HTMLDivElement>) => {
+  const point = (event: { currentTarget: HTMLDivElement; clientX: number; clientY: number }) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const sourceAspect = (frame?.width ?? 1280) / (frame?.height ?? 720);
     const boxAspect = rect.width / rect.height;
@@ -103,10 +122,57 @@ function BrowserTool() {
   };
   const browserAction = async (action: string, params: Record<string, unknown> = {}) => {
     if (!sessionId) return;
-    const result = await controlBrowserSession(sessionId, action, params);
-    if (["history_back", "history_forward", "reload"].includes(action)) await refreshBrowserSessions();
-    return result;
+    const run = async () => {
+      const result = await controlBrowserSession(sessionId, action, params);
+      if (!result.success && /session.+not found/i.test(result.error ?? "")) {
+        await refreshBrowserSessions();
+        setSelected("__new__");
+        setFrame(undefined);
+      } else if (["history_back", "history_forward", "reload", "goto", "mouse_click"].includes(action)) {
+        await refreshBrowserSessions();
+      }
+      return result;
+    };
+    const queued = actionQueueRef.current.then(run, run);
+    actionQueueRef.current = queued.then(() => undefined, () => undefined);
+    return queued;
   };
+  // A trackpad/mouse fires wheel events far faster than a scroll_by round-trip (server IPC +
+  // the browser settling the scroll) can complete. Queuing one call per event built an
+  // ever-growing backlog that kept "replaying" scroll deltas long after the user stopped -
+  // looked like the page scrolling forever on its own. Instead: at most one scroll_by is ever
+  // in flight; new deltas just accumulate and get coalesced into the next flush.
+  const flushWheel = () => {
+    const pending = pendingWheelRef.current;
+    if (pending.deltaX === 0 && pending.deltaY === 0) {
+      scrollInFlightRef.current = false;
+      return;
+    }
+    pendingWheelRef.current = { deltaX: 0, deltaY: 0, xRatio: pending.xRatio, yRatio: pending.yRatio };
+    scrollInFlightRef.current = true;
+    void browserAction("scroll_by", pending).finally(flushWheel);
+  };
+  const handleWheel = (event: WheelEvent) => {
+    // React attaches onWheel as a passive listener at the root (since React 17), so
+    // preventDefault() inside a JSX onWheel prop silently no-ops (and logs a console error) -
+    // the page then ALSO scrolls natively underneath our custom scroll_by dispatch. Wired as a
+    // real, non-passive native listener in the effect below instead.
+    event.preventDefault();
+    const position = point({ currentTarget: event.currentTarget as HTMLDivElement, clientX: event.clientX, clientY: event.clientY });
+    pendingWheelRef.current.deltaX += event.deltaX;
+    pendingWheelRef.current.deltaY += event.deltaY;
+    pendingWheelRef.current.xRatio = position.x;
+    pendingWheelRef.current.yRatio = position.y;
+    if (scrollInFlightRef.current) return;
+    flushWheel();
+  };
+  useEffect(() => {
+    const node = surfaceRef.current;
+    if (!node) return;
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return () => node.removeEventListener("wheel", handleWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
   // Pulls the same error buffer (console errors, page errors, failed requests) the coding
   // agent reads via its browser tool's get_page_errors action - same session, so what the
   // agent sees while testing and what this panel shows are identical.
@@ -152,7 +218,7 @@ function BrowserTool() {
     <div className="flex gap-1 border-b border-border p-2"><button onClick={() => void browserAction("history_back")} disabled={!sessionId} className="rounded p-2 hover:bg-accent disabled:opacity-30" title="Zurück"><ArrowLeft className="h-4 w-4"/></button><button onClick={() => void browserAction("history_forward")} disabled={!sessionId} className="rounded p-2 hover:bg-accent disabled:opacity-30" title="Vor"><ArrowRight className="h-4 w-4"/></button><button onClick={() => void browserAction("reload")} disabled={!sessionId} className="rounded p-2 hover:bg-accent disabled:opacity-30" title="Neu laden"><RotateCw className="h-4 w-4"/></button><select value={selected || sessionId} onChange={(e) => { setSelected(e.target.value); setFrame(undefined); }} className="min-w-0 flex-1 rounded border border-border bg-background px-2 text-xs"><option value="__new__">Neue Session</option>{browserSessions.map((s) => <option key={s.tabId} value={s.tabId}>{s.title || s.url || s.tabId}</option>)}</select><button onClick={() => void refreshBrowserSessions()} className="rounded p-2 hover:bg-accent" title="Sessions aktualisieren"><RefreshCw className="h-4 w-4" /></button></div>
     <form onSubmit={(e) => { e.preventDefault(); void go(); }} className="flex gap-2 border-b border-border p-2"><input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…" className="min-w-0 flex-1 rounded border border-border bg-background px-3 py-2 text-sm"/><button disabled={busy} className="rounded bg-primary px-3 text-primary-foreground disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Los"}</button></form>
     <div className="flex shrink-0 items-center gap-3 border-b border-cyan-500/20 bg-cyan-500/5 p-2"><span className="relative flex h-14 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-black/70">{frame ? <img src={`data:image/${frame.format};base64,${frame.data}`} alt="Das sieht dein Browser" className="h-full w-full object-cover"/> : <Globe2 className="h-5 w-5 text-cyan-300"/>}<span className="absolute right-1 top-1 h-2 w-2 animate-pulse rounded-full bg-cyan-400"/></span><span className="min-w-0"><span className="block text-xs font-semibold text-cyan-100">Das sieht dein Browser</span><span className="block truncate text-[10px] text-cyan-300/70">{current?.url || url || "Noch keine Seite"}</span><span className="block text-[10px] text-muted-foreground">Gemeinsame Session für dich und den Agenten</span></span></div>
-    <div ref={surfaceRef} role="application" aria-label="Interaktiver Browser" tabIndex={0} onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onWheel={(event) => { event.preventDefault(); void browserAction("scroll_by", { deltaX: event.deltaX, deltaY: event.deltaY }); }} onKeyDown={handleKeyDown} onPaste={(event) => { const text = event.clipboardData.getData("text"); if (text) { event.preventDefault(); void browserAction("keyboard_type", { text }); } }} className="relative flex min-h-0 flex-1 cursor-default touch-none items-center justify-center overflow-hidden bg-black/80 outline-none focus:ring-2 focus:ring-primary/60">{frame ? <img draggable={false} src={`data:image/${frame.format};base64,${frame.data}`} className="pointer-events-none h-full w-full select-none object-contain" alt="Live Browser" /> : <div className="px-6 text-center text-sm text-muted-foreground">{sessionId ? "Browser wird verbunden …" : "URL eingeben, um eine gemeinsame Browser-Session zu starten."}</div>}<span className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/70 px-2 py-1 text-[10px] text-white/70">Klicken, ziehen, scrollen und tippen</span></div>
+    <div ref={surfaceRef} role="application" aria-label="Interaktiver Browser" tabIndex={0} onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onPointerCancel={() => { pointerStart.current = undefined; }} onKeyDown={handleKeyDown} onPaste={(event) => { const text = event.clipboardData.getData("text"); if (text) { event.preventDefault(); void browserAction("keyboard_type", { text }); } }} className="relative flex min-h-0 flex-1 cursor-default touch-none items-center justify-center overflow-hidden bg-black/80 outline-none focus:ring-2 focus:ring-primary/60">{frame ? <img draggable={false} src={`data:image/${frame.format};base64,${frame.data}`} className="pointer-events-none h-full w-full select-none object-contain" alt="Live Browser" /> : <div className="px-6 text-center text-sm text-muted-foreground">{sessionId ? "Browser wird verbunden …" : "URL eingeben, um eine gemeinsame Browser-Session zu starten."}</div>}<span className="pointer-events-none absolute bottom-2 left-2 rounded bg-black/70 px-2 py-1 text-[10px] text-white/70">Klicken, ziehen, scrollen und tippen</span></div>
     <div className="shrink-0 border-t border-border bg-card">
       <div className="flex items-center gap-1 px-2 py-1.5">
         <button onClick={() => setShowTimeline((value) => !value)} className="flex items-center gap-1.5 text-xs font-medium"><History className="h-3.5 w-3.5"/>Timeline <span className="rounded bg-muted px-1.5">{timeline.length}</span></button>

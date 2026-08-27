@@ -119,6 +119,48 @@ describe("CodingAgent falls back to a browser check when no shell verifyCommand 
     expect(gotoUrl).toBe("http://preview.test/api/coding/projects/" + basename(sandbox) + "/serve/index.html");
   });
 
+  it("closes the sole final checklist step when the verified report explicitly completes it", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-browser-final-step-"));
+    sandboxes.push(sandbox);
+    const provider = scriptedProvider([
+      PLAN_JSON,
+      "[TOOL:filesystem action=write path=index.html]\n<html></html>\n[/TOOL]",
+      '[TOOL:todo({"action":"write","items":[{"title":"Write index.html","status":"done"},{"title":"Verify it works","status":"in_progress"}]})]',
+      "Zusammenfassung:\n✅ Schritt 1: Website - COMPLETED\n✅ Schritt 2: Verify it works - READY FOR DEPLOYMENT",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, {
+      sandboxRoot: sandbox,
+      previewBaseUrl: "http://preview.test",
+      extraTools: [stubBrowserTool([])],
+    });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    const result = await codingAgent.run("build a static world clock page", { maxAttempts: 1 });
+
+    expect(result.success).toBe(true);
+    expect(result.verified).toBe(true);
+    expect((codingAgent as any).todos.snapshot().map((item: { status: string }) => item.status)).toEqual([
+      "done",
+      "done",
+    ]);
+    expect((codingAgent as any).currentPlan.steps.map((step: { status: string }) => step.status)).toEqual([
+      "completed",
+      "completed",
+    ]);
+  });
+
+  it("does not close the final step from vague success prose", () => {
+    const codingAgent = new CodingAgent(scriptedProvider([PLAN_JSON]), stubDb(), undefined, {});
+    (codingAgent as any).todos.replace([
+      { title: "Write index.html", status: "done" },
+      { title: "Verify it works", status: "in_progress" },
+    ]);
+
+    (codingAgent as any).reconcileFinalStepAfterVerification("Everything looks good.");
+
+    expect((codingAgent as any).todos.snapshot()[1]?.status).toBe("in_progress");
+  });
+
   it("reports the concrete console error and retries when the page has a JS error", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-browser-verify-fail-"));
     sandboxes.push(sandbox);

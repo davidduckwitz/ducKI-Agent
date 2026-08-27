@@ -28,6 +28,7 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
   const [improvement, setImprovement] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [candidate, setCandidate] = useState<Plan | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,8 +49,7 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plan.goal]);
+  }, [plan.goal, JSON.stringify(plan.steps), plan.version]);
 
   const handleSubmit = async () => {
     const answeredParts = questions
@@ -61,11 +61,9 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.plans.refine(
-        { goal: plan.goal, steps: plan.steps ?? [], markdown: plan.markdown },
-        feedback
-      );
-      onRefined(result.plan);
+      const result = await api.plans.refine(plan, feedback);
+      setCandidate(result.plan);
+      setSubmitting(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
@@ -73,6 +71,10 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
   };
 
   const hasFeedback = questions.some((q) => answers[q.id] !== undefined) || improvement.trim().length > 0;
+  const oldIds = new Set((plan.steps ?? []).map((step) => step.id ?? step.title));
+  const newIds = new Set((candidate?.steps ?? []).map((step) => step.id ?? step.title));
+  const added = [...newIds].filter((id) => !oldIds.has(id)).length;
+  const removed = [...oldIds].filter((id) => !newIds.has(id)).length;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -98,11 +100,29 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
           </button>
         </div>
 
-        {loadingQuestions && (
+        {candidate && (
+          <div className="space-y-3 rounded-lg border border-gray-700 bg-gray-800/50 p-3">
+            <p className="text-sm font-semibold text-white">V{plan.version ?? 1} → V{candidate.version ?? (plan.version ?? 1) + 1}</p>
+            <div className="flex gap-3 text-xs text-gray-400">
+              <span>+{added} hinzugefügt</span><span>−{removed} entfernt</span><span>{candidate.steps?.length ?? 0} Schritte</span>
+            </div>
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {(candidate.steps ?? []).map((step, index) => (
+                <div key={step.id ?? `${step.title}-${index}`} className="rounded border border-gray-700 p-2 text-xs">
+                  <span className="font-medium text-white">{index + 1}. {step.title}</span>
+                  {step.description && <p className="mt-1 text-gray-400">{step.description}</p>}
+                </div>
+              ))}
+            </div>
+            <p className="text-[11px] text-amber-400">Die neue Version startet einen getrennten Run; der bisherige Verlauf bleibt erhalten.</p>
+          </div>
+        )}
+
+        {!candidate && loadingQuestions && (
           <p className="text-xs text-gray-400">Analysiere den Plan für Rückfragen...</p>
         )}
 
-        {!loadingQuestions && questions.length > 0 && (
+        {!candidate && !loadingQuestions && questions.length > 0 && (
           <div className="space-y-3">
             {questions.map((question) => (
               <AgentQuestionBox
@@ -117,7 +137,7 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
 
         {/* Free-text fallback/addition - always available so nothing is lost when no
             questions come back, or the user wants to say something the questions didn't cover. */}
-        <div className="space-y-2">
+        {!candidate && <div className="space-y-2">
           <label htmlFor="improvement" className="text-xs font-semibold text-gray-300">
             {questions.length > 0 ? "Weitere Anmerkungen (optional):" : "Was soll verbessert werden?"}
           </label>
@@ -130,7 +150,7 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
             rows={3}
             disabled={submitting}
           />
-        </div>
+        </div>}
 
         {error && (
           <div className="bg-red-500/10 border border-red-500/20 rounded p-3 flex items-start gap-2">
@@ -155,12 +175,12 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
             Abbrechen
           </button>
           <button
-            onClick={() => void handleSubmit()}
-            disabled={submitting || !hasFeedback}
+            onClick={() => candidate ? onRefined(candidate) : void handleSubmit()}
+            disabled={submitting || (!candidate && !hasFeedback)}
             className="px-4 py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
           >
             <Sparkles className="w-4 h-4" />
-            Plan verbessern
+            {candidate ? "Änderungen übernehmen" : "Plan verbessern"}
           </button>
         </div>
       </div>

@@ -3,14 +3,35 @@ import { DuckyMascot } from "./DuckyMascot";
 
 export interface Plan {
   id?: number;
+  version?: number;
+  parentPlanId?: number | null;
+  conversationId?: number | null;
+  projectId?: number | null;
   goal: string;
   title?: string;
   complexity?: number;
-  steps?: Array<{ title: string; description: string; tools?: string[] }>;
+  steps?: PlanStep[];
   tools?: string[];
   markdown?: string;
   status?: string;
   createdAt?: string;
+}
+
+export interface PlanStep {
+  id?: string;
+  title: string;
+  description: string;
+  tools?: string[];
+  toolsNeeded?: string[];
+  dependsOn?: string[];
+  canParallelizeWith?: string[];
+  expectedFiles?: string[];
+  acceptanceCriteria?: string[];
+  verificationCommands?: string[];
+  priority?: "critical" | "high" | "medium" | "low";
+  riskLevel?: "low" | "medium" | "high";
+  estimatedDuration?: number;
+  status?: string;
 }
 
 export type StepStatus = "pending" | "in_progress" | "completed" | "failed";
@@ -18,7 +39,7 @@ export type StepStatus = "pending" | "in_progress" | "completed" | "failed";
 interface PlanExecutionPanelProps {
   plan: Plan;
   onRefine: () => void;
-  onExecute: () => void;
+  onExecute: () => void | Promise<void>;
   onClose: () => void;
   isExecuting?: boolean;
   /** Real completion percentage. Omit when execution progress cannot be measured -
@@ -192,6 +213,12 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
     );
   } catch (err) {
     console.error("PlanExecutionPanel error:", err);
-    return null;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+        <div className="max-w-lg rounded-lg border border-red-500/30 bg-gray-900 p-4 text-sm text-red-300">
+          Planansicht konnte nicht dargestellt werden: {err instanceof Error ? err.message : String(err)}
+        </div>
+      </div>
+    );
   }
 };

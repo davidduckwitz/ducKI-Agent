@@ -431,6 +431,14 @@ const PREDEFINED_FIELDS: SettingField[] = [
     defaultValue: "60",
   },
   {
+    key: "AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES",
+    label: "Coding: Max identische Verify-Fehlschlaege",
+    description: "Wie viele Coding-Versuche in Folge mit EXAKT demselben Verifikationsfehler erlaubt sind, bevor der Lauf als nicht-konvergierend abgebrochen wird (statt den Rest des Attempt-Budgets an einer erwiesenermassen wirkungslosen Korrektur zu verbrennen). Erhoehen, wenn ein Lauf zu frueh aufgibt, obwohl noch Aussicht auf Konvergenz besteht. Default 3.",
+    type: "number",
+    section: "Agent",
+    defaultValue: "3",
+  },
+  {
     key: "AGENT_CODING_ENABLE_REFLECTION",
     label: "Coding: Reflection",
     description: "Qualitaets-Reflection waehrend Coding-Laeufen. Standard aus: auf langen Code-Antworten mit lokalem Modell laufen diese Pässe regelmaessig in den Timeout. Nur bei schnellen Modellen sinnvoll zu aktivieren.",

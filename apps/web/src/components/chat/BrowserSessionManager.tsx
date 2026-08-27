@@ -33,7 +33,10 @@ export function BrowserSessionManager() {
   const handleScreenshot = async (tabId: string) => {
     setBusySession(tabId);
     setErrors((e) => ({ ...e, [tabId]: "" }));
-    const result = await controlBrowserSession(tabId, "screenshot");
+    // fullPage:false - a full-page capture stitches the page together from multiple scroll
+    // positions, which duplicates any fixed/sticky-positioned element (nav bars, banners)
+    // once per stitched section. This panel just wants a quick viewport preview.
+    const result = await controlBrowserSession(tabId, "screenshot", { fullPage: false });
     setBusySession(null);
     const data = result.data as { screenshot?: string } | undefined;
     if (result.success && data?.screenshot) {
