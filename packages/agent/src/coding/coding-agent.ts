@@ -1620,7 +1620,22 @@ export class CodingAgent {
         runResult = await this.agent.run(prompt, {
           initialRunJournal: journal,
           getCurrentStepId: () => this.todos.currentStepId(),
-          onModelResponse: (response) => this.updatePhaseFromResponse(response),
+          onModelResponse: (response) => {
+            this.updatePhaseFromResponse(response);
+            // reconcileAnnouncedStep used to run only once, AFTER the whole attempt's
+            // agent.run() resolved (see below) - fine for a model that calls todo:update as it
+            // works, but a model that narrates "Step 2: ..." transitions without ever touching
+            // the todo tool left the checklist looking completely frozen for the ENTIRE attempt,
+            // then had every predecessor step closed in one batch the instant the attempt ended.
+            // That is exactly the "plan only ticks off at the very end" symptom this fixes:
+            // running the same reconciliation on every model turn (not just the final one) lets
+            // it catch up live, per turn, using only the diff accumulated so far this attempt.
+            if (this.sandboxRoot && checkpoint) {
+              void diffCheckpoint(this.sandboxRoot, checkpoint.sha)
+                .then((diff) => this.reconcileAnnouncedStep(response, diff?.files.length ?? 0))
+                .catch(() => {});
+            }
+          },
           ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
           // CodingAgent never opted into this before - every run always used the blocking
           // generate() path, so the UI had nothing to show for the iteration currently in
@@ -2639,9 +2654,14 @@ export class CodingAgent {
       "- When you know the next action, emit its tool call immediately; do not spend a turn promising it.",
       "",
       "Track your progress with the todo tool: it already contains the plan below as pending steps.",
-      "Mark a step in_progress before starting it and done once it is verified. That checklist is what",
-      "the user sees, so keep it truthful - never mark a step done on the strength of an edit alone,",
-      "only once diagnostics or the verification command confirmed it.",
+      "That checklist is what the user watches live while you work, so update it AS YOU GO, not in a",
+      "batch at the end: mark a step in_progress before starting it, and call todo:update the moment",
+      "that step's own change is written and looks correct - do not wait for the final project-wide",
+      "verification command before checking off an individual step; that command only confirms the",
+      "whole task at the end, and holding every step open until then is exactly what makes the checklist",
+      "look frozen to the user. Only keep a step open if ITS OWN change is not actually done yet or a",
+      "diagnostic specific to it is still failing - never mark a step done on the strength of an",
+      "announcement alone, without having made the corresponding edit.",
       "",
       "The status tool gives you a one-call snapshot of your current phase, checklist, open diagnostic",
       "errors, and what files have actually changed this attempt. Use it after a few edits when you need",

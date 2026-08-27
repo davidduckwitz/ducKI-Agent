@@ -63,6 +63,7 @@ export function createWorkflowMcpTool(db: DatabaseService): ToolExecutor {
           nodes: {
             type: "array",
             description: "Workflow nodes/steps (for create_workflow, update_workflow)",
+            items: { type: "object", description: "Workflow node/step definition" },
           },
           workflowId: {
             type: "string",

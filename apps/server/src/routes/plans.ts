@@ -16,6 +16,32 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   try { return value ? JSON.parse(value) as T : fallback; } catch { return fallback; }
 }
 
+/**
+ * plans.conversation_id/project_id are real foreign keys (see the CREATE TABLE in
+ * packages/database/src/index.ts) - inserting/updating a plan with an id that LOOKS numeric but
+ * no longer (or never did) point at an existing row throws a raw "FOREIGN KEY constraint failed"
+ * straight out of libsql. That happened in practice from the coding agent's Plan tab: the panel
+ * falls back to its own conversationId prop whenever the plan object itself has none (see
+ * CodingPlanPanel's `plan={{ ...plan, conversationId: plan.conversationId ?? conversationId }}`),
+ * so a stale/optimistic id client-side reached this route unchanged and the insert blew up with
+ * a 500 instead of a real error message. Resolving against the DB first and silently falling back
+ * to null (same as "no conversation given" was already handled) keeps the plan save itself
+ * working - the plan is still worth persisting even if we can't attribute it to a conversation.
+ */
+async function resolveExistingId(
+  db: import("@ducki/database").DatabaseService | undefined,
+  raw: unknown,
+  lookup: (id: number) => Promise<unknown>
+): Promise<number | null> {
+  const id = Number(raw);
+  if (!db || !Number.isFinite(id)) return null;
+  try {
+    return (await lookup(id)) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 function presentPlan(row: import("@ducki/database").PlanSelect) {
   return {
     ...row,
@@ -89,8 +115,8 @@ plansRouter.post("/refine", async (req, res, next) => {
     const sourceId = Number((body["plan"] as Record<string, unknown>)?.["id"]);
     const sourceVersion = Number((body["plan"] as Record<string, unknown>)?.["version"] ?? 1);
     const saved = db ? await db.createPlan({
-      conversationId: Number.isFinite(Number((body["plan"] as Record<string, unknown>)?.["conversationId"])) ? Number((body["plan"] as Record<string, unknown>)["conversationId"]) : null,
-      projectId: Number.isFinite(Number((body["plan"] as Record<string, unknown>)?.["projectId"])) ? Number((body["plan"] as Record<string, unknown>)["projectId"]) : null,
+      conversationId: await resolveExistingId(db, (body["plan"] as Record<string, unknown>)?.["conversationId"], (id) => db.getConversation(id)),
+      projectId: await resolveExistingId(db, (body["plan"] as Record<string, unknown>)?.["projectId"], (id) => db.getProject(id)),
       goal: refined.goal,
       title: String((body["plan"] as Record<string, unknown>)?.["title"] ?? refined.goal).slice(0, 200),
       complexity: refined.estimatedComplexity === "high" ? 5 : refined.estimatedComplexity === "medium" ? 3 : 1,
@@ -171,8 +197,8 @@ plansRouter.post("/", async (req, res, next) => {
     const db = req.app.locals["db"] as import("@ducki/database").DatabaseService;
     const steps = Array.isArray(body.steps) ? body.steps : [];
     const row = await db.createPlan({
-      conversationId: Number.isFinite(Number(body.conversationId)) ? Number(body.conversationId) : null,
-      projectId: Number.isFinite(Number(body.projectId)) ? Number(body.projectId) : null,
+      conversationId: await resolveExistingId(db, body.conversationId, (id) => db.getConversation(id)),
+      projectId: await resolveExistingId(db, body.projectId, (id) => db.getProject(id)),
       goal: String(body.goal), title: typeof body.title === "string" ? body.title : String(body.goal).slice(0, 200),
       complexity: Number.isFinite(Number(body.complexity)) ? Number(body.complexity) : null,
       steps: JSON.stringify(steps), tools: JSON.stringify(Array.isArray(body.tools) ? body.tools : []),

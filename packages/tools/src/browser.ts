@@ -967,8 +967,16 @@ export const browserTool: ToolExecutor = {
         screenshotQuality: { type: "number", description: "Screenshot compression quality 1-100 (ignored for png)", default: 85 },
         script: { type: "string", description: "JavaScript executed in page context" },
         count: { type: "number", description: "Limit for list_pages" },
-        cookies: { type: "array", description: "Cookie definitions for cookies_set" },
-        cookieNames: { type: "array", description: "Cookie names to clear. Empty clears all cookies for current URL." },
+        cookies: {
+          type: "array",
+          description: "Cookie definitions for cookies_set",
+          items: { type: "object", description: "Cookie object, e.g. {name, value, domain, path, expires, httpOnly, secure}" },
+        },
+        cookieNames: {
+          type: "array",
+          description: "Cookie names to clear. Empty clears all cookies for current URL.",
+          items: { type: "string" },
+        },
         fields: { type: "object", description: "Map of selector to value for form_fill." },
         clearFirst: { type: "boolean", description: "Clear fields before typing in form_fill/login", default: true },
         username: { type: "string", description: "Username for login action" },

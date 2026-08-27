@@ -189,8 +189,13 @@ export function createWorkflowManagementTool(workflowEngine: WorkflowEngine): To
             type: "array",
             description:
               "Complete workflow nodes. Use stable unique ids, kind:'agent' with role+prompt or kind:'tool_call' with toolName+toolInput. Preserve existing nodes when updating. toolInput can pass typed prior output with '{{nodeId.result}}' or a nested field such as '{{launch.result.sessionId}}'. Browser automations are sequential browser tool_call nodes sharing the launch sessionId through that nested token.",
+            items: { type: "object", description: "Workflow node: {id, kind:'agent'|'tool_call', role?, prompt?, toolName?, toolInput?, dependsOn?}" },
           },
-          edges: { type: "array", description: "Directed acyclic edges {id,source,target}. Each edge also establishes target.dependsOn source. Preserve existing edges on updates unless intentionally replacing the graph." },
+          edges: {
+            type: "array",
+            description: "Directed acyclic edges {id,source,target}. Each edge also establishes target.dependsOn source. Preserve existing edges on updates unless intentionally replacing the graph.",
+            items: { type: "object", description: "Edge object: {id, source, target}" },
+          },
         },
         required: ["action"],
       },
