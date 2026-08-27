@@ -360,6 +360,16 @@ export function condenseVerifyOutput(output: string, maxChars = 4000): string {
 }
 
 /**
+ * Blanks out line/column numbers (`:123:45`, `line 123`) before the identical-failure-streak
+ * comparison in run(). Line numbers shift on every edit even when the underlying error is
+ * unchanged, so comparing raw text under-counts genuine non-convergence; this keeps the
+ * comparison in run() free of that noise without touching what's actually shown to the model.
+ */
+function normalizeVerifyErrorForComparison(text: string): string {
+  return text.replace(/:\d+:\d+/g, ":N:N").replace(/\bline \d+\b/gi, "line N");
+}
+
+/**
  * Composes an Agent with a curated coding tool set and directive system prompt,
  * then orchestrates it through a plan -> verify -> iterate macro loop across
  * several agent.run() calls on the same conversation thread. Composition (not
@@ -1001,7 +1011,11 @@ export class CodingAgent {
 
     const goalLower = goal.toLowerCase();
     for (const [skill, keywords] of Object.entries(skillKeywords)) {
-      if (keywords.some(kw => goalLower.includes(kw))) {
+      // Word-boundary match, not substring: `includes("test")` also matched "latest"/"fastest",
+      // and `includes("fix")` matched "prefix"/"suffix", mis-selecting a skill (and, via
+      // verifyCommand detection above, its side effects) on goals that merely contain the
+      // substring rather than the word.
+      if (keywords.some(kw => new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(goalLower))) {
         return skill;
       }
     }
@@ -1039,6 +1053,14 @@ export class CodingAgent {
       return "npx tsc --noEmit";
     }
     if (this.readPackageJsonScripts()?.["build"]) return "npm run build";
+    // Non-Node ecosystems: one well-known, non-mutating check command per toolchain marker file -
+    // same "never fabricate a command that would fail for unrelated reasons" rule as above, so
+    // this only fires when the marker file makes the toolchain unambiguous.
+    if (existsSync(join(this.sandboxRoot, "Cargo.toml"))) return "cargo check";
+    if (existsSync(join(this.sandboxRoot, "go.mod"))) return "go build ./...";
+    if (existsSync(join(this.sandboxRoot, "pyproject.toml")) || existsSync(join(this.sandboxRoot, "requirements.txt"))) {
+      return "python -m compileall -q .";
+    }
     return undefined;
   }
 
@@ -1048,8 +1070,12 @@ export class CodingAgent {
    * run previously fell straight into "no verification possible" - leaving a checklist step like
    * "Teste im Browser" entirely dependent on the model remembering to call the browser tool
    * itself (it often doesn't). This finds the static entry point so runBrowserVerify() can supply
-   * a REAL, non-shell verification for exactly that case. Root index.html only, deliberately -
-   * scanning for other entry points risks guessing wrong and "verifying" the wrong page.
+   * a REAL, non-shell verification for exactly that case. Only these two conventional
+   * locations, deliberately - scanning further risks guessing wrong and "verifying" the wrong
+   * page. `public/index.html` is included alongside the root because it is the standard static
+   * entry point for a plain (non-bundled) project scaffolded with that layout - without it,
+   * every such project fell through to "no verification possible" exactly like the root-only
+   * case this was originally written to fix.
    *
    * Requires previewBaseUrl: without it there is no real HTTP URL to load the page from, and
    * loading it via a `file://` URL instead would silently break any ES module script or fetch()
@@ -1061,7 +1087,9 @@ export class CodingAgent {
    */
   private detectStaticEntryFile(): string | undefined {
     if (!this.sandboxRoot || !this.previewBaseUrl) return undefined;
-    return existsSync(join(this.sandboxRoot, "index.html")) ? "index.html" : undefined;
+    if (existsSync(join(this.sandboxRoot, "index.html"))) return "index.html";
+    if (existsSync(join(this.sandboxRoot, "public", "index.html"))) return "public/index.html";
+    return undefined;
   }
 
   /**
@@ -1809,7 +1837,14 @@ export class CodingAgent {
         error: verifyError.slice(0, 500),
       });
 
-      const isIdenticalToPreviousFailure = previousVerifyError !== undefined && verifyError.trim() === previousVerifyError.trim();
+      // Compared with line/column numbers blanked out: a genuinely non-converging edit (e.g. one
+      // that adds an unrelated line above the broken one, or renames a nearby symbol) shifts
+      // every subsequent line number without changing the error itself, which used to reset
+      // identicalFailureStreak to 0 on every attempt and let the run burn its whole budget on a
+      // failure this check exists specifically to catch early.
+      const isIdenticalToPreviousFailure =
+        previousVerifyError !== undefined &&
+        normalizeVerifyErrorForComparison(verifyError) === normalizeVerifyErrorForComparison(previousVerifyError);
       identicalFailureStreak = isIdenticalToPreviousFailure ? identicalFailureStreak + 1 : 0;
       previousVerifyError = verifyError;
 
