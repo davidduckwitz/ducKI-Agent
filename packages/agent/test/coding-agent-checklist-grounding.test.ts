@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CodingAgent } from "../src/coding/coding-agent";
@@ -57,6 +57,16 @@ const sandboxes: string[] = [];
 afterEach(() => {
   for (const dir of sandboxes) rmSync(dir, { recursive: true, force: true });
   sandboxes.length = 0;
+});
+
+const TWO_STEP_PLAN_JSON = JSON.stringify({
+  goal: "add two endpoints",
+  planType: "coding",
+  estimatedComplexity: "low",
+  steps: [
+    { id: "step_1", title: "Add the health endpoint", description: "..." },
+    { id: "step_2", title: "Add the status endpoint", description: "..." },
+  ],
 });
 
 describe("CodingAgent checklist grounding against the checkpoint diff", () => {
@@ -156,4 +166,74 @@ describe("CodingAgent checklist grounding against the checkpoint diff", () => {
       openChecklistItems: [],
     });
   });
+
+  /**
+   * Regression: a plan made entirely of explore/inspect/diagnose-type steps (a pure analysis
+   * task, no construction work planned or needed) used to be held to mutationExpected:true
+   * anyway - the run was correctly executed but still ended up marked incomplete because no
+   * file changed, which then fed back into the model as failure pressure it had no way to
+   * satisfy. mutationExpected is now derived from the plan itself instead of hardcoded.
+   */
+  it("derives mutationExpected:false from a plan whose steps are all check/diagnostic work", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-cp-ground-analysis-"));
+    sandboxes.push(sandbox);
+    writeFileSync(join(sandbox, "index.html"), "<html></html>");
+    const analysisPlan = JSON.stringify({
+      goal: "debug the game",
+      planType: "coding",
+      estimatedComplexity: "low",
+      steps: [
+        { id: "step_1", title: "Explore repository structure to locate source files", description: "..." },
+        { id: "step_2", title: "Inspect HTML for missing resource references", description: "..." },
+      ],
+    });
+    const provider = scriptedProvider([
+      analysisPlan,
+      "[TOOL:filesystem action=read path=index.html]",
+      "[TOOL:todo action=update id=1 status=done]",
+      "[TOOL:todo action=update id=2 status=done]",
+      "Analysis complete - found the issue.",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    const result = await codingAgent.run("debug the game", { maxAttempts: 1 });
+
+    expect(result.success).toBe(true);
+    expect(result.completionEvidence).toMatchObject({ mutationExpected: false, fileChangesObserved: false });
+    const todos = (codingAgent as any).todos.snapshot();
+    expect(todos.every((t: { status: string }) => t.status === "done")).toBe(true);
+  });
+
+  /**
+   * Regression: the old grounding check only asked "did ANY file change this attempt?" - with
+   * two construction steps closed out in the same attempt, a single write covering step 1 was
+   * enough to also confirm step 2, which never got its own change. Per-step attribution via
+   * RunJournalEntry.stepId (the "current" todo item at the moment of a successful write) must
+   * catch this: only the step actually being worked on when the write happened stays "done".
+   */
+  it("demotes only the step with no attributable write when two steps are closed in one attempt", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-cp-ground-batch-"));
+    sandboxes.push(sandbox);
+    const provider = scriptedProvider([
+      TWO_STEP_PLAN_JSON,
+      "[TOOL:todo action=update id=1 status=in_progress]",
+      "[TOOL:filesystem action=write path=health.js]\ncontent\n[/TOOL]",
+      "[TOOL:todo action=update id=1 status=done]",
+      "[TOOL:todo action=update id=2 status=done]",
+      "Fertig.",
+    ]);
+    const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    await codingAgent.run("add two endpoints", { maxAttempts: 1 });
+
+    const todos = (codingAgent as any).todos.snapshot();
+    const step1 = todos.find((t: any) => t.id === 1);
+    const step2 = todos.find((t: any) => t.id === 2);
+    expect(step1.status).toBe("done");
+    expect(step2.status).toBe("in_progress");
+    expect(step2.note).toContain("Journal");
+  });
+
 });

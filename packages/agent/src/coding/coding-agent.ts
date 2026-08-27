@@ -299,6 +299,37 @@ function isDiagnosticLine(line: string): boolean {
 }
 
 /**
+ * Checklist-title classifiers for the checkpoint-grounding check in run(): a step whose title
+ * matches this is assumed to require a file change to be genuinely "done" (checked first, so a
+ * mixed title like "fix the bug and verify" is still treated as construction, not exempted).
+ */
+const CHECKLIST_CONSTRUCTION_KEYWORDS =
+  /\b(write|add|create|implement|build|fix|refactor|update|remove|delete|rename|install|configure|integrate|migrate|style)\b/i;
+/**
+ * A step whose title matches this (and NOT the construction list above) can legitimately be
+ * "done" without touching a file this attempt - e.g. VERIFY/REPORT steps, or a diagnostic step
+ * like "reproduce the error in the browser". See the grounding check in run() for how these two
+ * lists are combined.
+ */
+const CHECKLIST_CHECK_KEYWORDS =
+  /\b(verify|test|check|report|review|confirm|validate|investigate|explore|research|reproduce|diagnose|analyze|understand|inspect|read)\b/i;
+
+/**
+ * Whole-plan version of the same classifier: does ANY step look like it needs a real file
+ * change to be genuinely done? Same precedence as the per-step check (construction wins over
+ * check, unrecognized defaults to "yes, needs evidence") - used to decide the RUN's overall
+ * mutationExpected instead of hardcoding it, so a plan made entirely of explore/inspect/
+ * diagnose-type steps is not held to a mutation requirement none of its steps ever implied.
+ */
+function planRequiresMutation(plan: Plan): boolean {
+  return plan.steps.some((step) => {
+    if (CHECKLIST_CONSTRUCTION_KEYWORDS.test(step.title)) return true;
+    if (CHECKLIST_CHECK_KEYWORDS.test(step.title)) return false;
+    return true;
+  });
+}
+
+/**
  * Verification output is fed straight back into the next prompt, so every wasted character is
  * paid for twice: once in this attempt's context and again in the follow-up prompt.
  *
@@ -1218,9 +1249,8 @@ export class CodingAgent {
 
     // Controller-owned completion evidence. Model prose and todo status are not execution
     // evidence; only checkpoint diffs (and the bounded parted-write healer) update these facts.
-    // CodingAgent is an execution surface, so mutation is the safe default. Deliberately
-    // read-only review callers must opt out explicitly.
-    const mutationExpected = opts.mutationExpected ?? !opts.planOnly;
+    // mutationExpected itself is assigned further down, once `plan` exists (see there for why) -
+    // this closure only READS it, and isn't called until well after that assignment runs.
     let fileChangesObserved = false;
     const changedFiles = new Set<string>();
 
@@ -1419,6 +1449,19 @@ export class CodingAgent {
       repositoryContext,
     }));
     this.currentPlan = plan;
+    // CodingAgent is an execution surface, so mutation is the safe default - but a plan whose
+    // steps are ENTIRELY check/diagnostic work (see CHECKLIST_CHECK_KEYWORDS: explore, inspect,
+    // read, diagnose, ...) never intended to change a file in the first place. Without this, a
+    // pure analysis/debugging goal ran to a correct conclusion and was still marked incomplete
+    // at the very end ("no checkpoint diff recorded a file change") purely because nothing
+    // needed changing - which then fed back into the model's next-attempt prompt as failure
+    // feedback it had no way to satisfy, and observably led it to give up and mark its own
+    // checklist steps "blocked" even though every step's actual work was already done correctly.
+    // Same classifier the per-step grounding check below already uses, just aggregated: if ANY
+    // step looks like real construction work (or its title is unrecognized - default stays
+    // strict), the whole run still requires evidence. Deliberately read-only review callers
+    // (opts.mutationExpected explicitly set) and Plan Mode (opts.planOnly) still win outright.
+    const mutationExpected = opts.mutationExpected ?? (opts.planOnly ? false : planRequiresMutation(plan));
     // A plan this call just created itself (not one the caller already had - opts.existingPlan
     // came with its own id from wherever it was loaded) is persisted to the `plans` table right
     // here, not only broadcast as an event. Without this row, the ONLY record of the plan was
@@ -1566,6 +1609,12 @@ export class CodingAgent {
       // which checklist items THIS attempt newly marked "done" - the checkpoint diff is only
       // meaningful measured against that same attempt's edits, not the whole run's history.
       const todosBeforeAttempt = this.todos.snapshot();
+      // Length of the cumulative journal before this attempt runs - used below to slice out
+      // only THIS attempt's entries (journal is seeded from the previous attempt's tail via
+      // initialRunJournal and keeps growing), so per-step attribution via stepId isn't
+      // contaminated by writes an earlier attempt made against a step that just happened to
+      // still be "current" at the start of this one.
+      const journalLengthBeforeAttempt = journal.length;
       let runResult: AgentRunResult;
       try {
         runResult = await this.agent.run(prompt, {
@@ -1683,12 +1732,12 @@ export class CodingAgent {
       // todo:update(done) without having written anything. The checkpoint diff is the one
       // signal in this loop that reflects the real working tree rather than the model's own
       // account of it, so a "done" step with zero changed files is demoted back to in_progress
-      // instead of being trusted at face value - but ONLY while this run has made no real
-      // change yet at all. Once EDIT has genuinely written something in an earlier attempt,
-      // later steps like VERIFY ("run a check") or REPORT ("summarize what changed") are
-      // legitimately done without touching another file - demoting those on an empty diff would
-      // punish entirely normal steps and could never converge (each such demotion re-opens the
-      // checklist, which re-triggers the "checklist not finished" continuation below, forever).
+      // instead of being trusted at face value. Checked on EVERY attempt, not just before the
+      // first real edit: a step that legitimately needs no file change (VERIFY/REPORT, or a
+      // diagnostic step like "reproduce the error") is exempted by title via
+      // CHECKLIST_CHECK_KEYWORDS instead of by "has any edit happened yet in this run" - the
+      // previous run-wide gate stopped checking entirely after the first edit, so a construction
+      // step falsely marked "done" with zero changes in attempt 3+ went completely undetected.
       let attemptChangedFileCount = 0;
       // Set when this attempt's own "done" claim got demoted below - a real signal that the
       // model IS actively driving the checklist (just prematurely), distinct from
@@ -1706,29 +1755,71 @@ export class CodingAgent {
           fileChangesObserved = true;
           for (const file of attemptDiff?.files ?? []) changedFiles.add(file.path);
         }
-        if (mutationExpected && changedFileCount === 0 && !anyFileChangedThisRun) {
+        if (mutationExpected) {
+          // This attempt's own journal slice, and which todo step was "current" (per
+          // getCurrentStepId) at the moment each successful filesystem write happened. This is
+          // the one signal precise enough to attribute a write to a SPECIFIC step rather than
+          // just to the attempt as a whole - needed because changedFileCount>0 alone cannot
+          // tell "step A's write" apart from "an unrelated step B's write", which previously let
+          // a step be confirmed "done" purely because *some other* step touched a file in the
+          // same attempt (see coding-agent-checklist-grounding memory: batch-update gap).
+          const thisAttemptJournal =
+            journal.length >= journalLengthBeforeAttempt ? journal.slice(journalLengthBeforeAttempt) : journal;
+          const stepIdsWithConfirmedWrite = new Set<string>();
+          let anyStepIdTrackedThisAttempt = false;
+          for (const entry of thisAttemptJournal) {
+            if (entry.stepId) anyStepIdTrackedThisAttempt = true;
+            if (
+              entry.success &&
+              entry.stepId &&
+              entry.toolName === "filesystem" &&
+              /^(write|append|edit|edit_lines|delete|move|copy)\b/i.test(entry.summary)
+            ) {
+              stepIdsWithConfirmedWrite.add(entry.stepId);
+            }
+          }
           const newlyDone = this.todos
             .snapshot()
-            .filter(
-              (item) =>
-                item.status === "done" &&
-                todosBeforeAttempt.find((before) => before.id === item.id)?.status !== "done"
-            );
+            .filter((item) => {
+              if (item.status !== "done") return false;
+              if (todosBeforeAttempt.find((before) => before.id === item.id)?.status === "done") return false;
+              // Construction verbs take precedence over check verbs so a mixed title like "fix
+              // the bug and verify" is still held to the file-change requirement. A pure
+              // check/read/verify step (no toolcalls, or read-only ones) is legitimately done
+              // without ever writing a file - exempted here, unaffected by everything below.
+              if (CHECKLIST_CONSTRUCTION_KEYWORDS.test(item.title)) return true;
+              if (CHECKLIST_CHECK_KEYWORDS.test(item.title)) return false;
+              return true; // unrecognized title: default to requiring evidence, same as before.
+            })
+            .filter((item) => {
+              // Confirmed by its OWN write this attempt - the strong, per-step signal. stepId on
+              // the journal entry is always a string (RunJournalEntry.stepId), while todo item
+              // ids are numbers - compare as strings so "1" matches 1.
+              if (stepIdsWithConfirmedWrite.has(String(item.id))) return false;
+              // No step-attributed write exists anywhere in this attempt's journal at all
+              // (getCurrentStepId wasn't wired, or nothing ran through it) - fall back to the
+              // coarse, attempt-wide checkpoint diff rather than demoting on missing
+              // instrumentation alone.
+              if (!anyStepIdTrackedThisAttempt) return changedFileCount === 0;
+              // stepId WAS tracked this attempt, just never for this step: some other step's
+              // write cannot vouch for this one.
+              return true;
+            });
           groundingDemotedThisAttempt = newlyDone.length > 0;
           if (newlyDone.length > 0) {
             for (const item of newlyDone) {
               this.todos.update(
                 item.id,
                 "in_progress",
-                'Als "done" gemeldet, aber der Checkpoint-Diff dieses Versuchs zeigt keine Dateiänderung - zurückgestuft.'
+                'Als "done" gemeldet, aber weder der Checkpoint-Diff noch das Journal dieses Versuchs zeigen eine diesem Schritt zuordenbare Dateiänderung - zurückgestuft.'
               );
             }
             this.emit(
               "decision",
-              `Checkliste behauptete ${newlyDone.length} erledigte(n) Schritt(e) in Versuch ${attempt}, aber es wurden keine Dateien geändert - zurückgestuft auf "in_progress".`,
+              `Checkliste behauptete ${newlyDone.length} erledigte(n) Schritt(e) in Versuch ${attempt}, ohne diesem Schritt zuordenbare Dateiänderung - zurückgestuft auf "in_progress".`,
               { attempt, items: newlyDone.map((item) => item.title) }
             );
-            lastSummary = `${lastSummary}\n\n[Checklist grounding: ${newlyDone.length} step(s) marked "done" were reset to "in_progress" - the checkpoint diff shows no file changes in this attempt, so the completion claim could not be confirmed: ${newlyDone.map((item) => item.title).join(", ")}]`;
+            lastSummary = `${lastSummary}\n\n[Checklist grounding: ${newlyDone.length} step(s) marked "done" were reset to "in_progress" - neither the checkpoint diff nor this attempt's journal show a file change attributable to that specific step, so the completion claim could not be confirmed: ${newlyDone.map((item) => item.title).join(", ")}]`;
           }
         }
       }
