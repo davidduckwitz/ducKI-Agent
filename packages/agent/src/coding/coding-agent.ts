@@ -316,6 +316,12 @@ const CHECKLIST_CONSTRUCTION_KEYWORDS =
 const CHECKLIST_CHECK_KEYWORDS =
   /\b(verify|test|check|report|review|confirm|validate|investigate|explore|research|reproduce|diagnose|analyze|understand|inspect|read)\b/i;
 
+/** Passed to the LIVE, per-turn call of reconcilePhaseCompletion (see onModelResponse in run()) -
+ *  that call only ever needs the unambiguous "exactly one in_progress item" path, never the
+ *  per-step-attributed disambiguation, so there is nothing to populate this with until the
+ *  attempt actually ends. Shared/frozen since every live call passes the same empty set. */
+const EMPTY_STEP_ID_SET: ReadonlySet<string> = new Set();
+
 /** Shared precedence for both the checkpoint-grounding demotion check and the verify-success
  *  gate below: construction wins over check (a mixed title is still held to the evidence
  *  requirement), an unrecognized title defaults to "needs evidence".
@@ -1804,6 +1810,10 @@ export class CodingAgent {
           getCurrentStepId: () => this.todos.currentStepId(),
           onModelResponse: (response) => {
             this.updatePhaseFromResponse(response);
+            // Needs no checkpoint diff at all (read-only phases never produce one) - see its own
+            // doc comment for why that makes it the one reconciliation safe to run unconditionally,
+            // synchronously, right here rather than inside the diff-dependent block below.
+            this.reconcileReadOnlyPhaseCompletion(response);
             // reconcileAnnouncedStep used to run only once, AFTER the whole attempt's
             // agent.run() resolved (see below) - fine for a model that calls todo:update as it
             // works, but a model that narrates "Step 2: ..." transitions without ever touching
@@ -1812,9 +1822,23 @@ export class CodingAgent {
             // That is exactly the "plan only ticks off at the very end" symptom this fixes:
             // running the same reconciliation on every model turn (not just the final one) lets
             // it catch up live, per turn, using only the diff accumulated so far this attempt.
+            //
+            // reconcilePhaseCompletion (the "<< EDIT COMPLETE" sibling) gets the identical
+            // treatment here for the identical reason - it used to run ONLY once, after the
+            // whole attempt resolved (see below), which left the Plan panel frozen on the seeded
+            // "step 1 in_progress" state for a model that narrates the phase contract's markers
+            // instead of calling todo:update itself, exactly reproducing the same "only ticks off
+            // at the end" symptom for that vocabulary. Passed an empty stepIdsWithWrite here (the
+            // live call only ever needs its unambiguous "exactly one in_progress item" path - see
+            // that method's doc comment; the full per-step-attributed disambiguation still runs
+            // once more at end-of-attempt, where stepIdsWithConfirmedWrite is actually populated).
             if (this.sandboxRoot && checkpoint) {
               void diffCheckpoint(this.sandboxRoot, checkpoint.sha)
-                .then((diff) => this.reconcileAnnouncedStep(response, diff?.files.length ?? 0))
+                .then((diff) => {
+                  const changedFileCount = diff?.files.length ?? 0;
+                  this.reconcileAnnouncedStep(response, changedFileCount);
+                  this.reconcilePhaseCompletion(response, changedFileCount, EMPTY_STEP_ID_SET);
+                })
                 .catch(() => {});
             }
           },
@@ -2033,6 +2057,9 @@ export class CodingAgent {
       // model to use ("<< EDIT COMPLETE") - see reconcilePhaseCompletion's doc comment for why
       // this is a separate check from the "Step N:" one right above.
       this.reconcilePhaseCompletion(lastSummary, attemptChangedFileCount, stepIdsWithConfirmedWrite);
+      // Safety net for the same reason the two calls above also run here, not just live: catches
+      // it if onModelResponse never fired for the response that carried the marker.
+      this.reconcileReadOnlyPhaseCompletion(lastSummary);
 
       // Re-checked fresh every attempt UNTIL it fires once (not just once before the loop): a
       // static HTML/CSS/JS project's index.html typically does not exist yet on attempt 1 - it
@@ -2372,6 +2399,47 @@ export class CodingAgent {
       "decision",
       `Fortschritt mit Checkliste konsolidiert: "<< EDIT COMPLETE" mit Dateiänderung erledigt Schritt "${target.title}".`,
       { changedFileCount, todo_items: this.todos.snapshot() }
+    );
+  }
+
+  /**
+   * Same reconciliation idea as reconcilePhaseCompletion, but for the read-only phases
+   * (EXPLORE/PLAN/VERIFY) instead of EDIT. Those phases legitimately never touch a file - a
+   * checkpoint diff of 0 is the CORRECT outcome for them, not a sign that nothing happened - so
+   * gating on changedFileCount (like every other reconciliation above) would mean these phases
+   * can NEVER auto-advance the checklist at all: the "Analyze/Explore"-type step stays
+   * "in_progress" for the model's entire exploration, however many turns and real file reads
+   * that takes, until the model itself calls todo:update. Since check/read-only steps are
+   * exempted from the evidence requirement in the first place (see checklistItemNeedsEvidence),
+   * there is nothing to lose by closing one here on narration alone - unlike the EDIT/construction
+   * case, prose IS sufficient evidence for a step that was never going to produce a file diff.
+   *
+   * Deliberately as conservative as its sibling otherwise: only ever closes ONE item, and only
+   * when exactly one check-type item is "in_progress" - ambiguous cases are left alone.
+   */
+  private reconcileReadOnlyPhaseCompletion(response: string): void {
+    const match = /<<\s*(EXPLORE|PLAN|VERIFY)\s+COMPLETE\b/i.exec(response);
+    if (!match) return;
+    const phase = match[1]!.toUpperCase();
+
+    const items = this.todos.snapshot();
+    const inProgress = items.filter((item) => item.status === "in_progress" && !checklistItemNeedsEvidence(item.title));
+    if (inProgress.length !== 1) return;
+    const target = inProgress[0]!;
+
+    this.todos.update(
+      target.id,
+      "done",
+      `Automatisch konsolidiert: Modell meldete "<< ${phase} COMPLETE" - dieser Schritt braucht keinen Dateibeleg.`
+    );
+    const nextPending = items.find((item) => item.status === "pending");
+    if (nextPending) {
+      this.todos.update(nextPending.id, "in_progress", `Naechster offener Schritt nach automatisch konsolidiertem ${phase}-Abschluss.`);
+    }
+    this.emit(
+      "decision",
+      `Fortschritt mit Checkliste konsolidiert: "<< ${phase} COMPLETE" erledigt Schritt "${target.title}".`,
+      { phase, todo_items: this.todos.snapshot() }
     );
   }
 
@@ -2889,14 +2957,20 @@ export class CodingAgent {
     ];
     if (this.previewBaseUrl) {
       const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot)}/serve/index.html`;
+      const browserSessionId = `coding-${basename(this.sandboxRoot)}`;
       lines.push(
         "BROWSER PREVIEW / TESTING:",
         `- To look at or test this project in the browser tool, navigate to: ${previewUrl}`,
         `- NEVER use a 'file://' URL for this project - it looks like it works, but Chromium blocks`,
         `  ES module scripts and fetch() under file:, so the page silently fails in ways that look`,
         `  like a real bug. The URL above is a real HTTP server and serves the project correctly.`,
-        `- Do NOT pass newSession/sessionId - omitting both reuses the one shared browser session`,
-        `  (the same one the user may already have open), instead of opening a second, separate one.`,
+        `- Pass sessionId:"${browserSessionId}" on EVERY browser call this run (launch, screenshot_url,`,
+        `  goto, click, evaluate, screenshot, everything) - always this exact literal string, never`,
+        `  something a previous tool result returned. The first call that uses it creates a dedicated`,
+        `  session under this name; every later call with the same string reuses that same session.`,
+        `  Do NOT omit sessionId "to keep it simple" - omitting it falls back to the ONE shared`,
+        `  default browser session, which is process-wide and has nothing to do with this project`,
+        `  (it could be sitting on a completely different page from an unrelated chat or task).`,
         `- Use browser snapshot before clicking. Prefer role/name targeting over coordinate guesses;`,
         `  snapshots include rendered off-screen controls and Puppeteer will scroll them into view.`,
         `- After click/type/scroll, read a fresh snapshot or use expect/get_content before deciding`,

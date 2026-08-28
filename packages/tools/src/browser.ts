@@ -449,6 +449,10 @@ async function getSession(sessionId: string): Promise<BrowserSession | undefined
 }
 
 async function createSession(options: {
+  /** Caller-chosen id for a "named" session (e.g. CodingAgent's per-sandbox handle) instead of
+   *  an opaque auto-generated one - see resolveOrLaunchSession's doc comment for why this exists
+   *  and why it deliberately does NOT become the shared defaultSessionId. */
+  sessionId?: string;
   headless?: boolean;
   viewport?: { width: number; height: number };
   executablePath?: string;
@@ -521,7 +525,7 @@ async function createSession(options: {
     }
   }
 
-  const sessionId = makeSessionId();
+  const sessionId = options.sessionId?.trim() || makeSessionId();
   const session: BrowserSession = {
     browser,
     page,
@@ -575,6 +579,51 @@ async function resolveOrLaunchSession(
 ): Promise<{ sessionId: string; session: BrowserSession; reused: boolean; browserPath?: string }> {
   const forceNew = input["newSession"] === true || input["newSession"] === "true";
   const requestedHeadless = input["headless"] === undefined ? true : input["headless"] === true || input["headless"] === "true";
+  const requestedSessionId = String(input["sessionId"] ?? "").trim();
+
+  // Named session: the caller supplied its OWN stable id (e.g. CodingAgent gives every browser
+  // call in a run the same literal, deterministic id derived from the sandbox slug - see
+  // pathHandlingBlock's BROWSER PREVIEW/TESTING guidance) instead of relying on whatever the
+  // tool happened to auto-generate and return from a PRIOR call. That removes the fragile
+  // "remember an opaque id across many LLM turns" dependency entirely: the caller always
+  // reproduces the exact same string, so there is nothing to misremember.
+  //
+  // Deliberately does NOT touch defaultSessionId either way (create or reuse) - a named session
+  // is the caller's own dedicated handle. Letting it become the shared default would just swap
+  // today's problem (an unrelated caller inheriting someone else's session) for the opposite one
+  // (a dedicated CodingAgent session leaking into an unrelated caller that omits sessionId).
+  if (requestedSessionId) {
+    const existing = sessions.get(requestedSessionId);
+    if (existing && !forceNew) {
+      return { sessionId: requestedSessionId, session: existing, reused: true };
+    }
+    if (existing && forceNew) {
+      // Same name, but the caller wants a genuinely fresh browser under it - close the stale one.
+      await stopStream(requestedSessionId, true);
+      try {
+        await existing.browser.close();
+      } catch {
+        // Already gone - fine, we're replacing it anyway.
+      }
+      sessions.delete(requestedSessionId);
+    }
+    const viewport = parseViewports(input["viewport"]);
+    const { sessionId, browserPath } = await createSession({
+      sessionId: requestedSessionId,
+      headless: requestedHeadless,
+      viewport,
+      executablePath: typeof input["executablePath"] === "string" ? input["executablePath"] : undefined,
+      userAgent: typeof input["userAgent"] === "string" ? input["userAgent"] : undefined,
+      disableImages: input["disableImages"] === true || input["disableImages"] === "true",
+      blockResources: (input["blockResources"] as "none" | "tracking" | "ads" | "all") || "none",
+      hideAutomation: input["hideAutomation"] !== false && input["hideAutomation"] !== "false",
+      cookieDetection: input["cookieDetection"] === true || input["cookieDetection"] === "true",
+      proxyUrl: typeof input["proxyUrl"] === "string" ? input["proxyUrl"] : undefined,
+    });
+    const session = await getSession(sessionId);
+    if (!session) throw new Error("Failed to create browser session");
+    return { sessionId, session, reused: false, browserPath };
+  }
 
   if (!forceNew && defaultSessionId) {
     const existing = sessions.get(defaultSessionId);
@@ -998,7 +1047,14 @@ export const browserTool: ToolExecutor = {
             "reload",
           ],
         },
-        sessionId: { type: "string", description: "Browser session id" },
+        sessionId: {
+          type: "string",
+          description:
+            "Browser session id. For most actions: targets an existing session (omit to use/create the shared default). " +
+            "For action=launch/screenshot_url ONLY: pass your OWN chosen id (e.g. a fixed name specific to your current task) " +
+            "to get a dedicated session under exactly that id - reused on every later call that passes the same id, and never " +
+            "shared with an unrelated caller. Prefer this over remembering an id the tool generated for you.",
+        },
         newSession: { type: "boolean", description: "For action=launch: force a brand-new browser instead of reusing the shared default session", default: false },
         url: { type: "string", description: "URL to open or navigate to" },
         selector: { type: "string", description: "CSS selector for click/type/wait/hover/select/upload. Example: '#submit-btn' or 'main button:nth-of-type(2)'" },

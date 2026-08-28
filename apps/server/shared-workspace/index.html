@@ -1,66 +1,661 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Globaler Zeitplan & Weltuhr</title>
-    <!-- Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        #globe-container {
-            position: relative;
-            width: 100%;
-            max-width: 600px;
-            aspect-ratio: 2 / 1;
-            /* Hintergrundbild der Weltkarte */
-            background-image: url('https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/World_map_-_low_resolution.svg/2560px-World_map_-_low_resolution.svg.png');
-            background-size: cover;
-            background-position: center;
-            border-radius: 1rem;
-            overflow: hidden;
-        }
-        #orb-marker {
-            transition: cx 0.5s ease-in-out, cy 0.5s ease-in-out; 
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SNAKE - Modern Arcade Edition</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background-color: #1a1a1a;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      color: #fff;
+    }
+
+    .game-container {
+      text-align: center;
+      padding: 20px;
+    }
+
+    h1 {
+      font-size: 3em;
+      margin-bottom: 15px;
+      color: #4ade80;
+      text-shadow: 0 0 10px rgba(74, 222, 128, 0.5);
+    }
+
+    .score-board {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+      margin-bottom: 20px;
+      font-size: 1.4em;
+    }
+
+    .score-item {
+      background-color: #2d2d2d;
+      padding: 10px 25px;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    }
+
+    .score-label {
+      color: #aaa;
+      font-size: 0.9em;
+      display: block;
+    }
+
+    .score-value {
+      color: #4ade80;
+      font-weight: bold;
+      text-shadow: 0 0 5px rgba(74, 222, 128, 0.3);
+    }
+
+    canvas {
+      border: 4px solid #4ade80;
+      border-radius: 8px;
+      box-shadow: 0 0 20px rgba(74, 222, 128, 0.3), inset 0 0 20px rgba(0, 0, 0, 0.5);
+      background-color: #1a1a1a;
+    }
+
+    .overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background-color: rgba(26, 26, 26, 0.95);
+      padding: 40px 60px;
+      border-radius: 12px;
+      border: 3px solid #4ade80;
+      box-shadow: 0 0 30px rgba(74, 222, 128, 0.5);
+      text-align: center;
+    }
+
+    .overlay h2 {
+      font-size: 2.5em;
+      color: #ef4444;
+      margin-bottom: 15px;
+      text-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+    }
+
+    .overlay p {
+      font-size: 1.3em;
+      color: #4ade80;
+      margin-bottom: 20px;
+    }
+
+    .controls-hint {
+      margin-top: 20px;
+      font-size: 0.95em;
+      color: #aaa;
+    }
+
+    .key {
+      display: inline-block;
+      background-color: #3d3d3d;
+      padding: 4px 10px;
+      border-radius: 4px;
+      margin: 2px;
+      font-size: 0.9em;
+    }
+
+    .powerup-active {
+      animation: pulse-gold 0.5s ease-in-out infinite alternate;
+    }
+
+    @keyframes pulse-gold {
+      from { box-shadow: 0 0 15px rgba(234, 179, 8, 0.6); }
+      to { box-shadow: 0 0 30px rgba(234, 179, 8, 1); }
+    }
+
+    .flash-effect {
+      animation: flash-bg 0.5s ease-out;
+    }
+
+    @keyframes flash-bg {
+      from { background-color: #fffacd !important; }
+      to { background-color: #1a1a1a !important; }
+    }
+  </style>
 </head>
-<body class="bg-slate-950 text-white min-h-screen flex items-center justify-center p-6 font-sans">
-
-    <div class="max-w-4xl w-full grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch">
-        
-        <!-- Linke Spalte: Uhr & Steuerung -->
-        <div class="bg-slate-900 p-8 rounded-3xl shadow-2xl border border-slate-800 flex flex-col justify-between space-y-8 transition-all duration-500 hover:border-blue-500/50">
-            <div class="text-center">
-                <h1 class="text-xs font-bold uppercase tracking-[0.3em] text-blue-500 mb-4">Globaler Zeit-Monitor</h1>
-                
-                <!-- Uhr-Anzeige -->
-                <div id="clock-display" class="text-6xl md:text-7xl font-mono font-black text-white py-2 drop-shadow-[0_0_25px_rgba(59,130,246,0.4)]">
-                    00:00:00
-                </div>
-                <div class="text-slate-500 text-sm mt-2 uppercase tracking-widest">Aktuelle Zeit</div>
-            </div>
-            
-            <div class="space-y-4">
-                <label for="timezone-select" class="block text-sm font-medium text-slate-400">Zeitzone wählen</label>
-                <select id="timezone-select" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-                    <!-- Wird per JS gefüllt -->
-                </select>
-            </div>
-        </div>
-
-        <!-- Rechte Spalte: Visuelle Weltkarte -->
-        <div class="flex flex-col items-center justify-center space-y-6 bg-slate-900 p-8 rounded-3xl shadow-2xl border border-slate-800">
-            <h2 class="text-xl font-bold text-white">Visuelle Position</h2>
-            <div id="globe-container" class="border border-slate-700 shadow-inner">
-                <svg viewBox="0 0 200 100" class="w-full h-full">
-                    <!-- Der Marker bewegt sich auf der statischen Karte -->
-                    <circle id="orb-marker" cx="100" cy="50" r="5" fill="#3b82f6" filter="drop-shadow(0 0 5px #3b82f6)" />
-                </svg>
-            </div>
-            <div id="location-label" class="text-lg font-semibold text-blue-400">Globaler Standard</div>
-        </div>
+<body id="gameBody">
+  <div class="game-container" style="position: relative;">
+    <h1>SNAKE</h1>
+    
+    <div class="score-board">
+      <div class="score-item">
+        <span class="score-label">CURRENT SCORE</span>
+        <span id="currentScore" class="score-value">0</span>
+      </div>
+      <div class="score-item">
+        <span class="score-label">HIGH SCORE</span>
+        <span id="highScore" class="score-value">0</span>
+      </div>
     </div>
 
-    <script src="script.js"></script>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+
+    <div id="startScreen" class="overlay">
+      <h2>SNAKE GAME</h2>
+      <p>Press SPACE to Start</p>
+      <div class="controls-hint">
+        Use <span class="key">Arrow Keys</span> or <span class="key">WASD</span> to move<br><br>
+        Eat food (+10 points)<br>
+        Avoid walls, yourself, and obstacles!<br><br>
+        Every 50 points: Golden Power-Up!
+      </div>
+    </div>
+
+    <div id="gameOverScreen" class="overlay" style="display: none;">
+      <h2>GAME OVER!</h2>
+      <p>Your Score: <span id="finalScore">0</span></p>
+      <p>Press SPACE to Restart</p>
+    </div>
+
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+  </div>
+
+  <script>
+    // Game Constants
+    const GRID_SIZE = 20;
+    const TILE_COUNT = 20;
+    const CANVAS_SIZE = 400;
+    const TICK_RATE = 110;
+
+    // Colors (Modern Arcade Theme)
+    const COLORS = {
+      background: '#1a1a1a',
+      snakeHead: '#4ade80',
+      snakeBody: '#2d7f35',
+      food: '#ef4444',
+      obstacle: '#06b6d4',
+      powerUp: '#eab308'
+    };
+
+    // Game State Variables
+    let canvas, ctx;
+    let snake = [];
+    let direction = { x: 1, y: 0 };
+    let nextDirection = { x: 1, y: 0 };
+    let food = null;
+    let powerUp = null;
+    let obstacles = [];
+    let score = 0;
+    let highScore = localStorage.getItem('snakeHighScore') || 0;
+    let gameState = 'start'; // start, playing, gameover
+    let lastTime = 0;
+    let accumulator = 0;
+
+    // Power-up timer (5 seconds)
+    let powerUpTimer = null;
+    let isPowerUpActive = false;
+
+    // Audio Context (initialized on first user interaction)
+    let audioContext = null;
+
+    // DOM Elements
+    const startScreen = document.getElementById('startScreen');
+    const gameOverScreen = document.getElementById('gameOverScreen');
+    const currentScoreEl = document.getElementById('currentScore');
+    const highScoreEl = document.getElementById('highScore');
+    const finalScoreEl = document.getElementById('finalScore');
+    const gameBody = document.getElementById('gameBody');
+
+    // Initialize Canvas Context
+    function initCanvas() {
+      canvas = document.getElementById('gameCanvas');
+      ctx = canvas.getContext('2d');
+    }
+
+    // Audio System (Web Audio API)
+    function initAudioContext() {
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      } else if (audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
+    }
+
+    function playSFX(type) {
+      if (!audioContext) return;
+
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      switch (type) {
+        case 'eat': // Short, high beep for eating food
+          oscillator.frequency.value = 800;
+          oscillator.type = 'sine';
+          gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+          oscillator.start(audioContext.currentTime);
+          oscillator.stop(audioContext.currentTime + 0.15);
+          break;
+
+        case 'powerup': // Quick twin-tone chime for power-up
+          const now = audioContext.currentTime;
+          
+          // First tone (higher)
+          const osc1 = audioContext.createOscillator();
+          const gain1 = audioContext.createGain();
+          osc1.connect(gain1);
+          gain1.connect(audioContext.destination);
+          osc1.frequency.value = 1200;
+          osc1.type = 'sine';
+          gain1.gain.setValueAtTime(0.3, now);
+          gain1.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+          osc1.start(now);
+          osc1.stop(now + 0.15);
+
+          // Second tone (lower) - slightly delayed for twin-tone effect
+          const osc2 = audioContext.createOscillator();
+          const gain2 = audioContext.createGain();
+          osc2.connect(gain2);
+          gain2.connect(audioContext.destination);
+          osc2.frequency.value = 1000;
+          osc2.type = 'sine';
+          gain2.gain.setValueAtTime(0.3, now + 0.05);
+          gain2.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+          osc2.start(now + 0.05);
+          osc2.stop(now + 0.2);
+
+          break;
+
+        case 'gameover': // Longer, descending explosion sound
+          oscillator.frequency.value = 400;
+          oscillator.type = 'sawtooth';
+          gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.6);
+          
+          // Add frequency drop for explosion effect
+          oscillator.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.6);
+
+          oscillator.start(audioContext.currentTime);
+          oscillator.stop(audioContext.currentTime + 0.6);
+          break;
+      }
+    }
+
+    // Initialize Game
+    function initGame() {
+      snake = [
+        { x: Math.floor(TILE_COUNT / 2), y: Math.floor(TILE_COUNT / 2) },
+        { x: Math.floor(TILE_COUNT / 2) - 1, y: Math.floor(TILE_COUNT / 2) },
+        { x: Math.floor(TILE_COUNT / 2) - 2, y: Math.floor(TILE_COUNT / 2) }
+      ];
+      direction = { x: 1, y: 0 };
+      nextDirection = { x: 1, y: 0 };
+      score = 0;
+      obstacles = [];
+      
+      // Generate random obstacles (4-5 blocks)
+      const obstacleCount = Math.floor(Math.random() * 2) + 4; // 4 or 5
+      
+      for (let i = 0; i < obstacleCount; i++) {
+        let validPosition = false;
+        let obsX, obsY;
+        
+        while (!validPosition) {
+          obsX = Math.floor(Math.random() * TILE_COUNT);
+          obsY = Math.floor(Math.random() * TILE_COUNT);
+          
+          // Check if position is not on snake or another obstacle
+          validPosition = true;
+          for (let segment of snake) {
+            if (segment.x === obsX && segment.y === obsY) {
+              validPosition = false;
+              break;
+            }
+          }
+          
+          // Check against existing obstacles
+          for (let obstacle of obstacles) {
+            if (obstacle.x === obsX && obstacle.y === obsY) {
+              validPosition = false;
+              break;
+            }
+          }
+        }
+        
+        obstacles.push({ x: obsX, y: obsY });
+      }
+
+      spawnFood();
+      
+      // Check if power-up should be spawned (every 50 points)
+      if (score >= 50 && !isPowerUpActive) {
+        isPowerUpActive = true;
+        spawnPowerUp();
+        
+        // Power-up lasts 5 seconds
+        setTimeout(() => {
+          isPowerUpActive = false;
+          powerUpTimer = null;
+        }, 5000);
+      }
+
+      currentScoreEl.textContent = score;
+    }
+
+    function spawnFood() {
+      let validPosition = false;
+      let foodX, foodY;
+      
+      while (!validPosition) {
+        foodX = Math.floor(Math.random() * TILE_COUNT);
+        foodY = Math.floor(Math.random() * TILE_COUNT);
+        
+        // Check if position is not on snake or obstacles
+        validPosition = true;
+        
+        for (let segment of snake) {
+          if (segment.x === foodX && segment.y === foodY) {
+            validPosition = false;
+            break;
+          }
+        }
+        
+        // Check against existing obstacles
+        for (let obstacle of obstacles) {
+          if (obstacle.x === foodX && obstacle.y === foodY) {
+            validPosition = false;
+            break;
+          }
+        }
+
+        // Also check power-up position
+        if (powerUp && powerUp.x === foodX && powerUp.y === foodY) {
+          validPosition = false;
+        }
+      }
+      
+      food = { x: foodX, y: foodY };
+    }
+
+    function spawnPowerUp() {
+      let validPosition = false;
+      let pux, puy;
+      
+      while (!validPosition) {
+        pux = Math.floor(Math.random() * TILE_COUNT);
+        puy = Math.floor(Math.random() * TILE_COUNT);
+        
+        // Check if position is not on snake or obstacles
+        validPosition = true;
+        
+        for (let segment of snake) {
+          if (segment.x === pux && segment.y === puy) {
+            validPosition = false;
+            break;
+          }
+        }
+        
+        // Check against existing obstacles
+        for (let obstacle of obstacles) {
+          if (obstacle.x === pux && obstacle.y === puy) {
+            validPosition = false;
+            break;
+          }
+        }
+
+        // Also check food position
+        if (food && food.x === pux && food.y === puy) {
+          validPosition = false;
+        }
+      }
+      
+      powerUp = { x: pux, y: puy };
+    }
+
+    function updateDirection() {
+      direction = nextDirection;
+    }
+
+    function handleInput(e) {
+      // Prevent default scrolling for arrow keys and space
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'w', 'a', 's', 'd'].includes(e.key)) {
+        e.preventDefault();
+      }
+
+      switch (e.key) {
+        case 'ArrowUp':
+        case 'w':
+        case 'W':
+          if (direction.y !== 1) nextDirection = { x: 0, y: -1 };
+          break;
+        case 'ArrowDown':
+        case 's':
+        case 'S':
+          if (direction.y !== -1) nextDirection = { x: 0, y: 1 };
+          break;
+        case 'ArrowLeft':
+        case 'a':
+        case 'A':
+          if (direction.x !== 1) nextDirection = { x: -1, y: 0 };
+          break;
+        case 'ArrowRight':
+        case 'd':
+        case 'D':
+          if (direction.x !== -1) nextDirection = { x: 1, y: 0 };
+          break;
+        case ' ': // Space bar for start/restart
+          e.preventDefault();
+          initAudioContext();
+          
+          if (gameState === 'start') {
+            gameState = 'playing';
+            startScreen.style.display = 'none';
+            lastTime = performance.now();
+            requestAnimationFrame(gameLoop);
+          } else if (gameState === 'gameover') {
+            gameState = 'playing';
+            gameOverScreen.style.display = 'none';
+            initGame();
+            lastTime = performance.now();
+            requestAnimationFrame(gameLoop);
+          }
+          break;
+      }
+    }
+
+    function update() {
+      if (gameState !== 'playing') return;
+
+      // Update direction from nextDirection buffer
+      updateDirection();
+
+      const head = snake[0];
+      const newHead = { x: head.x + direction.x, y: head.y + direction.y };
+
+      // Check wall collision
+      if (newHead.x < 0 || newHead.x >= TILE_COUNT || newHead.y < 0 || newHead.y >= TILE_COUNT) {
+        gameOver();
+        return;
+      }
+
+      // Check obstacle collision
+      for (let obstacle of obstacles) {
+        if (obstacle.x === newHead.x && obstacle.y === newHead.y) {
+          gameOver();
+          return;
+        }
+      }
+
+      // Check self-collision
+      for (let segment of snake) {
+        if (segment.x === newHead.x && segment.y === newHead.y) {
+          gameOver();
+          return;
+        }
+      }
+
+      // Add new head
+      snake.unshift(newHead);
+
+      // Check food collision
+      if (food && newHead.x === food.x && newHead.y === food.y) {
+        score += 10;
+        
+        // Play sound effect for eating food
+        playSFX('eat');
+        
+        currentScoreEl.textContent = score;
+
+        // Spawn power-up every 50 points (if not already active)
+        if (score >= 50 && !isPowerUpActive) {
+          isPowerUpActive = true;
+          
+          spawnPowerUp();
+          
+          setTimeout(() => {
+            isPowerUpActive = false;
+            powerUpTimer = null;
+          }, 5000);
+        }
+
+        // Spawn new food at random position (not on snake or obstacles)
+        spawnFood();
+      } else if (powerUp && newHead.x === powerUp.x && newHead.y === powerUp.y) {
+        score += 30;
+        
+        // Play sound effect for collecting power-up
+        playSFX('powerup');
+        
+        currentScoreEl.textContent = score;
+
+        // Flash background effect
+        gameBody.classList.add('flash-effect');
+        setTimeout(() => {
+          gameBody.classList.remove('flash-effect');
+        }, 500);
+
+        // Remove power-up and spawn new food
+        isPowerUpActive = false;
+        if (powerUpTimer) clearTimeout(powerUpTimer);
+        
+        spawnFood();
+      } else {
+        snake.pop();
+      }
+    }
+
+    function draw() {
+      // Clear canvas completely before drawing each frame
+      ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+      const gridSize = CANVAS_SIZE / TILE_COUNT;
+
+      // Draw obstacles (neon cyan)
+      for (let obstacle of obstacles) {
+        drawRect(obstacle.x * gridSize + 2, obstacle.y * gridSize + 2, 
+                 gridSize - 4, gridSize - 4, COLORS.obstacle);
+      }
+
+      // Draw food (vibrant red)
+      if (food) {
+        const pulse = Math.sin(Date.now() / 100) * 3;
+        drawRect(food.x * gridSize + 2, food.y * gridSize + 2, 
+                 gridSize - 4, gridSize - 4, COLORS.food);
+        
+        // Add glow effect to food
+        ctx.shadowColor = COLORS.food;
+        ctx.shadowBlur = pulse / 10;
+      }
+
+      // Draw power-up (golden) if active
+      if (isPowerUpActive && powerUp) {
+        drawRect(powerUp.x * gridSize + 2, powerUp.y * gridSize + 2, 
+                 gridSize - 4, gridSize - 4, COLORS.powerUp);
+        
+        ctx.shadowColor = COLORS.powerUp;
+        ctx.shadowBlur = 15;
+      }
+
+      // Draw snake (neon green)
+      for (let i = 0; i < snake.length; i++) {
+        const segment = snake[i];
+        const isHead = i === 0;
+        
+        drawRect(segment.x * gridSize + 2, segment.y * gridSize + 2, 
+                 gridSize - 4, gridSize - 4, isHead ? COLORS.snakeHead : COLORS.snakeBody);
+
+        // Add glow effect to snake head
+        if (isHead) {
+          ctx.shadowColor = COLORS.snakeHead;
+          ctx.shadowBlur = 10;
+        } else {
+          ctx.shadowBlur = 2;
+        }
+      }
+
+      // Reset shadow for next frame
+      ctx.shadowBlur = 0;
+    }
+
+    function drawRect(x, y, width, height, color) {
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, width, height);
+      
+      // Add a subtle border to make segments more visible
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, y, width, height);
+    }
+
+    function gameOver() {
+      gameState = 'gameover';
+      
+      // Play game over sound effect
+      playSFX('gameover');
+      
+      finalScoreEl.textContent = score;
+      gameOverScreen.style.display = 'block';
+      
+      // Update high score in localStorage
+      if (score > highScore) {
+        highScore = score;
+        localStorage.setItem('snakeHighScore', highScore);
+        highScoreEl.textContent = highScore;
+      }
+    }
+
+    function gameLoop(currentTime) {
+      const deltaTime = currentTime - lastTime;
+      
+      if (gameState === 'playing') {
+        accumulator += deltaTime;
+        
+        while (accumulator >= TICK_RATE) {
+          update();
+          accumulator -= TICK_RATE;
+        }
+      }
+      
+      draw();
+      lastTime = currentTime;
+      
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Initialize on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      initCanvas();
+      highScoreEl.textContent = highScore;
+      document.addEventListener('keydown', handleInput);
+    });
+
+  </script>
 </body>
 </html>

@@ -29,13 +29,25 @@ async function saveConfig(config: Config): Promise<void> {
 
 function cleanUrl(url: string): string { return url.trim().replace(/\/+$/, ""); }
 
-async function jsonFetch(url: string, init: RequestInit = {}): Promise<any> {
-  const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) } });
-  const text = await response.text();
-  let body: any = null;
-  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-  if (!response.ok) throw new Error(body?.message || body?.error || `HTTP ${response.status}: ${String(text).slice(0, 240)}`);
-  return body?.data ?? body;
+const DEFAULT_TIMEOUT_MS = 20_000;
+const CHAT_TIMEOUT_MS = 10 * 60_000;
+
+async function jsonFetch(url: string, init: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<any> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init.headers ?? {}) }, signal: controller.signal });
+    const text = await response.text();
+    let body: any = null;
+    try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+    if (!response.ok) throw new Error(body?.message || body?.error || `HTTP ${response.status}: ${String(text).slice(0, 240)}`);
+    return body?.data ?? body;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error(`Zeitüberschreitung nach ${Math.round(timeoutMs / 1000)}s: ${url}`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function cloudToken(config: Config): Promise<string> {
@@ -63,6 +75,7 @@ async function queueCloud(config: Config, type: string, payload: Record<string, 
     const current = await cloudRequest(config, `/api/agent/voice/client/commands/${command.id}`);
     if (current.status === "done") return current.result ?? {};
     if (current.status === "failed") throw new Error(current.result?.error || "Agent-Auftrag fehlgeschlagen.");
+    if (current.status === "cancelled") throw new Error("Auftrag wurde abgebrochen.");
     await new Promise(resolveWait => setTimeout(resolveWait, 1800));
   }
   throw new Error("Der Auftrag läuft länger als 65 Minuten.");
@@ -86,6 +99,7 @@ async function runChat(config: Config, input: any): Promise<any> {
   if (config.mode === "cloud") {
     return queueCloud(config, type, {
       message: input.message, conversationId: input.conversationId || undefined, model: input.model || undefined,
+      ...(input.botSlug ? { botSlug: input.botSlug } : {}),
       ...(input.attachment ? { attachment: input.attachment.base64, attachmentName: input.attachment.name, attachmentMimeType: input.attachment.mimeType } : {}),
     });
   }
@@ -95,11 +109,12 @@ async function runChat(config: Config, input: any): Promise<any> {
     message = `${message}\n\nAngehängte Datei: ${path}\nBitte analysiere diese Datei.`.trim();
   }
   if (input.mode === "team") {
-    return jsonFetch(`${cleanUrl(config.localUrl)}/api/bots/main/chat`, { method: "POST", body: JSON.stringify({ message }) });
+    const slug = String(input.botSlug || "main").trim() || "main";
+    return jsonFetch(`${cleanUrl(config.localUrl)}/api/bots/${encodeURIComponent(slug)}/chat`, { method: "POST", body: JSON.stringify({ message }) }, CHAT_TIMEOUT_MS);
   }
   return jsonFetch(`${cleanUrl(config.localUrl)}/api/chat`, {
     method: "POST", body: JSON.stringify({ message, conversationId: input.conversationId || undefined, model: input.model || undefined, clientRunId: input.clientRunId }),
-  });
+  }, CHAT_TIMEOUT_MS);
 }
 
 async function startJob(task: (job: Job) => Promise<any>): Promise<Job> {
@@ -180,7 +195,7 @@ app.post("/erpel-api/transcribe", async (req, res) => {
     const config = await loadConfig();
     job.mode = config.mode;
     if (config.mode === "cloud") return queueCloud(config, "voice.transcribe", { audio: body.audio, mode: body.mode, model: body.model || undefined, conversationId: body.conversationId || undefined });
-    const transcript = await jsonFetch(`${config.localUrl}/api/chat/transcribe`, { method: "POST", body: JSON.stringify({ audio: body.audio }) });
+    const transcript = await jsonFetch(`${config.localUrl}/api/chat/transcribe`, { method: "POST", body: JSON.stringify({ audio: body.audio }) }, CHAT_TIMEOUT_MS);
     const result = await runChat(config, { ...body, message: transcript.text, clientRunId: job.id });
     return { ...result, transcript: transcript.text };
   }));

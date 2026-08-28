@@ -314,6 +314,8 @@ CRITICAL: When you say you will do something (e.g., "I will create a file", "I w
 
 IMPORTANT: NEVER repeat the same tool call twice in the same conversation. Once you call a tool, you have already executed it - do not call it again unless the result indicates failure. If you need to use a tool again with different parameters, that's OK, but with the SAME parameters, skip it.
 
+IMPORTANT: Always reply in the SAME language the user's most recent message was written in, regardless of what language tool names, tool results, code, error messages, or your own internal instructions (including this one) happen to be in - those are working material, not a cue to switch. If the user switches language mid-conversation, switch with them starting on your very next reply.
+
 ## Real-Time Data Queries
 For queries requiring CURRENT/REAL data (not LLM training data), ALWAYS use tools:
 - Current date/time: Use shell tool (e.g., "date" or "Get-Date" command)
@@ -1193,7 +1195,7 @@ export class Agent {
       const summaryResult = await this.provider.generate([
         {
           role: "system",
-          content: "Compress the following message into 1-2 sentences, preserving key information.",
+          content: "Compress the following message into 1-2 sentences, preserving key information. Write the summary in the SAME language as the message - never translate it.",
         },
         {
           role: "user",
@@ -2026,7 +2028,16 @@ export class Agent {
       // here too, a macro call that ends up creating a fresh browser would silently ignore
       // BROWSER_HEADLESS_MODE and the other launch-time settings that "launch" honors.
       if (browserAction === "launch" || browserAction === "screenshot_url" || browserAction === "stream_start") {
-        if (normalizedInput["newSession"] === undefined) {
+        // Only applies the global reuse PREFERENCE when the caller left both newSession AND
+        // sessionId unset - an explicit sessionId is a request for a dedicated, NAMED session
+        // (see resolveOrLaunchSession in browser.ts), and BROWSER_REUSE_SESSION:false would
+        // otherwise inject newSession:true here on every single call, which forces that named
+        // session to be closed and relaunched from scratch each time (losing all navigation/
+        // interaction state) - silently defeating the entire point of naming it in the first
+        // place. A caller that names its own session already opted into keeping it across
+        // calls; the global "always start fresh" preference is for callers with no session
+        // identity of their own to protect.
+        if (normalizedInput["newSession"] === undefined && normalizedInput["sessionId"] === undefined) {
           normalizedInput["newSession"] = !controls.browserReuseSession;
         }
         if (normalizedInput["headless"] === undefined) {
@@ -3993,6 +4004,9 @@ export class Agent {
       if (/type requires 'text'/.test(normalizedError)) {
         return "Browser hint: the type action needs a non-empty 'text' value (optionally a 'selector' too).";
       }
+      if (/browser session '.*' not found|sessionid is required/.test(normalizedError)) {
+        return "Browser hint: that sessionId does not exist (it may have expired, been closed, or been mistyped/misremembered). Do NOT keep retrying the same sessionId - either omit sessionId entirely (uses/creates the shared default session), or call launch/screenshot_url with newSession:true to start a fresh one, and use the EXACT sessionId that call's own result returns for every call after it.";
+      }
     }
 
     if (normalizedTool === "task" && /unknown task action/.test(normalizedError)) {
@@ -4209,6 +4223,7 @@ export class Agent {
     original: Record<string, unknown>,
     repaired: Record<string, unknown>
   ): Record<string, unknown> | undefined {
+    if (toolName === "browser") return this.sanitizeBrowserRepair(original, repaired);
     if (toolName !== "filesystem") return repaired;
 
     const next = { ...repaired };
@@ -4224,6 +4239,37 @@ export class Agent {
         toolName,
         originalLength: originalContent?.length ?? null,
         repairedLength: repairedContent?.length ?? null,
+      });
+      return undefined;
+    }
+    return next;
+  }
+
+  /**
+   * Same principle as the filesystem guard above, applied to the browser tool's own payload
+   * fields: a failed call is almost always a SHAPE problem (bad/stale sessionId, wrong selector,
+   * missing param) that has nothing to do with the actual script or text being sent - but nothing
+   * stops the repair LLM from also "fixing" that payload while it's at it, e.g. shortening a long
+   * evaluate() script or rewording the text passed to action:"type". Both would silently run
+   * something other than what the acting model intended. Scoped to the two payload fields that
+   * actually carry meaningful, hard-to-reproduce content; every other browser field (selector,
+   * sessionId, url, ...) is exactly the kind of thing a repair is supposed to be allowed to touch.
+   */
+  private sanitizeBrowserRepair(
+    original: Record<string, unknown>,
+    repaired: Record<string, unknown>
+  ): Record<string, unknown> | undefined {
+    const next = { ...repaired };
+    for (const field of ["script", "text"]) {
+      if (!(field in original) && !(field in next)) continue;
+      const originalValue = original[field];
+      const repairedValue = next[field];
+      if (originalValue === undefined && repairedValue === undefined) continue;
+      if (originalValue === repairedValue) continue;
+      this.logger.warn("[SELF-REPAIR] Discarded a browser repair that altered the payload field", {
+        field,
+        originalLength: typeof originalValue === "string" ? originalValue.length : null,
+        repairedLength: typeof repairedValue === "string" ? repairedValue.length : null,
       });
       return undefined;
     }
@@ -8433,7 +8479,7 @@ export class Agent {
             content: checklistActive
               // Mid-checklist: a direct "answer the original question" prompt makes the model
               // finalize after one step and abandon the rest. Steer it to keep executing the plan.
-              ? `The ${toolNames} tool(s) just returned results. Briefly use them for the current checklist step, then CONTINUE to the next open step — if it needs an action (write/send/fetch), call the tool now. Only give a final answer once every checklist step is done.`
+              ? `The ${toolNames} tool(s) just returned results. Briefly use them for the current checklist step, then CONTINUE to the next open step — if it needs an action (write/send/fetch), call the tool now. Only give a final answer once every checklist step is done. Any prose you write (progress notes, the eventual final answer) stays in the same language the user used - the checklist/tool text above is working material, not a language cue.`
               : `Answer my original question directly, using the results from the ${toolNames} tool(s) that just executed. Reply in the same language I used. Give only the answer I asked for — do not describe the tool, the command run, or exit codes, and do not add headings like 'Analysis' or 'Summary'.`
                 + (this.respectPersonaLength ? "" : " Keep it as short as the question needs (for a simple question, one sentence)."),
             metadata: { internal: true, kind: "tool_analysis", toolNames },
