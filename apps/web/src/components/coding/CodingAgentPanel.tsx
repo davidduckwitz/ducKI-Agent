@@ -18,6 +18,7 @@ import { PanelEmpty } from "../ui/panel";
 import { CodingPlanPanel } from "./CodingPlanPanel";
 import { CodingChangesPanel } from "./CodingChangesPanel";
 import { CodingTodoStrip, type CodingTodoItem } from "./CodingTodoStrip";
+import { CodingAttemptTimeline } from "./CodingAttemptTimeline";
 
 /**
  * Strip raw tool-call markers from an assistant message for the coding CHAT tab.
@@ -96,7 +97,11 @@ export function CodingAgentPanel({
   onClearChat?: () => void;
 }) {
   const { t } = useI18n();
-  const { codingAgentTab, setCodingAgentTab, setCodingAgentOpen } = useUiStore();
+  const { codingAgentTab, setCodingAgentTab, setCodingAgentOpen, setCodingChangesSelected } = useUiStore();
+  const openCheckpointDiff = (sha: string) => {
+    setCodingChangesSelected(project, sha);
+    setCodingAgentTab("changes");
+  };
   // Same global selection the regular chat's LLM selector uses (ChatComposer) - unset
   // means "use the system default provider/model" for this coding run too.
   const chatProvider = useAppStore((s) => s.chatProvider);
@@ -414,7 +419,12 @@ export function CodingAgentPanel({
         </div>
       </div>
 
-      {(codingAgentTab === "chat" || codingAgentTab === "activity" || codingAgentTab === "plan") && <CodingTodoStrip items={todoItems} />}
+      {(codingAgentTab === "chat" || codingAgentTab === "activity" || codingAgentTab === "plan") && (
+        <>
+          <CodingAttemptTimeline events={events} />
+          <CodingTodoStrip items={todoItems} />
+        </>
+      )}
 
       {codingAgentTab === "chat" && (
         <div
@@ -522,6 +532,7 @@ export function CodingAgentPanel({
                           t={t}
                           expanded={expandedEvents[msg.id] ?? false}
                           onToggle={(open) => setExpandedEvents((prev) => ({ ...prev, [msg.id]: open }))}
+                          onOpenCheckpoint={openCheckpointDiff}
                         />
                       ))}
                     </div>

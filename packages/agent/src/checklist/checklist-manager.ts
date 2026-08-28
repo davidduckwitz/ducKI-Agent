@@ -11,6 +11,13 @@ import type { VerifyConstraint, VerifyConstraintKind, VerifyResult } from "../ve
  * `ChecklistStore` (structurally satisfied by DatabaseService) so it can be unit
  * tested with a mocked verifier and either a real or fake store. All open-goal
  * state lives in the DB; the run-loop (Phase 3/4) reads it back each iteration.
+ *
+ * NOT used by CodingAgent. CodingAgent (packages/agent/src/coding/coding-agent.ts) runs its
+ * own inner Agent with `enablePlanning:false` and `disableQualityPasses:true`, which keeps
+ * Agent.run() from ever building the planContext this manager needs - see the comment at
+ * that `enablePlanning: false` for why. CodingAgent tracks per-step progress instead with its
+ * own TodoList + checkpoint-diff grounding (todo-tool.ts / coding-agent.ts). This manager is
+ * only ever reached by the plain Agent's own (non-coding) conversations.
  */
 
 /** Row shape as returned by the store (subset of SessionChecklistSelect we rely on). */

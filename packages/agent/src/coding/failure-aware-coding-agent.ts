@@ -171,6 +171,12 @@ export class FailureAwareCodingAgent extends BaseCodingAgent {
             if (reflection) {
               pendingReflection = reflection;
               ruledOutSoFar.push(...reflection.avoid);
+              // Without this the reflection only ever reached the model, inside the next
+              // attempt's prompt - the user watching the run never saw WHY the agent changed
+              // strategy after a repeated failure, only that it eventually did something
+              // different. Reuses the existing "decision" event channel so no frontend wiring
+              // is needed beyond rendering `data.reflection` where other decision events render.
+              this.emit("decision", `Fehleranalyse: ${reflection.diagnosis}`, { reflection });
             }
           }
         }

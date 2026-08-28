@@ -28,6 +28,8 @@ export { stopAllBackgroundProcesses } from "./shell.js";
 export { stripStopMarkers, stripTrailingJsonArgTail, CONTENT_STOP_MARKERS } from "./content-sanitizer.js";
 export { globFiles, grepFiles, DEFAULT_IGNORED_DIRS } from "./filesystem-search.js";
 export type { GrepMatch, GlobOptions, GrepOptions } from "./filesystem-search.js";
+export { outlineFile, renderOutline } from "./outline.js";
+export type { OutlineResult, SymbolEntry } from "./outline.js";
 export { runScriptInSandbox, sanitizeRuntimeValue } from "./sandbox.js";
 export type { SandboxRuntime, SandboxVarNames, SandboxExecutionResult } from "./sandbox.js";
 export { safeRelativePath, frontmatterScript, extractInlineScript, resolveScriptSource } from "./script-source.js";

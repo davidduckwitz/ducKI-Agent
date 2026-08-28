@@ -234,10 +234,21 @@ export function isIntentionalEmptyWrite(input: Record<string, unknown>): boolean
   return input["allowEmpty"] === true;
 }
 
-/** Lines returned by `read` when the caller gives no explicit limit. */
-const DEFAULT_READ_LINES = 2000;
-/** Longest single line `read` returns verbatim before clipping it. */
-const MAX_READ_LINE_CHARS = 2000;
+/**
+ * Lines returned by `read` when the caller gives no explicit limit.
+ *
+ * This is the tool's OWN intrinsic fallback - the agent normally injects a configured value
+ * (Settings -> Agent -> Datei-Limits, AGENT_FS_READ_DEFAULT_LINES / AGENT_CODING_FS_READ_DEFAULT_LINES)
+ * before the call ever reaches here, so this constant only matters for direct/test invocations
+ * that bypass the agent's preflight.
+ */
+const DEFAULT_READ_LINES = 4000;
+/**
+ * Longest single line `read` returns verbatim before clipping it.
+ * Same caveat as DEFAULT_READ_LINES - the agent injects AGENT_FS_READ_MAX_LINE_CHARS /
+ * AGENT_CODING_FS_READ_MAX_LINE_CHARS as an explicit `maxLineChars` argument when available.
+ */
+const DEFAULT_MAX_READ_LINE_CHARS = 4000;
 
 /**
  * Undoes the `<n>: ` prefix that `read` adds, for the case where a model copies a snippet
@@ -680,13 +691,14 @@ export const filesystemTool: ToolExecutor = {
         },
         content: { type: "string", description: "Content to write (for write/append/edit_lines). Use actual line breaks (newlines) in multiline content - each line should be on a separate line, not escaped as \\n." },
         offset: { type: "number", description: "For read: first line to return (0-indexed, default 0)" },
-        limit: { type: "number", description: "For read: maximum number of lines to return (default 2000)" },
-        maxBytes: { type: "number", description: "For read: byte cap before truncation (default 262144 = 256KB)" },
+        limit: { type: "number", description: "For read: maximum number of lines to return (default 4000, or the value configured in Settings -> Agent -> Datei-Limits)" },
+        maxBytes: { type: "number", description: "For read: byte cap before truncation (default 1048576 = 1MB, or the value configured in Settings -> Agent -> Datei-Limits)" },
+        maxLineChars: { type: "number", description: "For read: longest single line returned verbatim before it gets clipped (default 4000, or the value configured in Settings -> Agent -> Datei-Limits)" },
         raw: { type: "boolean", default: false, description: "For read: return the file verbatim, without line-number prefixes." },
         pattern: { type: "string", description: "For glob: file path pattern (e.g. **/*.ts). For grep: regex to search." },
         filePattern: { type: "string", description: "For grep: optional glob pattern to restrict which files to search" },
         caseSensitive: { type: "boolean", default: false, description: "For grep: case-sensitive match (default false)" },
-        maxResults: { type: "number", description: "For glob/grep: maximum results to return (default: 1000 for glob, 500 for grep)" },
+        maxResults: { type: "number", description: "For glob/grep: maximum results to return (default: 2000 for glob, 1500 for grep, or the value configured in Settings -> Agent -> Datei-Limits)" },
         includeIgnored: { type: "boolean", default: false, description: "For glob/grep: also search node_modules, .git, dist, build output and .gitignore'd paths. Off by default - leave it off unless you specifically need a dependency's source." },
         oldString: { type: "string", description: "For edit: exact existing text to replace, WITHOUT the '<n>: ' line-number prefixes that read adds. Must match exactly once unless replaceAll is set." },
         newString: { type: "string", description: "For edit: text to replace oldString with." },
@@ -777,7 +789,8 @@ export const filesystemTool: ToolExecutor = {
           }
           const offset = Math.max(0, (input["offset"] as number | undefined) ?? 0);
           const limit = (input["limit"] as number | undefined) ?? DEFAULT_READ_LINES;
-          const maxBytes = (input["maxBytes"] as number | undefined) ?? 262144;
+          const maxBytes = (input["maxBytes"] as number | undefined) ?? 1048576;
+          const maxLineChars = (input["maxLineChars"] as number | undefined) ?? DEFAULT_MAX_READ_LINE_CHARS;
           // Programmatic callers that need the file byte-for-byte (no line numbers, no
           // range footer) opt out here; the agent-facing default is the numbered form.
           const rawMode = input["raw"] === true;
@@ -802,8 +815,8 @@ export const filesystemTool: ToolExecutor = {
           // A single minified line would otherwise blow the whole budget, so cap line width.
           const numbered = sliced
             .map((line, index) => {
-              const body = line.length > MAX_READ_LINE_CHARS
-                ? `${line.slice(0, MAX_READ_LINE_CHARS)} …[line truncated, ${line.length} chars total]`
+              const body = line.length > maxLineChars
+                ? `${line.slice(0, maxLineChars)} …[line truncated, ${line.length} chars total]`
                 : line;
               return `${offset + index + 1}: ${body}`;
             })
@@ -1361,7 +1374,7 @@ export const filesystemTool: ToolExecutor = {
         case "glob": {
           const pattern = input["pattern"] as string | undefined;
           if (!pattern) return { success: false, data: null, error: "pattern required for glob" };
-          const maxResults = (input["maxResults"] as number | undefined) ?? 1000;
+          const maxResults = (input["maxResults"] as number | undefined) ?? 2000;
           const includeIgnored = (input["includeIgnored"] as boolean | undefined) ?? false;
           const matches = globFiles(filePath, pattern, { maxResults, includeIgnored });
           const globScope = displayScopeRoot(input["basePath"] as string | undefined);
@@ -1380,7 +1393,7 @@ export const filesystemTool: ToolExecutor = {
           const pattern = input["pattern"] as string | undefined;
           if (!pattern) return { success: false, data: null, error: "pattern required for grep" };
           const filePattern = input["filePattern"] as string | undefined;
-          const maxResults = (input["maxResults"] as number | undefined) ?? 500;
+          const maxResults = (input["maxResults"] as number | undefined) ?? 1500;
           const caseSensitive = (input["caseSensitive"] as boolean | undefined) ?? false;
           const includeIgnored = (input["includeIgnored"] as boolean | undefined) ?? false;
           let matches;

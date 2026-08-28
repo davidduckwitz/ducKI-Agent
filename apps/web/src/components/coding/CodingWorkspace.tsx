@@ -4,19 +4,23 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { useServerQuery } from "../../lib/useServerQuery";
 import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
 import {
+  Check,
   Columns2,
   FileCode2,
   Globe,
+  Loader2,
   Maximize2,
   PanelRightOpen,
   Pencil,
   Plus,
   Save,
+  Sparkles,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
-import Editor from "@monaco-editor/react";
+import Editor, { type OnMount } from "@monaco-editor/react";
+import type { editor as MonacoEditorNS, Range as MonacoRange } from "monaco-editor";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
@@ -225,6 +229,18 @@ export function CodingWorkspace() {
   const [renameTarget, setRenameTarget] = useState("");
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [isEnsuringConversation, setIsEnsuringConversation] = useState(false);
+
+  // Inline AI edit (select text in the editor, describe a change, get a suggestion applied in
+  // place with accept/reject) - see the floating toolbar rendered next to the Editor below.
+  const editorRef = useRef<MonacoEditorNS.IStandaloneCodeEditor | null>(null);
+  const monacoApiRef = useRef<typeof import("monaco-editor") | null>(null);
+  const [inlineEditSelection, setInlineEditSelection] = useState<string | null>(null);
+  const [inlineEditState, setInlineEditState] = useState<"idle" | "composing" | "loading" | "review">("idle");
+  const [inlineEditInstruction, setInlineEditInstruction] = useState("");
+  const [inlineEditError, setInlineEditError] = useState<string | null>(null);
+  // The one thing Reject needs: exactly what to put back, and where. Kept out of React state
+  // since it's mutated between renders by editor callbacks, not by user interaction.
+  const pendingInlineEditRef = useRef<{ range: MonacoRange; originalText: string; decorationIds: string[] } | null>(null);
 
   const [projectConversationMap, setProjectConversationMap] = useState<Record<string, number>>(() => {
     try {
@@ -679,6 +695,98 @@ export function CodingWorkspace() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [saveActiveFile]);
 
+  const resetInlineEdit = useCallback(() => {
+    pendingInlineEditRef.current = null;
+    setInlineEditState("idle");
+    setInlineEditInstruction("");
+    setInlineEditError(null);
+  }, []);
+
+  // Switching files (or projects) swaps the editor's model out from under any pending inline
+  // edit - the remembered range/decoration ids would point at the wrong document.
+  useEffect(() => {
+    resetInlineEdit();
+    setInlineEditSelection(null);
+  }, [selectedProject, selectedPath, resetInlineEdit]);
+
+  const handleEditorMount: OnMount = useCallback((editorInstance, monacoApi) => {
+    editorRef.current = editorInstance;
+    monacoApiRef.current = monacoApi;
+    editorInstance.onDidChangeCursorSelection((event) => {
+      const model = editorInstance.getModel();
+      if (!model || event.selection.isEmpty()) {
+        setInlineEditSelection(null);
+        return;
+      }
+      const text = model.getValueInRange(event.selection);
+      setInlineEditSelection(text.trim() ? text : null);
+    });
+  }, []);
+
+  const runInlineEdit = useCallback(async () => {
+    const editorInstance = editorRef.current;
+    const monacoApi = monacoApiRef.current;
+    const instruction = inlineEditInstruction.trim();
+    if (!editorInstance || !monacoApi || !instruction || !selectedProject || !selectedPath) return;
+    const model = editorInstance.getModel();
+    const selection = editorInstance.getSelection();
+    if (!model || !selection || selection.isEmpty()) return;
+
+    const selectedText = model.getValueInRange(selection);
+    const fullText = model.getValue();
+    const startOffset = model.getOffsetAt(selection.getStartPosition());
+    const endOffset = model.getOffsetAt(selection.getEndPosition());
+
+    setInlineEditState("loading");
+    setInlineEditError(null);
+    try {
+      const { suggestion } = await api.coding.inlineEdit(selectedProject, {
+        path: selectedPath,
+        selectedText,
+        instruction,
+        prefix: fullText.slice(0, startOffset),
+        suffix: fullText.slice(endOffset),
+      });
+
+      // Applied straight into the editor model (not a separate diff view) - onChange already
+      // wires the model's content to setDraft, so this becomes an unsaved change exactly like a
+      // manual edit would, going through the same Ctrl+S / hasChanges path. Accept just keeps
+      // it; Reject below puts the original text back the same way.
+      editorInstance.executeEdits("inline-ai-edit", [{ range: selection, text: suggestion }]);
+      const newRange = monacoApi.Range.fromPositions(
+        model.getPositionAt(startOffset),
+        model.getPositionAt(startOffset + suggestion.length)
+      );
+      const decorationIds = editorInstance.deltaDecorations(
+        [],
+        [{ range: newRange, options: { inlineClassName: "inline-ai-edit-suggestion" } }]
+      );
+      pendingInlineEditRef.current = { range: newRange, originalText: selectedText, decorationIds };
+      setInlineEditState("review");
+    } catch (err) {
+      setInlineEditError(err instanceof Error ? err.message : String(err));
+      setInlineEditState("composing");
+    }
+  }, [inlineEditInstruction, selectedProject, selectedPath]);
+
+  const acceptInlineEdit = useCallback(() => {
+    const editorInstance = editorRef.current;
+    const pending = pendingInlineEditRef.current;
+    if (editorInstance && pending) editorInstance.deltaDecorations(pending.decorationIds, []);
+    resetInlineEdit();
+  }, [resetInlineEdit]);
+
+  const rejectInlineEdit = useCallback(() => {
+    const editorInstance = editorRef.current;
+    const pending = pendingInlineEditRef.current;
+    if (editorInstance && pending) {
+      editorInstance.executeEdits("inline-ai-edit-reject", [{ range: pending.range, text: pending.originalText }]);
+      editorInstance.deltaDecorations(pending.decorationIds, []);
+    }
+    resetInlineEdit();
+    setInlineEditSelection(null);
+  }, [resetInlineEdit]);
+
   // Commands from the sidebar's "Neu" menu / explorer header.
   const handledCommandNonce = useRef(-1);
   useEffect(() => {
@@ -995,7 +1103,7 @@ export function CodingWorkspace() {
             />
           ) : (
             <div className="flex min-h-0 flex-1">
-              <div className="min-h-0 min-w-0 flex-1">
+              <div className="relative min-h-0 min-w-0 flex-1">
                 {isTextFile ? (
                   <Editor
                     height="100%"
@@ -1003,6 +1111,7 @@ export function CodingWorkspace() {
                     language={detectLanguage(selectedPath)}
                     value={editorContent}
                     onChange={(value) => setDraft(selectedPath, value ?? "")}
+                    onMount={handleEditorMount}
                     options={{
                       minimap: { enabled: true },
                       fontSize: 13,
@@ -1016,6 +1125,83 @@ export function CodingWorkspace() {
                   />
                 ) : (
                   <PanelEmpty icon={<FileCode2 className="h-10 w-10" />} title={t("codingPage.binaryFile")} />
+                )}
+
+                {/* Inline AI edit: select text above to reveal this trigger, describe the
+                    change, review the in-place suggestion, then accept or reject it. */}
+                {isTextFile && inlineEditSelection && inlineEditState === "idle" && (
+                  <button
+                    type="button"
+                    onClick={() => setInlineEditState("composing")}
+                    className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-full border border-primary/40 bg-background/95 px-2.5 py-1 text-[11px] font-medium text-primary shadow-md backdrop-blur transition hover:bg-primary/10"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    {t("codingPage.inlineEditTrigger")}
+                  </button>
+                )}
+                {isTextFile && (inlineEditState === "composing" || inlineEditState === "loading") && (
+                  <div className="absolute right-3 top-3 z-10 w-72 rounded-lg border border-border bg-background/95 p-2 shadow-lg backdrop-blur">
+                    <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {t("codingPage.inlineEditTitle")}
+                    </div>
+                    <textarea
+                      autoFocus
+                      rows={2}
+                      value={inlineEditInstruction}
+                      onChange={(e) => setInlineEditInstruction(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          void runInlineEdit();
+                        }
+                        if (e.key === "Escape") resetInlineEdit();
+                      }}
+                      placeholder={t("codingPage.inlineEditPlaceholder")}
+                      className="input w-full resize-none text-xs"
+                      disabled={inlineEditState === "loading"}
+                    />
+                    {inlineEditError && <p className="mt-1 text-[10px] text-destructive">{inlineEditError}</p>}
+                    <div className="mt-1.5 flex justify-end gap-1.5">
+                      <button
+                        type="button"
+                        className="btn-secondary px-2 py-1 text-[11px]"
+                        onClick={resetInlineEdit}
+                        disabled={inlineEditState === "loading"}
+                      >
+                        {t("common.cancel")}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-primary flex items-center gap-1 px-2 py-1 text-[11px]"
+                        onClick={() => void runInlineEdit()}
+                        disabled={inlineEditState === "loading" || !inlineEditInstruction.trim()}
+                      >
+                        {inlineEditState === "loading" && <Loader2 className="h-3 w-3 animate-spin" />}
+                        {t("codingPage.inlineEditSubmit")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {isTextFile && inlineEditState === "review" && (
+                  <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-background/95 px-2 py-1.5 text-[11px] shadow-lg backdrop-blur">
+                    <span className="text-muted-foreground">{t("codingPage.inlineEditReview")}</span>
+                    <button
+                      type="button"
+                      className="rounded p-1 text-emerald-600 transition hover:bg-emerald-500/10"
+                      onClick={acceptInlineEdit}
+                      title={t("codingPage.inlineEditAccept")}
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded p-1 text-destructive transition hover:bg-destructive/10"
+                      onClick={rejectInlineEdit}
+                      title={t("codingPage.inlineEditReject")}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 )}
               </div>
 

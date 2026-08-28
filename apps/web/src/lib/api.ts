@@ -647,6 +647,19 @@ export const api = {
         { method: "POST" }
       ),
     /**
+     * Inline AI edit: one scoped LLM call that rewrites a selection inside a file, given an
+     * instruction and surrounding context - not a CodingAgent run (no plan/checklist/checkpoint).
+     * The caller applies the returned suggestion to the editor draft itself on accept.
+     */
+    inlineEdit: (
+      project: string,
+      data: { path: string; selectedText: string; instruction: string; prefix: string; suffix: string }
+    ) =>
+      request<{ suggestion: string }>(`/coding/projects/${encodeURIComponent(project)}/inline-edit`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    /**
      * Sends a follow-up message to an existing coding conversation, routing through
      * the CodingAgent endpoint with its full discipline (phases, read-before-edit,
      * diagnostics, verify retry). This is the same endpoint as the initial run — only

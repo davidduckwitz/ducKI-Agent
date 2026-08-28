@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Copy, FileText, RotateCcw, User } from "lucide-react";
+import { Check, Copy, FileText, GitCompare, RotateCcw, User } from "lucide-react";
 import { DuckyMascot } from "./DuckyMascot";
 import { eventDataWithoutInternalText, eventIcon, eventLabel, eventTone, extractInternalLlmText } from "./eventMeta";
 import type { RenderedChatMessage } from "./chatTypes";
@@ -36,6 +36,14 @@ interface RowCommonProps {
    *  bubbles, sender shown as a small label. Chat bubbles with a 32px avatar and a 90%
    *  max-width leave almost no room for code in a 400px column. */
   dense?: boolean;
+  /**
+   * Present only in the coding workspace (CodingAgentPanel), where a filesystem-edit tool
+   * result can carry a `checkpointSha` (see withPerEditCheckpoints). Lets EventRow offer a
+   * "Diff ansehen" link straight from the activity feed instead of the user hunting for the
+   * matching checkpoint by label/time in the separate Changes tab. Absent in normal chat,
+   * where tool results never carry a checkpointSha - the link simply never renders there.
+   */
+  onOpenCheckpoint?: (sha: string) => void;
 }
 
 const ANIMATE_IN = "animate-in fade-in slide-in-from-bottom-1 duration-300";
@@ -80,6 +88,7 @@ export function EventRow({
   t,
   expanded,
   onToggle,
+  onOpenCheckpoint,
 }: RowCommonProps & {
   msg: RenderedChatMessage;
   t: (key: string) => string;
@@ -87,7 +96,18 @@ export function EventRow({
   onToggle: (open: boolean) => void;
 }) {
   const internalText = extractInternalLlmText(msg.eventData);
-  const restData = eventDataWithoutInternalText(msg.eventData);
+  const resolvedPath = typeof msg.eventData?.["path"] === "string" ? (msg.eventData["path"] as string) : undefined;
+  const checkpointSha = typeof msg.eventData?.["checkpointSha"] === "string" ? (msg.eventData["checkpointSha"] as string) : undefined;
+  const restDataRaw = eventDataWithoutInternalText(msg.eventData);
+  // reflection/diagnosticErrors/path/checkpointSha get their own dedicated rendering below -
+  // drop them from the generic JSON dump so the same information isn't shown twice.
+  const restData = restDataRaw && ["reflection", "diagnosticErrors", "path", "checkpointSha"].some((key) => key in restDataRaw)
+    ? (() => {
+        const { reflection: _reflection, diagnosticErrors: _diagnosticErrors, path: _path, checkpointSha: _checkpointSha, ...rest } =
+          restDataRaw as Record<string, unknown>;
+        return Object.keys(rest).length > 0 ? rest : undefined;
+      })()
+    : restDataRaw;
 
   // Support both old format (direct tokens) and new format (nested)
   const llmTokens = msg.eventData?.llmTokens as
@@ -168,6 +188,16 @@ export function EventRow({
   const selectedSkills = msg.eventData?.["selectedSkills"] as Array<{ name: string; score?: number }> | undefined;
   const retryCount = msg.eventData?.["retryCount"] as number | undefined;
   const originalError = msg.eventData?.["originalError"] as string | undefined;
+  // Failure reflection (FailureAwareCodingAgent): why the agent changed strategy after a
+  // repeated verify failure, previously visible only in the next attempt's prompt.
+  const reflection = msg.eventData?.["reflection"] as
+    | { diagnosis?: string; avoid?: string[]; nextActions?: string[] }
+    | undefined;
+  // Live diagnostic errors (tsc etc.) surfaced right after the edit that introduced them,
+  // instead of only on demand via the `status` tool.
+  const diagnosticErrors = msg.eventData?.["diagnosticErrors"] as
+    | Array<{ file?: string; count?: number; errors?: string[] }>
+    | undefined;
 
   return (
     <details
@@ -184,6 +214,14 @@ export function EventRow({
             {toolName ?? eventLabel(t, msg.eventType)}
           </span>
           <span className="truncate opacity-80">{msg.content}</span>
+          {resolvedPath && (
+            <span
+              className="truncate font-mono text-[10px] opacity-50"
+              title={`Aufgeloester Pfad: ${resolvedPath}`}
+            >
+              {resolvedPath}
+            </span>
+          )}
         </span>
         <span className="flex items-center gap-2 text-[10px] opacity-60 whitespace-nowrap shrink-0">
           {totalTokens && (
@@ -197,6 +235,19 @@ export function EventRow({
       </summary>
       <div className="mt-2 pl-6 space-y-2">
         <div className="whitespace-pre-wrap opacity-90">{msg.content}</div>
+        {checkpointSha && onOpenCheckpoint && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              onOpenCheckpoint(checkpointSha);
+            }}
+            className="flex items-center gap-1.5 rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-100 hover:bg-emerald-500/20"
+          >
+            <GitCompare className="h-3 w-3" />
+            Diff ansehen
+          </button>
+        )}
         {(inputTokens || outputTokens || totalTokens || agentTokens) && (
           <div className="space-y-2">
             {(inputTokens || outputTokens || totalTokens) && (
@@ -232,6 +283,46 @@ export function EventRow({
               {t("chat.internalLlmResponse")}
             </div>
             <div className="text-fuchsia-50/90 whitespace-pre-wrap text-[11px]">{internalText}</div>
+          </div>
+        )}
+        {reflection && (
+          <div className="rounded border border-orange-400/30 bg-orange-500/10 p-2">
+            <div className="text-[10px] uppercase tracking-wide text-orange-200/80 mb-1">
+              Strategiewechsel nach wiederholtem Fehlschlag
+            </div>
+            {reflection.diagnosis && (
+              <div className="text-orange-50/90 text-[11px]">{reflection.diagnosis}</div>
+            )}
+            {reflection.avoid && reflection.avoid.length > 0 && (
+              <div className="mt-1 text-[11px]">
+                <span className="text-orange-200/70">Vermeiden: </span>
+                <span className="text-orange-50/90">{reflection.avoid.join(" · ")}</span>
+              </div>
+            )}
+            {reflection.nextActions && reflection.nextActions.length > 0 && (
+              <div className="mt-1 text-[11px]">
+                <span className="text-orange-200/70">Nächste Schritte: </span>
+                <span className="text-orange-50/90">{reflection.nextActions.join(" · ")}</span>
+              </div>
+            )}
+          </div>
+        )}
+        {diagnosticErrors && diagnosticErrors.length > 0 && (
+          <div className="rounded border border-red-400/30 bg-red-500/10 p-2">
+            <div className="text-[10px] uppercase tracking-wide text-red-200/80 mb-1">
+              Offene Diagnosefehler
+            </div>
+            <div className="space-y-1">
+              {diagnosticErrors.map((entry, index) => (
+                <div key={`${entry.file ?? "unknown"}-${index}`} className="text-[11px]">
+                  <span className="font-medium text-red-50/90">{entry.file ?? "unbekannte Datei"}</span>
+                  <span className="text-red-200/70"> ({entry.count ?? entry.errors?.length ?? "?"} Fehler)</span>
+                  {entry.errors && entry.errors.length > 0 && (
+                    <div className="pl-2 text-red-50/70 whitespace-pre-wrap">{entry.errors.slice(0, 3).join("\n")}</div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {restData && (

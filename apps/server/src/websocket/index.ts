@@ -36,6 +36,23 @@ function extractCodingProjectSlug(message: string): string | undefined {
   return /^[A-Za-z0-9_.-]+$/.test(slug) ? slug : undefined;
 }
 
+/**
+ * Remembers, per conversation, the sandbox a PREVIOUS turn resolved via the
+ * [CODING_CONTEXT] marker. The marker is derived fresh from each individual prompt
+ * (see extractCodingProjectSlug) rather than being sticky server-side state, so a turn
+ * whose prompt is built without it (a client bug, or an internal retry/continuation path
+ * that reconstructs the prompt differently - e.g. the plan-refine button never added it)
+ * silently fell back to the UNSCOPED filesystem tool, writing relative paths to the shared
+ * workspace root instead of the project. This map lets that case be caught INSTEAD of
+ * silently mis-scoped: if a conversation had a resolved sandbox before and suddenly
+ * doesn't, the run still uses the last known sandbox (safe - never worse than before this
+ * existed) and a visible warning is emitted so the user sees it and can investigate,
+ * instead of only a server log line nobody watches live.
+ * Server-process lifetime only; a restart just means the next properly-marked message
+ * re-establishes it, same as before this existed.
+ */
+const lastKnownCodingSandbox = new Map<number, { sandboxRoot: string; codingSlug: string }>();
+
 /** The client prepends the [CODING_CONTEXT] block; the user's own text follows the first
  *  blank line. Derive a readable checkpoint label from it (the raw prompt would start with
  *  the machine-facing scaffolding). */
@@ -560,6 +577,34 @@ export function setupWebSocket(
             if (scopedFs) {
               runAgent.executor.registerTool(scopedFs);
               logger.info("Scoped coding filesystem tool for chat run", { codingSlug, sandboxRoot });
+            }
+            if (typeof resolvedConversationId === "number") {
+              lastKnownCodingSandbox.set(resolvedConversationId, { sandboxRoot, codingSlug });
+            }
+          } else if (typeof resolvedConversationId === "number") {
+            // No marker on THIS prompt - if this conversation was scoped to a project
+            // before, that's the anomaly described above the map's declaration. Keep the
+            // run safely scoped to the last known project instead of silently falling
+            // back to the shared workspace, and surface it so the user can react.
+            const remembered = lastKnownCodingSandbox.get(resolvedConversationId);
+            if (remembered) {
+              const [scopedFs] = wrapTools([createScopedFilesystemTool(remembered.sandboxRoot)]);
+              if (scopedFs) {
+                runAgent.executor.registerTool(scopedFs);
+                sandboxRoot = remembered.sandboxRoot;
+              }
+              logger.warn("Coding chat prompt missing [CODING_CONTEXT] marker - reusing last known sandbox", {
+                conversationId: resolvedConversationId,
+                codingSlug: remembered.codingSlug,
+                sandboxRoot: remembered.sandboxRoot,
+              });
+              emitToConversation(resolvedConversationId, "chat:event", {
+                type: "guardrail",
+                message: `Warnung: Diese Nachricht kam ohne Projekt-Kontext an - Dateizugriffe bleiben sicherheitshalber auf "${remembered.codingSlug}" beschraenkt (letzter bekannter Stand). Falls Dateien trotzdem am falschen Ort landen, bitte melden.`,
+                data: { codingSlug: remembered.codingSlug, sandboxRoot: remembered.sandboxRoot },
+                timestamp: new Date().toISOString(),
+                conversationId: resolvedConversationId,
+              });
             }
           }
 

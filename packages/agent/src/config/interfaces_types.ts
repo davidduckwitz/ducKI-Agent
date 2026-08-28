@@ -571,6 +571,73 @@ export interface AgentRuntimeControls {
   browserCookieDetection: boolean;
   /** Settings key: BROWSER_PROXY_URL */
   browserProxyUrl: string;
+
+  // File read/write limits. This chain used to bottleneck at a hard-coded 8000-char tool
+  // result cap regardless of what the filesystem tool actually read - a model requesting a
+  // large read still got the answer chopped to 8KB before it ever saw the content. Every
+  // step of that chain is now configurable, with a separate (higher) tier for coding runs
+  // (the "[CODING_CONTEXT]" chat + the dedicated CodingAgent - same mechanism as
+  // codingMaxIterations above), since coding routinely needs full mid-size files while
+  // ordinary chat rarely does.
+  /**
+   * Hard cap (chars) on a single tool result's serialized JSON before it is added to the
+   * conversation. Above this, boundToolResultJson truncates string fields and, if still too
+   * large, falls back to a preview + tool_staging id.
+   * Settings key: AGENT_MAX_TOOL_RESULT_CHARS
+   */
+  maxToolResultChars: number;
+  /**
+   * Cap (chars) on any individual string field within a tool result before the whole result
+   * is re-serialized against maxToolResultChars. Keeps one huge field (e.g. a file's content)
+   * from eating the entire result budget on its own.
+   * Settings key: AGENT_MAX_TOOL_FIELD_CHARS
+   */
+  maxToolResultFieldChars: number;
+  /**
+   * Length of the inline content preview shown when a tool result is too large even after
+   * per-field truncation - the model reads the rest via tool_staging.
+   * Settings key: AGENT_TOOL_RESULT_PREVIEW_CHARS
+   */
+  toolResultPreviewChars: number;
+  /** Coding-run override for maxToolResultChars. Settings key: AGENT_CODING_MAX_TOOL_RESULT_CHARS */
+  codingMaxToolResultChars: number;
+  /** Coding-run override for maxToolResultFieldChars. Settings key: AGENT_CODING_MAX_TOOL_FIELD_CHARS */
+  codingMaxToolResultFieldChars: number;
+  /**
+   * Overall context budget (chars) the run-loop selects history messages against, for models
+   * whose real context window is unknown (a known model instead gets a budget derived from
+   * its actual token window - see modelDerivedMaxContextChars in the run loop).
+   * Settings key: AGENT_MAX_CONTEXT_CHARS
+   */
+  maxContextChars: number;
+  /** Coding-run override for maxContextChars. Settings key: AGENT_CODING_MAX_CONTEXT_CHARS */
+  codingMaxContextChars: number;
+  /**
+   * Lines the filesystem tool's `read` action returns when the model gives no explicit
+   * `limit`, injected as that default by the agent's tool-input preflight.
+   * Settings key: AGENT_FS_READ_DEFAULT_LINES
+   */
+  filesystemReadDefaultLines: number;
+  /**
+   * Byte cap the filesystem tool's `read` action applies when the model gives no explicit
+   * `maxBytes`, injected the same way.
+   * Settings key: AGENT_FS_READ_MAX_BYTES
+   */
+  filesystemReadMaxBytes: number;
+  /**
+   * Longest single line the filesystem tool's `read` action returns verbatim before clipping
+   * it, when the model gives no explicit `maxLineChars`.
+   * Settings key: AGENT_FS_READ_MAX_LINE_CHARS
+   */
+  filesystemReadMaxLineChars: number;
+  /** Coding-run override for filesystemReadDefaultLines. Settings key: AGENT_CODING_FS_READ_DEFAULT_LINES */
+  codingFilesystemReadDefaultLines: number;
+  /** Coding-run override for filesystemReadMaxBytes. Settings key: AGENT_CODING_FS_READ_MAX_BYTES */
+  codingFilesystemReadMaxBytes: number;
+  /** Default `maxResults` injected for the filesystem tool's `glob` action. Settings key: AGENT_FS_GLOB_MAX_RESULTS */
+  filesystemGlobMaxResults: number;
+  /** Default `maxResults` injected for the filesystem tool's `grep` action. Settings key: AGENT_FS_GREP_MAX_RESULTS */
+  filesystemGrepMaxResults: number;
 }
 
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)

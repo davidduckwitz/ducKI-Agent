@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2, Circle, ListChecks, Loader2, Play, Sparkles 
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
-import { checklistFromPlanSteps, findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "../../lib/planChecklist";
+import { checklistFromPlanSteps, findLatestChecklist, firstOpenStepIndex, resolveStepNote, resolveStepStatus } from "../../lib/planChecklist";
 import { findLatestPhaseProgress, CODING_PHASES, CODING_PHASE_LABEL, type CodingPhase } from "../../lib/planPhase";
 import { useSettings, readFlag, readNumber } from "../../lib/useSettings";
 import type { Plan } from "../chat/PlanExecutionPanel";
@@ -152,6 +152,7 @@ export function CodingPlanPanel({
 
   const steps = plan?.steps ?? [];
   const statusOf = (step: { id?: string; title: string }, index: number) => resolveStepStatus(checklist, step, index);
+  const noteOf = (step: { title: string }, index: number) => resolveStepNote(checklist, step, index);
   const runningIndex = useMemo(() => firstOpenStepIndex(checklist, steps), [checklist, steps]);
   const doneCount = checklist?.doneCount ?? 0;
 
@@ -299,6 +300,7 @@ export function CodingPlanPanel({
           const inProgress = status === "in_progress";
           const running = isLoading && !done && !failed && !skipped && (inProgress || index === runningIndex);
           if (done && !showCompleted) return null;
+          const note = noteOf(step, index);
 
           return (
             <div
@@ -349,6 +351,16 @@ export function CodingPlanPanel({
                   {step.description && (
                     <p className="mt-0.5 whitespace-pre-wrap text-[11px] leading-snug text-muted-foreground">
                       {step.description}
+                    </p>
+                  )}
+                  {note && (
+                    // The agent's own note on this step - most importantly the checklist-
+                    // grounding demotion reason ("marked done, but no attributable file
+                    // change - reset to in_progress"). Without this a step un-ticking mid-run
+                    // has no visible explanation, which reads as the plan panel randomly
+                    // losing progress rather than the agent being held to its own evidence.
+                    <p className="mt-1 whitespace-pre-wrap rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-1 text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+                      {note}
                     </p>
                   )}
                   {(step.toolsNeeded ?? step.tools)?.length ? (

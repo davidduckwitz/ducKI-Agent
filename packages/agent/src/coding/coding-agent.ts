@@ -11,8 +11,10 @@ import {
   skillsTool,
   listIncompletePartSequences,
   clearIncompletePartSequences,
+  outlineFile,
+  renderOutline,
 } from "@ducki/tools";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, resolve, isAbsolute, basename } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, AgentRunEventType, RunJournalEntry } from "../config/interfaces_types.js";
@@ -23,7 +25,7 @@ import { createScopedShellTool } from "./scoped-shell-tool.js";
 import { createScopedDiagnosticsTool, resetDiagnosticsFor } from "./scoped-diagnostics-tool.js";
 import { withAutoDiagnostics } from "./auto-diagnostics.js";
 import { TodoList, createTodoTool, type TodoItem, type TodoStatus } from "./todo-tool.js";
-import { createCheckpoint, diffCheckpoint, discardNoopCheckpoint } from "./checkpoints.js";
+import { createCheckpoint, diffCheckpoint, discardNoopCheckpoint, CHECKPOINT_DIR } from "./checkpoints.js";
 import { withPerEditCheckpoints } from "./checkpoint-on-write.js";
 import { createExploreTool, type ExploreToolOptions } from "./explore-tool.js";
 import { createStatusTool, type StatusProvider } from "./status-tool.js";
@@ -522,7 +524,99 @@ export class CodingAgent {
         packageInfo = { name: parsed["name"], scripts: parsed["scripts"], dependencies: parsed["dependencies"], devDependencies: parsed["devDependencies"] };
       } catch { /* malformed package.json will be discovered during execution */ }
     }
-    return { root: this.sandboxRoot, files, package: packageInfo, hasTsconfig: existsSync(join(this.sandboxRoot, "tsconfig.json")) };
+    return {
+      root: this.sandboxRoot,
+      files,
+      package: packageInfo,
+      hasTsconfig: existsSync(join(this.sandboxRoot, "tsconfig.json")),
+      ...(files.length > 0 ? { outline: this.buildRepositoryOutline(files) } : {}),
+    };
+  }
+
+  /** Extensions outlineFile() can say something useful about - either via its TypeScript AST
+   *  path or its regex heuristic fallback (see outline.ts). Skipping everything else (assets,
+   *  lockfiles, markdown, ...) keeps this pass fast and its output free of noise. */
+  private static readonly OUTLINE_SOURCE_EXTENSIONS =
+    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|cpp|h|hpp|cs)$/i;
+  private static readonly MAX_OUTLINE_FILES = 60;
+  private static readonly MAX_OUTLINE_CHARS = 15_000;
+
+  /**
+   * A compact, multi-file symbol map (function/class/interface names + line numbers) so the
+   * Planner and the model's own EXPLORE phase start from a repo-wide overview instead of having
+   * to `read`/`grep` their way to it call by call - the same idea as Aider's ctags-based "repo
+   * map", built on outline.ts (already used per-file via the filesystem tool's action:"outline")
+   * instead of introducing a new dependency.
+   *
+   * Deterministic and per-file fault-tolerant: one unparsable file is skipped, never aborts the
+   * whole pass - same "never a gate" principle as the checkpoint system. Bounded by both file
+   * count and total characters so a huge project cannot blow out the prompt this feeds into
+   * (buildRepositorySnapshot's repositoryContext, handed to the Planner).
+   */
+  private buildRepositoryOutline(files: string[]): string | undefined {
+    if (!this.sandboxRoot) return undefined;
+    const candidates = files.filter((path) => CodingAgent.OUTLINE_SOURCE_EXTENSIONS.test(path));
+    if (candidates.length === 0) return undefined;
+
+    const selected = candidates.slice(0, CodingAgent.MAX_OUTLINE_FILES);
+    const sections: string[] = [];
+    let totalChars = 0;
+    let truncated = candidates.length > selected.length;
+
+    for (const relativePath of selected) {
+      if (totalChars >= CodingAgent.MAX_OUTLINE_CHARS) {
+        truncated = true;
+        break;
+      }
+      try {
+        const outline = outlineFile(join(this.sandboxRoot, relativePath));
+        if (outline.symbols.length === 0) continue; // nothing worth listing for this file
+        const rendered = renderOutline(relativePath, outline);
+        const section = `### ${relativePath}\n${rendered}`;
+        if (totalChars + section.length > CodingAgent.MAX_OUTLINE_CHARS) {
+          truncated = true;
+          break;
+        }
+        sections.push(section);
+        totalChars += section.length;
+      } catch {
+        // Unreadable/binary-ish file slipped past the extension filter - skip it, not fatal.
+      }
+    }
+
+    if (sections.length === 0) return undefined;
+    return sections.join("\n\n") + (truncated ? "\n\n[...repo map truncated]" : "");
+  }
+
+  /**
+   * Best-effort, controller-owned run history - separate from the model's OWN plans/STATUS.md
+   * (which stays model-maintained per pathHandlingBlock's instructions; this never touches or
+   * replaces it). Lives next to the shadow-git checkpoint store, the same "internal machinery,
+   * hidden from the file tree" bucket routes/coding.ts already excludes by name - one compact
+   * JSON line per finished run, appended, never overwritten. Called from
+   * enforceCompletionContract, the single funnel every run() exit path passes through, so this
+   * fires exactly once per run regardless of which branch produced the final result.
+   *
+   * Never a gate: a write failure (permissions, sandbox gone) is swallowed silently, same
+   * principle as createCheckpoint.
+   */
+  private appendRunLogEntry(goal: string, result: CodingRunResult, changedFiles: string[]): void {
+    if (!this.sandboxRoot) return;
+    try {
+      const dir = join(this.sandboxRoot, CHECKPOINT_DIR);
+      mkdirSync(dir, { recursive: true });
+      const entry = {
+        timestamp: new Date().toISOString(),
+        goal: goal.slice(0, 300),
+        attempts: result.attempts,
+        success: result.success,
+        verified: result.verified,
+        changedFiles,
+      };
+      appendFileSync(join(dir, "run-log.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
+    } catch {
+      // Best-effort only - see doc comment.
+    }
   }
   /** True while CodingAgent itself is seeding/reseeding the checklist (initial seed from the
    *  plan, or rehydration on resume) rather than the MODEL deciding to rewrite it. Those internal
@@ -871,6 +965,21 @@ export class CodingAgent {
               });
             }
           }
+          // Surface freshly-found diagnostic errors to the UI immediately instead of only on
+          // demand via the `status` tool - otherwise the user only learns a file is broken if
+          // the model happens to call `status` or mention it in prose.
+          if (!diag.ok && diag.errorCount > 0) {
+            this.emit(
+              "decision",
+              `Diagnosefehler nach Edit: ${diag.errorCount} Fehler in ${checkedFiles.join(", ") || "unbekannter Datei"}.`,
+              {
+                diagnosticErrors: checkedFiles.map((file) => ({
+                  file,
+                  ...this.pendingDiagnosticErrors.get(this.fileKey(file)),
+                })),
+              }
+            );
+          }
           return { proceed: true };
         },
       },
@@ -924,6 +1033,17 @@ export class CodingAgent {
       // never used for anything but a log line. That wasted a full extra Planner LLM round-trip
       // PER ATTEMPT and produced the confusing "Plan erstellt mit N Schritten" events with
       // shifting, seemingly random step counts that don't correspond to the actual checklist.
+      // Side effect worth knowing about: enablePlanning:false also means Agent.run() never
+      // builds a planContext, so the generic session-checklist subsystem (ChecklistManager,
+      // packages/agent/src/checklist/checklist-manager.ts, its own "checklist" events and
+      // session_checklist DB table) never activates for a CodingAgent run either - it only
+      // ever runs for the plain Agent's own (non-coding) conversations. Combined with
+      // disableQualityPasses:true just below (which also skips the LLM Verifier,
+      // packages/agent/src/verification/verifier.ts), CodingAgent's TodoList/checkpoint-diff
+      // grounding above is the ONLY checklist/verify machinery actually active here. That is
+      // intentional, not an oversight - see ChecklistManager's own class doc for the reverse
+      // pointer - but it means the two systems look like unrelated duplication unless you
+      // already know these two flags are why only one of them ever runs for coding.
       enablePlanning: false,
       // Every attempt is this.agent.run() again on the SAME Agent instance for the SAME
       // overall goal - the relevant skill (usually just "coding-system" plus whatever
@@ -1290,6 +1410,8 @@ export class CodingAgent {
           summary: `${candidate.summary}\n\n[Incomplete: ${reason}.]`,
         };
       }
+
+      this.appendRunLogEntry(goal, result, completionEvidence.changedFiles);
 
       return {
         ...result,
@@ -2323,7 +2445,7 @@ export class CodingAgent {
     );
   }
 
-  private emit(type: "iteration" | "decision" | "phase_started" | "phase_completed" | "phase_failed", message: string, data?: Record<string, unknown>): void {
+  protected emit(type: "iteration" | "decision" | "phase_started" | "phase_completed" | "phase_failed", message: string, data?: Record<string, unknown>): void {
     const eventType: "iteration" | "decision" | "internal_instruction" = type === "iteration" ? "iteration" : type === "decision" ? "decision" : "internal_instruction";
     const timestamp = new Date().toISOString();
     try {

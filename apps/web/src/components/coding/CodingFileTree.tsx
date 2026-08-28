@@ -14,13 +14,31 @@ interface TreeNode {
   path: string;
   type: "file" | "directory";
   children: TreeNode[];
+  size?: number;
+  updatedAt?: string;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileTooltip(node: TreeNode): string {
+  const parts = [node.path];
+  if (typeof node.size === "number") parts.push(formatFileSize(node.size));
+  if (node.updatedAt) {
+    const date = new Date(node.updatedAt);
+    if (!Number.isNaN(date.getTime())) parts.push(date.toLocaleString());
+  }
+  return parts.join(" · ");
 }
 
 /**
  * The API returns a flat path list; the UI needs a tree. Intermediate folders are
  * synthesised so `a/b/c.ts` renders correctly even when `a/b` is not listed itself.
  */
-export function buildTree(files: CodingFileItem[]): TreeNode[] {
+export function buildTree(files: CodingFileItem[], sortMode: "name" | "recent" = "name"): TreeNode[] {
   const root: TreeNode = { name: "", path: "", type: "directory", children: [] };
   const byPath = new Map<string, TreeNode>([["", root]]);
 
@@ -45,7 +63,14 @@ export function buildTree(files: CodingFileItem[]): TreeNode[] {
     const slash = normalized.lastIndexOf("/");
     const parent = ensureDir(slash === -1 ? "" : normalized.slice(0, slash));
     if (byPath.has(normalized)) continue;
-    const node: TreeNode = { name: normalized.slice(slash + 1), path: normalized, type: "file", children: [] };
+    const node: TreeNode = {
+      name: normalized.slice(slash + 1),
+      path: normalized,
+      type: "file",
+      children: [],
+      ...(typeof file.size === "number" ? { size: file.size } : {}),
+      ...(file.updatedAt ? { updatedAt: file.updatedAt } : {}),
+    };
     parent.children.push(node);
     byPath.set(normalized, node);
   }
@@ -53,6 +78,14 @@ export function buildTree(files: CodingFileItem[]): TreeNode[] {
   const sortRecursive = (node: TreeNode) => {
     node.children.sort((a, b) => {
       if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
+      // "recent" only reorders files - directories stay alphabetical, otherwise the tree
+      // shape would reshuffle on every write and make the folder structure hard to scan.
+      if (sortMode === "recent" && a.type === "file" && b.type === "file") {
+        const aTime = a.updatedAt ? Date.parse(a.updatedAt) : NaN;
+        const bTime = b.updatedAt ? Date.parse(b.updatedAt) : NaN;
+        if (!Number.isNaN(aTime) && !Number.isNaN(bTime) && aTime !== bTime) return bTime - aTime;
+        if (!Number.isNaN(aTime) !== !Number.isNaN(bTime)) return Number.isNaN(aTime) ? 1 : -1;
+      }
       return a.name.localeCompare(b.name);
     });
     node.children.forEach(sortRecursive);
@@ -81,6 +114,7 @@ export function CodingFileTree({
   selectedPath,
   dirtyPaths,
   filter,
+  sortMode = "name",
   onSelect,
   onFolderAction,
   emptyLabel,
@@ -91,6 +125,9 @@ export function CodingFileTree({
   selectedPath: string;
   dirtyPaths: Set<string>;
   filter: string;
+  /** "recent" surfaces what the agent just touched instead of alphabetical order - useful
+   *  while a run is in progress and the file list otherwise gives no hint where it's working. */
+  sortMode?: "name" | "recent";
   onSelect: (path: string) => void;
   onFolderAction?: (folderPath: string) => void;
   emptyLabel: string;
@@ -103,7 +140,7 @@ export function CodingFileTree({
     () => (needle ? files.filter((file) => file.path.toLowerCase().includes(needle)) : files),
     [files, needle]
   );
-  const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles]);
+  const tree = useMemo(() => buildTree(visibleFiles, sortMode), [visibleFiles, sortMode]);
 
   if (files.length === 0) return <p className="px-2 py-1 text-[11px] text-muted-foreground">{emptyLabel}</p>;
   if (visibleFiles.length === 0) return <p className="px-2 py-1 text-[11px] text-muted-foreground">{noMatchLabel}</p>;
@@ -156,7 +193,7 @@ export function CodingFileTree({
         type="button"
         onClick={() => onSelect(node.path)}
         style={indent}
-        title={node.path}
+        title={fileTooltip(node)}
         className={`flex w-full items-center gap-1.5 rounded-md py-1 pr-1 text-left text-xs transition-colors ${
           active ? "bg-primary/15 font-medium text-foreground ring-1 ring-primary/40" : "hover:bg-accent"
         }`}

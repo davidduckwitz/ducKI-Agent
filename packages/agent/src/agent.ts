@@ -2079,6 +2079,29 @@ export class Agent {
       }
     }
 
+    if (normalizedName === "filesystem") {
+      // Defaults for the filesystem tool's own read/search limits, configurable via
+      // Settings -> Agent -> Datei-Limits (separate tiers for the standard agent and coding
+      // runs). Only injected when the model didn't specify its own value, so an explicit
+      // request always wins.
+      const fsAction = String(normalizedInput["action"] ?? "").trim().toLowerCase();
+      if (fsAction === "read") {
+        if (normalizedInput["limit"] === undefined) {
+          normalizedInput["limit"] = controls.filesystemReadDefaultLines;
+        }
+        if (normalizedInput["maxBytes"] === undefined) {
+          normalizedInput["maxBytes"] = controls.filesystemReadMaxBytes;
+        }
+        if (normalizedInput["maxLineChars"] === undefined) {
+          normalizedInput["maxLineChars"] = controls.filesystemReadMaxLineChars;
+        }
+      } else if (fsAction === "glob" && normalizedInput["maxResults"] === undefined) {
+        normalizedInput["maxResults"] = controls.filesystemGlobMaxResults;
+      } else if (fsAction === "grep" && normalizedInput["maxResults"] === undefined) {
+        normalizedInput["maxResults"] = controls.filesystemGrepMaxResults;
+      }
+    }
+
     if (!(await this.executor.hasTool(normalizedName))) {
       return { ok: false, error: `Unknown tool '${normalizedName}'` };
     }
@@ -2906,7 +2929,8 @@ export class Agent {
   private boundToolResultJson(
     value: unknown,
     maxSize: number,
-    maxFieldLength = 4000
+    maxFieldLength = 10000,
+    previewChars = 3000
   ): { json: string; truncated: boolean; originalSize: number } {
     const original = JSON.stringify(value);
     if (original.length <= maxSize) {
@@ -2929,7 +2953,6 @@ export class Agent {
     // just the "too large" note. Otherwise the model has zero actual content inline and a
     // small model that doesn't issue the follow-up tool_staging read will hallucinate the
     // result. The preview grounds it immediately; the note still points to the full content.
-    const previewChars = 1800;
     const preview = boundedJson.length > previewChars
       ? `${boundedJson.slice(0, previewChars)} …[preview truncated — read the staged result for the rest]`
       : boundedJson;
@@ -4416,6 +4439,20 @@ export class Agent {
       browserHideAutomation: true,
       browserCookieDetection: false,
       browserProxyUrl: "",
+      maxToolResultChars: 20000,
+      maxToolResultFieldChars: 10000,
+      toolResultPreviewChars: 3000,
+      codingMaxToolResultChars: 60000,
+      codingMaxToolResultFieldChars: 30000,
+      maxContextChars: 120000,
+      codingMaxContextChars: 200000,
+      filesystemReadDefaultLines: 4000,
+      filesystemReadMaxBytes: 1048576,
+      filesystemReadMaxLineChars: 4000,
+      codingFilesystemReadDefaultLines: 8000,
+      codingFilesystemReadMaxBytes: 2097152,
+      filesystemGlobMaxResults: 2000,
+      filesystemGrepMaxResults: 1500,
     };
 
     try {
@@ -4519,6 +4556,20 @@ export class Agent {
         browserHideAutomation: this.parseBooleanSetting(get("BROWSER_DISABLE_AUTOMATION"), defaults.browserHideAutomation),
         browserCookieDetection: this.parseBooleanSetting(get("BROWSER_COOKIE_DETECTION"), defaults.browserCookieDetection),
         browserProxyUrl: get("BROWSER_PROXY_URL") ?? defaults.browserProxyUrl,
+        maxToolResultChars: this.parseNumberSetting(get("AGENT_MAX_TOOL_RESULT_CHARS"), defaults.maxToolResultChars, 2000, 300000),
+        maxToolResultFieldChars: this.parseNumberSetting(get("AGENT_MAX_TOOL_FIELD_CHARS"), defaults.maxToolResultFieldChars, 500, 200000),
+        toolResultPreviewChars: this.parseNumberSetting(get("AGENT_TOOL_RESULT_PREVIEW_CHARS"), defaults.toolResultPreviewChars, 200, 20000),
+        codingMaxToolResultChars: this.parseNumberSetting(get("AGENT_CODING_MAX_TOOL_RESULT_CHARS"), defaults.codingMaxToolResultChars, 2000, 500000),
+        codingMaxToolResultFieldChars: this.parseNumberSetting(get("AGENT_CODING_MAX_TOOL_FIELD_CHARS"), defaults.codingMaxToolResultFieldChars, 500, 400000),
+        maxContextChars: this.parseNumberSetting(get("AGENT_MAX_CONTEXT_CHARS"), defaults.maxContextChars, 2000, 1000000),
+        codingMaxContextChars: this.parseNumberSetting(get("AGENT_CODING_MAX_CONTEXT_CHARS"), defaults.codingMaxContextChars, 2000, 2000000),
+        filesystemReadDefaultLines: this.parseNumberSetting(get("AGENT_FS_READ_DEFAULT_LINES"), defaults.filesystemReadDefaultLines, 50, 100000),
+        filesystemReadMaxBytes: this.parseNumberSetting(get("AGENT_FS_READ_MAX_BYTES"), defaults.filesystemReadMaxBytes, 4096, 10485760),
+        filesystemReadMaxLineChars: this.parseNumberSetting(get("AGENT_FS_READ_MAX_LINE_CHARS"), defaults.filesystemReadMaxLineChars, 200, 50000),
+        codingFilesystemReadDefaultLines: this.parseNumberSetting(get("AGENT_CODING_FS_READ_DEFAULT_LINES"), defaults.codingFilesystemReadDefaultLines, 50, 200000),
+        codingFilesystemReadMaxBytes: this.parseNumberSetting(get("AGENT_CODING_FS_READ_MAX_BYTES"), defaults.codingFilesystemReadMaxBytes, 4096, 20971520),
+        filesystemGlobMaxResults: this.parseNumberSetting(get("AGENT_FS_GLOB_MAX_RESULTS"), defaults.filesystemGlobMaxResults, 10, 20000),
+        filesystemGrepMaxResults: this.parseNumberSetting(get("AGENT_FS_GREP_MAX_RESULTS"), defaults.filesystemGrepMaxResults, 10, 20000),
       };
       return result;
     } catch {
@@ -5949,11 +6000,15 @@ export class Agent {
             : executed.result;
 
           // Add tool result to conversation so LLM sees it in next iteration
-          // Truncate very large results to avoid API token limits
-          const maxResultSize = 8000; // 8KB limit per tool result
+          // Truncate very large results to avoid API token limits. Configurable via
+          // Settings -> Agent -> Datei-Limits (AGENT_MAX_TOOL_RESULT_CHARS / the coding-run
+          // override), not a fixed 8KB - that used to clip a large filesystem read down to
+          // 8000 chars regardless of what the model actually asked to read.
           const { json: truncatedJson, truncated, originalSize } = this.boundToolResultJson(
             resultForLlm,
-            maxResultSize
+            controls.maxToolResultChars,
+            controls.maxToolResultFieldChars,
+            controls.toolResultPreviewChars
           );
 
           // Format tool result: extract actual output for readability, keep full JSON as fallback
@@ -6046,6 +6101,17 @@ export class Agent {
         const resultOutcome = executed.result.success
           ? "OK"
           : `Fehler: ${executed.result.error ?? "unbekannt"}`;
+        // The full tool result is deliberately NOT sent here (dataKeys below only lists key
+        // names) - most tool results are irrelevant or too large for a live activity row. Two
+        // fields are the exception, lifted explicitly because the UI has a concrete use for
+        // them: `path` lets the activity feed show where a filesystem call actually landed
+        // (see the coding-agent path-scoping investigation - the resolved path was already in
+        // the tool result, just never reached this event), and `checkpointSha` (set by
+        // withPerEditCheckpoints for a successful mutation) lets a row link straight to its own
+        // diff in the Changes tab instead of the user hunting for it by label/time.
+        const resultData = executed.result.success && typeof executed.result.data === "object"
+          ? (executed.result.data as Record<string, unknown>)
+          : undefined;
         emit("tool_result", `${resultSummary} — ${resultOutcome}`, {
           toolBatchId,
           toolName: toolCall?.toolName,
@@ -6053,9 +6119,9 @@ export class Agent {
           callId: executed.id,
           success: executed.result.success,
           error: executed.result.error,
-          dataKeys: executed.result.success && typeof executed.result.data === "object"
-            ? Object.keys(executed.result.data as Record<string, unknown>)
-            : undefined,
+          dataKeys: resultData ? Object.keys(resultData) : undefined,
+          ...(typeof resultData?.["path"] === "string" ? { path: resultData["path"] } : {}),
+          ...(typeof resultData?.["checkpointSha"] === "string" ? { checkpointSha: resultData["checkpointSha"] } : {}),
         });
       }
 
@@ -6656,6 +6722,14 @@ export class Agent {
         this.disableQualityPasses && this.hasExplicitMaxIterations
           ? this.maxIterations
           : adjustedControls.codingMaxIterations;
+      // File read/write limits: coding routinely needs full mid-size files (the whole point
+      // of the chain fixed here - see the fields' docs in interfaces_types.ts), so it gets
+      // its own, higher tier instead of the standard chat defaults above.
+      adjustedControls.maxToolResultChars = adjustedControls.codingMaxToolResultChars;
+      adjustedControls.maxToolResultFieldChars = adjustedControls.codingMaxToolResultFieldChars;
+      adjustedControls.maxContextChars = adjustedControls.codingMaxContextChars;
+      adjustedControls.filesystemReadDefaultLines = adjustedControls.codingFilesystemReadDefaultLines;
+      adjustedControls.filesystemReadMaxBytes = adjustedControls.codingFilesystemReadMaxBytes;
     }
 
     const installedSkillManifests = (effectiveMode === "full" || isDateTimeQuery) ? this.loadSkillManifests() : [];
@@ -7223,7 +7297,12 @@ export class Agent {
     const basMaxSystemPromptChars = envCap("AGENT_MAX_SYSTEM_PROMPT_CHARS", effectiveMode === "full" ? 120000 : 20000, 2000);
     const basMaxDynamicMemoryChars = envCap("AGENT_MAX_DYNAMIC_MEMORY_CHARS", effectiveMode === "full" ? 24000 : 0, 0);
     const basMaxContextMessages = envCap("AGENT_MAX_CONTEXT_MESSAGES", effectiveMode === "full" ? 60 : effectiveMode === "lightweight" ? 999 : 8, 1);
-    const basMaxContextChars = envCap("AGENT_MAX_CONTEXT_CHARS", effectiveMode === "full" ? 120000 : 60000, 2000);
+    // "full" mode's fallback comes from the configured (and, for coding runs, already
+    // overridden - see the codingRun block above) budget rather than a fixed 120000, so
+    // raising AGENT_MAX_CONTEXT_CHARS / AGENT_CODING_MAX_CONTEXT_CHARS in Settings actually
+    // takes effect for models whose window isn't in TokenCounter's table (a known model's
+    // budget is derived from its real window instead - see modelDerivedMaxContextChars below).
+    const basMaxContextChars = envCap("AGENT_MAX_CONTEXT_CHARS", effectiveMode === "full" ? adjustedControls.maxContextChars : 60000, 2000);
     const basMaxContextMessageChars = envCap("AGENT_MAX_CONTEXT_MESSAGE_CHARS", effectiveMode === "full" ? 12000 : 2000, 200);
 
     const maxSystemPromptChars = withOverride(contextCaps?.maxSystemPromptChars, basMaxSystemPromptChars, 2000);

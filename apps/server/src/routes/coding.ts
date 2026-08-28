@@ -6,6 +6,7 @@ import { appendFile } from "node:fs/promises";
 import { dirname, extname, join, resolve } from "node:path";
 import { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { listCheckpoints, diffCheckpoint, restoreCheckpoint } from "@ducki/agent";
+import type { LLMProvider, LLMMessage } from "@ducki/providers";
 
 export const codingRouter: IRouter = Router();
 
@@ -718,5 +719,85 @@ codingRouter.post("/projects/:project/checkpoints/:sha/restore", async (req, res
     res.json(createApiResponse({ project: slug, ...result }));
   } catch (error) {
     res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+// Context sent to the model around the selection - large enough for real surrounding code,
+// small enough that a 5000-line file doesn't blow the prompt budget on one inline suggestion.
+const INLINE_EDIT_CONTEXT_CHARS = 4000;
+
+function stripCodeFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^```[^\n]*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  return fenced ? fenced[1] ?? "" : trimmed;
+}
+
+/**
+ * Single-shot "edit just this selection" - the inline AI edit feature (select text in the
+ * Monaco editor, describe the change, get a replacement for exactly that selection). Deliberately
+ * NOT a CodingAgent run: no plan, no checklist, no checkpoint, no multi-turn tool loop - one LLM
+ * call scoped to the selection plus enough surrounding context to keep it coherent. The result is
+ * only ever applied to the in-editor draft (see codingSessionStore's setDraft on the frontend), so
+ * accepting/rejecting it works through the exact same dirty-tracking and Ctrl+S save path a manual
+ * edit already goes through - no new persistence or checkpoint machinery needed for this endpoint.
+ */
+codingRouter.post("/projects/:project/inline-edit", async (req, res, next) => {
+  try {
+    const provider = req.app.locals["provider"] as LLMProvider | undefined;
+    if (!provider) {
+      res.status(500).json(createApiError("LLM provider is not configured"));
+      return;
+    }
+    const { absolute } = projectRoot(String(req.params["project"] ?? ""));
+    if (!existsSync(absolute)) {
+      res.status(404).json(createApiError("Project not found"));
+      return;
+    }
+
+    const rel = String(req.body?.path ?? "");
+    const selectedText = String(req.body?.selectedText ?? "");
+    const instruction = String(req.body?.instruction ?? "").trim();
+    const prefix = String(req.body?.prefix ?? "").slice(-INLINE_EDIT_CONTEXT_CHARS);
+    const suffix = String(req.body?.suffix ?? "").slice(0, INLINE_EDIT_CONTEXT_CHARS);
+    if (!rel) {
+      res.status(400).json(createApiError("path is required"));
+      return;
+    }
+    if (!selectedText.trim()) {
+      res.status(400).json(createApiError("selectedText is required"));
+      return;
+    }
+    if (!instruction) {
+      res.status(400).json(createApiError("instruction is required"));
+      return;
+    }
+
+    const messages: LLMMessage[] = [
+      {
+        role: "system",
+        content:
+          "You are an expert code editor performing a single, scoped edit inside an existing file. " +
+          "You will see context before and after a selection, the exact selected text, and an instruction. " +
+          "Rewrite ONLY the selected text according to the instruction - do not touch the surrounding context, " +
+          "do not add explanations, and do not wrap the answer in markdown code fences. " +
+          "Match the existing indentation and code style exactly. " +
+          "Return ONLY the replacement text for the selection, nothing else.",
+      },
+      {
+        role: "user",
+        content:
+          `File: ${sanitizeRelativePath(rel)}\n\n` +
+          `Context before selection:\n${prefix}\n\n` +
+          `SELECTED TEXT (rewrite this):\n${selectedText}\n\n` +
+          `Context after selection:\n${suffix}\n\n` +
+          `Instruction: ${instruction}`,
+      },
+    ];
+
+    const response = await provider.generate(messages, { temperature: 0.2, maxTokens: 2000 });
+    const suggestion = stripCodeFence(response.content);
+    res.json(createApiResponse({ suggestion }));
+  } catch (error) {
+    next(error);
   }
 });

@@ -14,6 +14,8 @@ export function eventIcon(eventType?: AgentEventType, eventData?: Record<string,
   if (eventType === "tool_retry") return <RefreshCw className="w-4 h-4 text-orange-300" />;
   if (eventType === "iteration") return <Activity className="w-4 h-4 text-blue-300" />;
   if (eventType === "thinking") return <BrainCircuit className="w-4 h-4 text-amber-300 animate-pulse" />;
+  if (eventType === "decision" && eventData?.["reflection"]) return <RefreshCw className="w-4 h-4 text-orange-300" />;
+  if (eventType === "decision" && eventData?.["diagnosticErrors"]) return <AlertTriangle className="w-4 h-4 text-red-300" />;
   if (eventType === "decision" || eventType === "guardrail") return <BrainCircuit className="w-4 h-4 text-emerald-300" />;
   if (eventType === "mode_selected") return <Sparkles className="w-4 h-4 text-fuchsia-300" />;
   if (eventType === "browser_preview") return <Monitor className="w-4 h-4 text-cyan-300" />;
@@ -29,6 +31,12 @@ export function eventIcon(eventType?: AgentEventType, eventData?: Record<string,
 export function eventTone(eventType?: AgentEventType, eventData?: Record<string, unknown>): string {
   if (eventType === "tool_result" && eventData?.["success"] === false) {
     return "border-red-500/40 bg-red-500/10 text-red-100";
+  }
+  if (eventType === "decision" && eventData?.["reflection"]) {
+    return "border-orange-500/40 bg-orange-500/10 text-orange-100";
+  }
+  if (eventType === "decision" && eventData?.["diagnosticErrors"]) {
+    return "border-red-500/30 bg-red-500/[0.07] text-red-100";
   }
   if (eventType === "skill_selection") return "border-cyan-500/30 bg-cyan-500/[0.07] text-cyan-100";
   if (eventType === "tool_retry") return "border-orange-500/40 bg-orange-500/10 text-orange-100";

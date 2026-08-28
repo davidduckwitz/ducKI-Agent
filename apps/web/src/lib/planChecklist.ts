@@ -9,6 +9,14 @@ export interface ChecklistSnapshot {
   statusByIndex: Map<number, string>;
   /** Lowercased title -> status. Fallback for a plan whose steps were re-derived out of order. */
   statusByTitle: Map<string, string>;
+  /**
+   * stepIndex -> the agent's own short note on that step (e.g. why it was demoted back from
+   * "done" to "in_progress" by checklist grounding, or why it is blocked). Without this the Plan
+   * tab silently un-ticks a step with no explanation - the same information the compact
+   * CodingTodoStrip already shows inline, just missing from this richer view.
+   */
+  noteByIndex: Map<number, string>;
+  noteByTitle: Map<string, string>;
   doneCount: number;
   total: number;
 }
@@ -47,14 +55,22 @@ export function findLatestChecklist(messages: RenderedChatMessage[], scope?: Pla
     const statusByIndex = new Map<number, string>();
     const statusById = new Map<string, string>();
     const statusByTitle = new Map<string, string>();
+    const noteByIndex = new Map<number, string>();
+    const noteByTitle = new Map<string, string>();
     for (const raw of items) {
-      const item = (raw ?? {}) as { id?: string; stepId?: string; index?: number; title?: string; status?: string };
+      const item = (raw ?? {}) as { id?: string; stepId?: string; index?: number; title?: string; status?: string; note?: string };
       const status = String(item.status ?? "pending");
       if (typeof item.index === "number") statusByIndex.set(item.index, status);
       const stepId = item.stepId ?? item.id;
       if (typeof stepId === "string" && stepId) statusById.set(stepId, status);
       if (typeof item.title === "string" && item.title.trim()) {
         statusByTitle.set(item.title.trim().toLowerCase(), status);
+      }
+      if (typeof item.note === "string" && item.note.trim()) {
+        if (typeof item.index === "number") noteByIndex.set(item.index, item.note);
+        if (typeof item.title === "string" && item.title.trim()) {
+          noteByTitle.set(item.title.trim().toLowerCase(), item.note);
+        }
       }
     }
     if (statusByIndex.size === 0 && statusByTitle.size === 0) continue;
@@ -65,6 +81,8 @@ export function findLatestChecklist(messages: RenderedChatMessage[], scope?: Pla
       statusByIndex,
       statusById,
       statusByTitle,
+      noteByIndex,
+      noteByTitle,
       doneCount: Number.isFinite(doneCount)
         ? doneCount
         : [...statusByIndex.values()].filter((s) => s === "done").length,
@@ -119,9 +137,11 @@ function findLatestTodoSnapshot(messages: RenderedChatMessage[], scope?: PlanEve
     const statusByIndex = new Map<number, string>();
     const statusById = new Map<string, string>();
     const statusByTitle = new Map<string, string>();
+    const noteByIndex = new Map<number, string>();
+    const noteByTitle = new Map<string, string>();
     let doneCount = 0;
     for (const raw of items) {
-      const item = (raw ?? {}) as { id?: number; title?: string; status?: string };
+      const item = (raw ?? {}) as { id?: number; title?: string; status?: string; note?: string };
       const mapped = TODO_STATUS_MAP[String(item.status ?? "pending")] ?? "pending";
       if (mapped === "done") doneCount++;
       // TodoList ids are assigned in the SAME order the plan's steps were originally seeded
@@ -132,10 +152,20 @@ function findLatestTodoSnapshot(messages: RenderedChatMessage[], scope?: PlanEve
       if (typeof item.title === "string" && item.title.trim()) {
         statusByTitle.set(item.title.trim().toLowerCase(), mapped);
       }
+      // The grounding demotion note ('Als "done" gemeldet, aber ... zurueckgestuft') is the
+      // one piece of information that actually explains why a step un-checks mid-run - without
+      // it the Plan tab just flips a step back to pending/in_progress with no context, which is
+      // indistinguishable from a bug.
+      if (typeof item.note === "string" && item.note.trim()) {
+        if (typeof item.id === "number") noteByIndex.set(item.id - 1, item.note);
+        if (typeof item.title === "string" && item.title.trim()) {
+          noteByTitle.set(item.title.trim().toLowerCase(), item.note);
+        }
+      }
     }
     if (statusByIndex.size === 0 && statusByTitle.size === 0) continue;
 
-    return { statusById, statusByIndex, statusByTitle, doneCount, total: items.length };
+    return { statusById, statusByIndex, statusByTitle, noteByIndex, noteByTitle, doneCount, total: items.length };
   }
   return null;
 }
@@ -173,7 +203,9 @@ export function checklistFromPlanSteps(
     if (step.id) statusById.set(step.id, mapped);
     if (step.title?.trim()) statusByTitle.set(step.title.trim().toLowerCase(), mapped);
   });
-  return { statusByIndex, statusById, statusByTitle, doneCount, total: steps.length };
+  // PlanStep carries no note field, so this fallback source (used only once the live checklist/
+  // todo_items events have aged out of the loaded message window) has nothing to populate here.
+  return { statusByIndex, statusById, statusByTitle, noteByIndex: new Map(), noteByTitle: new Map(), doneCount, total: steps.length };
 }
 
 export function resolveStepStatus(
@@ -183,6 +215,17 @@ export function resolveStepStatus(
 ): string | undefined {
   if (!snapshot) return undefined;
   return (step.id ? snapshot.statusById.get(step.id) : undefined) ?? snapshot.statusByIndex.get(index) ?? snapshot.statusByTitle.get(step.title.trim().toLowerCase());
+}
+
+/** The agent's own short note for a step (e.g. a checklist-grounding demotion reason), same
+ *  precedence as resolveStepStatus above. */
+export function resolveStepNote(
+  snapshot: ChecklistSnapshot | null,
+  step: { title: string },
+  index: number
+): string | undefined {
+  if (!snapshot) return undefined;
+  return snapshot.noteByIndex.get(index) ?? snapshot.noteByTitle.get(step.title.trim().toLowerCase());
 }
 
 /**

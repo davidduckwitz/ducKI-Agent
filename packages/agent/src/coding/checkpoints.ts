@@ -6,8 +6,10 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /** Lives INSIDE the project but is a separate git directory, so a project that is itself a git
- *  repo keeps its own history, index and branches completely untouched. */
-const CHECKPOINT_DIR = ".ducki-checkpoints";
+ *  repo keeps its own history, index and branches completely untouched. Exported so other
+ *  internal machinery that belongs in the same "not the user's own files" bucket (e.g. the
+ *  auto-maintained run log) can share one location instead of hardcoding the name twice. */
+export const CHECKPOINT_DIR = ".ducki-checkpoints";
 
 /** Never snapshot these - a checkpoint of node_modules would take minutes and gigabytes. */
 const EXCLUDES = [

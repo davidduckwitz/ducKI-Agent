@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerQuery } from "../../lib/useServerQuery";
 import { useSettings, readFlag, settingsReady } from "../../lib/useSettings";
-import { Check, ExternalLink, FolderPlus, Globe2, RefreshCw, Search, Upload, X } from "lucide-react";
+import { Check, Clock, ExternalLink, FolderPlus, Globe2, RefreshCw, Search, SortAsc, Upload, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useCodingSession } from "../../lib/codingSessionStore";
@@ -30,6 +30,7 @@ export function CodingSidebarPanel() {
   const { filesOpen, toggleSection, setSection, openBrowserUrl } = useUiStore();
 
   const [filter, setFilter] = useState("");
+  const [sortMode, setSortMode] = useState<"name" | "recent">("name");
   const [newFilePath, setNewFilePath] = useState("");
   const [newFileOpen, setNewFileOpen] = useState(false);
   const newFileRef = useRef<HTMLInputElement>(null);
@@ -168,6 +169,16 @@ export function CodingSidebarPanel() {
             )}
           </div>
 
+          <button
+            type="button"
+            onClick={() => setSortMode((mode) => (mode === "name" ? "recent" : "name"))}
+            className="flex items-center gap-1 self-start rounded px-1 py-0.5 text-[10px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
+            title={sortMode === "name" ? t("codingPage.sortByRecent") : t("codingPage.sortByName")}
+          >
+            {sortMode === "name" ? <SortAsc className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+            {sortMode === "name" ? t("codingPage.sortByName") : t("codingPage.sortByRecent")}
+          </button>
+
           {newFileOpen && (
             <div className="flex gap-1">
               <input
@@ -210,6 +221,7 @@ export function CodingSidebarPanel() {
               selectedPath={selectedPath}
               dirtyPaths={dirtyPaths}
               filter={filter}
+              sortMode={sortMode}
               onSelect={openFile}
               onFolderAction={(folderPath) => {
                 setNewFilePath(`${folderPath}/`);

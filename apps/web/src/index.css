@@ -293,6 +293,15 @@
     @apply bg-background border border-input rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent;
   }
 
+  /* Monaco decoration className for the inline AI edit feature (CodingWorkspace) - highlights
+     a just-applied AI suggestion until the user accepts or rejects it. Plain CSS, not @apply:
+     Monaco injects this class directly into its own DOM, so Tailwind's content scanner never
+     sees it referenced and would otherwise purge it. */
+  .inline-ai-edit-suggestion {
+    background-color: rgba(16, 185, 129, 0.18);
+    border-radius: 2px;
+  }
+
   /* --- Layout-Bausteine -------------------------------------------------- */
 
   /* Seiten-Shell: zentriert, gedeckelt, damit Inhalte auf breiten Monitoren

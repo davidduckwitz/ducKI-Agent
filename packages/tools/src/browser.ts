@@ -80,6 +80,14 @@ interface BrowserSession {
   /** Failed network requests captured since the session started. See attachPageListeners(). */
   networkErrors: Array<{ url: string; method: string; error: string; timestamp: string }>;
   /**
+   * Native JS dialogs (alert/confirm/prompt/beforeunload) auto-dismissed since the session
+   * started. See attachPageListeners() - without a "dialog" handler, Puppeteer leaves an open
+   * dialog blocking, which freezes EVERY page.evaluate()/page.content() call (even a trivial
+   * "return document.title") until something dismisses it. Nothing ever did, so a page that
+   * happened to call alert() turned every subsequent inspection into a multi-minute timeout.
+   */
+  dialogsAutoDismissed: Array<{ type: string; message: string; url: string; timestamp: string }>;
+  /**
    * Set by action=mark_dirty (the coding agent calls this right after a successful filesystem
    * write/edit/append) whenever something the page depends on changed since the last time it was
    * inspected. Consumed by the read-only inspection actions (evaluate, get_content,
@@ -332,6 +340,30 @@ function makeSessionId(): string {
   return `browser_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Races `promise` against a timer so a stuck `page.evaluate()` (an injected script with an
+ * infinite loop, a Promise that never settles, or a renderer wedged for a reason the "dialog"
+ * handler above doesn't cover) fails fast with a diagnosable message, instead of silently
+ * riding the outer worker round-trip watchdog (callWorker, timeoutMs+3000) all the way out -
+ * that one only reports "Browser worker timed out", with no hint that the SCRIPT is what hung.
+ * Does not (cannot) cancel the underlying page-side execution; it only stops the caller from
+ * waiting on it past `ms`.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(
+        `${label} timed out after ${ms}ms. This usually means a native dialog (alert/confirm/prompt) is ` +
+        "blocking the page, or the script contains an infinite loop / a Promise that never resolves."
+      ));
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); }
+    );
+  });
+}
+
 function parseViewports(value: unknown): { width: number; height: number } | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
@@ -497,6 +529,7 @@ async function createSession(options: {
     headless: options.headless ?? true,
     pageErrors: [],
     networkErrors: [],
+    dialogsAutoDismissed: [],
     dirtySinceLastCheck: false,
   };
   sessions.set(sessionId, session);
@@ -628,6 +661,12 @@ async function ensureSession(input: Record<string, unknown>): Promise<{ sessionI
 async function reloadIfDirty(session: BrowserSession): Promise<void> {
   if (!session.dirtySinceLastCheck) return;
   session.dirtySinceLastCheck = false;
+  // Same "fresh navigation clears the console" reasoning as goto/reload above - this is the
+  // path get_page_errors itself takes when the agent edited a file since the last inspection,
+  // so without clearing here a fixed error would still show up after the very reload meant to
+  // pick up the fix.
+  session.pageErrors = [];
+  session.networkErrors = [];
   await session.page.reload({ waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => undefined);
 }
 
@@ -674,6 +713,22 @@ function attachPageListeners(session: BrowserSession, page: import("puppeteer-co
       method: req.method(),
       error: (req.failure()?.errorText ?? "failed").slice(0, 200),
       timestamp: new Date().toISOString(),
+    });
+  });
+  // Without this, an open alert()/confirm()/prompt() on the page blocks EVERY subsequent
+  // evaluate()/content() call indefinitely - Puppeteer never auto-dismisses a native dialog.
+  // Dismiss (never accept): accepting a confirm() could trigger whatever destructive action
+  // the page gated behind it (e.g. "Are you sure you want to delete?"), which is exactly the
+  // kind of autonomous confirmation this tool must not perform on the page's behalf.
+  page.on("dialog", (dialog) => {
+    push(session.dialogsAutoDismissed, {
+      type: dialog.type(),
+      message: dialog.message().slice(0, 300),
+      url: page.url().slice(0, 300),
+      timestamp: new Date().toISOString(),
+    });
+    dialog.dismiss().catch(() => {
+      // Already handled/closed (e.g. page navigated away) - nothing to do.
     });
   });
 }
@@ -1165,6 +1220,13 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         if (!url) return fail("url is required");
         const timeout = Number(input["timeout"] ?? 10000);
         const waitUntil = String(input["waitUntil"] ?? "domcontentloaded") as "load" | "domcontentloaded" | "networkidle0" | "networkidle2";
+        // A fresh navigation starts a fresh console, same as DevTools clearing on navigation
+        // (with "preserve log" off) - without this, an error from a page a fix already
+        // resolved stays in pageErrors/networkErrors forever (only get_page_errors's own
+        // clear=true removed it), so both the coding agent's browser-verify check and the UI
+        // console panel kept reporting errors that no longer reproduce on the current page.
+        session.pageErrors = [];
+        session.networkErrors = [];
         await session.page.goto(url, { waitUntil, timeout });
         session.targetUrl = session.page.url();
         session.dirtySinceLastCheck = false;
@@ -1191,6 +1253,10 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
       case "reload": {
         const { sessionId, session } = await ensureSession(input);
         const timeout = Number(input["timeout"] ?? 10000);
+        // Same reasoning as "goto" above: any of these reloads the page, so stale errors from
+        // before this navigation must not survive it.
+        session.pageErrors = [];
+        session.networkErrors = [];
         if (action === "history_back") await session.page.goBack({ waitUntil: "domcontentloaded", timeout }).catch(() => null);
         else if (action === "history_forward") await session.page.goForward({ waitUntil: "domcontentloaded", timeout }).catch(() => null);
         else await session.page.reload({ waitUntil: "domcontentloaded", timeout });
@@ -1715,7 +1781,11 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         await reloadIfDirty(session);
         const script = String(input["script"] ?? "").trim();
         if (!script) return fail("script is required");
-        const result = await session.page.evaluate(script);
+        // Same budget the caller passed for the whole call (matches callWorker's outer
+        // watchdog below) - fires ~3s before that one so a stuck script reports the real
+        // cause (see withTimeout) instead of the outer "Browser worker timed out".
+        const evalTimeoutMs = Number(input["timeoutMs"] ?? input["timeout"] ?? 30000);
+        const result = await withTimeout(session.page.evaluate(script), evalTimeoutMs, "Script evaluation");
         return ok({ sessionId, result });
       }
       case "verify_page": {
@@ -1747,7 +1817,8 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         let evaluateError: string | undefined;
         if (script) {
           try {
-            evaluated = await session.page.evaluate(script);
+            const evalTimeoutMs = Number(input["timeoutMs"] ?? input["timeout"] ?? 30000);
+            evaluated = await withTimeout(session.page.evaluate(script), evalTimeoutMs, "Script evaluation");
           } catch (error) {
             evaluateError = error instanceof Error ? error.message : String(error);
           }

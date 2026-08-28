@@ -468,7 +468,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     const emitRunState = (status: string, extra: Record<string, unknown> = {}) => {
       const timestamp = new Date().toISOString();
       const data = { plan_event: "run_status", status, planId, planVersion, runId, ...extra };
-      io?.emit("chat:event", {
+      io?.to(`conversation:${conversationId}`).emit("chat:event", {
         type: "internal_instruction", message: `Plan run ${status}`,
         data, timestamp, conversationId,
       });
@@ -559,17 +559,17 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             // through the same discipline as a plan started directly via /api/coding-agent/run.
             const codingEventEmitter: import("@ducki/agent").AgentEventEmitter = {
               emitChunk: (chunk: string) => {
-                io?.emit("chat:chunk", { content: chunk, conversationId });
+                io?.to(`conversation:${conversationId}`).emit("chat:chunk", { content: chunk, conversationId });
               },
               emitEvent: (event) => {
-                io?.emit("chat:event", withRunContext(event));
+                io?.to(`conversation:${conversationId}`).emit("chat:event", withRunContext(event));
               },
             };
             const codingAgent = createCodingAgent({ sandboxRoot, eventEmitter: codingEventEmitter });
 
             // Emit start event
             if (io) {
-              io.emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
+              io.to(`conversation:${conversationId}`).emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
             }
 
             const result = await codingAgent.run(executionPrompt, {
@@ -593,7 +593,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
             // Emit completion event
             if (io) {
-              io.emit("chat:complete", {
+              io.to(`conversation:${conversationId}`).emit("chat:complete", {
                 response: `Plan execution finished.\n\n${result.summary}`,
                 conversationId
               });
@@ -614,7 +614,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
         // Emit start event
         if (io) {
-          io.emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
+          io.to(`conversation:${conversationId}`).emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
         }
 
         const result = await agent.run(executionPrompt, {
@@ -623,10 +623,10 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
           timeoutMsOverride,
           checklistMaxItemAttemptsOverride,
           onChunk: (chunk) => {
-            io?.emit("chat:chunk", { content: chunk, conversationId });
+            io?.to(`conversation:${conversationId}`).emit("chat:chunk", { content: chunk, conversationId });
           },
             onEvent: (event) => {
-              io?.emit("chat:event", withRunContext(event));
+              io?.to(`conversation:${conversationId}`).emit("chat:event", withRunContext(event));
           },
         });
         await savePlanProgress(result, agent);
@@ -637,7 +637,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
         // Emit completion event
         if (io) {
-          io.emit("chat:complete", {
+          io.to(`conversation:${conversationId}`).emit("chat:complete", {
             response: result.response,
             conversationId
           });
@@ -647,7 +647,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
         await db?.updatePlanRun(runId, { status: "failed", result: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), finishedAt: new Date().toISOString() });
         emitRunState("failed", { error: error instanceof Error ? error.message : String(error) });
         if (io) {
-          io.emit("chat:error", {
+          io.to(`conversation:${conversationId}`).emit("chat:error", {
             error: error instanceof Error ? error.message : String(error),
             conversationId,
           });

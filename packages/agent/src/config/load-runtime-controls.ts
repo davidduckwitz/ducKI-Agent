@@ -290,6 +290,23 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     browserHideAutomation: (process.env["BROWSER_DISABLE_AUTOMATION"] ?? "true").toLowerCase() !== "false",
     browserCookieDetection: (process.env["BROWSER_COOKIE_DETECTION"] ?? "false").toLowerCase() === "true",
     browserProxyUrl: process.env["BROWSER_PROXY_URL"] ?? "",
+
+    // File read/write limits - see the fields' docs in interfaces_types.ts. Defaults mirror
+    // Agent.loadRuntimeControls() (the DB-backed path Settings -> Agent writes to).
+    maxToolResultChars: envInt("AGENT_MAX_TOOL_RESULT_CHARS", 20000),
+    maxToolResultFieldChars: envInt("AGENT_MAX_TOOL_FIELD_CHARS", 10000),
+    toolResultPreviewChars: envInt("AGENT_TOOL_RESULT_PREVIEW_CHARS", 3000),
+    codingMaxToolResultChars: envInt("AGENT_CODING_MAX_TOOL_RESULT_CHARS", 60000),
+    codingMaxToolResultFieldChars: envInt("AGENT_CODING_MAX_TOOL_FIELD_CHARS", 30000),
+    maxContextChars: envInt("AGENT_MAX_CONTEXT_CHARS", 120000),
+    codingMaxContextChars: envInt("AGENT_CODING_MAX_CONTEXT_CHARS", 200000),
+    filesystemReadDefaultLines: envInt("AGENT_FS_READ_DEFAULT_LINES", 4000),
+    filesystemReadMaxBytes: envInt("AGENT_FS_READ_MAX_BYTES", 1048576),
+    filesystemReadMaxLineChars: envInt("AGENT_FS_READ_MAX_LINE_CHARS", 4000),
+    codingFilesystemReadDefaultLines: envInt("AGENT_CODING_FS_READ_DEFAULT_LINES", 8000),
+    codingFilesystemReadMaxBytes: envInt("AGENT_CODING_FS_READ_MAX_BYTES", 2097152),
+    filesystemGlobMaxResults: envInt("AGENT_FS_GLOB_MAX_RESULTS", 2000),
+    filesystemGrepMaxResults: envInt("AGENT_FS_GREP_MAX_RESULTS", 1500),
   };
 }
 

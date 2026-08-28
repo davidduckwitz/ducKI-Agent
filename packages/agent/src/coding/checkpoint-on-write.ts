@@ -44,7 +44,13 @@ export function withPerEditCheckpoints(
           const paths = [input["path"], input["destination"]].filter(
             (value): value is string => typeof value === "string" && value.length > 0
           );
-          await createCheckpoint(sandboxRoot, label, paths);
+          const checkpoint = await createCheckpoint(sandboxRoot, label, paths);
+          // Lets the UI link straight from this edit's activity-feed row to its own diff
+          // (see agent.ts's tool_result event, which lifts this into the emitted event data) -
+          // additive only, so a caller reading the existing result fields is unaffected.
+          if (checkpoint && result.data && typeof result.data === "object") {
+            (result.data as Record<string, unknown>).checkpointSha = checkpoint.sha;
+          }
         }
       }
       return result;

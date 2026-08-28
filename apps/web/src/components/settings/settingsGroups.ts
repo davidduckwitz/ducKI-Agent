@@ -289,6 +289,32 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_CODING_ENABLE_VERIFY",
       ],
     },
+    {
+      name: "Datei-Limits (Standard-Agent)",
+      icon: HardDrive,
+      keys: [
+        "AGENT_MAX_TOOL_RESULT_CHARS",
+        "AGENT_MAX_TOOL_FIELD_CHARS",
+        "AGENT_TOOL_RESULT_PREVIEW_CHARS",
+        "AGENT_MAX_CONTEXT_CHARS",
+        "AGENT_FS_READ_DEFAULT_LINES",
+        "AGENT_FS_READ_MAX_BYTES",
+        "AGENT_FS_READ_MAX_LINE_CHARS",
+        "AGENT_FS_GLOB_MAX_RESULTS",
+        "AGENT_FS_GREP_MAX_RESULTS",
+      ],
+    },
+    {
+      name: "Datei-Limits (Coding Agent)",
+      icon: HardDrive,
+      keys: [
+        "AGENT_CODING_MAX_TOOL_RESULT_CHARS",
+        "AGENT_CODING_MAX_TOOL_FIELD_CHARS",
+        "AGENT_CODING_MAX_CONTEXT_CHARS",
+        "AGENT_CODING_FS_READ_DEFAULT_LINES",
+        "AGENT_CODING_FS_READ_MAX_BYTES",
+      ],
+    },
   ],
   Memory: [
     {
