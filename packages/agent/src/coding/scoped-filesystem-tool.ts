@@ -111,14 +111,31 @@ function scopedFilesystemDefinition(sandboxRoot: string): typeof filesystemTool.
  * basePath or safeMode:false and escape the sandbox entirely. Path fields are
  * de-duplicated (see normalizeScopedPath) so a model that repeats the sandbox
  * prefix doesn't double it.
+ *
+ * `isCheckpointBacked`, when supplied, is polled on every write/edit call (cheap - it just reads
+ * a boolean the caller already tracks, see CodingAgent's checkpointsUsable) to decide whether this
+ * sandbox's shadow-git checkpoint store is confirmed usable RIGHT NOW. When it is, the underlying
+ * filesystemTool skips its own .bak backup for this call (see atomicWrite in filesystem.ts) -
+ * checkpoints already keep a full, diffable history, so a .bak file would be pure clutter sitting
+ * next to the real project files. Omitted (the default) keeps the .bak safety net unconditionally,
+ * which is correct for every OTHER caller of this function - there is exactly one today
+ * (CodingAgent), but nothing here should assume that stays true.
  */
-export function createScopedFilesystemTool(sandboxRoot: string): ToolExecutor {
+export function createScopedFilesystemTool(sandboxRoot: string, isCheckpointBacked?: () => boolean): ToolExecutor {
   return {
     name: filesystemTool.name,
     description: `${filesystemTool.description} (scoped to ${sandboxRoot})`,
     definition: scopedFilesystemDefinition(sandboxRoot),
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const scopedInput: Record<string, unknown> = { ...input, basePath: sandboxRoot, safeMode: true };
+      const scopedInput: Record<string, unknown> = {
+        ...input,
+        basePath: sandboxRoot,
+        safeMode: true,
+        // Always explicitly set (never spread-conditional) so a model-supplied value can never
+        // survive when checkpoints are NOT confirmed usable - same override principle as
+        // basePath/safeMode above.
+        __skipBackup: isCheckpointBacked?.() === true,
+      };
       // Calls that came from a NATIVE tool_call or the heredoc write block deliver content
       // verbatim - there is no JSON-string wrapper for tool-call syntax to leak into, so
       // sanitizeCodeContent's heuristics (especially the unconditional trailing `"}` strip)

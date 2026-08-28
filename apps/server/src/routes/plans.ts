@@ -572,7 +572,15 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
               io.to(`conversation:${conversationId}`).emit("chat:start", { timestamp: new Date().toISOString(), conversationId });
             }
 
-            const result = await codingAgent.run(executionPrompt, {
+            // Plain `goal`, NOT `executionPrompt`: CodingAgent.run() builds its own complete
+            // machine-facing scaffold from goal + existingPlan + sandboxRoot (EXECUTION CONTRACT,
+            // checklist-tool instructions, phase protocol, plan steps rendered from
+            // existingPlan.steps, path-handling rules) and uses this same `goal` argument as the
+            // conversation's displayed user turn (see CodingAgent.run()'s own displayContent:goal
+            // on its internal agent.run() call). Passing executionPrompt here used to duplicate
+            // everything CodingAgent already renders from existingPlan (STEPS, project directory)
+            // AND leak that whole internal scaffold into the chat as if the user had typed it.
+            const result = await codingAgent.run(goal, {
               conversationId,
               existingPlan,
               planRunContext: { planId, planVersion, runId },
@@ -622,6 +630,12 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
           existingPlan,
           timeoutMsOverride,
           checklistMaxItemAttemptsOverride,
+          // The model still receives the full executionPrompt scaffold unchanged - this only
+          // controls what gets shown/persisted as the user's turn in the conversation, same
+          // reason CodingAgent's own run() sets this (see AgentRunOptions.displayContent's doc
+          // comment): without it, the whole internal "STEPS:/HOW TO WORK:" scaffold shows up in
+          // the chat as if the user had typed it.
+          displayContent: goal,
           onChunk: (chunk) => {
             io?.to(`conversation:${conversationId}`).emit("chat:chunk", { content: chunk, conversationId });
           },

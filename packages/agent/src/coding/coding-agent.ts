@@ -40,7 +40,7 @@ Discipline:
 3. Make minimal, targeted edits - do not restructure unrelated code. Prefer the filesystem tool's "edit" action (exact text replacement) over "write" for changes to existing files; only use "write" for new files or a genuine full-file replacement.
 4. After every change, verify it: re-read the file or run a build/test command via the shell tool.
 5. If a verification command fails, diagnose the ACTUAL error output before retrying - do not guess or repeat the same fix blindly.
-6. Use the git tool to inspect diffs/status when useful, but never push or force operations unless explicitly asked.
+6. Use git to inspect diffs/status/log when useful. Never run "git add", "git commit", "git push", or any other operation that stages, commits, or pushes changes - checkpoints are recorded automatically after every edit, version control is not your job here, and doing it yourself only creates a second, redundant history alongside the automatic one.
 7. Report concisely what changed and what you verified.
 
 ## Searching and reading efficiently - THIS DECIDES HOW FAST YOU FINISH
@@ -316,6 +316,31 @@ const CHECKLIST_CONSTRUCTION_KEYWORDS =
 const CHECKLIST_CHECK_KEYWORDS =
   /\b(verify|test|check|report|review|confirm|validate|investigate|explore|research|reproduce|diagnose|analyze|understand|inspect|read)\b/i;
 
+/** Shared precedence for both the checkpoint-grounding demotion check and the verify-success
+ *  gate below: construction wins over check (a mixed title is still held to the evidence
+ *  requirement), an unrecognized title defaults to "needs evidence".
+ *
+ *  Checked on the LEADING WORD first, not the whole title: plan step titles are imperative
+ *  ("Analyze current update implementation", "Test the fix with a manual update scenario"), so
+ *  the first word is what actually states the step's kind. Scanning the whole string lets an
+ *  incidental noun hijack the classification - "update" inside "update implementation" or
+ *  "update scenario" is not the verb, but a whole-string test can't tell the difference, and
+ *  wrongly marked both of those pure analysis/test steps as needing a file mutation they were
+ *  never going to produce, permanently stuck at "in_progress" no matter how correctly the model
+ *  did the actual analysis/testing. Only falls back to the whole title when the leading word
+ *  itself is inconclusive (matches neither list, e.g. "Update the timezone list" as a title
+ *  starting with a genuine construction verb still resolves correctly either way). */
+function checklistItemNeedsEvidence(title: string): boolean {
+  const leading = title.trim().match(/^[A-Za-z]+/)?.[0] ?? "";
+  if (leading) {
+    if (CHECKLIST_CONSTRUCTION_KEYWORDS.test(leading)) return true;
+    if (CHECKLIST_CHECK_KEYWORDS.test(leading)) return false;
+  }
+  if (CHECKLIST_CONSTRUCTION_KEYWORDS.test(title)) return true;
+  if (CHECKLIST_CHECK_KEYWORDS.test(title)) return false;
+  return true;
+}
+
 /**
  * Whole-plan version of the same classifier: does ANY step look like it needs a real file
  * change to be genuinely done? Same precedence as the per-step check (construction wins over
@@ -437,6 +462,13 @@ export class CodingAgent {
    * would be locked out of every write by a default they never opted into.
    */
   private currentPhase: "unstarted" | "explore" | "plan" | "edit" | "verify" | "report" = "unstarted";
+  /** True once THIS run has confirmed the sandbox's shadow-git checkpoint store is actually
+   *  usable (see checkpoints.ts's ensureCheckpointRepo, which is best-effort and silently returns
+   *  false if git is unavailable). Read live by the scoped filesystem tool (see
+   *  scoped-filesystem-tool.ts's isCheckpointBacked) to skip the generic .bak backup ONLY once a
+   *  real, diffable history is confirmed to exist for this sandbox - never assumed in advance,
+   *  since a run whose checkpoints never got a chance to initialize must keep that fallback. */
+  private checkpointsUsable = false;
   /** How often the phase lock refused a write this run - bounded for the same reason as
    *  readBeforeEditRefusals (see that hook): an unbounded refusal on a model that never emits
    *  the phase marker would deadlock the run instead of ever letting it edit anything. */
@@ -1050,9 +1082,25 @@ export class CodingAgent {
       // auto-selects) does not need re-scoring and re-loading from disk on every attempt.
       // run() itself resets the cache so a genuinely new goal still gets fresh selection.
       stickySkillSelection: true,
+      // Without this, Agent.run()'s per-iteration dynamic-memory retrieval (agent.ts, the
+      // "Memory-Kontext abgerufen" reasoning event) searches EVERY conversation in the database,
+      // not just this coding run's own - the same untargeted cross-chat recall the default chat
+      // agent deliberately has, documented on MemorySystem's `isolated` option as exactly the
+      // wrong thing for a scoped agent. Its keyword extraction includes recently-used TOOL NAMES
+      // (dynamicMemorySignals in agent.ts), so calling "git" here can resurface an unrelated
+      // long-term memory from a completely different feature (e.g. a past chat about the
+      // weather/news/Discord automation) purely because that memory also mentions git/commit -
+      // and a model that isn't reliably grounded (see the coding-agent-fresh-agent-review /
+      // no-tool-call issues elsewhere in this file) will happily narrate that unrelated memory as
+      // if it were this run's own state instead of continuing the actual coding task. A coding
+      // run already has its own structured, per-goal context (plan, checklist, run journal,
+      // status tool) - it never needed cross-conversation "recall" in the first place.
+      isolatedMemory: true,
     });
 
-    const baseFsTool = options.sandboxRoot ? createScopedFilesystemTool(options.sandboxRoot) : filesystemTool;
+    const baseFsTool = options.sandboxRoot
+      ? createScopedFilesystemTool(options.sandboxRoot, () => this.checkpointsUsable)
+      : filesystemTool;
     const diagnosedFsTool = withAutoDiagnostics(baseFsTool, options.sandboxRoot);
     // Per-edit checkpoints (see the wrapper's own doc comment) - a no-op when there is no
     // sandboxRoot, since the shadow-git checkpoint mechanism only exists for sandboxed runs.
@@ -1320,6 +1368,7 @@ export class CodingAgent {
     this.filesRead = new Set<string>();
     this.readBeforeEditRefusals = new Map<string, number>();
     this.currentPhase = "unstarted";
+    this.checkpointsUsable = false;
     this.phaseLockRefusals = 0;
     this.livePhaseEmitted = new Map<string, { rank: number; hasResult: boolean; hasError: boolean }>();
     this.pendingDiagnosticErrors = new Map<string, { count: number; errors: string[] }>();
@@ -1346,6 +1395,12 @@ export class CodingAgent {
     const maxIdenticalVerifyFailures = Number.isFinite(rawIdenticalVerifyLimit)
       ? Math.min(20, Math.max(1, rawIdenticalVerifyLimit))
       : 3;
+    // Settings key: AGENT_CODING_ALLOW_GIT_COMMIT (Settings > Coding Agent in the UI). Default
+    // off: CODING_DIRECTIVE's point 6 already tells the model not to stage/commit on its own -
+    // this only overrides that when an operator explicitly wants the model managing its own git
+    // history inside the sandbox (on top of the automatic checkpoint system, which always runs
+    // regardless of this setting).
+    const allowGitCommit = ((await this.db.getSetting("AGENT_CODING_ALLOW_GIT_COMMIT")) ?? "false").trim().toLowerCase() === "true";
 
     // Join the caller's conversation when there is one; only open a new one otherwise.
     // The callback fires either way - callers use it to register the run so the Stop button
@@ -1708,13 +1763,18 @@ export class CodingAgent {
       const checkpoint = this.sandboxRoot
         ? await createCheckpoint(this.sandboxRoot, `Before attempt ${attempt}: ${goal.slice(0, 80)}`)
         : undefined;
+      // Sticky once true: a checkpoint succeeding here means git itself works for this sandbox,
+      // which is the thing that was actually in question (see checkpointsUsable's doc comment) -
+      // a later transient failure doesn't retroactively make this attempt's writes unsafe. Reset
+      // to false at the top of every run() (a fresh goal deserves a fresh check), not per attempt.
+      if (checkpoint) this.checkpointsUsable = true;
 
       try {
 
       const prompt =
         attempt === 1
-          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan, isResuming, mutationExpected)
-          : this.buildFollowUpPrompt(goal, lastSummary, nextAttemptReason, mutationExpected);
+          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan, isResuming, mutationExpected, allowGitCommit)
+          : this.buildFollowUpPrompt(goal, lastSummary, nextAttemptReason, mutationExpected, allowGitCommit);
       // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
       // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
       // (possibly still "explore" if it timed out early) would permanently lock every retry
@@ -1883,6 +1943,11 @@ export class CodingAgent {
       // (e.g. "reproduce the error" via the browser tool) can be genuinely complete without
       // editing a single file, so gating solely on a file diff wrongly ends runs like that one.
       let groundingDemotedThisAttempt = false;
+      // Populated below (when mutationExpected), and read afterwards by reconcilePhaseCompletion
+      // to disambiguate which in_progress item a same-attempt write belongs to when more than one
+      // is open at once - see that method's doc comment for why a bare "exactly one in_progress"
+      // check alone isn't enough for that case.
+      const stepIdsWithConfirmedWrite = new Set<string>();
       if (this.sandboxRoot && checkpoint) {
         const attemptDiff = await diffCheckpoint(this.sandboxRoot, checkpoint.sha);
         const changedFileCount = attemptDiff?.files.length ?? 0;
@@ -1902,7 +1967,6 @@ export class CodingAgent {
           // same attempt (see coding-agent-checklist-grounding memory: batch-update gap).
           const thisAttemptJournal =
             journal.length >= journalLengthBeforeAttempt ? journal.slice(journalLengthBeforeAttempt) : journal;
-          const stepIdsWithConfirmedWrite = new Set<string>();
           let anyStepIdTrackedThisAttempt = false;
           for (const entry of thisAttemptJournal) {
             if (entry.stepId) anyStepIdTrackedThisAttempt = true;
@@ -1924,9 +1988,7 @@ export class CodingAgent {
               // the bug and verify" is still held to the file-change requirement. A pure
               // check/read/verify step (no toolcalls, or read-only ones) is legitimately done
               // without ever writing a file - exempted here, unaffected by everything below.
-              if (CHECKLIST_CONSTRUCTION_KEYWORDS.test(item.title)) return true;
-              if (CHECKLIST_CHECK_KEYWORDS.test(item.title)) return false;
-              return true; // unrecognized title: default to requiring evidence, same as before.
+              return checklistItemNeedsEvidence(item.title);
             })
             .filter((item) => {
               // Confirmed by its OWN write this attempt - the strong, per-step signal. stepId on
@@ -1967,6 +2029,10 @@ export class CodingAgent {
       // prevents the outer decision loop from treating already-finished predecessors as open.
       const announcedWorkStep = this.findAnnouncedWorkStep(lastSummary);
       this.reconcileAnnouncedStep(lastSummary, attemptChangedFileCount);
+      // Same conservative treatment for the phase-marker vocabulary the prompt also tells every
+      // model to use ("<< EDIT COMPLETE") - see reconcilePhaseCompletion's doc comment for why
+      // this is a separate check from the "Step N:" one right above.
+      this.reconcilePhaseCompletion(lastSummary, attemptChangedFileCount, stepIdsWithConfirmedWrite);
 
       // Re-checked fresh every attempt UNTIL it fires once (not just once before the loop): a
       // static HTML/CSS/JS project's index.html typically does not exist yet on attempt 1 - it
@@ -2046,8 +2112,41 @@ export class CodingAgent {
             ...(this.sandboxRoot ? { cwd: this.sandboxRoot } : {}),
           });
       if (verifyResult.success) {
-        this.emit("decision", `Verifikation "${verifyCommand}" erfolgreich.`, { attempt, verifyCommand });
         this.reconcileFinalStepAfterVerification(lastSummary);
+
+        // The verify command only proves the working tree doesn't currently fail its
+        // build/tests - it says nothing about whether the checklist's own construction steps
+        // were ever actually attempted. A verify command that happens to pass trivially (e.g.
+        // lint/build succeeding because nothing relevant changed yet) previously let the run
+        // finish "verified" while the model had only talked about steps 2+ without writing
+        // anything for them - the exact "steps stay un-started" symptom the !verifyCommand
+        // branch above already guards against, just missing here. Same construction/check
+        // classifier as the checkpoint-grounding demotion above; only checked when this plan is
+        // expected to touch files at all (mutationExpected), so a discussion/verification-only
+        // plan is never held to a mutation requirement none of its steps implied.
+        const openConstructionItems = mutationExpected
+          ? this.todos
+              .snapshot()
+              .filter((item) => item.status === "pending" || item.status === "in_progress")
+              .filter((item) => checklistItemNeedsEvidence(item.title))
+          : [];
+        if (openConstructionItems.length > 0 && attempt < maxAttempts) {
+          this.emit(
+            "decision",
+            `Verifikation "${verifyCommand}" erfolgreich, aber ${openConstructionItems.length} Checklisten-Schritt(e) sind noch nicht erledigt - fordere Fortsetzung an.`,
+            { attempt, verifyCommand, openItems: openConstructionItems.map((item) => item.title) }
+          );
+          lastSummary =
+            `${lastSummary}\n\nVerification command "${verifyCommand}" passed, but your own checklist still lists ` +
+            `open step(s) that were never actually completed: ${openConstructionItems.map((item) => item.title).join(", ")}. ` +
+            `A passing verify command does not mean the task is done - it only means nothing currently fails. ` +
+            `Actually perform the remaining step(s) now (make the concrete change and call the appropriate tool), then mark them done via the todo tool. ` +
+            `Only if a listed step is truly already finished should you mark it done without further changes - do not just narrate that it's finished.`;
+          nextAttemptReason = "checklist_open";
+          continue;
+        }
+
+        this.emit("decision", `Verifikation "${verifyCommand}" erfolgreich.`, { attempt, verifyCommand });
         return finalize({
           success: true,
           verified: true,
@@ -2225,6 +2324,55 @@ export class CodingAgent {
     const matches = [...response.matchAll(/\b(?:step|schritt)\s*(\d+)\s*[:.\-]\s*\S/gi)];
     const announced = Number(matches[matches.length - 1]?.[1]);
     return Number.isInteger(announced) && announced > 0 ? announced : undefined;
+  }
+
+  /**
+   * Reconciles the model's own phase narration (">> PHASE: EDIT" ... "<< EDIT COMPLETE") with the
+   * structured checklist, for the model that follows the phase contract exactly as instructed but
+   * never calls todo:update. reconcileAnnouncedStep already covers a model that narrates "Step 2:
+   * ..." instead - this covers the OTHER vocabulary the same prompt also tells every model to use
+   * (see buildInitialPrompt's phase contract), which that regex never matched at all since it only
+   * looks for "step N"/"schritt N".
+   *
+   * Deliberately as conservative as reconcileAnnouncedStep: fires only on "<< EDIT COMPLETE" (the
+   * model explicitly declaring the edit phase done, not merely started) with a real checkpoint
+   * diff in this same attempt as evidence, and only ever closes ONE item.
+   *
+   * Which one: if exactly one "in_progress" item needs evidence, that one - unambiguous by
+   * construction. If there is more than one (a plan with several construction steps open at
+   * once), a bare "exactly one in_progress" check would refuse to touch any of them even when the
+   * journal already knows precisely which step's write happened this attempt - stepIdsWithWrite
+   * is that same per-step attribution the checkpoint-grounding demotion above already computes
+   * (see its "confirmed by its OWN write this attempt" filter), reused here so the ambiguous case
+   * isn't silently dropped just because a second, unrelated step also happens to be open. Falls
+   * back to doing nothing only when neither signal resolves it - guessing is worse than a
+   * checklist that stays open one attempt longer.
+   */
+  private reconcilePhaseCompletion(response: string, changedFileCount: number, stepIdsWithWrite: ReadonlySet<string>): void {
+    if (changedFileCount <= 0) return;
+    if (!/<<\s*EDIT\s+COMPLETE\b/i.test(response)) return;
+
+    const items = this.todos.snapshot();
+    const inProgress = items.filter((item) => item.status === "in_progress" && checklistItemNeedsEvidence(item.title));
+    if (inProgress.length === 0) return;
+    const target =
+      inProgress.length === 1 ? inProgress[0]! : inProgress.find((item) => stepIdsWithWrite.has(String(item.id)));
+    if (!target) return;
+
+    this.todos.update(
+      target.id,
+      "done",
+      'Automatisch konsolidiert: Modell meldete "<< EDIT COMPLETE" mit einer belegten Dateiänderung in diesem Versuch.'
+    );
+    const nextPending = items.find((item) => item.status === "pending");
+    if (nextPending) {
+      this.todos.update(nextPending.id, "in_progress", "Naechster offener Schritt nach automatisch konsolidiertem EDIT-Abschluss.");
+    }
+    this.emit(
+      "decision",
+      `Fortschritt mit Checkliste konsolidiert: "<< EDIT COMPLETE" mit Dateiänderung erledigt Schritt "${target.title}".`,
+      { changedFileCount, todo_items: this.todos.snapshot() }
+    );
   }
 
   /**
@@ -2687,6 +2835,32 @@ export class CodingAgent {
     return meta.length > 0 ? `${line} [${meta.join(" · ")}]` : line;
   }
 
+  /**
+   * Shared between buildInitialPrompt and buildFollowUpPrompt - deliberately repeated on EVERY
+   * attempt, not just the first. All attempts share one conversation, so in principle attempt 1's
+   * copy is still "in context" for attempt 3 - but buildFollowUpPrompt's own status-tool line
+   * already warns the model that context may have been trimmed by then, and a multi-attempt run
+   * reading/writing real files fills that budget fast. A model that no longer sees this exact
+   * instruction reverts to narrating progress in prose instead of calling todo:update - which is
+   * indistinguishable, from the controller's side, from "checklist is frozen" (see the checkpoint-
+   * grounding demotion and reconcilePhaseCompletion, which both exist to catch that after the
+   * fact). Repeating the instruction verbatim on every attempt is cheaper than relying on stale
+   * context, and follows the same recency principle as checklistHint/runJournalHint in agent.ts.
+   */
+  private checklistMaintenanceBlock(): string[] {
+    return [
+      "Track your progress with the todo tool: it already contains the plan below as pending steps.",
+      "That checklist is what the user watches live while you work, so update it AS YOU GO, not in a",
+      "batch at the end: mark a step in_progress before starting it, and call todo:update the moment",
+      "that step's own change is written and looks correct - do not wait for the final project-wide",
+      "verification command before checking off an individual step; that command only confirms the",
+      "whole task at the end, and holding every step open until then is exactly what makes the checklist",
+      "look frozen to the user. Only keep a step open if ITS OWN change is not actually done yet or a",
+      "diagnostic specific to it is still failing - never mark a step done on the strength of an",
+      "announcement alone, without having made the corresponding edit.",
+    ];
+  }
+
   /** Shared with buildFollowUpPrompt (see there for why this must not be initial-attempt-only). */
   private pathHandlingBlock(): string[] {
     if (!this.sandboxRoot) return [];
@@ -2744,7 +2918,8 @@ export class CodingAgent {
     detectedSkill: string | undefined,
     plan: Plan,
     isResuming: boolean,
-    mutationExpected: boolean
+    mutationExpected: boolean,
+    allowGitCommit: boolean
   ): string {
     const parts: string[] = [`Goal: ${goal}`, "", ...this.pathHandlingBlock()];
 
@@ -2775,15 +2950,15 @@ export class CodingAgent {
       "- A final answer while required checklist steps are still open is rejected as incomplete.",
       "- When you know the next action, emit its tool call immediately; do not spend a turn promising it.",
       "",
-      "Track your progress with the todo tool: it already contains the plan below as pending steps.",
-      "That checklist is what the user watches live while you work, so update it AS YOU GO, not in a",
-      "batch at the end: mark a step in_progress before starting it, and call todo:update the moment",
-      "that step's own change is written and looks correct - do not wait for the final project-wide",
-      "verification command before checking off an individual step; that command only confirms the",
-      "whole task at the end, and holding every step open until then is exactly what makes the checklist",
-      "look frozen to the user. Only keep a step open if ITS OWN change is not actually done yet or a",
-      "diagnostic specific to it is still failing - never mark a step done on the strength of an",
-      "announcement alone, without having made the corresponding edit.",
+      ...(allowGitCommit
+        ? [
+            "Note: the operator has explicitly enabled git commits for this run (AGENT_CODING_ALLOW_GIT_COMMIT).",
+            "You MAY stage and commit your own changes within the sandbox if useful - this overrides the",
+            "\"never commit\" rule in your base instructions. Still never push or force operations unless asked.",
+            "",
+          ]
+        : []),
+      ...this.checklistMaintenanceBlock(),
       "",
       "The status tool gives you a one-call snapshot of your current phase, checklist, open diagnostic",
       "errors, and what files have actually changed this attempt. Use it after a few edits when you need",
@@ -2840,7 +3015,8 @@ export class CodingAgent {
     goal: string,
     previousSummaryWithVerification: string,
     reason: "verification_failed" | "checklist_open" | "guardrail",
-    mutationExpected: boolean
+    mutationExpected: boolean,
+    allowGitCommit: boolean
   ): string {
     // The checklist carries across attempts. Each attempt is a fresh agent.run(), so without
     // replaying it here the agent would re-plan from scratch and redo steps it already finished.
@@ -2857,10 +3033,15 @@ export class CodingAgent {
         ? "The controller will reject success unless a real filesystem mutation is recorded and every required checklist step is closed. Prose claims do not count. Call the next tool immediately instead of announcing it."
         : "This run is explicitly read-only. The controller still requires every checklist step to be closed; prose claims do not count as evidence.",
       "",
+      allowGitCommit
+        ? "Reminder: git commits are explicitly enabled for this run (AGENT_CODING_ALLOW_GIT_COMMIT) - you may still stage/commit your own changes if useful."
+        : "",
       "BEFORE YOU ACT, call the status tool. It tells you in one call what normally takes several reads: which steps are already done (from the checklist), what files you actually changed (from the checkpoint diff - not your memory), and whether any diagnostics are still failing. Your conversation context may have been trimmed and earlier results may no longer be visible, so do NOT rely on what you remember - ask the status tool for ground truth.",
       this.pathHandlingBlock().join("\n"),
       `Original goal: ${goal}`,
-      checklist ? `Your checklist so far (keep updating it, do not start it over):\n${checklist}` : "",
+      checklist
+        ? `Your checklist so far (keep updating it, do not start it over):\n${checklist}\n\n${this.checklistMaintenanceBlock().join("\n")}`
+        : "",
       reason === "verification_failed" ? "Previous attempt summary and verification output:" : "Continuation context:",
       previousSummaryWithVerification,
     ].filter((part) => part !== "").join("\n\n");

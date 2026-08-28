@@ -543,13 +543,20 @@ function detectLeakedQuoteEscaping(filePath: string, content: string): string | 
 }
 
 /**
- * Writes content via temp-file + rename (atomic on the same volume) and keeps
- * a .bak copy of the previous version, so a truncated/garbled LLM completion
- * can never leave the target file half-written and the prior version is
- * always recoverable.
+ * Writes content via temp-file + rename (atomic on the same volume) and, unless the caller says
+ * a real version history already covers this file, keeps a .bak copy of the previous version -
+ * so a truncated/garbled LLM completion can never leave the target file half-written and the
+ * prior version is always recoverable.
+ *
+ * `skipBackup` is set by createScopedFilesystemTool only when the CodingAgent sandbox's shadow-
+ * git checkpoint store is confirmed usable for this run - a full history with diff/revert already
+ * exists there, so the .bak copy would be pure clutter sitting next to the real project files
+ * (checkpoints deliberately exclude *.bak from their own snapshots, see checkpoints.ts's
+ * EXCLUDES, so it never even shows up in that history). The plain, unscoped tool (regular chat,
+ * no checkpoint system at all) never sets this flag and keeps the .bak safety net unconditionally.
  */
-function atomicWrite(filePath: string, content: string): void {
-  if (existsSync(filePath)) {
+function atomicWrite(filePath: string, content: string, skipBackup = false): void {
+  if (!skipBackup && existsSync(filePath)) {
     copyFileSync(filePath, `${filePath}.bak`);
   }
   const tmpPath = join(dirname(filePath), `.${randomBytes(6).toString("hex")}.tmp`);
@@ -726,6 +733,9 @@ export const filesystemTool: ToolExecutor = {
     const dryRun = (input["dryRun"] as boolean | undefined) ?? false;
     const createDirs = (input["createDirs"] as boolean | undefined) ?? true;
     const overwrite = (input["overwrite"] as boolean | undefined) ?? true;
+    // Internal-only flag, set by createScopedFilesystemTool - never part of the tool's public
+    // schema/definition, so an LLM has no way to pass this itself. See atomicWrite's doc comment.
+    const skipBackup = input["__skipBackup"] === true;
     // Field aliases and non-string shapes are resolved by the shared extractor, so the agent's
     // preflight validation applies exactly the same rule (see extractFileContent).
     let content = extractFileContent(input, String(input["path"] ?? ""));
@@ -896,7 +906,7 @@ export const filesystemTool: ToolExecutor = {
           } else {
             partGroups.delete(filePath);
           }
-          atomicWrite(filePath, content);
+          atomicWrite(filePath, content, skipBackup);
           if (part.totalParts !== undefined && part.totalParts === 1) {
             // A single-part "sequence" is complete the moment it is written.
             partGroups.delete(filePath);
@@ -999,7 +1009,7 @@ export const filesystemTool: ToolExecutor = {
             return { success: false, data: null, error: validationError };
           }
           const leakWarning = isCompleteAppend ? detectLeakedQuoteEscaping(filePath, combined) : undefined;
-          atomicWrite(filePath, combined);
+          atomicWrite(filePath, combined, skipBackup);
           if (group) {
             // partNumber is validated above (the sequence branch requires it and matches
             // group.next), so it is defined here.
@@ -1146,7 +1156,7 @@ export const filesystemTool: ToolExecutor = {
           if (dryRun) {
             return { success: true, data: { dryRun: true, action, path: filePath, occurrences: spans.length, matchedMode, ...fuzzyExtra } };
           }
-          atomicWrite(filePath, updated);
+          atomicWrite(filePath, updated, skipBackup);
           return { success: true, data: { path: filePath, occurrences: spans.length, matchedMode, ...fuzzyExtra } };
         }
 
@@ -1235,7 +1245,7 @@ export const filesystemTool: ToolExecutor = {
               data: { dryRun: true, action, path: filePath, linesRemoved, linesInserted: replacementLines.length },
             };
           }
-          atomicWrite(filePath, updated);
+          atomicWrite(filePath, updated, skipBackup);
           return {
             success: true,
             data: {
