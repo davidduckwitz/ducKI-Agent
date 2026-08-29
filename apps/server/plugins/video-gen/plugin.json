@@ -1,0 +1,70 @@
+{
+  "name": "video-gen",
+  "version": "0.1.0",
+  "description": "Lokale Videogenerierung mit kleinen/mittleren Text-zu-Video-Diffusionsmodellen (Wan2.1, LTX-Video, HunyuanVideo, CogVideoX) ueber einen eigenen Python-Sidecar (diffusers). Erzeugt kurze MP4-Clips direkt aus einem Text-Prompt, ohne fremde Oberflaeche - Schwestermodul zu image-gen, gleiches Setup-/Sidecar-Muster.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🎬",
+  "category": "workspace",
+  "provides": {
+    "moduleTools": [
+      "tools/video-gen.js"
+    ],
+    "skills": [
+      "skills/video-gen-usage"
+    ],
+    "settings": [
+      {
+        "key": "PYTHON_PATH",
+        "type": "string",
+        "default": "python",
+        "description": "Pfad/Kommando zum Python-Interpreter, der den Videogenerierungs-Sidecar startet (z. B. 'python' oder Pfad zu einer venv)"
+      },
+      {
+        "key": "VIDEO_MODEL",
+        "type": "select",
+        "default": "cogvideox-2b",
+        "options": ["wan2.1-1.3b", "ltx-video", "hunyuanvideo", "cogvideox-2b"],
+        "description": "Standardmodell fuer die Videogenerierung. cogvideox-2b ist das kleinste/genuegsamste, hunyuanvideo das groesste (braucht sehr viel VRAM). Alle profitieren stark von einer GPU - reine CPU-Generierung ist bei Video praktisch unbrauchbar langsam."
+      },
+      {
+        "key": "DEVICE",
+        "type": "select",
+        "default": "auto",
+        "options": ["auto", "cpu", "cuda"],
+        "description": "Rechengeraet fuer die Inferenz. 'auto' nutzt CUDA falls verfuegbar, sonst CPU (fuer Video kaum praktikabel)."
+      },
+      {
+        "key": "AUTO_INSTALL_DEPS",
+        "type": "boolean",
+        "default": false,
+        "description": "Erlaubt dem Plugin, fehlende Python-Pakete beim ersten Start automatisch zu installieren (Download mehrerer GB moeglich). Standardmaessig deaktiviert."
+      },
+      {
+        "key": "MAX_IDLE_MINUTES",
+        "type": "number",
+        "default": 10,
+        "description": "Minuten ohne Anfrage, nach denen der lokale Sidecar-Prozess beendet wird, um RAM/VRAM freizugeben."
+      },
+      {
+        "key": "OFFLINE_MODE",
+        "type": "boolean",
+        "default": false,
+        "description": "Erlaubt NIE einen Netzwerkzugriff auf huggingface.co - nutzt ausschliesslich bereits lokal gecachte Modelle und bricht mit einer klaren Fehlermeldung ab, falls ein Modell noch nicht vollstaendig heruntergeladen wurde."
+      },
+      {
+        "key": "HF_TOKEN",
+        "type": "secret",
+        "description": "Optionales Hugging-Face-Zugriffstoken (huggingface.co/settings/tokens). Manche Video-Modelle (z. B. HunyuanVideo) verlangen ein angemeldetes/akzeptiertes Konto."
+      }
+    ],
+    "frontendPage": "app/index.html",
+    "settingsPage": "settings/index.html"
+  },
+  "storage": {
+    "sqlite": true
+  },
+  "trust": "node",
+  "permissions": [],
+  "enabled": true
+}

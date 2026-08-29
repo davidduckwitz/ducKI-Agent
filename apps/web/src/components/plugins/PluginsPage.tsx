@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, type PluginInfo, type PluginWidgetSpec } from "../../lib/api";
+import { api, type PluginInfo, type PluginWidgetSpec, type PluginBuilderDraft } from "../../lib/api";
 import { pluginUiUrl } from "../../lib/backendUrl";
 import { toastManager as toast } from "../../lib/toast";
+import { useAppStore } from "../../lib/store";
 import { CreatePluginWizardModal } from "./CreatePluginWizardModal";
 
 /** Public plugin catalog API (filterable via ?search= / ?category=). */
@@ -31,9 +32,25 @@ export function PluginsPage() {
   const [widgetsFor, setWidgetsFor] = useState<string | null>(null);
   const [widgetDrafts, setWidgetDrafts] = useState<Record<string, PluginWidgetSpec[]>>({});
   const [createOpen, setCreateOpen] = useState(false);
+  const [resumeRun, setResumeRun] = useState<{ name: string; runId: string } | null>(null);
+  const [drafts, setDrafts] = useState<PluginBuilderDraft[]>([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
+  const [draftBusy, setDraftBusy] = useState<string | null>(null);
   const [reloading, setReloading] = useState(false);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const socket = useAppStore((s) => s.socket);
+
+  const refreshDrafts = useCallback(async () => {
+    setDraftsLoading(true);
+    try {
+      setDrafts(await api.plugins.listDrafts());
+    } catch {
+      // Best-effort - a broken drafts listing shouldn't block the rest of the page.
+    } finally {
+      setDraftsLoading(false);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -66,8 +83,47 @@ export function PluginsPage() {
 
   useEffect(() => {
     void reload(true);
+    void refreshDrafts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A builder run's terminal state (success/fail/stop) is only pushed over the socket while
+  // the wizard modal that started it is mounted and listening - refresh the drafts list here too
+  // so a run that finishes after the modal was closed ("im Hintergrund weiterlaufen lassen")
+  // still updates status/removes itself from "Unfertige Entwürfe" without a manual reload.
+  useEffect(() => {
+    if (!socket) return;
+    const handleComplete = () => { void refreshDrafts(); if (tab === "installed") void refresh(); };
+    socket.on("plugin_create_complete", handleComplete);
+    return () => { socket.off("plugin_create_complete", handleComplete); };
+  }, [socket, refreshDrafts, refresh, tab]);
+
+  const resumeDraft = async (draft: PluginBuilderDraft) => {
+    setDraftBusy(draft.name);
+    try {
+      const res = await api.plugins.resumeRun(draft.name);
+      setResumeRun({ name: draft.name, runId: res.runId });
+      setCreateOpen(true);
+      void refreshDrafts();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Fortsetzen fehlgeschlagen");
+    } finally {
+      setDraftBusy(null);
+    }
+  };
+
+  const deleteDraft = async (draft: PluginBuilderDraft) => {
+    setDraftBusy(draft.name);
+    try {
+      await api.plugins.deleteDraft(draft.name);
+      setDrafts((current) => current.filter((d) => d.name !== draft.name));
+      toast.success(`Entwurf "${draft.name}" gelöscht`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Löschen fehlgeschlagen");
+    } finally {
+      setDraftBusy(null);
+    }
+  };
 
   // Catalog is fetched server-side filtered (?search=) with a small debounce so typing
   // doesn't hammer the endpoint. Re-runs whenever the search term changes on the catalog tab.
@@ -179,7 +235,7 @@ export function PluginsPage() {
             {reloading ? "Aktualisiere…" : "⟳ Aktualisieren"}
           </button>
           <button
-            onClick={() => setCreateOpen(true)}
+            onClick={() => { setResumeRun(null); setCreateOpen(true); }}
             className="rounded bg-primary px-3 py-1.5 text-sm text-primary-foreground"
           >
             + Plugin erstellen
@@ -189,9 +245,10 @@ export function PluginsPage() {
 
       <CreatePluginWizardModal
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={() => { setCreateOpen(false); setResumeRun(null); void refreshDrafts(); }}
         existingNames={plugins.map((p) => p.name)}
         onCreated={() => void refresh()}
+        resumeRun={resumeRun}
       />
 
       <div className="flex gap-2 border-b border-border">
@@ -208,6 +265,61 @@ export function PluginsPage() {
 
       {tab === "installed" && (
         <div className="space-y-3">
+          {!draftsLoading && drafts.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+              <div className="text-sm font-medium text-amber-200">🚧 Unfertige Entwürfe ({drafts.length})</div>
+              <p className="text-xs text-muted-foreground">
+                Diese Plugin-Builder-Läufe wurden nicht abgeschlossen (fehlgeschlagen, gestoppt oder das Fenster wurde geschlossen).
+                Die geschriebenen Dateien liegen noch auf dem Server — hier kannst du sie fortsetzen oder verwerfen.
+              </p>
+              {drafts.map((draft) => (
+                <div key={draft.name} className="flex items-center justify-between gap-3 rounded border border-border bg-background/60 p-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 text-sm">
+                      {draft.icon && <span>{draft.icon}</span>}
+                      <span className="font-medium">{draft.displayName}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{draft.name}</span>
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] ${
+                        draft.status === "running" ? "bg-cyan-500/15 text-cyan-300"
+                          : draft.status === "failed" ? "bg-red-500/15 text-red-400"
+                          : draft.status === "stopped" ? "bg-gray-500/15 text-gray-400"
+                          : "bg-muted text-muted-foreground"
+                      }`}>
+                        {draft.status === "running" ? "läuft" : draft.status === "failed" ? "fehlgeschlagen" : draft.status === "stopped" ? "gestoppt" : "unbekannt"}
+                      </span>
+                    </div>
+                    {draft.error && <p className="mt-0.5 truncate text-xs text-red-400" title={draft.error}>{draft.error}</p>}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {draft.status === "running" ? (
+                      <button
+                        onClick={() => { setResumeRun({ name: draft.name, runId: draft.runId ?? "" }); setCreateOpen(true); }}
+                        className="rounded border border-border px-3 py-1.5 text-xs"
+                      >
+                        Ansehen
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => void resumeDraft(draft)}
+                        disabled={draftBusy === draft.name || !draft.resumable}
+                        title={draft.resumable ? undefined : "Kein spec.json vorhanden - dieser Entwurf kann nur gelöscht werden"}
+                        className="rounded border border-border px-3 py-1.5 text-xs disabled:opacity-50"
+                      >
+                        {draftBusy === draft.name ? "…" : "Fortsetzen"}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => void deleteDraft(draft)}
+                      disabled={draftBusy === draft.name}
+                      className="rounded border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                    >
+                      Löschen
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {loading && <p className="text-sm text-muted-foreground">Lade …</p>}
           {!loading && plugins.length === 0 && (
             <p className="text-sm text-muted-foreground">Keine Plugins in <code>plugins/</code> gefunden.</p>

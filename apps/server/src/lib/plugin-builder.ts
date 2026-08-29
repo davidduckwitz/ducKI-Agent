@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { z } from "zod";
+import { CHECKPOINT_DIR } from "@ducki/agent";
 
 const SAFE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SETTING_PREFIX = /^[A-Z][A-Z0-9_]*$/;
@@ -204,6 +205,18 @@ function digest(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+/**
+ * Same shape as createPluginScaffold's return value, but for a scaffold that already exists on
+ * disk (a resumed builder run) - hashes the CURRENT locked-file contents instead of writing fresh
+ * TODO placeholders, so validateScaffoldIntegrity() checks against what's really there rather than
+ * clobbering an agent's earlier work.
+ */
+export function describeExistingScaffold(root: string, input: unknown): PluginScaffoldResult {
+  const described = describePluginScaffold(input);
+  const hashes = Object.fromEntries(described.lockedFiles.map((rel) => [rel, digest(readFileSync(join(root, rel), "utf8"))]));
+  return { ...described, hashes };
+}
+
 export function createPluginScaffold(root: string, input: unknown): PluginScaffoldResult {
   const described = describePluginScaffold(input);
   const contents = scaffoldContents(described.spec);
@@ -219,9 +232,19 @@ export function createPluginScaffold(root: string, input: unknown): PluginScaffo
   return { ...described, hashes };
 }
 
+/** Builder-internal bookkeeping file (the original spec, so /builder/drafts and resume-run can
+ *  reconstruct a staging dir after the in-memory run record is gone) - not part of the plugin
+ *  itself, so it must be excluded from the same "unexpected file" scan as CHECKPOINT_DIR below. */
+export const BUILDER_SPEC_FILE = "spec.json";
+
 function listFiles(root: string, current = root): string[] {
   const result: string[] = [];
   for (const entry of readdirSync(current, { withFileTypes: true })) {
+    // The CodingAgent's own checkpoint git repo (packages/agent/src/coding/checkpoints.ts) lives
+    // INSIDE the sandbox root it's checkpointing - it's the agent's tooling, not something it
+    // "created" in the plugin, so it must never be flagged as an unexpected/extra file. Same for
+    // the builder's own spec.json bookkeeping file (see BUILDER_SPEC_FILE).
+    if (current === root && (entry.name === CHECKPOINT_DIR || entry.name === BUILDER_SPEC_FILE)) continue;
     const abs = join(current, entry.name);
     if (entry.isDirectory()) result.push(...listFiles(root, abs));
     else if (entry.isFile()) result.push(relative(root, abs).replace(/\\/g, "/"));

@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Gen</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #0b0b0f;
+    --surface: #141419;
+    --surface-2: #1b1b22;
+    --surface-3: #22222b;
+    --border: #292932;
+    --border-strong: #383842;
+    --text: #f4f4f5;
+    --text-secondary: #d4d4d8;
+    --muted: #a1a1aa;
+    --primary: #ec4899;
+    --primary-hover: #f472b6;
+    --primary-soft: rgba(236, 72, 153, .16);
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius: 16px;
+  }
+
+  * { box-sizing: border-box; }
+  html { min-height: 100%; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  button, input, select, textarea { font: inherit; }
+  button { cursor: pointer; }
+
+  .app { width: 100%; max-width: 1200px; margin: 0 auto; padding: 20px 24px 40px; }
+
+  .topbar { display: flex; align-items: center; gap: 13px; margin-bottom: 20px; }
+  .brand-icon {
+    width: 46px; height: 46px; display: flex; align-items: center; justify-content: center;
+    border-radius: 14px; color: #fff; font-size: 21px;
+    background: linear-gradient(135deg, #ec4899, #f472b6);
+    box-shadow: 0 8px 25px rgba(236, 72, 153, .35); flex-shrink: 0;
+  }
+  .brand-text h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.03em; }
+  .brand-text p { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 20px;
+  }
+
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; }
+  .field textarea, .field input:not([type="range"]), .field select {
+    width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--text); padding: 10px 12px; outline: 0;
+  }
+  .field textarea { min-height: 70px; resize: vertical; }
+  .field textarea:focus, .field input:focus, .field select:focus { border-color: var(--border-strong); }
+  .field input[type="range"] { width: 100%; accent-color: var(--primary); }
+
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .hint { font-size: 11px; color: var(--muted); margin: -4px 0 14px; line-height: 1.4; }
+
+  .primary-button {
+    min-height: 42px; border-radius: 10px; padding: 0 18px; border: 1px solid var(--primary);
+    background: var(--primary); color: #fff; font-weight: 700; transition: .18s ease;
+  }
+  .primary-button:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
+  .primary-button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .secondary-button {
+    min-height: 34px; border-radius: 9px; padding: 0 14px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); font-weight: 600; font-size: 12px; transition: .18s ease;
+  }
+  .secondary-button:hover:not(:disabled) { background: var(--surface-3); border-color: var(--border-strong); }
+  .secondary-button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .danger-button {
+    min-height: 34px; border-radius: 9px; padding: 0 14px; border: 1px solid rgba(239, 68, 68, .4);
+    background: rgba(239, 68, 68, .1); color: var(--danger); font-weight: 700; font-size: 12px; transition: .18s ease;
+  }
+  .danger-button:hover:not(:disabled) { background: rgba(239, 68, 68, .18); }
+
+  .link-button {
+    background: none; border: none; color: var(--primary); font-size: 11px; font-weight: 700;
+    padding: 0; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .link-button:hover:not(:disabled) { color: var(--primary-hover); }
+  .link-button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .field-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .field-head label { margin-bottom: 0; }
+
+  .spinner {
+    display: inline-block; width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; margin-right: 6px;
+    animation: spin .7s linear infinite; vertical-align: -1px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .status { font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 16px; }
+  .status.error { color: var(--danger); }
+  .status.ok { color: var(--success); }
+
+  .gallery-title { font-size: 14px; font-weight: 700; margin: 0 0 12px; color: var(--text-secondary); }
+  .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 16px; }
+  .pagination #page-info { font-size: 12px; color: var(--muted); min-width: 90px; text-align: center; }
+  .pagination button:disabled { opacity: .4; cursor: not-allowed; }
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .gallery-item {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+    cursor: pointer; transition: border-color .15s ease;
+  }
+  .gallery-item:hover { border-color: var(--border-strong); }
+  .gallery-item video { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: var(--surface-3); pointer-events: none; }
+  .gallery-item .meta { padding: 8px 10px; }
+  .gallery-item .meta p { margin: 0; font-size: 11px; color: var(--muted); line-clamp: 2; -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+  .empty { color: var(--muted); font-size: 13px; padding: 30px 0; text-align: center; }
+
+  .setup-card { text-align: center; }
+  .setup-card h2 { margin: 0 0 8px; font-size: 16px; }
+  .setup-card p { margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+  .setup-log {
+    text-align: left; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font-family: "Consolas", "Menlo", monospace; font-size: 11px; color: var(--text-secondary);
+    max-height: 220px; overflow-y: auto; margin-top: 14px; white-space: pre-wrap; display: none;
+  }
+  .setup-phase { font-size: 12px; font-weight: 700; color: var(--primary); margin-top: 12px; display: none; }
+  .hidden { display: none !important; }
+
+  /* Model management */
+  .model-row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border);
+  }
+  .model-row:last-child { border-bottom: none; }
+  .model-info { flex: 1; min-width: 0; }
+  .model-name { font-size: 13px; font-weight: 700; }
+  .model-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .model-badge {
+    display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 6px;
+    margin-right: 6px; text-transform: uppercase; letter-spacing: .02em;
+  }
+  .model-badge.loaded { background: var(--primary-soft); color: var(--primary-hover); }
+  .model-badge.downloaded { background: rgba(34, 197, 94, .14); color: var(--success); }
+  .model-badge.not-downloaded { background: var(--surface-3); color: var(--muted); }
+  .model-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+  /* Modal (detail view) */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center;
+    justify-content: center; z-index: 100; padding: 20px;
+  }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    max-width: 680px; width: 100%; max-height: 90vh; overflow-y: auto;
+  }
+  .modal-head {
+    display: flex; align-items: center; justify-content: space-between; padding: 16px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal-head h2 { margin: 0; font-size: 15px; font-weight: 700; }
+  .modal-close {
+    background: none; border: none; color: var(--muted); font-size: 16px; width: 28px; height: 28px;
+    border-radius: 8px;
+  }
+  .modal-close:hover { background: var(--surface-2); color: var(--text); }
+  .modal-body { padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-video { width: 100%; max-height: 420px; border-radius: 10px; background: #000; }
+  .meta-line { font-size: 11px; color: var(--muted); line-height: 1.6; }
+  .meta-line b { color: var(--text-secondary); font-weight: 600; }
+  .action-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .text-box {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+    font-size: 12px; color: var(--text-secondary); line-height: 1.5; white-space: pre-wrap;
+  }
+  .section-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px; }
+  .danger-row { display: flex; justify-content: flex-end; padding-top: 4px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand-icon">🎬</div>
+    <div class="brand-text">
+      <h1>Video Gen</h1>
+      <p>Lokale Videogenerierung (Wan2.1 / LTX-Video / HunyuanVideo / CogVideoX)</p>
+    </div>
+  </div>
+
+  <div class="card setup-card hidden" id="setup-card">
+    <h2>Erstmalige Einrichtung noetig</h2>
+    <p>Legt eine eigene Python-Umgebung an und installiert PyTorch/diffusers (GPU wird automatisch erkannt). Laedt mehrere GB, dauert einige Minuten. Modellgewichte selbst werden separat pro Modell geladen (siehe "Modelle verwalten" unten, sobald eingerichtet).</p>
+    <button class="primary-button" id="setup-btn">Jetzt automatisch einrichten</button>
+    <div class="setup-phase" id="setup-phase"></div>
+    <div class="setup-log" id="setup-log"></div>
+  </div>
+
+  <div class="card hidden" id="models-card">
+    <p class="gallery-title">Modelle verwalten</p>
+    <div id="models-list"></div>
+    <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+      <button type="button" class="link-button" id="repair-env-btn">🔧 Python-Umgebung reparieren (bei Fehlern wie "ModuleNotFoundError")</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="generate-card">
+    <div class="field">
+      <div class="field-head">
+        <label for="prompt">Prompt</label>
+        <button type="button" class="link-button" id="prompt-maker-btn">✨ Prompt-Vorschlag</button>
+      </div>
+      <textarea id="prompt" placeholder="z. B. a wave crashing on a beach at sunset, slow motion (auch eine grobe Idee reicht - dann auf ✨ klicken)"></textarea>
+    </div>
+    <div class="field">
+      <label for="negative">Negative Prompt (optional)</label>
+      <input id="negative" type="text" placeholder="z. B. static, blurry, distorted motion, low quality">
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="model">Modell</label>
+        <select id="model">
+          <option value="">Plugin-Standard</option>
+          <option value="wan2.1-1.3b">Wan2.1-T2V-1.3B</option>
+          <option value="ltx-video">LTX-Video</option>
+          <option value="hunyuanvideo">HunyuanVideo</option>
+          <option value="cogvideox-2b">CogVideoX-2B</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="seed">Seed (optional)</label>
+        <input id="seed" type="number" placeholder="zufaellig">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="width">Breite</label>
+        <input id="width" type="number" step="16" placeholder="modellabhaengig">
+      </div>
+      <div class="field">
+        <label for="height">Hoehe</label>
+        <input id="height" type="number" step="16" placeholder="modellabhaengig">
+      </div>
+      <div class="field">
+        <label for="num_frames">Frames</label>
+        <input id="num_frames" type="number" placeholder="modellabhaengig">
+      </div>
+      <div class="field">
+        <label for="fps">FPS</label>
+        <input id="fps" type="number" placeholder="modellabhaengig">
+      </div>
+    </div>
+    <div class="row">
+      <div class="field">
+        <label for="steps">Steps</label>
+        <input id="steps" type="number" placeholder="modellabhaengig (meist ~50)">
+      </div>
+      <div class="field">
+        <label for="guidance">CFG / Guidance-Scale</label>
+        <input id="guidance" type="number" step="0.5" placeholder="modellabhaengig">
+      </div>
+    </div>
+    <p class="hint">Leer lassen, um die vom jeweiligen Modell empfohlenen Standardwerte zu nutzen. Clip-Laenge in Sekunden = Frames / FPS. Videogenerierung ist deutlich langsamer als Bildgenerierung - je nach Modell/GPU mehrere Minuten pro Clip.</p>
+
+    <button class="primary-button" id="generate-btn">Video generieren</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card">
+    <p class="gallery-title">Zuletzt generiert</p>
+    <div class="gallery" id="gallery"></div>
+    <div class="pagination" id="pagination">
+      <button type="button" class="secondary-button" id="page-prev-btn">← Zurück</button>
+      <span id="page-info"></span>
+      <button type="button" class="secondary-button" id="page-next-btn">Weiter →</button>
+    </div>
+  </div>
+</div>
+
+<div id="modalRoot"></div>
+
+<script>
+  const INVOKE_URL = "/api/plugins/video-gen/invoke";
+  const statusEl = document.getElementById("status");
+  const galleryEl = document.getElementById("gallery");
+  const btn = document.getElementById("generate-btn");
+  const setupCard = document.getElementById("setup-card");
+  const generateCard = document.getElementById("generate-card");
+  const setupBtn = document.getElementById("setup-btn");
+  const setupPhase = document.getElementById("setup-phase");
+  const setupLog = document.getElementById("setup-log");
+  const promptEl = document.getElementById("prompt");
+  const promptMakerBtn = document.getElementById("prompt-maker-btn");
+  const modalRoot = document.getElementById("modalRoot");
+  const modelsCard = document.getElementById("models-card");
+  const modelsList = document.getElementById("models-list");
+
+  const PHASE_LABELS = {
+    idle: "",
+    creating_venv: "Erstelle Python-Umgebung...",
+    installing_torch: "Installiere PyTorch...",
+    installing_deps: "Installiere restliche Abhaengigkeiten...",
+    done: "Fertig!",
+    error: "Fehler bei der Einrichtung",
+  };
+
+  let pollTimer = null;
+  let galleryItems = [];
+
+  async function invoke(input) {
+    const res = await fetch(INVOKE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "video_gen", input }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) {
+      throw new Error(json.error || "Anfrage fehlgeschlagen");
+    }
+    return json.data.result;
+  }
+
+  async function withButtonSpinner(btnEl, label, fn) {
+    const original = btnEl.innerHTML;
+    btnEl.disabled = true;
+    btnEl.innerHTML = '<span class="spinner"></span>' + label;
+    try {
+      await fn();
+    } finally {
+      btnEl.disabled = false;
+      btnEl.innerHTML = original;
+    }
+  }
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text || "";
+    statusEl.className = "status" + (kind ? " " + kind : "");
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function fmtDate(iso) {
+    try { return new Date(iso).toLocaleString(); } catch { return iso || ""; }
+  }
+
+  /** Custom confirm dialog - the plugin frontend runs in a sandboxed iframe without allow-modals,
+   *  so native confirm()/alert() are silently blocked (see image-gen/app/index.html for the fuller
+   *  explanation this was cloned from). Appended to document.body so it can layer on top of the
+   *  detail modal. */
+  function confirmDialog(message) {
+    return new Promise((resolve) => {
+      const backdrop = document.createElement("div");
+      backdrop.className = "modal-backdrop";
+      backdrop.style.zIndex = "200";
+      backdrop.innerHTML =
+        '<div class="modal" style="max-width:360px">' +
+          '<div class="modal-body" style="padding-top:20px">' +
+            '<div style="font-size:13px;line-height:1.5;margin-bottom:16px">' + escapeHtml(message) + '</div>' +
+            '<div style="display:flex;gap:8px;justify-content:flex-end">' +
+              '<button type="button" class="secondary-button" id="confirmCancelBtn">Abbrechen</button>' +
+              '<button type="button" class="danger-button" id="confirmOkBtn">Loeschen</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(backdrop);
+      function cleanup(result) { backdrop.remove(); resolve(result); }
+      backdrop.querySelector("#confirmCancelBtn").addEventListener("click", () => cleanup(false));
+      backdrop.querySelector("#confirmOkBtn").addEventListener("click", () => cleanup(true));
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) cleanup(false); });
+    });
+  }
+
+  // --- Models management -----------------------------------------------------------------------
+
+  const MODEL_LABELS = { "wan2.1-1.3b": "Wan2.1-T2V-1.3B", "ltx-video": "LTX-Video", "hunyuanvideo": "HunyuanVideo", "cogvideox-2b": "CogVideoX-2B" };
+
+  function fmtBytes(bytes) {
+    if (!bytes) return "0 MB";
+    const mb = bytes / (1024 * 1024);
+    return mb >= 1024 ? (mb / 1024).toFixed(1) + " GB" : Math.round(mb) + " MB";
+  }
+
+  let modelsPollTimer = null;
+
+  async function loadModels() {
+    try {
+      const result = await invoke({ action: "list_models" });
+      const models = result.models || [];
+      renderModels(models);
+      modelsCard.classList.remove("hidden");
+
+      const anyDownloading = models.some((m) => m.downloading);
+      if (anyDownloading && !modelsPollTimer) {
+        modelsPollTimer = setInterval(loadModels, 3000);
+      } else if (!anyDownloading && modelsPollTimer) {
+        clearInterval(modelsPollTimer);
+        modelsPollTimer = null;
+      }
+    } catch (err) {
+      modelsCard.classList.add("hidden");
+    }
+  }
+
+  function renderModels(models) {
+    modelsList.innerHTML = "";
+    for (const m of models) {
+      const row = document.createElement("div");
+      row.className = "model-row";
+
+      let metaHtml = "";
+      if (m.loaded) metaHtml += '<span class="model-badge loaded">Geladen</span>';
+      if (m.downloading) metaHtml += '<span class="model-badge not-downloaded">Wird heruntergeladen…</span>';
+      else if (m.downloaded) metaHtml += '<span class="model-badge downloaded">Heruntergeladen · ' + fmtBytes(m.size_bytes) + '</span>';
+      else metaHtml += '<span class="model-badge not-downloaded">Nicht heruntergeladen</span>';
+      if (m.download_error) metaHtml += '<div class="status error" style="margin-top:6px">' + escapeHtml(m.download_error) + '</div>';
+      if (!m.downloaded && !m.downloading) metaHtml += '<div class="model-meta" style="margin-top:4px">Entladen ist erst moeglich, waehrend das Modell im Speicher ist (waehrend/kurz nach einer Generierung; wird nach Leerlauf automatisch entladen).</div>';
+
+      row.innerHTML =
+        '<div class="model-info">' +
+          '<div class="model-name">' + escapeHtml(MODEL_LABELS[m.key] || m.key) + '</div>' +
+          '<div class="model-meta">' + metaHtml + '</div>' +
+        '</div>' +
+        '<div class="model-actions">' +
+          (m.downloaded
+            ? '<button type="button" class="secondary-button" data-action="unload" ' + (m.loaded ? '' : 'disabled') + ' title="' + (m.loaded ? "" : "Nur moeglich, waehrend das Modell aktuell im Speicher geladen ist") + '">Entladen</button>' +
+              '<button type="button" class="danger-button" data-action="uninstall">Deinstallieren</button>'
+            : '<button type="button" class="primary-button" data-action="install" ' + (m.downloading ? 'disabled' : '') + '>' + (m.downloading ? '<span class="spinner"></span>Laedt...' : 'Installieren') + '</button>') +
+        '</div>';
+
+      const unloadBtn = row.querySelector('[data-action="unload"]');
+      if (unloadBtn) {
+        unloadBtn.addEventListener("click", async (e) => {
+          await withButtonSpinner(e.target, "Entlade...", async () => {
+            try {
+              await invoke({ action: "unload_model" });
+              await loadModels();
+            } catch (err) {
+              setStatus(err.message || "Entladen fehlgeschlagen", "error");
+            }
+          });
+        });
+      }
+
+      const uninstallBtn = row.querySelector('[data-action="uninstall"]');
+      if (uninstallBtn) {
+        uninstallBtn.addEventListener("click", async (e) => {
+          const confirmed = await confirmDialog("Modell '" + (MODEL_LABELS[m.key] || m.key) + "' dauerhaft von der Festplatte loeschen? Es wird bei erneuter Nutzung neu heruntergeladen (kann mehrere GB sein).");
+          if (!confirmed) return;
+          await withButtonSpinner(e.target, "Deinstalliere...", async () => {
+            try {
+              await invoke({ action: "uninstall_model", model: m.key });
+              await loadModels();
+            } catch (err) {
+              setStatus(err.message || "Deinstallieren fehlgeschlagen", "error");
+            }
+          });
+        });
+      }
+
+      const installBtn = row.querySelector('[data-action="install"]');
+      if (installBtn) {
+        installBtn.addEventListener("click", async (e) => {
+          try {
+            await invoke({ action: "install_model", model: m.key });
+            await loadModels();
+          } catch (err) {
+            setStatus(err.message || "Installieren fehlgeschlagen", "error");
+          }
+        });
+      }
+
+      modelsList.appendChild(row);
+    }
+  }
+
+  // --- Prompt-Maker --------------------------------------------------------------------------
+
+  promptMakerBtn.addEventListener("click", async () => {
+    const idea = promptEl.value.trim();
+    if (!idea) { setStatus("Erst eine (auch grobe) Idee in den Prompt schreiben.", "error"); return; }
+    await withButtonSpinner(promptMakerBtn, "Denke nach...", async () => {
+      try {
+        const result = await invoke({ action: "suggest_prompt", idea });
+        promptEl.value = result.prompt || idea;
+        if (result.negative_prompt) document.getElementById("negative").value = result.negative_prompt;
+      } catch (err) {
+        setStatus(err.message || "Prompt-Vorschlag fehlgeschlagen", "error");
+      }
+    });
+  });
+
+  // --- Gallery ---------------------------------------------------------------------------------
+
+  function renderGallery(items) {
+    galleryItems = items;
+    galleryEl.innerHTML = "";
+    if (!items.length) {
+      galleryEl.innerHTML = '<div class="empty">Noch keine Videos generiert.</div>';
+      return;
+    }
+    for (const item of items) {
+      const el = document.createElement("div");
+      el.className = "gallery-item";
+      el.addEventListener("click", () => openDetail(item.id));
+      const video = document.createElement("video");
+      video.src = item.url;
+      video.muted = true;
+      video.preload = "metadata";
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const p = document.createElement("p");
+      p.textContent = item.prompt || "";
+      meta.appendChild(p);
+      el.appendChild(video);
+      el.appendChild(meta);
+      galleryEl.appendChild(el);
+    }
+  }
+
+  const PAGE_SIZE = 24;
+  let currentPage = 0;
+
+  function renderPagination(result) {
+    const totalPages = Math.max(1, Math.ceil((result.total || 0) / PAGE_SIZE));
+    document.getElementById("page-info").textContent = "Seite " + (currentPage + 1) + " von " + totalPages;
+    document.getElementById("page-prev-btn").disabled = currentPage <= 0;
+    document.getElementById("page-next-btn").disabled = !result.hasMore;
+  }
+
+  async function loadGallery(page) {
+    if (page != null) currentPage = Math.max(0, page);
+    try {
+      const result = await invoke({ action: "list", limit: PAGE_SIZE, offset: currentPage * PAGE_SIZE });
+      renderGallery(result.items || []);
+      renderPagination(result);
+    } catch (err) {
+      galleryEl.innerHTML = '<div class="empty">' + (err.message || "Fehler beim Laden") + "</div>";
+    }
+  }
+
+  document.getElementById("page-prev-btn").addEventListener("click", () => loadGallery(currentPage - 1));
+  document.getElementById("page-next-btn").addEventListener("click", () => loadGallery(currentPage + 1));
+
+  // --- Detail modal ------------------------------------------------------------------------
+
+  function closeModal() { modalRoot.innerHTML = ""; }
+
+  function openDetail(id) {
+    const item = galleryItems.find((it) => it.id === id);
+    if (item) renderDetail(item);
+  }
+
+  function renderDetail(item) {
+    modalRoot.innerHTML =
+      '<div class="modal-backdrop" id="modalBackdrop">' +
+        '<div class="modal">' +
+          '<div class="modal-head"><h2>Video-Details</h2><button type="button" class="modal-close" id="modalCloseBtn">✕</button></div>' +
+          '<div class="modal-body">' +
+            '<video class="modal-video" src="' + item.url + '" controls></video>' +
+            '<div class="meta-line">' +
+              '<b>Prompt:</b> ' + escapeHtml(item.prompt) + '<br>' +
+              (item.negative_prompt ? '<b>Negative Prompt:</b> ' + escapeHtml(item.negative_prompt) + '<br>' : '') +
+              '<b>Modell:</b> ' + escapeHtml(item.model) + ' &middot; <b>Groesse:</b> ' + item.width + '×' + item.height +
+              (item.duration_seconds != null ? ' &middot; <b>Laenge:</b> ~' + item.duration_seconds + 's (' + item.num_frames + ' Frames @ ' + item.fps + ' FPS)' : '') +
+              (item.seed != null ? ' &middot; <b>Seed:</b> ' + item.seed : '') +
+              (item.steps != null ? ' &middot; <b>Steps:</b> ' + item.steps : '') +
+              (item.guidance_scale != null ? ' &middot; <b>CFG:</b> ' + item.guidance_scale : '') + '<br>' +
+              '<b>Erstellt:</b> ' + fmtDate(item.created_at) +
+            '</div>' +
+            '<div class="action-row">' +
+              '<button type="button" class="secondary-button" id="modalAnalyzeBtn">' + (item.ai_analysis ? "Erneut analysieren" : "Analysieren") + '</button>' +
+            '</div>' +
+            '<div class="status" id="modalStatus"></div>' +
+            (item.ai_analysis ? '<div><div class="section-label">Analyse (mittlerer Frame)</div><div class="text-box" id="modalAnalysisBox">' + escapeHtml(item.ai_analysis) + '</div></div>' : '<div id="modalAnalysisBox"></div>') +
+            '<div class="danger-row"><button type="button" class="danger-button" id="modalDeleteBtn">Loeschen</button></div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById("modalCloseBtn").addEventListener("click", closeModal);
+    document.getElementById("modalBackdrop").addEventListener("click", (e) => { if (e.target.id === "modalBackdrop") closeModal(); });
+
+    document.getElementById("modalAnalyzeBtn").addEventListener("click", async (e) => {
+      await withButtonSpinner(e.target, "Analysiere...", async () => {
+        try {
+          const result = await invoke({ action: "analyze", id: item.id });
+          const box = document.getElementById("modalAnalysisBox");
+          box.outerHTML = '<div><div class="section-label">Analyse (mittlerer Frame)</div><div class="text-box" id="modalAnalysisBox">' + escapeHtml(result.analysis) + '</div></div>';
+          item.ai_analysis = result.analysis;
+        } catch (err) {
+          document.getElementById("modalAnalysisBox").outerHTML = '<div class="text-box">' + escapeHtml(err.message || "Analyse fehlgeschlagen") + '</div>';
+        }
+      });
+    });
+
+    document.getElementById("modalDeleteBtn").addEventListener("click", async (e) => {
+      const confirmed = await confirmDialog("Dieses Video dauerhaft loeschen?");
+      if (!confirmed) return;
+      await withButtonSpinner(e.target, "Loesche...", async () => {
+        try {
+          await invoke({ action: "delete", id: item.id });
+          closeModal();
+          await loadGallery();
+        } catch (err) {
+          document.getElementById("modalStatus").textContent = err.message || "Loeschen fehlgeschlagen";
+          document.getElementById("modalStatus").className = "status error";
+        }
+      });
+    });
+  }
+
+  // --- Generate form -----------------------------------------------------------------------
+
+  function numOrUndefined(id) {
+    const v = document.getElementById(id).value;
+    return v === "" ? undefined : Number(v);
+  }
+
+  async function generate() {
+    const prompt = promptEl.value.trim();
+    if (!prompt) { setStatus("Bitte einen Prompt eingeben.", "error"); return; }
+
+    const fields = {
+      prompt,
+      negative_prompt: document.getElementById("negative").value.trim() || undefined,
+      model: document.getElementById("model").value || undefined,
+      seed: document.getElementById("seed").value ? Number(document.getElementById("seed").value) : undefined,
+      width: numOrUndefined("width"),
+      height: numOrUndefined("height"),
+      num_frames: numOrUndefined("num_frames"),
+      fps: numOrUndefined("fps"),
+      steps: numOrUndefined("steps"),
+      guidance_scale: numOrUndefined("guidance"),
+    };
+
+    btn.disabled = true;
+    setStatus("Generiere Video... (kann je nach Modell/GPU mehrere Minuten dauern)");
+    try {
+      await invoke({ action: "generate", ...fields });
+      setStatus("Fertig.", "ok");
+      await loadGallery(0);
+      loadModels();
+    } catch (err) {
+      const message = err.message || "Fehler bei der Generierung";
+      setStatus(message, "error");
+      if (/eingerichtet|einzurichten/.test(message)) checkReadiness();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function renderSetupState(state) {
+    if (state.phase && state.phase !== "idle") {
+      setupPhase.style.display = "block";
+      setupPhase.textContent = PHASE_LABELS[state.phase] || state.phase;
+    }
+    if (state.log && state.log.length) {
+      setupLog.style.display = "block";
+      setupLog.textContent = state.log.join("\n");
+      setupLog.scrollTop = setupLog.scrollHeight;
+    }
+    if (state.error) {
+      setupPhase.textContent = "Fehler: " + state.error;
+    }
+  }
+
+  function isRunningPhase(phase) {
+    return phase === "creating_venv" || phase === "installing_torch" || phase === "installing_deps";
+  }
+
+  function showReady() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    setupCard.classList.add("hidden");
+    generateCard.classList.remove("hidden");
+    loadGallery();
+    loadModels();
+  }
+
+  function showSetup(state) {
+    generateCard.classList.add("hidden");
+    setupCard.classList.remove("hidden");
+    renderSetupState(state);
+    setupBtn.disabled = isRunningPhase(state.phase);
+    setupBtn.textContent = isRunningPhase(state.phase) ? "Einrichtung laeuft..." : "Jetzt automatisch einrichten";
+
+    if (isRunningPhase(state.phase) && !pollTimer) {
+      pollTimer = setInterval(pollStatus, 2000);
+    }
+  }
+
+  async function pollStatus() {
+    try {
+      const state = await invoke({ action: "status" });
+      if (state.ready) { showReady(); return; }
+      showSetup(state);
+    } catch (err) {
+      // keep polling silently - a transient error here shouldn't interrupt the setup flow
+    }
+  }
+
+  async function checkReadiness() {
+    try {
+      const state = await invoke({ action: "status" });
+      if (state.ready) { showReady(); return; }
+      showSetup(state);
+    } catch (err) {
+      showReady();
+    }
+  }
+
+  async function startSetup() {
+    setupBtn.disabled = true;
+    setupBtn.textContent = "Einrichtung laeuft...";
+    try {
+      await invoke({ action: "install" });
+      if (!pollTimer) pollTimer = setInterval(pollStatus, 2000);
+    } catch (err) {
+      setupPhase.style.display = "block";
+      setupPhase.textContent = "Fehler: " + (err.message || "Einrichtung fehlgeschlagen");
+      setupBtn.disabled = false;
+      setupBtn.textContent = "Erneut versuchen";
+    }
+  }
+
+  setupBtn.addEventListener("click", startSetup);
+  btn.addEventListener("click", generate);
+
+  // "ready" only means the venv's python.exe exists (hasVenv() on the server side) - if the pip
+  // install of torch/diffusers/etc partway failed (network hiccup, one package failing to build),
+  // the venv still "exists" but is missing packages (e.g. ModuleNotFoundError for huggingface_hub),
+  // and the setup card is normally hidden once ready so there's no way back to the installer UI.
+  // This re-shows it and re-runs action=install, which re-runs the pip steps (only venv creation
+  // itself is skipped when the folder already exists) - a "repair" path for that state.
+  document.getElementById("repair-env-btn").addEventListener("click", () => {
+    generateCard.classList.add("hidden");
+    modelsCard.classList.add("hidden");
+    setupCard.classList.remove("hidden");
+    startSetup();
+  });
+
+  checkReadiness();
+</script>
+</body>
+</html>

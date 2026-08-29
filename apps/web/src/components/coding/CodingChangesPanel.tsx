@@ -246,6 +246,13 @@ export function CodingChangesPanel({
       <div className="max-h-48 shrink-0 overflow-y-auto border-b border-border">
         {checkpoints.map((checkpoint) => {
           const active = checkpoint.sha === selectedSha;
+          // Only known for the currently selected row (its diff is the only one fetched) - a
+          // checkpoint whose attempt made no file changes at all (e.g. a pure verification pass
+          // that confirmed the previous attempt's work was already correct) still shows up here
+          // with the same "Before attempt N: <goal>" label as a real edit attempt, which reads
+          // like the whole task restarted. Flagging it once its empty diff is known avoids that
+          // false impression without having to fetch every row's diff up front.
+          const isEmptyDiff = active && diffQuery.isSuccess && (diffQuery.data?.files.length ?? 0) === 0;
           return (
             <div
               key={checkpoint.sha}
@@ -257,10 +264,21 @@ export function CodingChangesPanel({
                 type="button"
                 onClick={() => (active ? handleDeselectCheckpoint() : handleSelectCheckpoint(checkpoint.sha))}
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                title="Änderungen seit diesem Checkpoint anzeigen"
+                title={
+                  isEmptyDiff
+                    ? "Nur Überprüfung - dieser Versuch hat keine Dateien geändert"
+                    : "Änderungen seit diesem Checkpoint anzeigen"
+                }
               >
-                <GitCompare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{checkpoint.label}</span>
+                <GitCompare className={`h-3.5 w-3.5 shrink-0 ${isEmptyDiff ? "text-muted-foreground/50" : "text-muted-foreground"}`} />
+                <span className={`min-w-0 flex-1 truncate ${isEmptyDiff ? "text-muted-foreground italic" : ""}`}>
+                  {checkpoint.label}
+                </span>
+                {isEmptyDiff && (
+                  <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+                    nur geprüft
+                  </span>
+                )}
                 <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                   {checkpoint.sha.slice(0, 7)}
                 </span>

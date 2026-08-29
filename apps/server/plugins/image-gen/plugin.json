@@ -58,7 +58,8 @@
         "description": "Optionales Hugging-Face-Zugriffstoken (huggingface.co/settings/tokens). Manche Modelle (z. B. Flux-1-schnell) verlangen ein angemeldetes Konto oder liefern sonst 'not a valid model identifier'/Rate-Limit-Fehler."
       }
     ],
-    "frontendPage": "app/index.html"
+    "frontendPage": "app/index.html",
+    "settingsPage": "settings/index.html"
   },
   "storage": {
     "sqlite": true

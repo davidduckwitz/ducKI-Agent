@@ -194,7 +194,7 @@ export function PetLayer() {
   if (!enabled) return null;
 
   // The matrix pet is an ambient full-window effect instead of a walking creature.
-  if (isMatrix) return <MatrixRain opacity={opacity} color={pet.palette?.primary} />;
+  if (isMatrix) return <MatrixRain opacity={opacity} color={pet.palette?.primary} speed={speed} followCursor={followCursor} />;
 
   return (
     <>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { FileText, FolderOpen, Upload, Trash2, Plus, RefreshCw, Save, ArrowRightLeft, Download, ChevronRight, ChevronDown, Folder, X, LayoutGrid } from "lucide-react";
@@ -38,10 +38,11 @@ interface TreeNode {
 export function SharedWorkspace() {
   const { t } = useI18n();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const [selectedPath, setSelectedPath] = useState<string>("");
+  const [selectedPath, setSelectedPath] = useState<string>(() => searchParams.get("path") ?? "");
   const [newFilePath, setNewFilePath] = useState("");
   const [newFileContent, setNewFileContent] = useState("");
   const [editorContent, setEditorContent] = useState("");
@@ -79,6 +80,23 @@ export function SharedWorkspace() {
     }
     setMoveToPath(selectedPath);
   }, [selectedPath]);
+
+  // Reveals a file linked from elsewhere (e.g. a chat "Datei anzeigen" action, /shared?path=...)
+  // by expanding its ancestor folders once the tree has loaded, so it isn't hidden in a collapsed node.
+  useEffect(() => {
+    if (!selectedPath || !data) return;
+    const segments = selectedPath.split("/").slice(0, -1);
+    if (segments.length === 0) return;
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      let acc = "";
+      for (const segment of segments) {
+        acc = acc ? `${acc}/${segment}` : segment;
+        next.add(acc);
+      }
+      return next;
+    });
+  }, [selectedPath, data]);
 
   const refresh = async () => {
     await qc.invalidateQueries({ queryKey: ["shared", "files"] });

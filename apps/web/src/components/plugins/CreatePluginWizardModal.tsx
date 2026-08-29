@@ -10,6 +10,11 @@ interface CreatePluginWizardModalProps {
   onClose: () => void;
   existingNames: string[];
   onCreated: () => void;
+  /** Set when reopening this modal to watch/continue a draft whose builder run was already
+   *  (re)started server-side (see PluginsPage's "Fortsetzen" action on a draft card). Jumps
+   *  straight to the progress step and subscribes to that run's socket events instead of
+   *  starting the normal from-scratch wizard flow. */
+  resumeRun?: { name: string; runId: string } | null;
 }
 
 const SAFE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -57,7 +62,7 @@ function slugify(input: string, maxLength = 40): string {
   return lastHyphen > 0 ? truncated.slice(0, lastHyphen) : truncated;
 }
 
-export function CreatePluginWizardModal({ open, onClose, existingNames, onCreated }: CreatePluginWizardModalProps) {
+export function CreatePluginWizardModal({ open, onClose, existingNames, onCreated, resumeRun }: CreatePluginWizardModalProps) {
   const socket = useAppStore((s) => s.socket);
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
@@ -143,6 +148,14 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
       setStopping(false);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !resumeRun) return;
+    setName(resumeRun.name);
+    setStep(3);
+    setStarting(false);
+    setRunId(resumeRun.runId);
+  }, [open, resumeRun]);
 
   useEffect(() => {
     if (!socket || !runId) return;
@@ -488,11 +501,11 @@ export function CreatePluginWizardModal({ open, onClose, existingNames, onCreate
                       </div>
                     </div>
                   ) : result.stopped ? (
-                    <p>Gestoppt. Die bisher geschriebenen Dateien bleiben serverseitig zur Pruefung liegen.</p>
+                    <p>Gestoppt. Der Entwurf bleibt unter "Unfertige Entwürfe" sichtbar — dort kannst du ihn fortsetzen oder löschen.</p>
                   ) : (
                     <div>
                       <p>Fehlgeschlagen: {result.error ?? "Unbekannter Fehler"}</p>
-                      <p className="mt-1 text-xs text-red-300/80">Das Plugin wurde nicht aktiviert und erscheint nicht in der Liste. Die geschriebenen Dateien bleiben serverseitig zur Pruefung liegen.</p>
+                      <p className="mt-1 text-xs text-red-300/80">Das Plugin wurde nicht aktiviert und erscheint nicht in der Plugin-Liste. Der Entwurf bleibt aber unter "Unfertige Entwürfe" sichtbar — dort kannst du ihn fortsetzen oder löschen.</p>
                     </div>
                   )}
                 </div>

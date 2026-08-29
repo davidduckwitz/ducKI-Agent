@@ -3576,6 +3576,37 @@ export class Agent {
   }
 
   /**
+   * Detects a PAST-tense "the file was created/written/saved" claim in the model's own text -
+   * e.g. "Der Taschenrechner wurde in /shared-workspace/calculator/index.html erstellt" after a
+   * turn whose only filesystem call was a `read`. Unlike detectFalseCompletionClaim, this does
+   * NOT require the absence of a [TOOL:] marker: the whole point is to catch a turn where a tool
+   * DID run, just not one that persists anything. See the caller (gated on
+   * `anyFileWrittenThisRun`) for why this only fires when no write has EVER succeeded this run -
+   * a later iteration honestly re-confirming an earlier successful write must not trip this.
+   *
+   * Requires a file-ish reference (the word "file"/"Datei" or a filename-looking token) near the
+   * creation verb, mirroring detectForwardIntentClaim's target check - otherwise "the plan was
+   * created" or similar non-file completions would misfire.
+   */
+  private detectFileCreationClaim(response: string): boolean {
+    const fileNoun = /\b(datei|dateien|file|files)\b/i;
+    // A leading "/" is optional (both "scripts/build.sh" and the shared-workspace convention
+    // "/shared-workspace/calculator/index.html" must match, see filesystem.ts's path convention).
+    const filenameLike = /(?:^|[\s"'`(])\/?[A-Za-z0-9_.-]+\/[A-Za-z0-9_.\/-]*\.[A-Za-z0-9]{1,8}\b/;
+    if (!fileNoun.test(response) && !filenameLike.test(response)) return false;
+
+    // A gap between the auxiliary/verb and the participle - not just adjacency - because the
+    // real-world phrasing puts the path in between: "wurde in <path> erstellt".
+    const creationClaim = [
+      /\b(wurde|wurden)\b[\s\S]{0,60}\b(erstellt|angelegt|geschrieben|gespeichert)\b/i,
+      /\b(ist|sind)\b[\s\S]{0,30}\b(erstellt|angelegt|fertig|gespeichert)\b/i,
+      /\b(was|has been|have been)\b[\s\S]{0,30}\b(created|written|saved|generated)\b/i,
+      /\b(i|ich)\s+(created|wrote|saved|erstellte?|schrieb|speicherte)\b/i,
+    ];
+    return creationClaim.some((re) => re.test(response));
+  }
+
+  /**
    * Detects the "announced future work, then stopped" failure mode: the model writes prose
    * COMMITTING to an action ("I will now create X", "I'll edit Y", "als Nächstes schreibe ich
    * Z") but emits no [TOOL:...] marker and no native tool_call, so the promise simply becomes
@@ -5418,8 +5449,10 @@ export class Agent {
     browserToolsCount: number;
     journalEntries: RunJournalEntry[];
     /** The model's issued (deduplicated) tool calls this iteration - used by the run loop's
-     *  non-convergence detection to recognise a repeated read-only call set. */
-    executedCalls: Array<{ toolName: string; input: Record<string, unknown> }>;
+     *  non-convergence detection to recognise a repeated read-only call set, and (via `id`,
+     *  matching the resultMap key) to check whether a call that claims to persist content
+     *  actually succeeded. */
+    executedCalls: Array<{ id: string; toolName: string; input: Record<string, unknown> }>;
   }> {
     this.logger.info("[TOOL-CALLS] Starting extraction and execution", {
       responseLength: response.length,
@@ -6214,7 +6247,7 @@ export class Agent {
       cleanedResponse,
       browserToolsCount,
       journalEntries,
-      executedCalls: toolCalls.map((c) => ({ toolName: c.toolName, input: c.input })),
+      executedCalls: toolCalls.map((c, idx) => ({ id: callIds[idx] ?? `batch_${iterations}_${idx}`, toolName: c.toolName, input: c.input })),
     };
   }
 
@@ -7432,6 +7465,8 @@ export class Agent {
     let malformedToolCallAttempts = 0;
     let unexecutedCodeFenceNudges = 0; // Bounded retries for the "showed code instead of writing it" guardrail
     let falseCompletionClaimNudges = 0; // Bounded retries for the "narrated a fake success" guardrail
+    let falseWriteClaimNudges = 0; // Bounded retries for the "claims a file was created but no write ever succeeded" guardrail
+    let anyFileWrittenThisRun = false; // Set once ANY filesystem write/append/edit succeeds - see falseWriteClaimNudges below
     let forwardIntentClaimNudges = 0; // Bounded retries for the "announced future work but emitted no tool call" guardrail
     let truncatedEmptyResponseNudges = 0; // Bounded retries for the "ran out of tokens while reasoning, said nothing" guardrail
     let toolsJustExecuted = false; // Track if tools were executed in previous iteration
@@ -8253,6 +8288,16 @@ export class Agent {
         const anyToolSucceeded = Array.from(toolResultsMap.values()).some((r) => r.success);
         consecutiveToolFailures = anyToolSucceeded ? 0 : consecutiveToolFailures + 1;
 
+        // Tracks whether a filesystem write/append/edit has EVER actually succeeded in this
+        // run - see the false-write-claim guardrail below, which needs this rather than just
+        // "this iteration" so it doesn't misfire on a later iteration that legitimately just
+        // re-reads/re-confirms a file an earlier iteration already wrote.
+        if (!anyFileWrittenThisRun) {
+          anyFileWrittenThisRun = executedCalls.some(
+            (c) => callWouldPersistContent(c.toolName, c.input) && toolResultsMap.get(c.id)?.success === true
+          );
+        }
+
         if (consecutiveToolFailures >= adjustedControls.maxConsecutiveToolFailures) {
           // Name the actual errors. "10x in Folge ohne Erfolg" on its own says nothing about
           // WHY, and the failing calls are almost always the same single mistake repeated -
@@ -8356,6 +8401,38 @@ export class Agent {
           toolsJustExecuted = false;
           runAbortedEarly = "stale_read_loop";
           break;
+        }
+
+        // Guardrail: the model's own text claims a file was created/written/saved, but the
+        // ONLY filesystem tool calls that have ever succeeded so far this run are reads/lists -
+        // e.g. it called action:"read" to check something and then reported "the file was
+        // created" from an earlier turn's leftover phrasing, or simply hallucinated success.
+        // detectFalseCompletionClaim (above, in the toolResultsMap.size === 0 branch) cannot
+        // catch this: it only fires when NO tool call happened at all this iteration, but here
+        // one did - it just didn't persist anything.
+        if (!anyFileWrittenThisRun && falseWriteClaimNudges < 2 && this.detectFileCreationClaim(cleanedResponse)) {
+          falseWriteClaimNudges++;
+          this.logger.warn("[TOOL-CALLS] Detected a file-creation claim with no successful write this run, nudging", {
+            attempt: falseWriteClaimNudges,
+          });
+          emit("guardrail", "Datei-Erstellung behauptet ohne erfolgreichen Schreibvorgang — fordere echten Write an", {
+            attempt: falseWriteClaimNudges,
+          });
+          const nudgePrompt: LLMMessage = {
+            role: "user",
+            content:
+              `Your last response claims a file was created/written/saved, but no filesystem write/append/edit has actually succeeded yet in this run - only read/list/stat-type calls ran. ` +
+              `The file does not exist yet, or not with that content. If you meant to create or update it, emit the write now:\n\n` +
+              `[TOOL:filesystem action=write path=<the file path>]\n<the exact content, verbatim>\n[/TOOL]\n\n` +
+              `Do not claim it is created or saved until a write/append/edit tool call actually reports success.`,
+            metadata: { internal: true, kind: "false_write_claim_nudge" },
+          };
+          await this.conversation.addMessage(nudgePrompt);
+          this.history.add(nudgePrompt, "false_write_claim_nudge");
+          emit("internal_instruction", "Fordere echten Schreibvorgang statt Behauptung an...", {
+            kind: "false_write_claim_nudge",
+          });
+          continue;
         }
       }
 
@@ -8655,14 +8732,14 @@ export class Agent {
 
           const howTo =
             `If you need to read or list files:\n` +
-            `[TOOL:filesystem action=list path="."]\n[/TOOL]\n` +
+            `[TOOL:filesystem({"action":"list","path":"."})]\n` +
             `or:\n` +
-            `[TOOL:filesystem action=read path=<the file path>]\n[/TOOL]\n\n` +
+            `[TOOL:filesystem({"action":"read","path":"<the file path>"})]\n\n` +
             `If you need to edit a file, use a structured call (the old/new strings are fields, not wrapper blocks):\n` +
             `[TOOL:filesystem({"action":"edit","path":"<the file path>","oldString":"<exact existing text>","newString":"<replacement text>"})]\n` +
             `For write/append, NEVER place <<< or >>> around the file content.\n\n` +
             `If you need to check your status:\n` +
-            `[TOOL:status]\n[/TOOL]\n\n` +
+            `[TOOL:status({})]\n\n` +
             `Do not announce, do not preview, do not promise — EXECUTE now.`;
 
           const nudgeContent = baseNudge + phaseNudge + howTo;

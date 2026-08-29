@@ -40,7 +40,7 @@ interface AgentQuestionBoxProps {
 - Grüner Hintergrund nach Antwort
 - Responsive und dark-mode aware
 
-### 2. Agent Skill (`apps/server/shared-workspace/skills/agent-questions.md`)
+### 2. Agent Skill (`~/DucKI/shared-workspace/skills/agent-questions.md`)
 **Anweisungen für den Agent, wie das Question System genutzt wird**
 
 Enthält:

@@ -41,13 +41,22 @@ import { createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdirSync, writeFileSync, existsSync, readFileSync, unlinkSync } from "node:fs";
+import { homedir } from "node:os";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, unlinkSync, rmSync, readdirSync, statSync } from "node:fs";
 
 const PLUGIN_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 const GENERATED_DIR = join(PLUGIN_DIR, "data", "generated");
 const SERVER_SCRIPT = join(PLUGIN_DIR, "runtime", "server.py");
 const REQUIREMENTS_FILE = join(PLUGIN_DIR, "runtime", "requirements.txt");
 const VENV_DIR = join(PLUGIN_DIR, "runtime", ".venv");
+
+/** Mirrors runtime/server.py's MODEL_MAP - kept here too so the JS side can locate/size/delete a
+ *  model's local huggingface_hub cache folder without having to shell out to Python for it. */
+const MODEL_MAP = {
+  "sd-turbo": "stabilityai/sd-turbo",
+  "sdxl-turbo": "stabilityai/sdxl-turbo",
+  "flux-schnell": "black-forest-labs/FLUX.1-schnell",
+};
 
 const HEALTH_POLL_INTERVAL_MS = 1000;
 const HEALTH_POLL_TIMEOUT_MS = 90_000; // cold start can include a multi-GB model load
@@ -77,11 +86,15 @@ export const definition = {
     "action=sharpen (id, sharpen_amount?) schaerft ein Bild nach (Unsharp-Mask, sharpen_amount 0-300, Standard 150) - ebenfalls kein KI-Modell. Beide legen ein NEUES Bild an (verweist per reference_id auf das Original), das Original bleibt erhalten. " +
     "action=install richtet die Python-Umgebung automatisch ein (venv + PyTorch/diffusers, GPU wird automatisch erkannt) - beim ersten Mal noetig, dauert mehrere Minuten. " +
     "action=status liefert den Einrichtungsfortschritt (ready, phase, log). " +
-    "action=stop_engine beendet den lokalen Sidecar-Prozess sofort (sonst beendet er sich nach Leerlauf selbst).",
+    "action=stop_engine beendet den lokalen Sidecar-Prozess sofort (sonst beendet er sich nach Leerlauf selbst). " +
+    "action=list_models listet die bekannten Modelle (sd-turbo/sdxl-turbo/flux-schnell) mit Download-Status, Groesse auf der Festplatte und ob es gerade im Speicher geladen ist. " +
+    "action=unload_model entlaedt das aktuell im Speicher geladene Modell (beendet den Sidecar-Prozess, identisch zu stop_engine - der Sidecar haelt immer nur ein Modell gleichzeitig). " +
+    "action=uninstall_model (model) loescht die heruntergeladenen Gewichte eines Modells dauerhaft von der Festplatte (huggingface_hub-Cache) - bei erneuter Nutzung wird es neu heruntergeladen. " +
+    "action=install_model (model) laedt nur die Gewichte eines Modells herunter (huggingface_hub, kein Torch/GPU noetig), OHNE es zu laden oder ein Bild zu generieren - fuer gezieltes Vorab-Herunterladen. Fortschritt ueber action=list_models (downloading/download_error).",
   parameters: {
     type: "object",
     properties: {
-      action: { type: "string", enum: ["generate", "generate_preview", "save_generation", "list", "analyze", "suggest_prompt", "delete", "upscale", "sharpen", "install", "status", "stop_engine"], description: "Welche Operation ausgefuehrt wird" },
+      action: { type: "string", enum: ["generate", "generate_preview", "save_generation", "list", "analyze", "suggest_prompt", "delete", "upscale", "sharpen", "install", "status", "stop_engine", "list_models", "unload_model", "uninstall_model", "install_model"], description: "Welche Operation ausgefuehrt wird" },
       prompt: { type: "string", description: "Bildbeschreibung (Englisch funktioniert meist am besten)" },
       negative_prompt: { type: "string", description: "Was im Bild vermieden werden soll (wird von Turbo-Modellen ggf. ignoriert)" },
       width: { type: "number", description: "Breite in Pixeln, Standard 512" },
@@ -89,7 +102,7 @@ export const definition = {
       steps: { type: "number", description: "Anzahl Diffusionsschritte, Standard modellabhaengig (1-4 fuer Turbo/Schnell-Modelle). Mehr Schritte = i.d.R. mehr Detail, aber langsamer; bei Turbo/Schnell-Modellen bringt weit ueber den Standard hinausgehen kaum noch etwas." },
       guidance_scale: { type: "number", description: "CFG-Wert (Classifier-Free Guidance), Standard modellabhaengig (0 fuer Turbo/Schnell-Modelle). Hoeher = folgt dem Prompt staerker (und beruecksichtigt negative_prompt), kann aber uebersaettigt/verzerrt wirken - bei Turbo/Schnell-Modellen macht ein Wert > 0 die Bilder meist schlechter, nicht besser." },
       seed: { type: "number", description: "Fester Seed fuer reproduzierbare Ergebnisse" },
-      model: { type: "string", enum: ["sd-turbo", "sdxl-turbo", "flux-schnell"], description: "Modell-Override fuer diese eine Generierung (sonst Plugin-Einstellung IMAGE_MODEL)" },
+      model: { type: "string", enum: ["sd-turbo", "sdxl-turbo", "flux-schnell"], description: "Modell-Override fuer diese eine Generierung (sonst Plugin-Einstellung IMAGE_MODEL); fuer action=uninstall_model/install_model das betroffene Modell" },
       reference_id: { type: "string", description: "id eines frueheren image_gen-Ergebnisses als img2img-Referenzbild (bevorzugt gegenueber reference_image - kein Base64 durch den Kontext schleusen)" },
       reference_image: { type: "string", description: "Referenzbild als Base64/Data-URL fuer img2img, falls es NICHT von einem frueheren image_gen-Aufruf stammt (reference_id ist meist die bessere Wahl)" },
       strength: { type: "number", description: "img2img-Staerke 0-1 (nur mit reference_id/reference_image), Standard 0.6 - hoeher = staerkere Veraenderung des Referenzbilds" },
@@ -161,12 +174,18 @@ function pushInstallLog(line) {
   if (install.log.length > INSTALL_LOG_MAX_LINES) install.log.splice(0, install.log.length - INSTALL_LOG_MAX_LINES);
 }
 
-function runInstallStep(command, args) {
+function runInstallStep(command, args, logFn = pushInstallLog) {
   return new Promise((resolveStep, rejectStep) => {
     const child = spawn(command, args, { cwd: PLUGIN_DIR, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false });
+    // Keep the tail of combined stdout/stderr so a failure can report the ACTUAL Python error
+    // (traceback, HF auth/gated-repo message, missing package, ...) - just echoing the command
+    // back (as this used to do) tells the user nothing about why it failed.
+    let outputTail = "";
     const onData = (chunk) => {
-      for (const line of chunk.toString("utf8").split(/\r?\n/)) {
-        if (line.trim()) pushInstallLog(line.trim());
+      const text = chunk.toString("utf8");
+      outputTail = (outputTail + text).slice(-2000);
+      for (const line of text.split(/\r?\n/)) {
+        if (line.trim()) logFn(line.trim());
       }
     };
     child.stdout.on("data", onData);
@@ -174,7 +193,10 @@ function runInstallStep(command, args) {
     child.on("error", rejectStep);
     child.on("exit", (code) => {
       if (code === 0) resolveStep();
-      else rejectStep(new Error(`Befehl fehlgeschlagen (exit ${code}): ${command} ${args.join(" ")}`));
+      else {
+        const reason = outputTail.trim().slice(-800) || `${command} ${args.join(" ")}`;
+        rejectStep(new Error(`Befehl fehlgeschlagen (exit ${code}): ${reason}`));
+      }
     });
   });
 }
@@ -231,6 +253,62 @@ async function runInstall(ctx) {
 }
 
 const RUNNING_PHASES = new Set(["creating_venv", "installing_torch", "installing_deps"]);
+
+// --- Model download (weights only, no inference) -------------------------------------------
+
+/** Downloads a model's weights into the huggingface_hub cache WITHOUT loading it into a pipeline
+ *  (no torch/diffusers pipeline construction, no GPU/CPU inference) - just huggingface_hub's
+ *  snapshot_download, run as a one-off script in the plugin's venv. Much lighter than triggering
+ *  a download via a real /generate call (server.py's _load_pipeline does that too, but only as a
+ *  side effect of actually running the diffusion model once). */
+const DOWNLOAD_SCRIPT = `
+import sys
+from huggingface_hub import snapshot_download
+repo_id = sys.argv[1]
+token = sys.argv[2] or None
+snapshot_download(repo_id=repo_id, token=token)
+print("DOWNLOAD_OK")
+`;
+
+/** @type {{ key: string | null, phase: "idle"|"downloading"|"done"|"error", log: string[], error: string | null }} */
+const modelDownload = { key: null, phase: "idle", log: [], error: null };
+
+function pushDownloadLog(line) {
+  modelDownload.log.push(line);
+  if (modelDownload.log.length > INSTALL_LOG_MAX_LINES) modelDownload.log.splice(0, modelDownload.log.length - INSTALL_LOG_MAX_LINES);
+}
+
+async function runModelDownload(key, repoId, ctx) {
+  modelDownload.key = key;
+  modelDownload.phase = "downloading";
+  modelDownload.error = null;
+  modelDownload.log = [];
+  try {
+    pushDownloadLog(`Lade '${repoId}' herunter...`);
+    const hfToken = String(ctx.secrets.HF_TOKEN || "").trim();
+    await runInstallStep(venvPythonPath(), ["-c", DOWNLOAD_SCRIPT, repoId, hfToken], pushDownloadLog);
+    modelDownload.phase = "done";
+    pushDownloadLog("Fertig heruntergeladen.");
+  } catch (err) {
+    modelDownload.phase = "error";
+    modelDownload.error = explainSidecarError(err instanceof Error ? err.message : String(err));
+    pushDownloadLog(`Fehler: ${modelDownload.error}`);
+    ctx.logger.error(`[image-gen model download] ${modelDownload.error}`);
+  }
+}
+
+function startModelDownload(input, ctx) {
+  ensureVenvOrThrow(ctx);
+  const key = String(input.model || "").trim();
+  const repoId = MODEL_MAP[key];
+  if (!repoId) throw new Error(`Unbekanntes Modell '${key}'`);
+  if (modelDownload.phase === "downloading") {
+    return { started: false, key: modelDownload.key, phase: modelDownload.phase };
+  }
+  // Fire and forget - the caller (UI) polls action=list_models for progress.
+  void runModelDownload(key, repoId, ctx);
+  return { started: true, key, phase: "downloading" };
+}
 
 function startInstall(ctx) {
   if (RUNNING_PHASES.has(install.phase)) {
@@ -367,6 +445,107 @@ function stopSidecar() {
   sidecar.child = null;
   sidecar.port = null;
   sidecar.ready = null;
+}
+
+// --- Model cache (huggingface_hub) --------------------------------------------------------
+
+/** Default huggingface_hub cache location, honoring the same env overrides huggingface_hub
+ *  itself respects (HF_HOME / HUGGINGFACE_HUB_CACHE) - no plugin-specific override exists, so
+ *  downloaded model weights live in the same shared cache any other local HF tool would use. */
+function hfCacheDir() {
+  if (process.env.HUGGINGFACE_HUB_CACHE) return process.env.HUGGINGFACE_HUB_CACHE;
+  if (process.env.HF_HOME) return join(process.env.HF_HOME, "hub");
+  return join(homedir(), ".cache", "huggingface", "hub");
+}
+
+/** huggingface_hub's on-disk naming convention for a cached repo's folder, e.g.
+ *  "stabilityai/sd-turbo" -> "models--stabilityai--sd-turbo". */
+function modelCacheDir(repoId) {
+  return join(hfCacheDir(), "models--" + repoId.replace(/\//g, "--"));
+}
+
+function dirSizeBytes(dirPath) {
+  let total = 0;
+  let entries;
+  try {
+    entries = readdirSync(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  for (const entry of entries) {
+    const full = join(dirPath, entry.name);
+    try {
+      if (entry.isSymbolicLink()) {
+        total += statSync(full).size; // follows the link - huggingface_hub snapshots symlink into blobs/
+      } else if (entry.isDirectory()) {
+        total += dirSizeBytes(full);
+      } else {
+        total += statSync(full).size;
+      }
+    } catch {
+      // file vanished mid-walk or broken symlink - skip it
+    }
+  }
+  return total;
+}
+
+/** Asks the running sidecar what it currently has loaded in memory (server.py's /health reports
+ *  _state["model_id"], null until the first /generate call actually loads a pipeline - just
+ *  having spawned the process with --model doesn't mean anything is loaded yet). Returns null if
+ *  no sidecar is running or it doesn't answer in time. */
+async function currentlyLoadedModelId(ctx) {
+  if (!sidecar.child || !sidecar.port) return null;
+  try {
+    const res = await ctx.fetch(`http://127.0.0.1:${sidecar.port}/health`);
+    if (!res.ok) return null;
+    const body = await res.json();
+    return body.model_loaded || null;
+  } catch {
+    return null;
+  }
+}
+
+/** action=list_models: reports, per known model, whether its weights are downloaded (+ size) and
+ *  whether it's the one currently loaded in the sidecar's memory - what the UI needs to offer
+ *  per-model "entladen" (unload) / "deinstallieren" (delete from disk) buttons. */
+async function listModels(ctx) {
+  const loadedModelId = await currentlyLoadedModelId(ctx);
+  return {
+    models: Object.entries(MODEL_MAP).map(([key, repoId]) => {
+      const cacheDir = modelCacheDir(repoId);
+      const downloaded = existsSync(cacheDir);
+      return {
+        key,
+        repo_id: repoId,
+        downloaded,
+        size_bytes: downloaded ? dirSizeBytes(cacheDir) : 0,
+        loaded: repoId === loadedModelId,
+        downloading: modelDownload.key === key && modelDownload.phase === "downloading",
+        download_error: modelDownload.key === key && modelDownload.phase === "error" ? modelDownload.error : null,
+      };
+    }),
+    engine_running: sidecar.child != null,
+  };
+}
+
+/** action=uninstall_model: deletes a model's local weights from the huggingface_hub cache. If
+ *  it's currently loaded, the sidecar is stopped first - it holds an in-memory pipeline plus
+ *  (on Windows, without symlink support) open file handles into that exact folder. */
+async function uninstallModel(input, ctx) {
+  const key = String(input.model || "").trim();
+  const repoId = MODEL_MAP[key];
+  if (!repoId) throw new Error(`Unbekanntes Modell '${key}'`);
+
+  if (repoId === (await currentlyLoadedModelId(ctx))) {
+    stopSidecar();
+  }
+
+  const cacheDir = modelCacheDir(repoId);
+  if (!existsSync(cacheDir)) {
+    return { key, repo_id: repoId, uninstalled: false, reason: "not_downloaded" };
+  }
+  rmSync(cacheDir, { recursive: true, force: true });
+  return { key, repo_id: repoId, uninstalled: true };
 }
 
 // --- Tool actions ------------------------------------------------------------------------
@@ -760,5 +939,13 @@ export async function execute(input, ctx) {
     stopSidecar();
     return { stopped: true };
   }
+  if (action === "list_models") return listModels(ctx);
+  if (action === "unload_model") {
+    const wasRunning = sidecar.child != null;
+    stopSidecar();
+    return { unloaded: wasRunning };
+  }
+  if (action === "uninstall_model") return uninstallModel(input, ctx);
+  if (action === "install_model") return startModelDownload(input, ctx);
   throw new Error(`Unbekannte action: ${action}`);
 }

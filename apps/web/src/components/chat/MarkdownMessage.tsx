@@ -3,6 +3,7 @@ import { useState, useMemo } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { splitMarkdownSegments } from "../../lib/markdownSegments";
+import { FileLinkChip } from "./FileLinkChip";
 
 /**
  * Minimal markdown renderer for chat messages.
@@ -49,16 +50,41 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   );
 }
 
-/** Inline formatting: `code`, **bold**. Applied per line so a stray marker cannot swallow
- *  the rest of the message. */
+// Matches how the agent addresses the shared workspace in its own text (see filesystem.ts'
+// "Normal agent" path convention): an optional "./" or leading "/" followed by "shared-workspace/"
+// and the path inside it. Captured outside backticks too, since the agent doesn't always wrap
+// paths in code spans.
+const WORKSPACE_PATH_RE = /^(?:\.\/)?\/?shared-workspace\/([A-Za-z0-9_\-./]+)$/;
+const TRAILING_PUNCTUATION_RE = /^(.*?)([.,;:!?)]+)$/;
+
+function parseWorkspacePath(text: string): string | null {
+  const match = WORKSPACE_PATH_RE.exec(text);
+  return match ? (match[1] ?? null) : null;
+}
+
+/** Splits off trailing sentence punctuation (".", "," etc.) so "...index.html." doesn't turn the
+ *  closing period into part of the linked path. */
+function splitTrailingPunctuation(text: string): [string, string] {
+  const match = TRAILING_PUNCTUATION_RE.exec(text);
+  return match ? [match[1] ?? "", match[2] ?? ""] : [text, ""];
+}
+
+/** Inline formatting: `code`, **bold**, and shared-workspace file paths (rendered as an
+ *  actionable chip, see FileLinkChip). Applied per line so a stray marker cannot swallow the
+ *  rest of the message. */
 function renderInline(text: string, keyPrefix: string) {
-  const parts = text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g);
+  const parts = text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|(?:\.\/)?\/?shared-workspace\/[A-Za-z0-9_\-./]+)/g);
   return parts.map((part, index) => {
     const key = `${keyPrefix}-${index}`;
     if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      const inner = part.slice(1, -1);
+      const relPath = parseWorkspacePath(inner);
+      if (relPath) {
+        return <FileLinkChip key={key} rawText={inner} relPath={relPath} />;
+      }
       return (
         <code key={key} className="rounded bg-black/40 px-1 py-0.5 font-mono text-[0.85em] text-amber-200">
-          {part.slice(1, -1)}
+          {inner}
         </code>
       );
     }
@@ -67,6 +93,16 @@ function renderInline(text: string, keyPrefix: string) {
         <strong key={key} className="font-semibold">
           {part.slice(2, -2)}
         </strong>
+      );
+    }
+    const [corePart, trailing] = splitTrailingPunctuation(part);
+    const relPath = parseWorkspacePath(corePart);
+    if (relPath) {
+      return (
+        <span key={key}>
+          <FileLinkChip rawText={corePart} relPath={relPath} />
+          {trailing}
+        </span>
       );
     }
     return <span key={key}>{part}</span>;

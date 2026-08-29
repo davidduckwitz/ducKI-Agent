@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Product Box Styler</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0b0d12; --panel: #12151c; --panel-2: #191d27; --border: #262b38;
+    --text: #e7e9ee; --muted: #8b93a7; --accent: #6d5bff; --accent-2: #22d3ee;
+    --ok: #34d399; --err: #f87171; --warn: #fbbf24;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f5f6fa; --panel: #ffffff; --panel-2: #f0f1f6; --border: #e2e4ec; --text: #1a1d27; --muted: #6b7180; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 1.1rem; margin: 0; display: flex; align-items: center; gap: 0.5rem; }
+  main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+  button { font: inherit; cursor: pointer; border: 0; border-radius: 8px; padding: 0.55rem 1rem; font-weight: 600; }
+  .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; }
+  .btn-ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .btn-danger { background: #f8717122; color: var(--err); }
+  .btn-sm { padding: 0.35rem 0.7rem; font-size: 0.8rem; }
+  input, select, textarea { font: inherit; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.7rem; width: 100%; }
+  textarea { resize: vertical; font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin: 0.9rem 0 0.3rem; font-weight: 600; }
+  label:first-child { margin-top: 0; }
+  .radio-row { display: flex; gap: 0.6rem; }
+  .radio-row label.opt { flex: 1; display: flex; flex-direction: column; gap: 0.2rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.7rem; cursor: pointer; margin: 0; font-weight: 400; }
+  .radio-row label.opt.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .radio-row label.opt strong { color: var(--text); font-size: 0.85rem; }
+  .radio-row label.opt span { font-size: 0.72rem; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 1rem; cursor: pointer; transition: border-color .15s; }
+  .card:hover { border-color: var(--accent); }
+  .card .name { font-weight: 700; margin-bottom: 0.2rem; }
+  .card .url { font-size: 0.78rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 0.6rem; }
+  .badge { display: inline-block; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; padding: 0.2rem 0.5rem; border-radius: 999px; }
+  .badge.draft { background: #8b93a733; color: var(--muted); }
+  .badge.analyzed { background: #34d39933; color: var(--ok); }
+  .badge.error { background: #f8717133; color: var(--err); }
+  .badge.type { background: #6d5bff33; color: var(--accent); margin-left: 0.35rem; }
+  .empty { text-align: center; color: var(--muted); padding: 3rem 1rem; }
+  .modal-backdrop { position: fixed; inset: 0; background: #000a; display: flex; align-items: center; justify-content: center; z-index: 50; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 1.4rem; width: 420px; max-width: 92vw; }
+  .modal h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.2rem; }
+  .hidden { display: none !important; }
+  .detail-grid { display: grid; grid-template-columns: 380px 1fr; gap: 1.2rem; align-items: start; }
+  @media (max-width: 900px) { .detail-grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 1.1rem; }
+  .toolbar { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; }
+  .toolbar .spacer { flex: 1; }
+  .preview-frame-wrap { background: repeating-conic-gradient(var(--panel-2) 0% 25%, var(--panel) 0% 50%) 50% / 16px 16px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; min-height: 320px; }
+  iframe { width: 100%; height: 420px; border: 0; background: #fff; }
+  #browserFrameImg { width: 100%; height: 420px; object-fit: contain; background: #111; display: block; }
+  .live-caption { font-size: 0.78rem; color: var(--err); font-weight: 600; margin-bottom: 0.4rem; display: flex; align-items: center; gap: 0.4rem; }
+  #browserLive { margin-bottom: 1rem; }
+  .tabs { display: flex; gap: 0.3rem; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 0.2rem; }
+  .tab-btn { background: transparent; color: var(--muted); padding: 0.35rem 0.8rem; border-radius: 6px; font-size: 0.82rem; font-weight: 600; }
+  .tab-btn.active { background: var(--panel); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+  .css-editor { width: 100%; height: 420px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.82rem; line-height: 1.5; border-radius: 12px; padding: 1rem; tab-size: 2; }
+  .css-editor-actions { display: flex; align-items: center; gap: 0.7rem; margin-top: 0.6rem; }
+  .report { margin-top: 0.9rem; font-size: 0.78rem; }
+  .report .row { display: flex; justify-content: space-between; padding: 0.3rem 0; border-top: 1px solid var(--border); }
+  .report .row:first-child { border-top: 0; }
+  .row .role { font-weight: 600; text-transform: capitalize; }
+  .row .status.mapped { color: var(--ok); }
+  .row .status.unmatched_in_template, .row .status.no_style_detected { color: var(--warn); }
+  #status { font-size: 0.82rem; margin-top: 0.6rem; min-height: 1.1em; }
+  #status.ok { color: var(--ok); } #status.err { color: var(--err); }
+  .back { color: var(--accent); background: none; padding: 0.3rem 0; font-weight: 600; }
+  .hint { font-size: 0.72rem; color: var(--muted); margin-top: 0.3rem; }
+  .file-row { display: flex; gap: 0.5rem; align-items: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧩 Product Box Styler</h1>
+  <button class="btn-primary" id="newProjectBtn">+ Neues Projekt</button>
+</header>
+<main>
+  <div id="listView">
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <div id="detailView" class="hidden">
+    <button class="back" id="backBtn">&larr; Alle Projekte</button>
+    <div class="detail-grid">
+      <div class="panel">
+        <label>Name</label>
+        <input id="d-name" />
+        <label>Shop-URL</label>
+        <input id="d-url" placeholder="https://shop.example.com/produkt" />
+        <label>Analyse-Typ</label>
+        <div class="radio-row" id="d-type-row">
+          <label class="opt" data-val="heuristic"><strong>Heuristic</strong><span>DOM + &lt;style&gt;-Blöcke, schnell &amp; präzise bei normalem HTML</span></label>
+          <label class="opt" data-val="vision"><strong>Vision</strong><span>Screenshot per LLM interpretiert, braucht Bild-Input</span></label>
+          <label class="opt" data-val="combo"><strong>Kombi</strong><span>Heuristic zuerst, Vision als Fallback</span></label>
+        </div>
+        <button class="btn-ghost btn-sm" id="saveMetaBtn" style="margin-top:0.9rem;width:100%;">Speichern</button>
+
+        <label>HTML-Vorlage</label>
+        <div class="file-row">
+          <input type="file" id="templateFile" accept=".html,text/html" />
+        </div>
+        <textarea id="d-template" rows="6" placeholder="&lt;div data-pb=&quot;root&quot; class=&quot;product-card&quot;&gt;...&lt;/div&gt;"></textarea>
+        <div class="hint">Elemente mit <code>data-pb="root|image|title|price|button|rating|badge|description"</code> markieren für sicheres Mapping.</div>
+        <button class="btn-ghost btn-sm" id="saveTemplateBtn" style="margin-top:0.6rem;width:100%;">Vorlage speichern</button>
+
+        <button class="btn-primary" id="analyzeBtn" style="margin-top:1rem;width:100%;">🔍 Analysieren &amp; CSS generieren</button>
+        <div id="status"></div>
+
+        <div class="report hidden" id="report"></div>
+      </div>
+
+      <div>
+        <div class="toolbar">
+          <div class="tabs" id="viewTabs">
+            <button class="tab-btn active" data-tab="preview">👁️ Vorschau</button>
+            <button class="tab-btn" data-tab="css">✏️ CSS bearbeiten</button>
+          </div>
+          <div class="spacer"></div>
+          <button class="btn-ghost btn-sm" id="refreshPreviewBtn">Aktualisieren</button>
+          <button class="btn-ghost btn-sm" id="downloadCssBtn">CSS herunterladen</button>
+          <button class="btn-danger btn-sm" id="deleteProjectBtn">Löschen</button>
+        </div>
+        <div id="browserLive" class="hidden">
+          <div class="live-caption">🔴 Live: Analysiert Shop-Seite im internen Browser …</div>
+          <div class="preview-frame-wrap"><img id="browserFrameImg" alt="Browser-Live-Ansicht" /></div>
+        </div>
+        <div id="cssPreview" class="preview-frame-wrap"><iframe id="preview" sandbox="allow-same-origin"></iframe></div>
+        <div id="cssEditorPane" class="hidden">
+          <textarea id="cssEditor" class="css-editor" spellcheck="false" placeholder="/* Noch kein CSS generiert. */"></textarea>
+          <div class="css-editor-actions">
+            <button class="btn-primary btn-sm" id="saveCssBtn">💾 CSS speichern &amp; Vorschau aktualisieren</button>
+            <span id="cssStatus" class="hint"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="modalBackdrop" class="modal-backdrop hidden">
+    <div class="modal">
+      <h2>Neues Projekt</h2>
+      <label>Name</label>
+      <input id="m-name" placeholder="z.B. Konkurrent XY" />
+      <label>Shop-URL (optional, kann später ergänzt werden)</label>
+      <input id="m-url" placeholder="https://..." />
+      <label>Analyse-Typ</label>
+      <select id="m-type">
+        <option value="heuristic">Heuristic</option>
+        <option value="vision">Vision</option>
+        <option value="combo">Kombi</option>
+      </select>
+      <div class="modal-actions">
+        <button class="btn-ghost" id="modalCancel">Abbrechen</button>
+        <button class="btn-primary" id="modalCreate">Erstellen</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const NAME = "product-box-styler";
+  const INVOKE = "/api/plugins/" + NAME + "/invoke";
+  const $ = (id) => document.getElementById(id);
+  let currentProject = null;
+
+  async function invoke(input) {
+    const res = await fetch(INVOKE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tool: "product_box_styler", input }) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload && payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  function setStatus(msg, ok) { const s = $("status"); s.textContent = msg || ""; s.className = ok ? "ok" : (msg ? "err" : ""); }
+
+  function statusBadge(status) {
+    const map = { draft: "Entwurf", analyzed: "Analysiert", error: "Fehler" };
+    return `<span class="badge ${status}">${map[status] || status}</span>`;
+  }
+
+  async function loadList() {
+    const grid = $("grid");
+    try {
+      const { projects } = await invoke({ action: "list_projects" });
+      if (!projects || projects.length === 0) { grid.innerHTML = '<div class="empty">Noch keine Projekte. Lege dein erstes Projekt an.</div>'; return; }
+      grid.innerHTML = "";
+      for (const p of projects) {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `<div class="name">${escapeHtml(p.name)}</div><div class="url">${escapeHtml(p.shopUrl || "keine URL")}</div>${statusBadge(p.status)}<span class="badge type">${p.analyzeType}</span>`;
+        card.onclick = () => openProject(p.id);
+        grid.appendChild(card);
+      }
+    } catch (e) { grid.innerHTML = `<div class="empty">Laden fehlgeschlagen: ${escapeHtml(e.message)}</div>`; }
+  }
+
+  function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+  function showList() { $("listView").classList.remove("hidden"); $("detailView").classList.add("hidden"); currentProject = null; loadList(); }
+  function showDetail() { $("listView").classList.add("hidden"); $("detailView").classList.remove("hidden"); }
+
+  function setTypeRadio(val) {
+    for (const el of $("d-type-row").querySelectorAll(".opt")) el.classList.toggle("active", el.dataset.val === val);
+  }
+  $("d-type-row").addEventListener("click", (e) => {
+    const opt = e.target.closest(".opt");
+    if (opt) setTypeRadio(opt.dataset.val);
+  });
+
+  function renderPreview(templateHtml, styleCss) {
+    const emptyHint = '<p style="font-family:sans-serif;color:#999;padding:2rem">Noch keine Vorlage hochgeladen.</p>';
+    const doc = `<!doctype html><html><head><meta charset="utf-8"><style>${styleCss || ""}</style></head><body>${templateHtml || emptyHint}</body></html>`;
+    $("preview").srcdoc = doc;
+  }
+
+  let activeTab = "preview";
+  function setTab(tab) {
+    activeTab = tab;
+    for (const btn of $("viewTabs").querySelectorAll(".tab-btn")) btn.classList.toggle("active", btn.dataset.tab === tab);
+    $("cssPreview").classList.toggle("hidden", tab !== "preview");
+    $("cssEditorPane").classList.toggle("hidden", tab !== "css");
+    if (tab === "css" && currentProject) $("cssEditor").value = currentProject.styleCss || "";
+  }
+  $("viewTabs").addEventListener("click", (e) => {
+    const btn = e.target.closest(".tab-btn");
+    if (btn) setTab(btn.dataset.tab);
+  });
+
+  $("saveCssBtn").onclick = async () => {
+    if (!currentProject) return;
+    const css = $("cssEditor").value;
+    const cssStatus = $("cssStatus");
+    try {
+      await invoke({ action: "save_css", id: currentProject.id, css });
+      currentProject.styleCss = css;
+      renderPreview(currentProject.templateHtml, css);
+      cssStatus.textContent = "Gespeichert.";
+      cssStatus.style.color = "var(--ok)";
+    } catch (e) {
+      cssStatus.textContent = "Fehler: " + e.message;
+      cssStatus.style.color = "var(--err)";
+    }
+  };
+
+  function renderReport(mappingReport) {
+    const box = $("report");
+    if (!mappingReport || !mappingReport.roles) { box.classList.add("hidden"); return; }
+    box.classList.remove("hidden");
+    const conf = mappingReport.confidence != null ? `Konfidenz: ${Math.round(mappingReport.confidence * 100)}%` : "";
+    box.innerHTML = `<div class="hint" style="margin-bottom:0.4rem;">${conf}${mappingReport.notes ? " — " + escapeHtml(mappingReport.notes) : ""}</div>` +
+      mappingReport.roles.map((r) => `<div class="row"><span class="role">${r.role}</span><span class="status ${r.status}">${r.status.replace(/_/g, " ")}</span></div>`).join("");
+  }
+
+  async function openProject(id) {
+    try {
+      const { project } = await invoke({ action: "get_project", id });
+      currentProject = project;
+      $("d-name").value = project.name;
+      $("d-url").value = project.shopUrl || "";
+      setTypeRadio(project.analyzeType);
+      $("d-template").value = project.templateHtml || "";
+      setStatus("");
+      renderPreview(project.templateHtml, project.styleCss);
+      renderReport(project.mappingReport);
+      setTab("preview");
+      showDetail();
+    } catch (e) { setStatus("Laden fehlgeschlagen: " + e.message, false); }
+  }
+
+  $("newProjectBtn").onclick = () => { $("m-name").value = ""; $("m-url").value = ""; $("m-type").value = "heuristic"; $("modalBackdrop").classList.remove("hidden"); };
+  $("modalCancel").onclick = () => $("modalBackdrop").classList.add("hidden");
+  $("modalCreate").onclick = async () => {
+    const name = $("m-name").value.trim();
+    if (!name) return;
+    try {
+      const { project } = await invoke({ action: "create_project", name, shopUrl: $("m-url").value.trim(), analyzeType: $("m-type").value });
+      $("modalBackdrop").classList.add("hidden");
+      openProject(project.id);
+    } catch (e) { alert("Erstellen fehlgeschlagen: " + e.message); }
+  };
+
+  $("backBtn").onclick = showList;
+
+  $("saveMetaBtn").onclick = async () => {
+    if (!currentProject) return;
+    const activeType = $("d-type-row").querySelector(".opt.active")?.dataset.val || "heuristic";
+    try {
+      await invoke({ action: "update_project", id: currentProject.id, name: $("d-name").value.trim(), shopUrl: $("d-url").value.trim(), analyzeType: activeType });
+      setStatus("Gespeichert.", true);
+    } catch (e) { setStatus("Speichern fehlgeschlagen: " + e.message, false); }
+  };
+
+  $("templateFile").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const text = await file.text();
+    $("d-template").value = text;
+  };
+
+  $("saveTemplateBtn").onclick = async () => {
+    if (!currentProject) return;
+    try {
+      const templateHtml = $("d-template").value;
+      const r = await invoke({ action: "upload_template", id: currentProject.id, templateHtml });
+      currentProject.templateHtml = templateHtml;
+      renderPreview(templateHtml, currentProject.styleCss);
+      setStatus(`Vorlage gespeichert. Erkannte Klassen: ${r.detectedClasses.length}, gemappte Rollen: ${Object.keys(r.roleMapping).length}.`, true);
+    } catch (e) { setStatus("Speichern fehlgeschlagen: " + e.message, false); }
+  };
+
+  let framePollTimer = null;
+  function startBrowserLive(projectId) {
+    stopBrowserLive(false);
+    setTab("preview");
+    $("browserLive").classList.remove("hidden");
+    $("cssPreview").classList.add("hidden");
+    framePollTimer = setInterval(async () => {
+      try {
+        const r = await invoke({ action: "browser_frame", id: projectId });
+        if (r.frame && r.frame.data) {
+          $("browserFrameImg").src = `data:image/${r.frame.format === "png" ? "png" : "jpeg"};base64,${r.frame.data}`;
+        }
+      } catch (e) { /* Browser-Session startet evtl. noch - naechster Poll versucht es erneut. */ }
+    }, 700);
+  }
+  function stopBrowserLive(sendStop) {
+    if (framePollTimer) { clearInterval(framePollTimer); framePollTimer = null; }
+    $("browserLive").classList.add("hidden");
+    setTab(activeTab);
+    if (sendStop && currentProject) invoke({ action: "browser_stop", id: currentProject.id }).catch(() => {});
+  }
+
+  $("analyzeBtn").onclick = async () => {
+    if (!currentProject) return;
+    setStatus("Analysiere …", true);
+    startBrowserLive(currentProject.id);
+    try {
+      const { project } = await invoke({ action: "analyze", id: currentProject.id });
+      currentProject = project;
+      renderPreview(project.templateHtml, project.styleCss);
+      renderReport(project.mappingReport);
+      setStatus(project.status === "analyzed" ? "CSS generiert." : (project.errorMessage || "Analyse abgeschlossen."), project.status === "analyzed");
+    } catch (e) { setStatus("Analyse fehlgeschlagen: " + e.message, false); }
+    finally { stopBrowserLive(true); }
+  };
+
+  $("refreshPreviewBtn").onclick = () => currentProject && renderPreview($("d-template").value, currentProject.styleCss);
+
+  $("downloadCssBtn").onclick = () => {
+    if (!currentProject) return;
+    const blob = new Blob([currentProject.styleCss || ""], { type: "text/css" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = (currentProject.name || "style") + ".css";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  $("deleteProjectBtn").onclick = async () => {
+    if (!currentProject || !confirm(`Projekt "${currentProject.name}" wirklich löschen?`)) return;
+    try { await invoke({ action: "delete_project", id: currentProject.id }); showList(); }
+    catch (e) { setStatus("Löschen fehlgeschlagen: " + e.message, false); }
+  };
+
+  loadList();
+</script>
+</body>
+</html>

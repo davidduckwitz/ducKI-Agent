@@ -1,0 +1,26 @@
+{
+  "name": "product-box-styler",
+  "version": "0.1.0",
+  "description": "Erkennt Produktboxen auf Shop-Seiten (DOM-Heuristik und/oder Vision) und generiert daraus CSS fuer eine eigene HTML-Vorlage - mit Projektverwaltung, Vorlagen-Upload und Live-Vorschau.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🧩",
+  "category": "workspace",
+  "provides": {
+    "moduleTools": [
+      "tools/product-box-styler.js"
+    ],
+    "skills": [
+      "skills/product-box-styler-usage"
+    ],
+    "frontendPage": "app/index.html"
+  },
+  "storage": {
+    "sqlite": true
+  },
+  "trust": "node",
+  "permissions": [
+    "browser.frames"
+  ],
+  "enabled": true
+}

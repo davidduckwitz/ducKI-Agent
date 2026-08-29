@@ -287,8 +287,8 @@ await mcp.call("bitcoin-puzzle-solve", {
 
 ### Files & Storage
 
-- **Wordlist:** `apps/server/shared-workspace/btc-puzzle/english.txt` (2048 BIP39 words)
-- **State Persistence:** `/apps/server/shared-workspace/bitcoin-puzzle-attempts/`
+- **Wordlist:** `/shared-workspace/btc-puzzle/english.txt` (2048 BIP39 words)
+- **State Persistence:** `/shared-workspace/bitcoin-puzzle-attempts/`
   - `{puzzleId}-state.json` — Puzzle metadata and current state
   - `{puzzleId}-attempts.csv` — All attempted phrases and addresses
 - **API Base:** `http://localhost:3001/api/bitcoin-puzzle` (port 3001)

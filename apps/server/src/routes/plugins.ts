@@ -16,7 +16,9 @@ import {
   PluginBuilderSpecSchema,
   createPluginScaffold,
   describePluginScaffold,
+  describeExistingScaffold,
   validateScaffoldIntegrity,
+  BUILDER_SPEC_FILE,
   type PluginBuilderSpec,
   type PluginScaffoldResult,
 } from "../lib/plugin-builder.js";
@@ -96,6 +98,63 @@ pluginsRouter.get("/builder/runs/:runId", (req, res) => {
   const run = pluginBuilderRuns.get(String(req.params.runId ?? ""));
   if (!run) { res.status(404).json(createApiError("Plugin builder run not found")); return; }
   res.json(createApiResponse(run));
+});
+
+/**
+ * GET /api/plugins/builder/drafts - list every staging dir left behind by a create-run that
+ * didn't finish (failed, was stopped, or the browser tab was closed mid-run). Previously these
+ * were only reachable if the client still held the in-memory runId - closing the wizard modal
+ * lost that, so the draft became invisible even though its files were still on disk. Reads
+ * spec.json (written by create-run/resume-run) for display info and cross-references the
+ * in-memory pluginBuilderRuns map for a best-effort status.
+ */
+pluginsRouter.get("/builder/drafts", (req, res, next) => {
+  try {
+    const root = pluginStagingRoot();
+    if (!existsSync(root)) { res.json(createApiResponse([])); return; }
+    const runsByName = new Map<string, PluginBuilderRunStatus>();
+    for (const run of pluginBuilderRuns.values()) {
+      const existing = runsByName.get(run.name);
+      if (!existing || run.updatedAt > existing.updatedAt) runsByName.set(run.name, run);
+    }
+    const drafts = readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => {
+        const dir = join(root, entry.name);
+        let spec: Partial<PluginBuilderSpec> | null = null;
+        try { spec = JSON.parse(readFileSync(join(dir, BUILDER_SPEC_FILE), "utf8")); } catch { /* older/foreign staging dir without spec.json */ }
+        let updatedAt: string;
+        try { updatedAt = statSync(dir).mtime.toISOString(); } catch { updatedAt = new Date(0).toISOString(); }
+        const run = runsByName.get(entry.name);
+        return {
+          name: entry.name,
+          displayName: spec?.displayName ?? entry.name,
+          description: spec?.description ?? "",
+          icon: spec?.icon,
+          archetype: spec?.archetype,
+          userRequest: spec?.userRequest ?? "",
+          status: run?.status ?? (spec ? "stopped" : "unknown"),
+          error: run?.error,
+          runId: run?.status === "running" ? run.runId : undefined,
+          resumable: spec !== null,
+          updatedAt,
+        };
+      })
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    res.json(createApiResponse(drafts));
+  } catch (error) {
+    next(error);
+  }
+});
+
+pluginsRouter.delete("/builder/drafts/:name", (req, res) => {
+  const name = String(req.params.name ?? "");
+  if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
+  const dir = join(pluginStagingRoot(), name);
+  if (!existsSync(dir)) { res.status(404).json(createApiError("Draft not found")); return; }
+  rmSync(dir, { recursive: true, force: true });
+  for (const [runId, run] of pluginBuilderRuns) if (run.name === name) pluginBuilderRuns.delete(runId);
+  res.json(createApiResponse({ name, deleted: true }));
 });
 
 /** GET /api/plugins - list all plugins with their resolved tools/skills/status. */
@@ -606,7 +665,48 @@ function cleanupStalePluginStaging(): void {
   }
 }
 
-function buildPluginCreationGoal(spec: PluginBuilderSpec, scaffold: PluginScaffoldResult): string {
+/**
+ * Inlines the current content of every editable scaffold file directly into the goal, and steers
+ * the agent toward `write` over `edit` for them. Both changes target the same failure class seen
+ * in practice with small/local models: they call action:"edit" with an old_string reconstructed
+ * from memory (after a separate read() turn) rather than copied verbatim, and it doesn't match -
+ * especially for a multi-line `script` field, which JSON stores as ONE line with literal `\n`
+ * escapes, but a small model tends to "mentally unescape" back into real newlines. These scaffold
+ * files are tiny (~20 lines), so a full inline + full-rewrite is cheap and removes both an extra
+ * read-tool round trip and the exact-byte-match risk entirely.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * renameSync(stagingDir, finalDir) moves an entire directory tree that a CodingAgent run just
+ * finished writing to - including its `.ducki-checkpoints/` git repo. On Windows this can fail
+ * with EPERM/EBUSY if something still holds a handle open inside that tree for a moment after the
+ * run resolves (a lingering git.exe from a checkpoint diff, or transient AV scanning of the
+ * files just written) - see pendingCheckpointDiffs in coding-agent.ts for the specific race this
+ * closes at the source; this is the belt-and-braces retry for whatever that doesn't cover.
+ * A no-op fast path elsewhere (Linux/macOS in CI, or once the handle is already released).
+ */
+async function renameWithRetry(from: string, to: string, attempts = 5, delayMs = 200): Promise<void> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt === attempts || (code !== "EPERM" && code !== "EBUSY")) throw error;
+      await sleep(delayMs * attempt);
+    }
+  }
+}
+
+function buildPluginCreationGoal(spec: PluginBuilderSpec, scaffold: PluginScaffoldResult, stagingDir: string): string {
+  const editableFileBlocks = scaffold.editableFiles.map((file) => {
+    let content: string;
+    try { content = readFileSync(join(stagingDir, file), "utf8"); } catch { content = "(could not read - file missing?)"; }
+    return `--- ${file} ---\n${content}`;
+  }).join("\n\n");
   return [
     `A valid ${spec.archetype} plugin scaffold named "${spec.name}" already exists in the current directory.`,
     `User request: ${spec.userRequest}`,
@@ -614,7 +714,14 @@ function buildPluginCreationGoal(spec: PluginBuilderSpec, scaffold: PluginScaffo
     "",
     `You may edit ONLY these files:\n${scaffold.editableFiles.map((file) => `- ${file}`).join("\n")}`,
     `Never edit these system-owned files:\n${scaffold.lockedFiles.map((file) => `- ${file}`).join("\n")}`,
-    "Do not create, rename, or delete files. Read the existing scaffold before editing it.",
+    "Do not create, rename, or delete files.",
+    "",
+    "Current content of every editable file, exactly as it is on disk right now (no need to read() these before your first edit):",
+    editableFileBlocks,
+    "",
+    "These files are short. Prefer the filesystem tool's `write` action (full-file overwrite) over `edit` for them: " +
+      "`edit` requires old_string to match the file byte-for-byte, and a multi-line value like a `script` field is stored " +
+      "as one JSON line with literal \\n escapes - easy to get subtly wrong. `write` sidesteps that entirely.",
     "Fill the TODO placeholders with a concise, working implementation that matches the user request.",
     "Run the provided verify command and fix only editable files when it reports an error.",
   ].filter(Boolean).join("\n");
@@ -720,104 +827,184 @@ pluginsRouter.post("/create-run", async (req, res, next) => {
 
     const runId = randomUUID();
     const scaffold = createPluginScaffold(stagingDir, spec);
+    // Persisted alongside the scaffold so a later /builder/drafts listing or /builder/resume-run
+    // can reconstruct the spec after the in-memory pluginBuilderRuns entry (and the browser's
+    // runId) are gone - e.g. after a server restart or the wizard modal being closed.
+    writeFileSync(join(stagingDir, BUILDER_SPEC_FILE), `${JSON.stringify(spec, null, 2)}\n`, "utf8");
     pluginBuilderRuns.set(runId, { runId, name, status: "running", updatedAt: new Date().toISOString() });
     res.json(createApiResponse({ runId }));
 
-    const io = req.app.locals["io"];
-    const emit = (event: string, data: Record<string, unknown>) => {
-      if (io) io.emit(event, { runId, ...data });
-    };
-
-    void (async () => {
-      // Set as soon as the CodingAgent's conversation exists (see onConversationStarted below),
-      // so the finally block can always clean up registrations regardless of how the run ends.
-      let runConversationId: number | undefined;
-      let agentRegistryRunId: string | undefined;
-      try {
-        const eventEmitter: AgentEventEmitter = {
-          emitChunk(chunk: string) {
-            emit("plugin_create_chunk", { chunk });
-          },
-          emitEvent(event: any) {
-            emit("plugin_create_event", { type: event.type, message: event.message, data: event.data, timestamp: event.timestamp });
-          },
-        };
-
-        const codingAgent = createCodingAgent({ sandboxRoot: stagingDir, maxIterations: 40, eventEmitter });
-        const goal = buildPluginCreationGoal(spec, scaffold);
-        // Points validate-cli at the STAGING root, not pluginsRoot() - it resolves
-        // join(pluginsRoot, name) internally, so passing stagingRoot here makes it check
-        // stagingDir (= stagingRoot/name), matching where the agent is actually writing.
-        const verifyCommand = `node "${resolveValidateCliPath()}" "${stagingRoot}" "${name}"${spec.archetype === "llm-provider" ? " --allow-builder-llm-provider" : ""}${spec.archetype === "widget" ? " --allow-builder-widgets" : ""}`;
-
-        const runResult = await codingAgent.run(goal, {
-          verifyCommand,
-          maxAttempts: 3,
-          timeoutMs: 5 * 60 * 1000,
-          // Previously this run was invisible to BOTH the agent registry (so the "still
-          // running" snapshot a reconnecting/navigating client gets never listed it - the
-          // Stop button just vanished) and the chat:stop handler (so clicking it did nothing
-          // anyway). Registering here, the moment the conversation exists, closes both gaps.
-          onConversationStarted: (conversationId) => {
-            runConversationId = conversationId;
-            registerCodingRun(conversationId, codingAgent);
-            agentRegistryRunId = agentRegistry.register({
-              source: "chat_http",
-              conversationId,
-              label: `Plugin: ${name}`,
-            });
-            emit("plugin_create_started", { conversationId });
-          },
-        });
-
-        // Authoritative re-check, in-process - never trust the agent's own reported "verified".
-        const integrityErrors = validateScaffoldIntegrity(stagingDir, scaffold);
-        const finalCheck = validatePluginDir(stagingRoot, name, {
-          allowBuilderLLMProvider: spec.archetype === "llm-provider",
-          allowBuilderWidgets: spec.archetype === "widget",
-        });
-        if (integrityErrors.length > 0) finalCheck.errors.push(...integrityErrors);
-        finalCheck.ok = finalCheck.errors.length === 0;
-        if (!finalCheck.ok) {
-          // Left in staging (never moved into plugins/), so it's invisible to loadPlugins() -
-          // nothing broken ever reaches the general plugin list. Stays on disk for manual
-          // inspection until cleanupStalePluginStaging() reclaims it after 24h.
-          const error = finalCheck.errors.join("; ");
-          pluginBuilderRuns.set(runId, { runId, name, status: "failed", error, conversationId: runResult.conversationId, updatedAt: new Date().toISOString() });
-          emit("plugin_create_complete", { success: false, name, error });
-          return;
-        }
-
-        renameSync(stagingDir, finalDir);
-        setPluginEnabled(name, false);
-        const reload = reloadPlugins(req);
-
-        // Tag the CodingAgent's own conversation as belonging to this plugin, so continuing
-        // it later in the regular chat re-derives the same [CODING_CONTEXT] marker
-        // CodingWorkspace uses (proper coding iteration budget + filesystem tool scoped to
-        // this plugin's folder, see the sandbox fallback in websocket/index.ts) instead of
-        // being misclassified as a tiny-budget lightweight/chatbot run.
-        if (runResult.conversationId !== undefined) {
-          await db.updateConversation(runResult.conversationId, { pluginContext: name });
-        }
-
-        pluginBuilderRuns.set(runId, { runId, name, status: "completed", conversationId: runResult.conversationId, updatedAt: new Date().toISOString() });
-        emit("plugin_create_complete", { success: true, name, conversationId: runResult.conversationId, reload });
-      } catch (error) {
-        if (isAbortError(error)) {
-          pluginBuilderRuns.set(runId, { runId, name, status: "stopped", error: "Vom Nutzer gestoppt", updatedAt: new Date().toISOString() });
-          emit("plugin_create_complete", { success: false, stopped: true, name, error: "Vom Nutzer gestoppt" });
-        } else {
-          const message = error instanceof Error ? error.message : String(error);
-          pluginBuilderRuns.set(runId, { runId, name, status: "failed", error: message, updatedAt: new Date().toISOString() });
-          emit("plugin_create_complete", { success: false, name, error: message });
-        }
-      } finally {
-        if (runConversationId !== undefined) unregisterCodingRun(runConversationId);
-        if (agentRegistryRunId !== undefined) agentRegistry.unregister(agentRegistryRunId);
-      }
-    })();
+    void executeBuilderRun(req, { runId, name, spec, scaffold, stagingRoot, stagingDir, finalDir, db, createCodingAgent });
   } catch (error) {
     next(error);
   }
 });
+
+/**
+ * POST /api/plugins/builder/resume-run - continue the CodingAgent against an existing staging
+ * dir (a draft left over from a failed/stopped create-run) instead of scaffolding a fresh one.
+ * Reuses the spec.json written by create-run; hashes locked files as they currently sit on disk
+ * (describeExistingScaffold) rather than re-writing them, so earlier agent progress survives.
+ */
+pluginsRouter.post("/builder/resume-run", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    const codingEnabled = parseBooleanSetting(await db.getSetting("CODING_ENABLED"), false);
+    const creationEnabled = parseBooleanSetting(await db.getSetting("PLUGIN_CREATION_ENABLED"), false);
+    if (!codingEnabled || !creationEnabled) {
+      res.status(403).json(createApiError("Plugin creation is disabled"));
+      return;
+    }
+    const createCodingAgent = req.app.locals["createCodingAgent"] as
+      | ((options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: AgentEventEmitter }) => CodingAgent)
+      | undefined;
+    if (!createCodingAgent) {
+      res.status(500).json(createApiError("Coding agent factory is not configured"));
+      return;
+    }
+
+    const name = String(req.body?.name ?? "");
+    if (!SAFE_NAME.test(name)) { res.status(400).json(createApiError("Invalid plugin name")); return; }
+    const stagingRoot = pluginStagingRoot();
+    const stagingDir = join(stagingRoot, name);
+    const specPath = join(stagingDir, BUILDER_SPEC_FILE);
+    if (!existsSync(stagingDir) || !existsSync(specPath)) {
+      res.status(404).json(createApiError("Draft not found (no spec.json - it may predate this feature; delete and recreate it)"));
+      return;
+    }
+    const parsedSpec = PluginBuilderSpecSchema.safeParse(JSON.parse(readFileSync(specPath, "utf8")));
+    if (!parsedSpec.success) {
+      res.status(400).json(createApiError("Draft's spec.json is invalid"));
+      return;
+    }
+    const spec = parsedSpec.data;
+    const finalDir = resolve(pluginsRoot(), name);
+    if (existsSync(finalDir)) {
+      res.status(409).json(createApiError(`A plugin named '${name}' already exists`));
+      return;
+    }
+
+    const scaffold = describeExistingScaffold(stagingDir, spec);
+    const runId = randomUUID();
+    pluginBuilderRuns.set(runId, { runId, name, status: "running", updatedAt: new Date().toISOString() });
+    res.json(createApiResponse({ runId }));
+
+    void executeBuilderRun(req, { runId, name, spec, scaffold, stagingRoot, stagingDir, finalDir, db, createCodingAgent });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Shared tail of create-run/resume-run: drives the CodingAgent against an already-scaffolded
+ *  staging dir, verifies the result, and moves it into plugins/ on success. Both callers have
+ *  already responded with { runId } by the time this is invoked, so errors here are reported
+ *  only via pluginBuilderRuns + the plugin_create_complete socket event, never via `next()`. */
+async function executeBuilderRun(
+  req: import("express").Request,
+  params: {
+    runId: string;
+    name: string;
+    spec: PluginBuilderSpec;
+    scaffold: PluginScaffoldResult;
+    stagingRoot: string;
+    stagingDir: string;
+    finalDir: string;
+    db: DatabaseService;
+    createCodingAgent: (options?: { sandboxRoot?: string; maxIterations?: number; eventEmitter?: AgentEventEmitter }) => CodingAgent;
+  },
+): Promise<void> {
+  const { runId, name, spec, scaffold, stagingRoot, stagingDir, finalDir, db, createCodingAgent } = params;
+  const io = req.app.locals["io"];
+  const emit = (event: string, data: Record<string, unknown>) => {
+    if (io) io.emit(event, { runId, ...data });
+  };
+
+  // Set as soon as the CodingAgent's conversation exists (see onConversationStarted below),
+  // so the finally block can always clean up registrations regardless of how the run ends.
+  let runConversationId: number | undefined;
+  let agentRegistryRunId: string | undefined;
+  try {
+    const eventEmitter: AgentEventEmitter = {
+      emitChunk(chunk: string) {
+        emit("plugin_create_chunk", { chunk });
+      },
+      emitEvent(event: any) {
+        emit("plugin_create_event", { type: event.type, message: event.message, data: event.data, timestamp: event.timestamp });
+      },
+    };
+
+    const codingAgent = createCodingAgent({ sandboxRoot: stagingDir, maxIterations: 40, eventEmitter });
+    const goal = buildPluginCreationGoal(spec, scaffold, stagingDir);
+    // Points validate-cli at the STAGING root, not pluginsRoot() - it resolves
+    // join(pluginsRoot, name) internally, so passing stagingRoot here makes it check
+    // stagingDir (= stagingRoot/name), matching where the agent is actually writing.
+    const verifyCommand = `node "${resolveValidateCliPath()}" "${stagingRoot}" "${name}"${spec.archetype === "llm-provider" ? " --allow-builder-llm-provider" : ""}${spec.archetype === "widget" ? " --allow-builder-widgets" : ""}`;
+
+    const runResult = await codingAgent.run(goal, {
+      verifyCommand,
+      maxAttempts: 3,
+      timeoutMs: 5 * 60 * 1000,
+      // Previously this run was invisible to BOTH the agent registry (so the "still
+      // running" snapshot a reconnecting/navigating client gets never listed it - the
+      // Stop button just vanished) and the chat:stop handler (so clicking it did nothing
+      // anyway). Registering here, the moment the conversation exists, closes both gaps.
+      onConversationStarted: (conversationId) => {
+        runConversationId = conversationId;
+        registerCodingRun(conversationId, codingAgent);
+        agentRegistryRunId = agentRegistry.register({
+          source: "chat_http",
+          conversationId,
+          label: `Plugin: ${name}`,
+        });
+        emit("plugin_create_started", { conversationId });
+      },
+    });
+
+    // Authoritative re-check, in-process - never trust the agent's own reported "verified".
+    const integrityErrors = validateScaffoldIntegrity(stagingDir, scaffold);
+    const finalCheck = validatePluginDir(stagingRoot, name, {
+      allowBuilderLLMProvider: spec.archetype === "llm-provider",
+      allowBuilderWidgets: spec.archetype === "widget",
+    });
+    if (integrityErrors.length > 0) finalCheck.errors.push(...integrityErrors);
+    finalCheck.ok = finalCheck.errors.length === 0;
+    if (!finalCheck.ok) {
+      // Left in staging (never moved into plugins/), so it's invisible to loadPlugins() -
+      // nothing broken ever reaches the general plugin list. Stays on disk for manual
+      // inspection (now surfaced via GET /builder/drafts) until cleanupStalePluginStaging()
+      // reclaims it after 24h, or the user deletes/resumes it explicitly.
+      const error = finalCheck.errors.join("; ");
+      pluginBuilderRuns.set(runId, { runId, name, status: "failed", error, conversationId: runResult.conversationId, updatedAt: new Date().toISOString() });
+      emit("plugin_create_complete", { success: false, name, error });
+      return;
+    }
+
+    await renameWithRetry(stagingDir, finalDir);
+    setPluginEnabled(name, false);
+    const reload = reloadPlugins(req);
+
+    // Tag the CodingAgent's own conversation as belonging to this plugin, so continuing
+    // it later in the regular chat re-derives the same [CODING_CONTEXT] marker
+    // CodingWorkspace uses (proper coding iteration budget + filesystem tool scoped to
+    // this plugin's folder, see the sandbox fallback in websocket/index.ts) instead of
+    // being misclassified as a tiny-budget lightweight/chatbot run.
+    if (runResult.conversationId !== undefined) {
+      await db.updateConversation(runResult.conversationId, { pluginContext: name });
+    }
+
+    pluginBuilderRuns.set(runId, { runId, name, status: "completed", conversationId: runResult.conversationId, updatedAt: new Date().toISOString() });
+    emit("plugin_create_complete", { success: true, name, conversationId: runResult.conversationId, reload });
+  } catch (error) {
+    if (isAbortError(error)) {
+      pluginBuilderRuns.set(runId, { runId, name, status: "stopped", error: "Vom Nutzer gestoppt", updatedAt: new Date().toISOString() });
+      emit("plugin_create_complete", { success: false, stopped: true, name, error: "Vom Nutzer gestoppt" });
+    } else {
+      const message = error instanceof Error ? error.message : String(error);
+      pluginBuilderRuns.set(runId, { runId, name, status: "failed", error: message, updatedAt: new Date().toISOString() });
+      emit("plugin_create_complete", { success: false, name, error: message });
+    }
+  } finally {
+    if (runConversationId !== undefined) unregisterCodingRun(runConversationId);
+    if (agentRegistryRunId !== undefined) agentRegistry.unregister(agentRegistryRunId);
+  }
+}

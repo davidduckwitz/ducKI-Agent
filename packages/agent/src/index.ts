@@ -138,6 +138,7 @@ export { createScopedShellTool } from "./coding/scoped-shell-tool.js";
 export { createScopedDiagnosticsTool } from "./coding/scoped-diagnostics-tool.js";
 export { CODING_ALLOWED_SHELL_COMMANDS, condenseVerifyOutput } from "./coding/coding-agent.js";
 export {
+  CHECKPOINT_DIR,
   ensureCheckpointRepo,
   createCheckpoint,
   listCheckpoints,

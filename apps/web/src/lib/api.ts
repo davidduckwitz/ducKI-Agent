@@ -205,6 +205,22 @@ export interface PluginScaffoldPreview {
   files: Array<{ path: string; owner: "system" | "agent"; purpose: string }>;
 }
 
+/** A create-run/resume-run attempt still sitting in .plugin-staging/ - failed, stopped, or
+ *  abandoned mid-run - surfaced so the user can reopen and continue it instead of losing it. */
+export interface PluginBuilderDraft {
+  name: string;
+  displayName: string;
+  description: string;
+  icon?: string;
+  archetype?: PluginBuilderArchetype;
+  userRequest: string;
+  status: "running" | "completed" | "failed" | "stopped" | "unknown";
+  error?: string;
+  runId?: string;
+  resumable: boolean;
+  updatedAt: string;
+}
+
 export type PluginSettingSpec = PluginInfo["settings"][number];
 
 export interface ConnectorStatus {
@@ -558,6 +574,11 @@ export const api = {
       request<PluginScaffoldPreview>("/plugins/builder/preview", { method: "POST", body: JSON.stringify(payload) }),
     createRun: (payload: PluginBuilderSpec) =>
       request<{ runId: string }>("/plugins/create-run", { method: "POST", body: JSON.stringify(payload) }),
+    resumeRun: (name: string) =>
+      request<{ runId: string }>("/plugins/builder/resume-run", { method: "POST", body: JSON.stringify({ name }) }),
+    listDrafts: () => request<PluginBuilderDraft[]>("/plugins/builder/drafts"),
+    deleteDraft: (name: string) =>
+      request<{ name: string; deleted: boolean }>(`/plugins/builder/drafts/${encodeURIComponent(name)}`, { method: "DELETE" }),
   },
 
   coding: {

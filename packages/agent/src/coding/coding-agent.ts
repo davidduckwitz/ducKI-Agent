@@ -14,7 +14,7 @@ import {
   outlineFile,
   renderOutline,
 } from "@ducki/tools";
-import { existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute, basename } from "node:path";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, AgentRunEventType, RunJournalEntry } from "../config/interfaces_types.js";
@@ -479,6 +479,13 @@ export class CodingAgent {
    *  readBeforeEditRefusals (see that hook): an unbounded refusal on a model that never emits
    *  the phase marker would deadlock the run instead of ever letting it edit anything. */
   private phaseLockRefusals = 0;
+  /** Fire-and-forget `diffCheckpoint` calls spawned per model turn (see onModelResponse below) -
+   *  tracked so finalize() can await them before run() resolves. Without this, a git.exe process
+   *  spawned by the last turn's diff can still be reading/writing inside sandboxRoot/CHECKPOINT_DIR
+   *  at the moment a caller acts on the resolved run (e.g. the plugin builder's renameSync() of the
+   *  whole sandbox into plugins/), which on Windows can fail with EPERM because the directory is
+   *  still momentarily locked by that lingering handle. */
+  private pendingCheckpointDiffs = new Set<Promise<unknown>>();
   /**
    * True only while Plan-Mode's own investigation sub-run (see run()'s planOnly branch) is in
    * flight - read by the coding-plan-only-explore-lock hook below. Unlike the normal phase lock,
@@ -1207,27 +1214,107 @@ export class CodingAgent {
     return process.platform === "win32" ? absolute.toLowerCase() : absolute;
   }
 
-  private autoSelectCodingSkill(goal: string): string | undefined {
-    const skillKeywords = {
-      "test-driven-development": ["test", "tdd", "unit test", "jest", "vitest", "spec"],
-      "code-review": ["review", "quality", "style", "lint", "format"],
-      "debugging": ["debug", "error", "bug", "fix", "crash"],
-      "phaser-game-scaffold": ["phaser", "game scene", "sprite", "browser game", "2d game", "spiel"],
-      "frontend-scaffold": ["landing page", "landingpage", "website", "webseite", "homepage", "static site"],
-    };
+  /**
+   * Keyword table shared by autoSelectCodingSkill (whole goal, once per run - still used for
+   * verifyCommand side effects like the code-review->lint mapping below) and matchSkillForStep
+   * (one plan step's own title+description - see renderPlanStep). Kept as one table so a new
+   * skill only needs to be added here to become available at both granularities.
+   */
+  private static readonly CODING_SKILL_KEYWORDS: Record<string, string[]> = {
+    "test-driven-development": ["test", "tdd", "unit test", "jest", "vitest", "spec"],
+    "code-review": ["review", "quality", "lint", "format"],
+    "debugging": ["debug", "error", "bug", "fix", "crash"],
+    "phaser-game-scaffold": ["phaser", "game scene", "sprite", "browser game", "2d game", "spiel"],
+    // These three are deliberately listed before frontend-scaffold: a step's own title is
+    // usually specific ("HTML-Struktur erstellen", "CSS Styling implementieren", "JavaScript
+    // Funktionalität implementieren") and should resolve to the matching narrow skill rather
+    // than the broad whole-project scaffold below it.
+    "html-structure": ["html structure", "html skeleton", "html-struktur", "grundgerüst", "semantic html", "page markup"],
+    "css-styling": ["css styling", "css design", "stylesheet", "tailwind", "responsive design", "dark mode", "light mode"],
+    "vanilla-javascript": ["javascript", "vanilla js", "js functionality", "localstorage", "script.js"],
+    "frontend-scaffold": ["landing page", "landingpage", "website", "webseite", "homepage", "static site"],
+  };
 
-    const goalLower = goal.toLowerCase();
-    for (const [skill, keywords] of Object.entries(skillKeywords)) {
-      // Word-boundary match, not substring: `includes("test")` also matched "latest"/"fastest",
-      // and `includes("fix")` matched "prefix"/"suffix", mis-selecting a skill (and, via
-      // verifyCommand detection above, its side effects) on goals that merely contain the
-      // substring rather than the word.
-      if (keywords.some(kw => new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(goalLower))) {
+  /**
+   * Word-boundary keyword match against the shared table, used at both the goal level and the
+   * per-step level. Word-boundary, not substring: `includes("test")` also matched
+   * "latest"/"fastest", and `includes("fix")` matched "prefix"/"suffix", mis-selecting a skill on
+   * text that merely contains the substring rather than the word.
+   */
+  private matchSkillForText(text: string): string | undefined {
+    const lower = text.toLowerCase();
+    for (const [skill, keywords] of Object.entries(CodingAgent.CODING_SKILL_KEYWORDS)) {
+      if (keywords.some(kw => new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(lower))) {
         return skill;
       }
     }
-
     return undefined;
+  }
+
+  private autoSelectCodingSkill(goal: string): string | undefined {
+    return this.matchSkillForText(goal);
+  }
+
+  /** Filename-like tokens with a known code/doc extension (e.g. "index.html" out of "Create
+   *  index.html skeleton structure"). Used by the checklist-grounding demotion to catch a step
+   *  being marked done on the strength of writes to a DIFFERENT file than the one its own
+   *  title/description names - see that call site's doc comment for the concrete failure this
+   *  guards against. The extension allowlist keeps this from false-positive-matching version-like
+   *  tokens ("v1.2") that a bare `\w+\.\w+` pattern would also catch. */
+  private static readonly FILE_HINT_RE =
+    /\b[\w-]+\.(?:html?|css|jsx?|tsx?|mjs|cjs|json|md|py|svg|xml|ya?ml|txt)\b/gi;
+
+  private extractFileHints(text: string): string[] {
+    const matches = text.match(CodingAgent.FILE_HINT_RE) ?? [];
+    return [...new Set(matches.map((match) => match.toLowerCase()))];
+  }
+
+  /**
+   * Whether a file with this exact basename (case-insensitive) exists anywhere in the sandbox
+   * right now, with real content - checked directly against the live filesystem rather than
+   * inferred from this attempt's write journal or checkpoint diff.
+   *
+   * Deliberately NOT limited to "was this file written THIS attempt": a step's own evidence
+   * that its named file is done can legitimately be a read/explore/find/list action that
+   * confirmed the file already exists - from an earlier attempt in the same run, or because the
+   * project was already there (see the isResuming path in buildInitialPrompt). Requiring a fresh
+   * write in the exact attempt being graded would wrongly demote a step whose target file was
+   * genuinely already present and correctly left untouched. What actually matters for grounding
+   * the model's completion claim is only "does the file exist now, with something in it" - not
+   * which tool call, or which attempt, established that.
+   *
+   * Bounded the same way buildRepositorySnapshot's walk is (same bail-outs, same ignored dirs) -
+   * this only runs for steps about to be marked done, so the cost is per-step, not per-iteration.
+   */
+  private sandboxContainsFile(basenameHint: string): boolean {
+    if (!this.sandboxRoot || !existsSync(this.sandboxRoot)) return false;
+    const ignored = new Set(["node_modules", ".git", CHECKPOINT_DIR, "dist", "build", "coverage", ".next", ".turbo"]);
+    const stack: Array<{ dir: string; depth: number }> = [{ dir: this.sandboxRoot, depth: 0 }];
+    let visited = 0;
+    while (stack.length > 0 && visited < 3000) {
+      const { dir, depth } = stack.pop()!;
+      if (depth > 6) continue;
+      let entries: import("node:fs").Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        visited++;
+        if (entry.isDirectory()) {
+          if (!ignored.has(entry.name)) stack.push({ dir: join(dir, entry.name), depth: depth + 1 });
+          continue;
+        }
+        if (entry.name.toLowerCase() !== basenameHint) continue;
+        try {
+          if (statSync(join(dir, entry.name)).size > 0) return true;
+        } catch {
+          // Unreadable/race - keep looking rather than treating this as a confirmed hit.
+        }
+      }
+    }
+    return false;
   }
 
   /**
@@ -1497,6 +1584,12 @@ export class CodingAgent {
     // the fallback when healing does not finish the job. Every return path below goes through
     // this wrapper.
     const finalize = async (result: CodingRunResult): Promise<CodingRunResult> => {
+      // See pendingCheckpointDiffs' doc comment: wait out any git subprocess still spawned from
+      // the last model turn's fire-and-forget diff before this run is allowed to resolve, so a
+      // caller acting on the resolved result (e.g. renaming sandboxRoot away) never races it.
+      if (this.pendingCheckpointDiffs.size > 0) {
+        await Promise.allSettled([...this.pendingCheckpointDiffs]);
+      }
       const incomplete = listIncompletePartSequences(this.sandboxFilter());
       if (incomplete.length === 0) return enforceCompletionContract(result);
 
@@ -1835,13 +1928,17 @@ export class CodingAgent {
             // that method's doc comment; the full per-step-attributed disambiguation still runs
             // once more at end-of-attempt, where stepIdsWithConfirmedWrite is actually populated).
             if (this.sandboxRoot && checkpoint) {
-              void diffCheckpoint(this.sandboxRoot, checkpoint.sha)
+              // Tracked in pendingCheckpointDiffs (not just void-ed) so finalize() can await any
+              // still-in-flight git subprocess before run() resolves - see that field's doc comment.
+              const pending: Promise<unknown> = diffCheckpoint(this.sandboxRoot, checkpoint.sha)
                 .then((diff) => {
                   const changedFileCount = diff?.files.length ?? 0;
                   this.reconcileAnnouncedStep(response, changedFileCount);
                   this.reconcilePhaseCompletion(response, changedFileCount, EMPTY_STEP_ID_SET);
                 })
-                .catch(() => {});
+                .catch(() => {})
+                .finally(() => { this.pendingCheckpointDiffs.delete(pending); });
+              this.pendingCheckpointDiffs.add(pending);
             }
           },
           ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
@@ -1984,6 +2081,10 @@ export class CodingAgent {
           for (const file of attemptDiff?.files ?? []) changedFiles.add(file.path);
         }
         if (mutationExpected) {
+          // Maps a todo item's title back to the PlanStep it was seeded from (this.todos.replace
+          // only carries title+status, see run()'s seeding above) so the filename-hint check
+          // below can read that step's own description too, not just its title.
+          const planStepByTitle = new Map(plan.steps.map((step) => [step.title.trim().toLowerCase(), step]));
           // This attempt's own journal slice, and which todo step was "current" (per
           // getCurrentStepId) at the moment each successful filesystem write happened. This is
           // the one signal precise enough to attribute a write to a SPECIFIC step rather than
@@ -2017,6 +2118,26 @@ export class CodingAgent {
               return checklistItemNeedsEvidence(item.title);
             })
             .filter((item) => {
+              // A plan step whose OWN title/description names its target file ("Create
+              // index.html skeleton structure") is graded against that file directly: does it
+              // exist on disk right now, with real content? Checked BEFORE the write-attribution
+              // logic below and independent of it, on purpose - the concrete failure this catches
+              // is the model working on script.js/globe.js while step 1 sat in_progress, then
+              // reporting "index.html has the complete skeleton structure - PASS" for a file that
+              // was never written. stepId-attributed write evidence alone can't see that
+              // mismatch, it only knows SOME write happened, not which file.
+              //
+              // Deliberately NOT limited to "written THIS attempt via the filesystem tool": a
+              // read/explore/find/list action (or a shell command, or an earlier attempt, or a
+              // resumed project that already had the file) that confirms the named file already
+              // exists is equally valid evidence - see sandboxContainsFile's doc comment. Only
+              // demote when the file is verifiably absent, not merely "wasn't (re)written now".
+              const step = planStepByTitle.get(item.title.trim().toLowerCase());
+              const hints = step ? this.extractFileHints(`${step.title} ${step.description ?? ""}`) : [];
+              if (hints.length > 0) {
+                return !hints.some((hint) => this.sandboxContainsFile(hint));
+              }
+              // Step names no specific file - fall back to write-attribution grounding.
               // Confirmed by its OWN write this attempt - the strong, per-step signal. stepId on
               // the journal entry is always a string (RunJournalEntry.stepId), while todo item
               // ids are numbers - compare as strings so "1" matches 1.
@@ -2032,11 +2153,26 @@ export class CodingAgent {
             });
           groundingDemotedThisAttempt = newlyDone.length > 0;
           if (newlyDone.length > 0) {
+            // A newlyDone item with hints is a mismatch BY CONSTRUCTION - the filter above only
+            // let it through because none of its own named files exist in the sandbox.
+            const mismatchNotes = new Map<number, string>();
+            for (const item of newlyDone) {
+              const step = planStepByTitle.get(item.title.trim().toLowerCase());
+              const hints = step ? this.extractFileHints(`${step.title} ${step.description ?? ""}`) : [];
+              if (hints.length > 0) {
+                mismatchNotes.set(
+                  item.id,
+                  `Als "done" gemeldet, aber die Datei(en) ${hints.join(", ")}, die dieser Schritt selbst nennt, ` +
+                    `existieren nicht im Projekt - zurückgestuft.`
+                );
+              }
+            }
             for (const item of newlyDone) {
               this.todos.update(
                 item.id,
                 "in_progress",
-                'Als "done" gemeldet, aber weder der Checkpoint-Diff noch das Journal dieses Versuchs zeigen eine diesem Schritt zuordenbare Dateiänderung - zurückgestuft.'
+                mismatchNotes.get(item.id) ??
+                  'Als "done" gemeldet, aber weder der Checkpoint-Diff noch das Journal dieses Versuchs zeigen eine diesem Schritt zuordenbare Dateiänderung - zurückgestuft.'
               );
             }
             this.emit(
@@ -2044,7 +2180,9 @@ export class CodingAgent {
               `Checkliste behauptete ${newlyDone.length} erledigte(n) Schritt(e) in Versuch ${attempt}, ohne diesem Schritt zuordenbare Dateiänderung - zurückgestuft auf "in_progress".`,
               { attempt, items: newlyDone.map((item) => item.title) }
             );
-            lastSummary = `${lastSummary}\n\n[Checklist grounding: ${newlyDone.length} step(s) marked "done" were reset to "in_progress" - neither the checkpoint diff nor this attempt's journal show a file change attributable to that specific step, so the completion claim could not be confirmed: ${newlyDone.map((item) => item.title).join(", ")}]`;
+            lastSummary = `${lastSummary}\n\n[Checklist grounding: ${newlyDone.length} step(s) marked "done" were reset to "in_progress" - their completion claim could not be confirmed: ${newlyDone
+              .map((item) => `${item.title}${mismatchNotes.has(item.id) ? " (its own named file does not exist in the project)" : ""}`)
+              .join(", ")}]`;
           }
         }
       }
@@ -2902,6 +3040,11 @@ export class CodingAgent {
     if (step.dependsOn && step.dependsOn.length > 0) meta.push(`depends on: ${step.dependsOn.join(", ")}`);
     if (step.riskLevel && step.riskLevel !== "low") meta.push(`risk: ${step.riskLevel}`);
     if (step.toolsNeeded && step.toolsNeeded.length > 0) meta.push(`tools: ${step.toolsNeeded.join(", ")}`);
+    // Matched against THIS step's own title+description, not the whole goal - lets different
+    // steps of the same plan (e.g. a "write tests" step vs. a "scaffold the page" step) pull in
+    // different skills instead of the one goal-level skill picked once for the entire run.
+    const stepSkill = this.matchSkillForText(`${step.title} ${step.description ?? ""}`);
+    if (stepSkill) meta.push(`skill: ${stepSkill}`);
     return meta.length > 0 ? `${line} [${meta.join(" · ")}]` : line;
   }
 
@@ -2928,6 +3071,11 @@ export class CodingAgent {
       "look frozen to the user. Only keep a step open if ITS OWN change is not actually done yet or a",
       "diagnostic specific to it is still failing - never mark a step done on the strength of an",
       "announcement alone, without having made the corresponding edit.",
+      "One step must be in_progress before you write anything for it - progress is attributed to",
+      "WHICHEVER step is currently in_progress, so if you keep step 1 in_progress while actually writing",
+      "step 3's content, that work gets credited to step 1 and steps 2+ stay stuck open forever. Never",
+      "write content that belongs to a later step while an earlier step is still the one marked",
+      "in_progress - close the current step first, then advance the next one to in_progress, then write.",
     ];
   }
 
@@ -3054,13 +3202,37 @@ export class CodingAgent {
       "   with the corrected steps - do not silently ignore the draft, adjust it explicitly.",
       "   At start: \">> PHASE: PLAN\"",
       "   At end: \"<< PLAN COMPLETE\"",
-      "3. EDIT - make minimal, targeted edits (prefer the filesystem tool's \"edit\" action).",
+      "3. EDIT - make minimal, targeted edits (prefer the filesystem tool's \"edit\" action). This phase covers",
+      "   ALL plan steps, but you must still work through them ONE AT A TIME, not as one combined write:",
+      "     a. call todo:update to mark the next step in_progress",
+      "     b. make ONLY the change that step's own title/description describes - nothing from a later step",
+      "     c. call todo:update to mark that exact step done, the moment its own change is written and correct",
+      "     d. repeat a-c for the next pending step",
+      "   Do NOT produce the complete final file in your first edit and then retroactively check off every",
+      "   step at once - e.g. if step 1 says \"create the HTML skeleton\", write only the skeleton (no styling",
+      "   classes, no script logic yet) even if you already know what steps 2/3 will add; those belong to",
+      "   their own step's edit and their own todo:update call. The checklist the user watches is driven ONLY",
+      "   by these todo:update calls, not by prose - a step every step is genuinely, individually done before",
+      "   moving to the next.",
+      "   Some steps above are tagged \"[skill: <name>]\" - that skill was matched against THAT step's own",
+      "   title/description, not the whole goal, so different steps of the same plan can pull in different",
+      "   skills. Load it via the skill tool right before starting that specific step (not earlier, not for",
+      "   the whole run) and follow it only while working on that step.",
       "   At start: \">> PHASE: EDIT\"",
-      "   At end: \"<< EDIT COMPLETE\"",
-      "4. VERIFY - re-read what you changed and run the verification command below.",
+      "   At end (only once every plan step above is marked done): \"<< EDIT COMPLETE\"",
+      "4. VERIFY - re-read what you changed and run the verification command below. If a plan step's own",
+      "   title/description names a specific file (e.g. \"Create index.html skeleton structure\"), actually",
+      "   list/read that exact file here and confirm it exists on disk - do not infer from memory that an",
+      "   earlier step must have created it. Writing a self-authored check script for this counts only if it",
+      "   genuinely fails when the named file is missing; a check that can pass regardless (e.g. grepping for",
+      "   a keyword across the whole project instead of the specific file) is not verification.",
       "   At start: \">> PHASE: VERIFY\"",
       "   At end: \"<< VERIFY COMPLETE\"",
-      "5. REPORT - list the files you changed and what the verification showed.",
+      "5. REPORT - list the files you changed and what the verification showed. Every file you claim exists",
+      "   or is complete must be one you (or a step before this one) actually wrote and then re-read in THIS",
+      "   run - never state a file \"has the complete structure\" or similar based on what the plan intended",
+      "   rather than what you confirmed. The controller checks this claim against the real checkpoint diff,",
+      "   not against this text, so an unconfirmed claim here gets the affected step reopened next attempt.",
       "   At start: \">> PHASE: REPORT\"",
       "   At end: \"<< REPORT COMPLETE\""
     );
@@ -3080,7 +3252,7 @@ export class CodingAgent {
     if (detectedSkill) {
       parts.push(
         "",
-        `A "${detectedSkill}" skill looks relevant for this goal - load it via the skill tool before phase 3 and follow it if it applies.`
+        `A "${detectedSkill}" skill looks relevant for the goal AS A WHOLE - load it via the skill tool before phase 3 and follow it if it applies. This is separate from the per-step "[skill: ...]" tags on individual plan steps above, which take precedence for that specific step's own edit.`
       );
     }
 
