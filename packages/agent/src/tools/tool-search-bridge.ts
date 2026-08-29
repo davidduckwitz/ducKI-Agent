@@ -37,6 +37,10 @@ const CORE_TOOL_NAMES = new Set([
   "vision",
   "explore",
   "gateway",
+  // Local image generation: kept core because the model otherwise defaults to suggesting
+  // external services (DALL-E, Midjourney, ...) for creative image requests instead of
+  // proactively calling tool_search to discover a locally available generator.
+  "image_gen",
   // Bridge tools themselves are always visible when progressive disclosure is active
   "tool_search",
   "tool_describe",
