@@ -638,6 +638,17 @@ export interface AgentRuntimeControls {
   filesystemGlobMaxResults: number;
   /** Default `maxResults` injected for the filesystem tool's `grep` action. Settings key: AGENT_FS_GREP_MAX_RESULTS */
   filesystemGrepMaxResults: number;
+  /**
+   * Whether the run loop is allowed to offer native (structured JSON) tool-calling to the
+   * provider at all. Only narrows what the provider itself already advertises via
+   * `supportsNativeTools()` - never forces it on for a backend that doesn't support it.
+   * Small local models reliably drop the `content` argument when asked to emit a large
+   * multi-line file body as a native JSON tool-call, since that requires correctly escaping
+   * quotes/newlines for the whole file inline; disabling this falls back to the `[TOOL:...]`
+   * text/heredoc protocol, which takes content verbatim with no escaping.
+   * Settings key: AGENT_NATIVE_TOOLS_ENABLED (default true).
+   */
+  enableNativeTools: boolean;
 }
 
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)

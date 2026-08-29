@@ -423,6 +423,18 @@ const PREDEFINED_FIELDS: SettingField[] = [
     ],
   },
   {
+    key: "AGENT_NATIVE_TOOLS_ENABLED",
+    label: "Natives Tool-Calling",
+    description: "Aktiv (Standard) = das Modell ruft Tools ueber sein natives JSON-Function-Calling auf. Aus = immer das [TOOL:...]-Textformat verwenden, bei dem Datei-Inhalt woertlich zwischen Markern steht statt als escapetes JSON-Argument. Kleine lokale Modelle (z. B. LM Studio) lassen bei nativem Calling oft das content-Argument beim Schreiben groesser Dateien einfach weg - dann hilft nur Aus. Narrows nur ein, was der Provider ohnehin unterstuetzt; erzwingt nichts.",
+    type: "select",
+    section: "Agent",
+    defaultValue: "true",
+    options: [
+      { label: "Aktiv", value: "true" },
+      { label: "Aus (Textformat erzwingen)", value: "false" },
+    ],
+  },
+  {
     key: "AGENT_CODING_MAX_ITERATIONS",
     label: "Coding: Max Iterations",
     description: "Iterations-Budget fuer Coding-Laeufe (Coding-Area-Chat & CodingWorkspace-Plan-Ausfuehrung). Coding ist mehrstufig (schreiben -> pruefen -> fixen); der normale Modus-Cap (5-10) reicht fuer grosse Tasks nicht. Betrifft NUR Coding, nicht den normalen Chat. Vorrang: Diese Setting ueberstimmt AGENT_MAX_ITERATIONS fuer Coding-Area-Chat und CodingWorkspace-Plan-Umsetzung; die Chat-Plan-Umsetzung ('Umsetzen') nutzt stattdessen die CODING_AGENT_MAX_ITERATIONS_-Tiers (einfach/mittel/komplex).",

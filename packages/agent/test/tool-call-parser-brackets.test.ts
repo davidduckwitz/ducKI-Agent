@@ -95,6 +95,107 @@ describe("Tool Call Parser – Bracket Payload Handling (PR1-A1)", () => {
     });
   });
 
+  describe("content with raw, unescaped inner quotes (HTML attributes)", () => {
+    // Reproduces a real coding-agent failure: the model wrote a full HTML page as the `content`
+    // argument of a function-call-style bracket call, but - since it was authoring markup, not
+    // hand-escaping a JSON string - left every attribute quote raw (`charset="UTF-8"`, not
+    // `charset=\"UTF-8\"`). The naive last-resort parser used to stop `content` at the FIRST such
+    // quote and misread every attribute after it as more top-level key:value pairs, destroying
+    // `action`/`path` and truncating `content` to a few characters. It only manifested for HTML
+    // (dense with `attr="value"` pairs) - JS/CSS/JSON writes never hit this, which is exactly why
+    // "every file but the .html one" kept failing in practice.
+    it("keeps a content value intact past raw unescaped double quotes inside HTML", () => {
+      const agent = createAgentForParserTests();
+      const html =
+        '<!DOCTYPE html><html><head><meta charset="UTF-8">' +
+        '<link rel="stylesheet" href="style.css"></head>' +
+        '<body><div class="app" id="calc"><svg viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"></circle></svg></div>' +
+        '</body></html>';
+      const response = `[TOOL: filesystem(action:"write", path="index.html", content="${html}")]`;
+
+      const result = (agent as any).extractAllToolCalls(response);
+
+      expect(result.calls).toHaveLength(1);
+      expect(result.unparsed).toHaveLength(0);
+      const call = result.calls[0];
+      expect(call.toolName).toBe("filesystem");
+      expect(call.input.action).toBe("write");
+      expect(call.input.path).toBe("index.html");
+      expect(call.input.content).toBe(html);
+      // The bug's signature: stray HTML attribute names leaking in as bogus top-level keys.
+      expect(call.input.charset).toBeUndefined();
+      expect(call.input.viewBox).toBeUndefined();
+    });
+
+    it("still ends the value at a quote genuinely followed by a separator", () => {
+      const agent = createAgentForParserTests();
+      // Consistent colon separators throughout, matching how a model actually writes one of
+      // these calls (it never mixes `:` and `=` within a single call) - a mixed-separator string
+      // is a self-inflicted edge case a real model wouldn't produce, not something worth hardening
+      // against here.
+      const response = '[TOOL: filesystem(action:"write", path:"a.txt", content:"hello world")]';
+
+      const result = (agent as any).extractAllToolCalls(response);
+
+      expect(result.calls).toHaveLength(1);
+      expect(result.calls[0].input.action).toBe("write");
+      expect(result.calls[0].input.content).toBe("hello world");
+    });
+  });
+
+  describe("colon-style call misdetected as key=value because content contains attr=\"value\"", () => {
+    // The ACTUAL bug behind a real "index.html never gets written, every other file is fine"
+    // report. parseBracketBody's key=value-list detection used to be
+    // `/[A-Za-z_][A-Za-z0-9_\-]*\s*=/.test(inner)` - unanchored, so it fired the moment `=`
+    // appeared ANYWHERE in the argument text. A colon-style call
+    // (`filesystem(action:"write", path:"index.html", content:"<meta charset=\"UTF-8\">...")`)
+    // has its `content` value stuffed with `attr="value"` HTML pairs, which are `=`-joined even
+    // though the call itself is entirely `:`-joined. That false-positive routed the WHOLE call
+    // through parseHeredocHeader, a flat `key=value` scanner that: (a) never matches `action:`/
+    // `path:` at all since it only recognises `=`, so `action`/`path` silently vanish, and
+    // (b) reconstructs bogus top-level keys from the markup inside `content` (`charset`,
+    // `viewBox`, `cx`, `stdDeviation`, ...) - exactly the symptom seen in production. Also
+    // reproduces the model's actual malformed terminator (a stray `}` with no closing `)]`,
+    // since it opened with `(` not `{`) to prove the fix holds through scanBracketPayload's
+    // "unterminated, take the rest" fallback too - not a synthetic, well-closed call.
+    it("keeps action/path and does not leak HTML attributes as top-level keys", () => {
+      const agent = createAgentForParserTests();
+      const response =
+        '[TOOL: filesystem(action:"write", path="index.html", content="<!DOCTYPE html>\\n' +
+        '<html lang=\\"de\\">\\n<head>\\n<meta charset=\\"UTF-8\\">\\n' +
+        '<link rel=\\"stylesheet\\" href=\\"style.css\\">\\n</head>\\n' +
+        '<body>\\n<svg viewBox=\\"0 0 10 10\\"><circle cx=\\"5\\" cy=\\"5\\" r=\\"4\\"/></svg>\\n' +
+        '</body>\\n</html>"}';
+
+      const result = (agent as any).extractAllToolCalls(response);
+
+      expect(result.calls).toHaveLength(1);
+      const call = result.calls[0];
+      expect(call.toolName).toBe("filesystem");
+      expect(call.input.action).toBe("write");
+      expect(call.input.path).toBe("index.html");
+      expect(call.input.content).toContain("<!DOCTYPE html>");
+      expect(call.input.content).toContain('charset="UTF-8"');
+      expect(call.input.content).toContain("</html>");
+      // The bug's signature: stray HTML attribute names leaking in as bogus top-level keys.
+      expect(call.input.charset).toBeUndefined();
+      expect(call.input.viewBox).toBeUndefined();
+      expect(call.input.cx).toBeUndefined();
+    });
+
+    it("still uses the key=value reader for a genuine equals-style call", () => {
+      const agent = createAgentForParserTests();
+      const response = '[TOOL: filesystem(action="write", path="a.md", content="# Title")]';
+
+      const result = (agent as any).extractAllToolCalls(response);
+
+      expect(result.calls).toHaveLength(1);
+      expect(result.calls[0].input.action).toBe("write");
+      expect(result.calls[0].input.path).toBe("a.md");
+      expect(result.calls[0].input.content).toBe("# Title");
+    });
+  });
+
   describe("scanBracketPayload helper", () => {
     it("correctly finds closing bracket at any nesting depth", () => {
       const agent = createAgentForParserTests();

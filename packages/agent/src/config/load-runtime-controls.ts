@@ -307,6 +307,7 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     codingFilesystemReadMaxBytes: envInt("AGENT_CODING_FS_READ_MAX_BYTES", 2097152),
     filesystemGlobMaxResults: envInt("AGENT_FS_GLOB_MAX_RESULTS", 2000),
     filesystemGrepMaxResults: envInt("AGENT_FS_GREP_MAX_RESULTS", 1500),
+    enableNativeTools: envBool("AGENT_NATIVE_TOOLS_ENABLED", true),
   };
 }
 

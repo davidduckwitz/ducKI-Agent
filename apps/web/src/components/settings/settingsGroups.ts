@@ -280,6 +280,11 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       ],
     },
     {
+      name: "Tool-Calling",
+      icon: Wrench,
+      keys: ["AGENT_NATIVE_TOOLS_ENABLED"],
+    },
+    {
       name: "Coding-Laeufe (Chat & Plan)",
       icon: Terminal,
       keys: [

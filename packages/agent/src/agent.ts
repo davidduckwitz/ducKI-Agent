@@ -2457,6 +2457,27 @@ export class Agent {
       const singleHermesQuoted = readDelimitedValue("<|'|>");
       if (singleHermesQuoted !== undefined) return singleHermesQuoted;
 
+      // An unescaped quote only really ends the value if what follows looks like the call
+      // actually continuing (a separator or closer) - otherwise it's almost certainly a raw,
+      // unescaped quote INSIDE the value itself. This matters enormously for a `content` field
+      // holding HTML/JSX: `<meta charset="UTF-8">` is packed with literal `"..."` attribute
+      // values the model never escapes as `\"` (it's writing markup, not authoring a JSON
+      // string by hand). Stopping at the very first one truncated `content` after a few dozen
+      // characters and left everything past it - dozens of subsequent HTML attributes - to be
+      // misread as more top-level `key: value` pairs, silently destroying the call (including
+      // the `action`/`path` keys that came before `content` in the object). Mirrors the same
+      // lookahead `readDelimitedValue` above already uses for Hermes-token-quoted values.
+      const looksLikeValueEnd = (afterQuote: number): boolean => {
+        const remainder = source.slice(afterQuote).trimStart();
+        return (
+          remainder.length === 0 ||
+          remainder.startsWith(",") ||
+          remainder.startsWith("}") ||
+          remainder.startsWith(")") ||
+          remainder.startsWith("]")
+        );
+      };
+
       // Try regular double quotes
       if (ch === '"') {
         i++;
@@ -2464,6 +2485,12 @@ export class Agent {
         while (i < source.length) {
           const c = source[i] ?? "";
           if (c === '"') {
+            if (!looksLikeValueEnd(i + 1)) {
+              // A raw quote inside the value (e.g. an HTML attribute) - keep it literally.
+              value += c;
+              i++;
+              continue;
+            }
             i++;
             break;
           }
@@ -2492,6 +2519,11 @@ export class Agent {
         while (i < source.length) {
           const c = source[i] ?? "";
           if (c === "'") {
+            if (!looksLikeValueEnd(i + 1)) {
+              value += c;
+              i++;
+              continue;
+            }
             i++;
             break;
           }
@@ -3880,7 +3912,20 @@ export class Agent {
       // carried no recognisable action, no path and no content, and the write silently did
       // nothing. There is already a correct key=value reader; it just ran too late to be
       // reached, because this branch "succeeded" with garbage first.
-      if (!inner.startsWith("{") && /[A-Za-z_][A-Za-z0-9_\-]*\s*=/.test(inner)) {
+      //
+      // The detection MUST be anchored to the call's own FIRST key, not a scan for "does `=`
+      // appear anywhere in this text" - `content` for an HTML/JSX write is full of `attr="value"`
+      // pairs, so an unanchored test was true for every such call regardless of what syntax the
+      // call itself actually used. That misrouted a normal colon-style call
+      // (`filesystem(action:"write", path:"index.html", content:"<meta charset=\"UTF-8\">...")`)
+      // through this key=value reader, which scans the WHOLE blob (including the giant `content`
+      // string) for `word=` pairs and reconstructs bogus top-level keys from the markup inside
+      // it (`charset`, `viewBox`, `cx`, ...) while `action` - written with `:`, so never matched
+      // by this reader's `=`-only pattern - silently disappears. This is why "every file but the
+      // HTML one" kept failing: JS/CSS/JSON content rarely contains `word="value"` sequences
+      // dense enough to trigger the false positive; markup always does.
+      const firstKeySeparator = inner.match(/^\s*[A-Za-z_][A-Za-z0-9_\-]*\s*([:=])/)?.[1];
+      if (!inner.startsWith("{") && firstKeySeparator === "=") {
         const pairArgs = this.parseHeredocHeader(this.unwrapHeaderParens(inner));
         if (Object.keys(pairArgs).length > 0) {
           return this.resolveToolNameAndInput(parenNameMatch[1], pairArgs);
@@ -4530,6 +4575,12 @@ export class Agent {
       codingFilesystemReadMaxBytes: 2097152,
       filesystemGlobMaxResults: 2000,
       filesystemGrepMaxResults: 1500,
+      // Small local models reliably drop the "content" argument when asked to emit a large
+      // multi-line file body as a native JSON tool-call (they have to correctly escape quotes/
+      // newlines for the whole file inline) - see AGENT_NATIVE_TOOLS_ENABLED / Settings ->
+      // Agent -> Tool-Calling. Only ever narrows what the provider already supports (an AND,
+      // not an override) - turning this off can't make a backend do native calls it can't.
+      enableNativeTools: true,
     };
 
     try {
@@ -4647,6 +4698,7 @@ export class Agent {
         codingFilesystemReadMaxBytes: this.parseNumberSetting(get("AGENT_CODING_FS_READ_MAX_BYTES"), defaults.codingFilesystemReadMaxBytes, 4096, 20971520),
         filesystemGlobMaxResults: this.parseNumberSetting(get("AGENT_FS_GLOB_MAX_RESULTS"), defaults.filesystemGlobMaxResults, 10, 20000),
         filesystemGrepMaxResults: this.parseNumberSetting(get("AGENT_FS_GREP_MAX_RESULTS"), defaults.filesystemGrepMaxResults, 10, 20000),
+        enableNativeTools: this.parseBooleanSetting(get("AGENT_NATIVE_TOOLS_ENABLED"), defaults.enableNativeTools),
       };
       return result;
     } catch {
@@ -7800,7 +7852,10 @@ export class Agent {
         // Offer tool definitions to the provider only when it advertises native
         // function-calling. Backends without it never see `tools` and keep using the
         // text `[TOOL:...]` protocol described in the system prompt.
-        const nativeToolsEnabled = this.provider.supportsNativeTools?.() ?? false;
+        // adjustedControls.enableNativeTools (Settings -> Agent -> Tool-Calling) can only ever
+        // narrow this further, never force it on for a backend that doesn't advertise it - see
+        // its doc comment for why (small local models mangling large write-file payloads).
+        const nativeToolsEnabled = adjustedControls.enableNativeTools && (this.provider.supportsNativeTools?.() ?? false);
         const mainGenOptions: { maxTokens: number; tools?: ReturnType<Executor["getToolDefinitions"]>; signal?: AbortSignal } = {
           maxTokens: adjustedControls.maxOutputTokens,
           signal: this.abortController?.signal,
