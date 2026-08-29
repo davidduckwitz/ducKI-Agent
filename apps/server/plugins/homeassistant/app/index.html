@@ -140,6 +140,8 @@
     background: var(--surface-2); color: var(--text);
   }
   .mini-button:hover { background: var(--surface-3); }
+  .range-control { width: 100%; accent-color: var(--primary); }
+  .media-controls { display: flex; gap: 6px; flex-wrap: wrap; }
 
   .toast-container { position: fixed; right: 20px; bottom: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
   .toast {
@@ -342,6 +344,27 @@ document.addEventListener("DOMContentLoaded", async function () {
       label.appendChild(checkbox);
       label.appendChild(slider);
       controls.appendChild(label);
+      if (entity.domain === "light" && entity.attributes && (entity.attributes.brightness != null || entity.attributes.brightness_pct != null)) {
+        const range = document.createElement("input");
+        range.type = "range"; range.className = "range-control"; range.min = "1"; range.max = "100";
+        range.value = String(entity.attributes.brightness_pct || Math.round(Number(entity.attributes.brightness || 0) * 100 / 255));
+        range.title = "Helligkeit"; range.setAttribute("aria-label", "Helligkeit von " + entity.friendly_name);
+        range.addEventListener("change", async function () {
+          range.disabled = true;
+          try { await invoke({ action: "call_service", domain: "light", service: "turn_on", entity_id: entity.entity_id, data: { brightness_pct: Number(range.value) } }); await loadEntities({ silent: true }); }
+          catch (error) { showToast("Helligkeit konnte nicht geändert werden: " + error.message); }
+          finally { range.disabled = false; }
+        });
+        card.appendChild(range);
+      }
+    } else if (entity.domain === "media_player") {
+      const buttons = document.createElement("div"); buttons.className = "media-controls";
+      [["media_play", "▶"], ["media_pause", "Ⅱ"], ["volume_down", "−"], ["volume_up", "+"], ["volume_mute", "🔇"]].forEach(function (pair) {
+        const btn = document.createElement("button"); btn.type = "button"; btn.className = "mini-button"; btn.textContent = pair[1]; btn.title = pair[0];
+        btn.addEventListener("click", async function () { btn.disabled = true; try { const res = await invoke({ action: "call_service", domain: "media_player", service: pair[0], entity_id: entity.entity_id }); if (res.error) throw new Error(res.error); await loadEntities({ silent: true }); } catch (error) { showToast("Fehlgeschlagen: " + error.message); } finally { btn.disabled = false; } });
+        buttons.appendChild(btn);
+      });
+      controls.appendChild(buttons);
     } else if (entity.domain === "cover") {
       const buttons = document.createElement("div");
       buttons.className = "mini-buttons";

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parsePluginManifest } from "./plugin-manifest.js";
 
@@ -106,7 +106,12 @@ export function validatePluginDir(pluginsRoot: string, name: string, options: Pl
 
 function isMainModule(): boolean {
   const entry = process.argv[1];
-  return !!entry && import.meta.url === pathToFileURL(entry).href;
+  // Also required (not just the URL match): this module gets bundled into the packaged server's
+  // single-file build alongside the entry point, where every module shares the bundle's own
+  // import.meta.url - so on `node index.js` the URL comparison alone would false-positive and
+  // run the CLI branch (argv-less) inside the server, exiting it immediately. The basename check
+  // only passes for a real `node .../validate-cli.js <pluginsRoot> <name>` invocation.
+  return !!entry && basename(entry) === "validate-cli.js" && import.meta.url === pathToFileURL(entry).href;
 }
 
 if (isMainModule()) {

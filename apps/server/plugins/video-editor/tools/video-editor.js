@@ -96,11 +96,11 @@ export const definition = {
     "action=analyze_clip (clip_id, question?) liefert eine KI-Szenen-/Inhaltsbeschreibung. " +
     "action=suggest_highlight (clip_id) laesst die KI den staerksten Moment vorschlagen. " +
     "action=get_timeline (project_id) / set_timeline (project_id, items) - items=[{type:'clip', clip_id, source_start_sec, source_end_sec, order, transition_out?, effects?} | {type:'scene', duration_sec, background:{kind:'color'|'gradient'|'image', value}, order, transition_out?, effects?}], ersetzt die gesamte Schnittliste. transition_out={type:'none'|'crossfade'|'wipe'|'fade_to_black', duration_sec} gilt zwischen diesem Item und dem naechsten. effects=[{type:'fade_in'|'fade_out'|'brightness'|'contrast'|'saturation'|'blur'|'speed', value?, duration_sec?}]. " +
-    "action=add_scene_background_image (project_id, image_base64, original_name?) laedt ein Bild fuer background.kind='image' hoch (value=zurueckgegebene background_id). " +
+    "action=add_scene_background_image (project_id, image_base64 ODER image_url, original_name?) laedt ein Bild fuer background.kind='image' hoch (value=zurueckgegebene background_id). image_url laedt serverseitig von einer URL (z. B. das 'url'-Feld eines image_gen-generate-Ergebnisses) - bevorzugt gegenueber image_base64 fuer vom image_gen-Plugin erzeugte Bilder, um kein Base64 durch den Kontext zu schleusen. " +
     "action=add_title_card (project_id, text, duration_sec?, background_color?, order?) Komfort-Action: erzeugt in EINEM Aufruf eine Szene + zentriertes Text-Overlay (Titelkarte). " +
     "action=generate_captions_from_clip (project_id, clip_id, timeline_offset_sec) erzeugt Untertitel aus dem Transkript eines Clips, verschoben um seine Timeline-Position. " +
     "action=list_captions / add_caption (project_id, start_sec, end_sec, text, pos_x?, pos_y?) / update_caption (id, ..., pos_x?, pos_y?) / delete_caption (id). pos_x/pos_y sind Prozent-Position (0-100, Default 50/88) - nur pos_y wirkt sich aufs gerenderte Video aus, solange pos_x beim Default 50 bleibt (horizontal zentriert); sobald pos_x veraendert wird, wird links-buendig anhand von pos_x gerendert. " +
-    "action=add_overlay (project_id, type:'text'|'shape', start_sec, end_sec, x, y, width?, height?, z_index?, track_index?, props) - x/y/width/height in PROZENT (0-100) der Zielaufloesung (width/height ohne Angabe: Default 30x10 fuer Text, 20x20 fuer Formen). track_index (Default 0) ist rein eine UI-Spur-Gruppierung, hat KEINEN Effekt auf das Rendering. props text: {content, font_size?, color?, background_color?, align?}. props shape: {shape_type:'rect'|'circle', color, opacity?, stroke_width?}. " +
+    "action=add_overlay (project_id, type:'text'|'shape'|'image', start_sec, end_sec, x, y, width?, height?, z_index?, track_index?, props) - x/y/width/height in PROZENT (0-100) der Zielaufloesung (width/height ohne Angabe: Default 30x10 fuer Text, 20x20 fuer Formen, 30x30 fuer Bilder). track_index (Default 0) ist rein eine UI-Spur-Gruppierung, hat KEINEN Effekt auf das Rendering. props text: {content, font_size?, color?, background_color?, align?}. props shape: {shape_type:'rect'|'circle', color, opacity?, stroke_width?}. props image: {background_id} - background_id stammt von add_scene_background_image (dasselbe Bild kann sowohl als Szenen-Hintergrund als auch als Overlay verwendet werden). " +
     "action=list_overlays / update_overlay (id, ..., track_index?) / delete_overlay (id). " +
     "action=add_audio_track (project_id, audio_base64, start_sec, volume?, track_index?, original_name?) mischt eine zusaetzliche Audiodatei an einer Timeline-Position ein (track_index: reine UI-Spur-Gruppierung, Default 0, kein Render-Effekt). " +
     "action=list_audio_tracks / update_audio_track (id, start_sec?, volume?, track_index?) / delete_audio_track (id). " +
@@ -139,8 +139,9 @@ export const definition = {
       background_color: { type: "string", description: "Hex-Farbe (add_title_card, optional)" },
       order: { type: "number", description: "Position (add_title_card, optional)" },
       image_base64: { type: "string", description: "Bild als Base64 (add_scene_background_image)" },
-      overlay_type: { type: "string", enum: ["text", "shape"], description: "add_overlay" },
-      type: { type: "string", description: "Overlay-Typ ('text'|'shape') fuer add_overlay - alias von overlay_type" },
+      image_url: { type: "string", description: "Alternative zu image_base64 (add_scene_background_image): URL zu einem Bild, wird serverseitig geladen - z. B. das 'url'-Feld eines image_gen generate-Ergebnisses" },
+      overlay_type: { type: "string", enum: ["text", "shape", "image"], description: "add_overlay" },
+      type: { type: "string", description: "Overlay-Typ ('text'|'shape'|'image') fuer add_overlay - alias von overlay_type" },
       x: { type: "number", description: "X-Position in Prozent (0-100) der Zielaufloesung" },
       y: { type: "number", description: "Y-Position in Prozent (0-100)" },
       width: { type: "number", description: "Breite in Prozent (0-100), optional" },
@@ -626,6 +627,28 @@ async function buildRenderFilterGraph(items, clipsById, backgroundsById, caption
         const nv = `dt${textFileIdx}`;
         filterParts.push(`[${videoLabel}]drawtext=textfile=${fileName}:fontsize=${fontSize}:fontcolor=${color}${boxPart}:x=${xExpr}:y=${yExpr}:${enable}[${nv}]`);
         videoLabel = nv;
+      } else if (draw.type === "image") {
+        const props = draw.props || {};
+        const bgRow = backgroundsById[Number(props.background_id)];
+        if (bgRow) {
+          const px = Math.round((Number(draw.x) || 0) / 100 * width);
+          const py = Math.round((Number(draw.y) || 0) / 100 * height);
+          const pw = Math.max(2, Math.round((Number(draw.width) || 30) / 100 * width));
+          const ph = Math.max(2, Math.round((Number(draw.height) || 30) / 100 * height));
+          const imgIdx = inputCount; // append a new -i AFTER all timeline-item inputs
+          // -loop 1 alone makes this input infinite (never hits EOF) - without an explicit -t
+          // bound, ffmpeg has no reason to ever stop pulling frames from it, which hangs the
+          // whole render (verified: the render process never exits). -t to the overlay's own
+          // end time is enough - past that point `enable` hides it anyway, so it doesn't matter
+          // that the input itself stops there too.
+          inputs.push("-loop", "1", "-t", end.toFixed(3), "-i", backgroundAbsPath(bgRow.filename));
+          inputCount++;
+          const scaledLabel = `imgov${textFileIdx}_${imgIdx}`;
+          filterParts.push(`[${imgIdx}:v]scale=${pw}:${ph},format=yuva420p[${scaledLabel}]`);
+          const nv = `ov${textFileIdx}_img${imgIdx}`;
+          filterParts.push(`[${videoLabel}][${scaledLabel}]overlay=x=${px}:y=${py}:eof_action=repeat:${enable}[${nv}]`);
+          videoLabel = nv;
+        }
       } else {
         const props = draw.props || {};
         const px = Math.round((Number(draw.x) || 0) / 100 * width);
@@ -861,19 +884,46 @@ async function suggestHighlight(input, storage, agent) {
 // Actions - scene backgrounds, title card
 // ----------------------------------------------------------------------------------------------
 
-async function addSceneBackgroundImage(input, storage) {
+/**
+ * Fetches bytes from a same-server plugin data URL (e.g. image-gen's
+ * /api/plugins/image-gen/data/generated/<id>.png) server-side, so a generated image can be
+ * handed to a scene background WITHOUT routing its base64 through the agent's own context -
+ * base64 image data in an LLM message is exactly the kind of context bloat that made image-gen
+ * cap its own inline thumbnails (see plugins/image-gen/tools/image-gen.js THUMBNAIL_MAX_BYTES).
+ * Accepts either an absolute URL or a path relative to this same server (what image-gen's tool
+ * results actually return, since that string is also used as a browser <img src>).
+ */
+async function fetchImageUrlAsBase64(imageUrl, ctx) {
+  const absoluteUrl = /^https?:\/\//i.test(imageUrl)
+    ? imageUrl
+    : `http://127.0.0.1:${process.env["PORT"] ?? "3001"}${imageUrl.startsWith("/") ? "" : "/"}${imageUrl}`;
+  const res = await ctx.fetch(absoluteUrl);
+  if (!res.ok) throw new Error(`image_url HTTP ${res.status}`);
+  const arrayBuffer = await res.arrayBuffer();
+  return Buffer.from(arrayBuffer).toString("base64");
+}
+
+async function addSceneBackgroundImage(input, storage, ctx) {
   const projectId = Number(input.project_id);
   if (!Number.isFinite(projectId)) return { error: "project_id ist erforderlich" };
-  if (!input.image_base64) return { error: "image_base64 ist erforderlich" };
+  let imageBase64 = input.image_base64;
+  if (!imageBase64 && input.image_url) {
+    try {
+      imageBase64 = await fetchImageUrlAsBase64(input.image_url, ctx);
+    } catch (error) {
+      return { error: `image_url konnte nicht geladen werden: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+  if (!imageBase64) return { error: "image_base64 oder image_url ist erforderlich" };
   const now = new Date().toISOString();
   const [row] = await storage.query(
     "INSERT INTO backgrounds (project_id, filename, original_name, created_at) VALUES (?, '', ?, ?) RETURNING *",
     [projectId, input.original_name ?? null, now]
   );
   try {
-    const buffer = decodeBase64(input.image_base64);
+    const buffer = decodeBase64(imageBase64);
     if (buffer.length === 0) throw new Error("image_base64 ist leer/ungueltig");
-    const ext = extFromOriginalName(input.original_name) || extFromDataUrl(input.image_base64, "image") || "png";
+    const ext = extFromOriginalName(input.original_name) || extFromDataUrl(imageBase64, "image") || "png";
     const filename = `${row.id}.${ext}`;
     mkdirSync(BACKGROUNDS_DIR, { recursive: true });
     writeFileSync(backgroundAbsPath(filename), buffer);
@@ -954,13 +1004,13 @@ async function generateCaptionsFromClip(input, storage) {
 // Default box size (percent) for a newly created overlay when width/height aren't given - the
 // schema allows both to be null (no size = nothing concrete to see or drag-resize from in the
 // UI), so pick a sane starting box per type instead of leaving it null.
-const OVERLAY_DEFAULT_SIZE = { text: { width: 30, height: 10 }, shape: { width: 20, height: 20 } };
+const OVERLAY_DEFAULT_SIZE = { text: { width: 30, height: 10 }, shape: { width: 20, height: 20 }, image: { width: 30, height: 30 } };
 
 async function addOverlay(input, storage) {
   const projectId = Number(input.project_id);
   if (!Number.isFinite(projectId)) return { error: "project_id ist erforderlich" };
   const type = input.overlay_type || input.type;
-  if (!["text", "shape"].includes(type)) return { error: "type/overlay_type muss 'text' oder 'shape' sein" };
+  if (!["text", "shape", "image"].includes(type)) return { error: "type/overlay_type muss 'text', 'shape' oder 'image' sein" };
   const now = new Date().toISOString();
   const defaultSize = OVERLAY_DEFAULT_SIZE[type];
   const [row] = await storage.query(
@@ -1003,6 +1053,11 @@ async function startRender(input, storage, logger) {
   const captions = await storage.query(`SELECT ${CAPTION_COLUMNS} FROM captions WHERE project_id = ? ORDER BY sort_order ASC`, [projectId]);
   const overlayRows = await storage.query(`SELECT ${OVERLAY_COLUMNS} FROM overlays WHERE project_id = ? ORDER BY z_index ASC`, [projectId]);
   const overlays = overlayRows.map(overlayRowToApi);
+  for (const overlay of overlays) {
+    if (overlay.type === "image" && !backgroundsById[Number(overlay.props?.background_id)]) {
+      return { error: `Overlay ${overlay.id} referenziert unbekanntes Bild ${overlay.props?.background_id}` };
+    }
+  }
   const audioTracks = await storage.query(`SELECT ${AUDIO_TRACK_COLUMNS} FROM audio_tracks WHERE project_id = ?`, [projectId]);
 
   const now = new Date().toISOString();
@@ -1134,7 +1189,7 @@ export async function execute(input, ctx) {
   }
 
   // --- Scene backgrounds / title card -------------------------------------------------------------
-  if (action === "add_scene_background_image") return addSceneBackgroundImage(input, storage);
+  if (action === "add_scene_background_image") return addSceneBackgroundImage(input, storage, ctx);
   if (action === "add_title_card") return addTitleCard(input, storage);
 
   // --- Captions -----------------------------------------------------------------------------------

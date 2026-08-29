@@ -102,6 +102,354 @@ async function invoke(input) {
 function dataUrl(rel) { return "/api/plugins/" + PLUGIN + "/data/" + rel; }
 
 // =============================================================================================
+// image-gen integration (optional - only rendered if that plugin is installed AND enabled).
+// The agent already has this handoff via tools (image_gen.generate -> image_url ->
+// add_scene_background_image, see tools/video-editor.js) - this section gives the human user
+// the same capability directly in the UI: generate/vary a scene image with a prompt instead of
+// only being able to upload a file.
+// =============================================================================================
+
+async function detectImageGen() {
+  try {
+    const res = await fetch("/api/plugins/image-gen");
+    if (!res.ok) { state.imageGenAvailable = false; return; }
+    const json = await res.json().catch(() => ({}));
+    state.imageGenAvailable = !!(json && json.data && json.data.enabled);
+  } catch {
+    state.imageGenAvailable = false;
+  }
+}
+
+async function invokeImageGen(input) {
+  const res = await fetch("/api/plugins/image-gen/invoke", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tool: "image_gen", input }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+  const payload = (json.data && json.data.result) || json.result || {};
+  if (payload.error) throw new Error(payload.error);
+  return payload;
+}
+
+/** Generates one image via image-gen and immediately attaches it as a scene background of the
+ *  current project, server-side (image_url handoff - no base64 through this browser tab's JS
+ *  beyond what the resulting <img> naturally loads). */
+async function generateAiImageAndAttach({ prompt, referenceId, referenceImageBase64 }) {
+  const genResult = await invokeImageGen({
+    action: "generate", prompt,
+    reference_id: referenceId || undefined,
+    reference_image: referenceImageBase64 || undefined,
+  });
+  const bgResult = await invoke({
+    action: "add_scene_background_image", project_id: state.currentProjectId,
+    image_url: genResult.url, original_name: "ai-generated.png",
+  });
+  return { background: bgResult.background, imageGenId: genResult.id };
+}
+
+/** Finds the most recent AI-generated scene image BEFORE `beforeOrder` (or the overall most
+ *  recent one if `beforeOrder` is null) so a new/edited scene can offer "stay visually
+ *  consistent with that one" via image-gen's reference_id (img2img). Returns null if there is
+ *  no earlier AI-generated scene image to chain from. */
+function findConsistencyReference(beforeOrder) {
+  const candidates = state.timelineItems
+    .filter((it) => it.type === "scene" && it.background && it.background.kind === "image" && (beforeOrder == null || it.order < beforeOrder))
+    .sort((a, b) => b.order - a.order);
+  for (const item of candidates) {
+    const cached = state.backgroundsCache.find((b) => String(b.id) === String(item.background.value));
+    if (cached && cached.imageGenId) return { imageGenId: cached.imageGenId, name: cached.original_name };
+  }
+  return null;
+}
+
+/** Injects a "Mit KI generieren" toggle + inline prompt form into `container`. No-op if
+ *  image-gen isn't available. opts: { referenceImageGenId?, referenceLabel?, buttonLabel?,
+ *  onCreated(background, imageGenId) }. */
+function renderAiImageControl(container, opts) {
+  if (!state.imageGenAvailable) return;
+  const toggleBtn = el("button", "secondary-button block-btn", "✨ " + (opts.buttonLabel || "Mit KI generieren"));
+  toggleBtn.type = "button";
+  toggleBtn.style.marginTop = "6px";
+  const formWrap = el("div");
+  formWrap.style.marginTop = "8px";
+  container.appendChild(toggleBtn);
+  container.appendChild(formWrap);
+
+  toggleBtn.addEventListener("click", () => {
+    if (formWrap.dataset.open === "1") { formWrap.innerHTML = ""; formWrap.dataset.open = "0"; return; }
+    formWrap.dataset.open = "1";
+    formWrap.innerHTML =
+      '<div class="form-row"><label>Prompt</label><textarea class="form-control small" id="aiImgPrompt" rows="2" placeholder="z. B. a cozy reading nook, warm light, flat illustration"></textarea></div>' +
+      (opts.referenceImageGenId
+        ? '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text);margin-bottom:10px"><input type="checkbox" id="aiImgConsistent" checked> Stilkonsistent zu ' + escapeHtml(opts.referenceLabel || "letztem Bild") + "</label>"
+        : "") +
+      '<button type="button" class="primary-button block-btn" id="aiImgGoBtn">Generieren</button>' +
+      '<div class="panel-hint" id="aiImgStatus"></div>';
+
+    formWrap.querySelector("#aiImgGoBtn").addEventListener("click", async (e) => {
+      const prompt = formWrap.querySelector("#aiImgPrompt").value.trim();
+      if (!prompt) { formWrap.querySelector("#aiImgStatus").textContent = "Bitte einen Prompt eingeben."; return; }
+      const consistentEl = formWrap.querySelector("#aiImgConsistent");
+      const referenceId = (consistentEl && consistentEl.checked) ? opts.referenceImageGenId : undefined;
+
+      await withButtonSpinner(e.target, "Generiere...", async () => {
+        try {
+          const result = await generateAiImageAndAttach({ prompt, referenceId });
+          formWrap.innerHTML = "";
+          formWrap.dataset.open = "0";
+          opts.onCreated(result.background, result.imageGenId);
+        } catch (err) {
+          formWrap.querySelector("#aiImgStatus").textContent = err.message || "Generierung fehlgeschlagen";
+        }
+      });
+    });
+  });
+}
+
+/** Injects an inline "veraendern" form for an EXISTING background into `container` - img2img via
+ *  its stored image-gen id if it was AI-generated, otherwise (a manually uploaded photo) the
+ *  bytes are fetched client-side from this plugin's own /data/backgrounds/ route and sent as
+ *  reference_image (fine here - this is browser<->server traffic, not routed through an agent's
+ *  own context, so the base64-bloat concern that applies to tool calls doesn't apply). */
+function renderModifyBackgroundControl(container, bg, onCreated) {
+  if (!state.imageGenAvailable) return;
+  const wrap = el("div");
+  wrap.style.marginTop = "8px";
+  wrap.innerHTML =
+    '<div class="form-row"><label>Neuer Prompt (beschreibt die Veraenderung)</label><textarea class="form-control small" id="modPrompt" rows="2"></textarea></div>' +
+    '<button type="button" class="primary-button block-btn" id="modGoBtn">Generieren</button>' +
+    '<div class="panel-hint" id="modStatus"></div>';
+  container.appendChild(wrap);
+
+  wrap.querySelector("#modGoBtn").addEventListener("click", async (e) => {
+    const prompt = wrap.querySelector("#modPrompt").value.trim();
+    if (!prompt) { wrap.querySelector("#modStatus").textContent = "Bitte einen Prompt eingeben."; return; }
+    await withButtonSpinner(e.target, "Generiere...", async () => {
+      try {
+        let referenceImageBase64;
+        const referenceId = bg.imageGenId || undefined;
+        if (!referenceId) {
+          const res = await fetch(dataUrl("backgrounds/" + bg.filename));
+          const blob = await res.blob();
+          referenceImageBase64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error("Bild konnte nicht gelesen werden"));
+            reader.readAsDataURL(blob);
+          });
+        }
+        const result = await generateAiImageAndAttach({ prompt, referenceId, referenceImageBase64 });
+        wrap.remove();
+        onCreated(result.background, result.imageGenId);
+      } catch (err) {
+        wrap.querySelector("#modStatus").textContent = err.message || "Generierung fehlgeschlagen";
+      }
+    });
+  });
+}
+
+// =============================================================================================
+// Elements panel - a picker for image-gen results + chat-uploaded images, so the user doesn't
+// have to fight the fiddly native drag of the small scene-preview card just to get an existing
+// image onto the timeline. Click "+" (or drag the list item itself) to add it as a new scene.
+// Only shown when image-gen is available (see detectImageGen()).
+// =============================================================================================
+
+/** Builds one `.item-list`'s worth of list-items (same markup/classes as renderClipsList()) from
+ *  a generic {url, name} shape, wires the "+" button and native drag, and calls onAdd(url,
+ *  atOrder, btn) - kept generic so both the image-gen list and the chat-upload list share it. */
+function renderElementsList(container, items, emptyText, onAdd) {
+  if (!items.length) {
+    container.innerHTML = '<div class="empty-state">' + escapeHtml(emptyText) + "</div>";
+    return;
+  }
+  container.innerHTML = items.map((item, idx) =>
+    '<div class="list-item" draggable="true" data-elem-idx="' + idx + '">' +
+      '<div class="thumb"><img src="' + item.url + '" loading="lazy"></div>' +
+      '<div class="meta"><div class="name" title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + "</div></div>" +
+      '<div class="actions">' +
+        '<button type="button" class="icon-button act-add-element" data-elem-idx="' + idx + '" title="' + escapeHtml(t("elements.addTitle")) + '">+</button>' +
+        '<button type="button" class="icon-button act-add-element-overlay" data-elem-idx="' + idx + '" title="' + escapeHtml(t("elements.addOverlayTitle")) + '">▭</button>' +
+      "</div>" +
+    "</div>"
+  ).join("");
+
+  container.querySelectorAll(".act-add-element").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onAdd(items[Number(btn.dataset.elemIdx)].url, null, btn);
+    });
+  });
+  container.querySelectorAll(".act-add-element-overlay").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      addElementToOverlayTrack(items[Number(btn.dataset.elemIdx)].url, typeof playheadTime === "number" ? playheadTime : 0, 0, btn);
+    });
+  });
+  container.querySelectorAll(".list-item[data-elem-idx]").forEach((elx) => {
+    elx.addEventListener("dragstart", (e) => {
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("application/json", JSON.stringify({ kind: "element", url: items[Number(elx.dataset.elemIdx)].url }));
+    });
+  });
+}
+
+/** Shared by both the "+" button (atOrder=null, has a btn to spin) and the timeline drop handler
+ *  (atOrder=target index, no btn). Same server-side image_url handoff add_scene_background_image
+ *  already uses for AI-generated images (see generateAiImageAndAttach) - works unmodified for a
+ *  chat-upload URL too, since fetchImageUrlAsBase64() in tools/video-editor.js just does a plain
+ *  server-side GET regardless of which plugin/route the URL points at. */
+async function addElementToMainTrack(imageUrl, atOrder, btn) {
+  if (!state.currentProjectId) { showToast(t("scenes.needProject"), true); return; }
+  const run = async () => {
+    try {
+      const bgResult = await invoke({
+        action: "add_scene_background_image", project_id: state.currentProjectId,
+        image_url: imageUrl, original_name: "element.png",
+      });
+      state.backgroundsCache.push({
+        id: bgResult.background.id, filename: bgResult.background.filename,
+        original_name: "element.png", dataUrl: dataUrl("backgrounds/" + bgResult.background.filename),
+      });
+      addSceneToMainTrack({ duration: 3, background: { kind: "image", value: bgResult.background.id } }, atOrder);
+      populateSceneLibrary();
+      showToast(t("elements.added"));
+    } catch (err) {
+      showToast(err.message || String(err), true);
+    }
+  };
+  if (btn) await withButtonSpinner(btn, "+", run);
+  else await run();
+}
+
+/** Same image_url handoff as addElementToMainTrack, but attaches the result as an IMAGE overlay
+ *  (type:"image", props:{background_id}) on the overlay track instead of a full-frame scene -
+ *  see the "image" branch in tools/video-editor.js's buildRenderFilterGraph for how that's
+ *  actually burned in (ffmpeg overlay filter, reusing the same backgrounds row/file). */
+async function addElementToOverlayTrack(imageUrl, startSec, trackIndex, btn) {
+  if (!state.currentProjectId) { showToast(t("scenes.needProject"), true); return; }
+  const run = async () => {
+    try {
+      const bgResult = await invoke({
+        action: "add_scene_background_image", project_id: state.currentProjectId,
+        image_url: imageUrl, original_name: "element.png",
+      });
+      state.backgroundsCache.push({
+        id: bgResult.background.id, filename: bgResult.background.filename,
+        original_name: "element.png", dataUrl: dataUrl("backgrounds/" + bgResult.background.filename),
+      });
+      const start = Math.max(0, startSec || 0);
+      const res = await invoke({
+        action: "add_overlay", project_id: state.currentProjectId, type: "image",
+        start_sec: start, end_sec: start + 3, x: 65, y: 65, width: 30, height: 30,
+        z_index: state.overlays.length, track_index: trackIndex || 0,
+        props: { background_id: bgResult.background.id },
+      });
+      await loadOverlays();
+      state.selection = { kind: "overlay", id: res.overlay.id };
+      renderAll();
+      showToast(t("elements.added"));
+    } catch (err) {
+      showToast(err.message || String(err), true);
+    }
+  };
+  if (btn) await withButtonSpinner(btn, "▭", run);
+  else await run();
+}
+
+// Infinite scroll instead of a single fixed-size fetch - both lists can grow without bound
+// (every image-gen generation ever made / every chat upload ever sent), so loading everything
+// up front would only get slower over time. Each list tracks its own offset/hasMore/loading
+// state and fetches the next page when its sentinel div scrolls into view.
+const ELEMENTS_PAGE_SIZE = 20;
+const elementsGenState = { items: [], offset: 0, hasMore: true, loading: false };
+const elementsUploadState = { items: [], offset: 0, hasMore: true, loading: false };
+
+async function loadMoreGenerated() {
+  if (elementsGenState.loading || !elementsGenState.hasMore) return;
+  elementsGenState.loading = true;
+  try {
+    const result = await invokeImageGen({ action: "list", limit: ELEMENTS_PAGE_SIZE, offset: elementsGenState.offset });
+    const newItems = (result.items || []).map((row) => ({ url: row.url, name: row.prompt || row.id }));
+    elementsGenState.items = elementsGenState.items.concat(newItems);
+    elementsGenState.offset += newItems.length;
+    elementsGenState.hasMore = !!result.hasMore;
+    renderElementsList($("elementsGeneratedList"), elementsGenState.items, t("elements.emptyGenerated"), addElementToMainTrack);
+  } catch {
+    elementsGenState.hasMore = false; // stop retrying this list on error, keep whatever loaded so far
+  } finally {
+    elementsGenState.loading = false;
+  }
+}
+
+async function loadMoreUploads() {
+  if (elementsUploadState.loading || !elementsUploadState.hasMore) return;
+  elementsUploadState.loading = true;
+  try {
+    // /api/artifacts has no "hasMore"/mime-filter of its own - fetch one extra RAW row to detect
+    // whether another page exists, then filter to images client-side. offset always advances by
+    // the number of RAW rows consumed (not the filtered image count), so paging stays correct
+    // even through a long run of non-image uploads.
+    const probeLimit = ELEMENTS_PAGE_SIZE + 1;
+    const res = await fetch("/api/artifacts?source=chat_upload&limit=" + probeLimit + "&offset=" + elementsUploadState.offset);
+    const json = await res.json();
+    const rawRows = (json && json.data) || [];
+    elementsUploadState.hasMore = rawRows.length > ELEMENTS_PAGE_SIZE;
+    const pageRows = rawRows.slice(0, ELEMENTS_PAGE_SIZE);
+    elementsUploadState.offset += pageRows.length;
+    const newItems = pageRows
+      .filter((row) => (row.mimeType || "").startsWith("image/"))
+      .map((row) => ({ url: "/api/shared/view?path=" + encodeURIComponent(row.path), name: row.filename || "upload" }));
+    elementsUploadState.items = elementsUploadState.items.concat(newItems);
+    renderElementsList($("elementsUploadsList"), elementsUploadState.items, t("elements.emptyUploads"), addElementToMainTrack);
+  } catch {
+    elementsUploadState.hasMore = false;
+  } finally {
+    elementsUploadState.loading = false;
+  }
+}
+
+function loadElementsPanel() {
+  if (!state.imageGenAvailable) return;
+  elementsGenState.items = []; elementsGenState.offset = 0; elementsGenState.hasMore = true;
+  elementsUploadState.items = []; elementsUploadState.offset = 0; elementsUploadState.hasMore = true;
+  renderElementsList($("elementsGeneratedList"), [], t("elements.emptyGenerated"), addElementToMainTrack);
+  renderElementsList($("elementsUploadsList"), [], t("elements.emptyUploads"), addElementToMainTrack);
+  loadMoreGenerated();
+  loadMoreUploads();
+}
+
+/** Sentinel-based infinite scroll: a 1px marker after each list, observed against the sidebar's
+ *  own scroll container (.side-panel-scroll - the individual .item-list divs don't scroll
+ *  themselves, the whole sidebar panel does). Fires again automatically once more items are
+ *  appended and the sentinel re-enters the rootMargin, no manual scroll-position math needed. */
+function initElementsInfiniteScroll() {
+  const scrollRoot = document.querySelector(".side-panel-scroll");
+  if (!scrollRoot) return;
+  const genSentinel = el("div", "elements-scroll-sentinel");
+  const uploadSentinel = el("div", "elements-scroll-sentinel");
+  $("elementsGeneratedList").insertAdjacentElement("afterend", genSentinel);
+  $("elementsUploadsList").insertAdjacentElement("afterend", uploadSentinel);
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      if (entry.target === genSentinel) loadMoreGenerated();
+      else if (entry.target === uploadSentinel) loadMoreUploads();
+    }
+  }, { root: scrollRoot, rootMargin: "200px" });
+  observer.observe(genSentinel);
+  observer.observe(uploadSentinel);
+}
+
+function initElementsPanel() {
+  if (!state.imageGenAvailable) return;
+  $("elementsTabBtn").addEventListener("click", loadElementsPanel);
+  initElementsInfiniteScroll();
+  loadElementsPanel();
+}
+
+// =============================================================================================
 // Theme
 // =============================================================================================
 
@@ -153,7 +501,8 @@ const state = {
   renders: [],
   pxPerSec: 60,
   selection: null,     // {kind:'main', index} | {kind:'overlay'|'audio'|'caption', id}
-  backgroundsCache: [], // session-only cache of uploaded scene background images: {id, filename, original_name}
+  backgroundsCache: [], // session-only cache of uploaded scene background images: {id, filename, original_name, dataUrl, imageGenId?}
+  imageGenAvailable: false, // whether the image-gen plugin is installed+enabled (see detectImageGen())
   audioDurations: {},  // audioTrack.id -> probed duration (client-side only, for timeline width)
   pendingAudioUpload: null, // {file, dataUrl, originalName} staged from the Audio panel, not yet uploaded
   renderPollTimer: null,
@@ -595,6 +944,18 @@ function renderSceneKindFields() {
         populateSceneLibrary();
       } catch (err) { showToast(err.message || String(err), true); }
     });
+    const ref = findConsistencyReference(null);
+    renderAiImageControl(wrap, {
+      referenceImageGenId: ref && ref.imageGenId,
+      referenceLabel: ref && ref.name,
+      onCreated: (bg, imageGenId) => {
+        state.backgroundsCache.push({ id: bg.id, filename: bg.filename, original_name: "ai-generated.png", dataUrl: dataUrl("backgrounds/" + bg.filename), imageGenId });
+        $("sceneDragConfig").dataset.bgId = bg.id;
+        showToast("Bild generiert");
+        updateScenePreview();
+        populateSceneLibrary();
+      },
+    });
   }
   updateScenePreview();
 }
@@ -636,7 +997,9 @@ function populateSceneLibrary() {
     '<div class="list-item" data-bg-id="' + bg.id + '">' +
       '<div class="thumb"><img src="' + bg.dataUrl + '"></div>' +
       '<div class="meta"><div class="name" title="' + escapeHtml(bg.original_name) + '">' + escapeHtml(bg.original_name) + "</div></div>" +
-      '<div class="actions"><button type="button" class="icon-button lib-use" data-id="' + bg.id + '">✓</button></div>' +
+      '<div class="actions"><button type="button" class="icon-button lib-use" data-id="' + bg.id + '">✓</button>' +
+        (state.imageGenAvailable ? '<button type="button" class="icon-button lib-modify" data-id="' + bg.id + '" title="Mit KI veraendern">✨</button>' : "") +
+      "</div>" +
     "</div>"
   ).join("");
   list.querySelectorAll(".lib-use").forEach((btn) => btn.addEventListener("click", () => {
@@ -644,6 +1007,21 @@ function populateSceneLibrary() {
     renderSceneKindFields();
     $("sceneDragConfig").dataset.bgId = btn.dataset.id;
     updateScenePreview();
+  }));
+  list.querySelectorAll(".lib-modify").forEach((btn) => btn.addEventListener("click", () => {
+    const bg = state.backgroundsCache.find((b) => String(b.id) === btn.dataset.id);
+    const row = btn.closest(".list-item");
+    if (!bg || !row) return;
+    const existing = row.querySelector(".lib-modify-form");
+    if (existing) { existing.remove(); return; }
+    row.style.flexWrap = "wrap";
+    const wrap = el("div", "lib-modify-form");
+    wrap.style.flexBasis = "100%";
+    row.appendChild(wrap);
+    renderModifyBackgroundControl(wrap, bg, (newBg, imageGenId) => {
+      state.backgroundsCache.push({ id: newBg.id, filename: newBg.filename, original_name: "ai-generated.png", dataUrl: dataUrl("backgrounds/" + newBg.filename), imageGenId });
+      populateSceneLibrary();
+    });
   }));
 }
 
@@ -1003,6 +1381,7 @@ function renderMainTrack(minWidth) {
       const payload = JSON.parse(json);
       if (payload.kind === "clip") addClipToMainTrack(payload.clipId, targetIdx);
       else if (payload.kind === "scene") addSceneToMainTrack(payload.scene, targetIdx);
+      else if (payload.kind === "element") addElementToMainTrack(payload.url, targetIdx, null);
     } catch (err) { /* ignore malformed payload */ }
   };
 }
@@ -1187,11 +1566,12 @@ function renderOverlaysTrack(minWidth, lanes) {
     linkedEnd: true,
     lanes,
     getDuration: (o) => Math.max(0.2, (Number(o.end_sec) || 0) - (Number(o.start_sec) || 0)),
-    label: (o) => (o.type === "text" ? "🔤 " : "▭ ") + escapeHtml(o.type === "text" ? (o.props.content || "") : (o.props.shape_type || "shape")),
+    label: (o) => (o.type === "text" ? "🔤 " + escapeHtml(o.props.content || "") : o.type === "image" ? "🖼️ " + t("inspector.overlay.image") : "▭ " + escapeHtml(o.props.shape_type || "shape")),
     onCommit: (o) => commitOverlayUpdate(o),
     onDrop: (payload, sec, lane) => {
       if (payload.kind === "overlay-text") addOverlayToTrack("text", payload.props, sec, null, null, lane);
       else if (payload.kind === "overlay-shape") addOverlayToTrack("shape", payload.props, sec, null, null, lane);
+      else if (payload.kind === "element") addElementToOverlayTrack(payload.url, sec, lane, null);
     },
   });
 }
@@ -1397,6 +1777,16 @@ function renderOverlayPreview(o, frame) {
     box.style.fontWeight = "700";
     if (o.props.background_color) box.style.background = o.props.background_color + "cc";
     box.textContent = o.props.content || "";
+  } else if (o.type === "image") {
+    const cached = state.backgroundsCache.find((b) => String(b.id) === String(o.props.background_id));
+    if (cached) {
+      const img = document.createElement("img");
+      img.src = cached.dataUrl;
+      img.style.cssText = "width:100%;height:100%;object-fit:cover;border-radius:4px";
+      box.appendChild(img);
+    } else {
+      box.style.background = "var(--surface-3)";
+    }
   } else {
     const shape = el("div", o.props.shape_type === "circle" ? "preview-shape-circle" : "preview-shape-rect");
     shape.style.background = o.props.color || "#ff0000";
@@ -1408,7 +1798,7 @@ function renderOverlayPreview(o, frame) {
     box.appendChild(shape);
   }
   canvas.appendChild(box);
-  const label = el("div", "tl-label", o.type === "text" ? t("preview.overlay.text") : t("preview.overlay.shape"));
+  const label = el("div", "tl-label", o.type === "text" ? t("preview.overlay.text") : o.type === "image" ? t("preview.overlay.image") : t("preview.overlay.shape"));
   label.style.cssText = "position:absolute;top:10px;left:10px;background:rgba(0,0,0,.5);padding:4px 9px;border-radius:6px;color:#fff;font-size:11px;z-index:2";
   frame.appendChild(canvas);
   frame.appendChild(label);
@@ -1512,6 +1902,16 @@ function applyOverlayElStyle(elx, o) {
     const textSpan = document.createElement("span");
     textSpan.textContent = (o.props && o.props.content) || "";
     elx.appendChild(textSpan);
+  } else if (o.type === "image") {
+    const cached = state.backgroundsCache.find((b) => String(b.id) === String(o.props && o.props.background_id));
+    if (cached) {
+      const img = document.createElement("img");
+      img.src = cached.dataUrl;
+      img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block";
+      elx.appendChild(img);
+    } else {
+      elx.style.background = "var(--surface-3)";
+    }
   } else {
     const shape = document.createElement("div");
     shape.className = "shape-fill" + ((o.props && o.props.shape_type) === "circle" ? " circle" : "");
@@ -1527,7 +1927,7 @@ function applyOverlayElStyle(elx, o) {
 }
 
 function buildCompositedOverlayElement(o) {
-  const elx = el("div", "composited-overlay-el " + (o.type === "text" ? "text" : "shape"));
+  const elx = el("div", "composited-overlay-el " + (o.type === "text" ? "text" : o.type === "image" ? "image" : "shape"));
   elx.dataset.id = String(o.id);
   elx.style.display = "none";
   const handle = el("div", "resize-handle-corner");
@@ -1887,14 +2287,51 @@ function renderMainInspector() {
           populateSceneLibrary();
         });
         if (state.backgroundsCache.length) {
-          const libRow = el("div", "form-row");
-          libRow.innerHTML = '<label>' + escapeHtml(t("scenes.library")) + '</label>';
+          const libRow = el("div", "form-row-inline");
+          const libSelWrap = el("div", "form-row"); libSelWrap.style.flex = "1";
+          libSelWrap.innerHTML = '<label>' + escapeHtml(t("scenes.library")) + '</label>';
           const libSel = el("select", "form-control small");
           libSel.innerHTML = state.backgroundsCache.map((b) => '<option value="' + b.id + '"' + (bg.kind === "image" && String(bg.value) === String(b.id) ? " selected" : "") + '>' + escapeHtml(b.original_name) + "</option>").join("");
-          libRow.appendChild(libSel);
-          fieldsWrap.appendChild(libRow);
+          libSelWrap.appendChild(libSel);
+          libRow.appendChild(libSelWrap);
+          if (state.imageGenAvailable) {
+            const modifyBtn = el("button", "icon-button", "✨");
+            modifyBtn.type = "button";
+            modifyBtn.title = "Ausgewaehltes Bild mit KI veraendern";
+            modifyBtn.style.alignSelf = "flex-end";
+            modifyBtn.style.marginBottom = "10px";
+            libRow.appendChild(modifyBtn);
+            const modifyWrap = el("div");
+            modifyBtn.addEventListener("click", () => {
+              if (modifyWrap.childElementCount) { modifyWrap.innerHTML = ""; return; }
+              const bgEntry = state.backgroundsCache.find((b) => String(b.id) === libSel.value);
+              if (!bgEntry) return;
+              renderModifyBackgroundControl(modifyWrap, bgEntry, (newBg, imageGenId) => {
+                state.backgroundsCache.push({ id: newBg.id, filename: newBg.filename, original_name: "ai-generated.png", dataUrl: dataUrl("backgrounds/" + newBg.filename), imageGenId });
+                item.background = { kind: "image", value: newBg.id };
+                scheduleTimelineSave();
+                renderBgFields();
+              });
+            });
+            fieldsWrap.appendChild(libRow);
+            fieldsWrap.appendChild(modifyWrap);
+          } else {
+            fieldsWrap.appendChild(libRow);
+          }
           libSel.addEventListener("change", () => { item.background = { kind: "image", value: Number(libSel.value) }; scheduleTimelineSave(); });
         }
+        const ref = findConsistencyReference(item.order);
+        renderAiImageControl(fieldsWrap, {
+          referenceImageGenId: ref && ref.imageGenId,
+          referenceLabel: ref && ref.name,
+          onCreated: (newBg, imageGenId) => {
+            state.backgroundsCache.push({ id: newBg.id, filename: newBg.filename, original_name: "ai-generated.png", dataUrl: dataUrl("backgrounds/" + newBg.filename), imageGenId });
+            item.background = { kind: "image", value: newBg.id };
+            scheduleTimelineSave();
+            populateSceneLibrary();
+            renderBgFields();
+          },
+        });
       }
     }
     kindSelect.addEventListener("change", renderBgFields);
@@ -2025,7 +2462,11 @@ function buildDeleteFooter(onDelete) {
 function renderOverlayInspector() {
   const o = state.overlays.find((x) => x.id === state.selection.id);
   if (!o) { state.selection = null; return renderInspector(); }
-  setInspectorHeader("overlay", o.type === "text" ? t("inspector.overlay.text") : t("inspector.overlay.shape"), o.type === "text" ? (o.props.content || "") : (o.props.shape_type || ""));
+  setInspectorHeader(
+    "overlay",
+    o.type === "text" ? t("inspector.overlay.text") : o.type === "image" ? t("inspector.overlay.image") : t("inspector.overlay.shape"),
+    o.type === "text" ? (o.props.content || "") : o.type === "image" ? "" : (o.props.shape_type || "")
+  );
 
   const body = $("inspectorBody");
   body.innerHTML = "";
@@ -2069,6 +2510,13 @@ function renderOverlayInspector() {
         '<option value="left"' + (o.props.align === "left" ? " selected" : "") + '>' + escapeHtml(t("text.align.left")) + "</option></select></div>" +
       '<label class="checkbox-label"><input type="checkbox" id="ovBgEnable"' + (o.props.background_color ? " checked" : "") + '> ' + escapeHtml(t("inspector.bgEnable")) + '</label>' +
       '<input type="color" class="form-control small" id="ovBgColor" value="' + (o.props.background_color || "#000000") + '" style="margin-top:6px">';
+  } else if (o.type === "image") {
+    const cached = state.backgroundsCache.find((b) => String(b.id) === String(o.props.background_id));
+    typeSection.innerHTML =
+      '<h4>' + escapeHtml(t("inspector.overlay.image")) + '</h4>' +
+      (cached
+        ? '<img src="' + cached.dataUrl + '" style="max-width:100%;border-radius:8px;display:block">'
+        : '<div class="inspector-hint">' + escapeHtml(t("inspector.imageMissing")) + '</div>');
   } else {
     typeSection.innerHTML =
       '<h4>' + escapeHtml(t("inspector.overlay.shape")) + '</h4>' +
@@ -2104,6 +2552,8 @@ function renderOverlayInspector() {
         content: $("ovContent").value, font_size: Number($("ovFontSize").value) || 32, color: $("ovColor").value,
         align: $("ovAlign").value, background_color: $("ovBgEnable").checked ? $("ovBgColor").value : undefined,
       };
+    } else if (o.type === "image") {
+      // no editable props beyond the generic position/time fields collected above
     } else {
       o.props = {
         shape_type: $("ovShapeType").value, color: $("ovShapeColor").value,
@@ -2371,10 +2821,14 @@ function initSidebarResize() {
 // =============================================================================================
 
 document.addEventListener("DOMContentLoaded", async function () {
+  await detectImageGen();
+  $("elementsTabBtn").style.display = state.imageGenAvailable ? "" : "none";
+
   initTheme();
   initLang();
   initProjectControls();
   initClipsPanel();
+  initElementsPanel();
   initScenesPanel();
   initTextPanel();
   initShapesPanel();

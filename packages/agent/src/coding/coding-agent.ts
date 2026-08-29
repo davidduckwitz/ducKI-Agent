@@ -1212,6 +1212,8 @@ export class CodingAgent {
       "test-driven-development": ["test", "tdd", "unit test", "jest", "vitest", "spec"],
       "code-review": ["review", "quality", "style", "lint", "format"],
       "debugging": ["debug", "error", "bug", "fix", "crash"],
+      "phaser-game-scaffold": ["phaser", "game scene", "sprite", "browser game", "2d game", "spiel"],
+      "frontend-scaffold": ["landing page", "landingpage", "website", "webseite", "homepage", "static site"],
     };
 
     const goalLower = goal.toLowerCase();

@@ -81,6 +81,17 @@ For a `background.kind:'image'` scene, upload the image first:
 ```
 -> returns `background.id`, use that as `background.value`.
 
+**Slideshow videos from generated images:** if the `image_gen` plugin is available, use it to create the
+source stills instead of asking the user for images - generate one image per scene, then pass its `url`
+straight through as `image_url` (NOT `image_base64` - keeps the base64 out of your context entirely):
+```
+[TOOL:image_gen({"action": "generate", "prompt": "..."})]  -> returns {url: "/api/plugins/image-gen/data/generated/<id>.png", ...}
+[TOOL:video_editor({"action": "add_scene_background_image", "project_id": 1, "image_url": "/api/plugins/image-gen/data/generated/<id>.png"})]
+```
+For visual consistency across a multi-scene slideshow (same character/style/palette), pass the previous
+scene's `image_gen` result `id` as `reference_id` on the next `generate` call (img2img instead of a fresh
+random image) rather than generating each scene fully independently.
+
 ## Captions vs. overlays
 
 Both are TIMELINE-relative (0 = start of the assembled cut) and burned in together on `render`

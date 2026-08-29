@@ -22,10 +22,19 @@ window.I18N = {
     "confirm.deleteProject": "Dieses Projekt und ALLE Clips, Untertitel und Renders unwiderruflich löschen?",
 
     "tabs.clips": "Clips",
+    "tabs.elements": "Elemente",
     "tabs.scenes": "Szenen",
     "tabs.text": "Text",
     "tabs.shapes": "Formen",
     "tabs.audio": "Audio",
+
+    "elements.generated": "Generierte Bilder",
+    "elements.uploads": "Hochgeladene Bilder (Chat)",
+    "elements.emptyGenerated": "Noch keine Bilder generiert.",
+    "elements.emptyUploads": "Keine hochgeladenen Bilder gefunden.",
+    "elements.added": "Zur Timeline hinzugefügt",
+    "elements.addTitle": "Als Szene zur Timeline hinzufügen",
+    "elements.addOverlayTitle": "Als Overlay hinzufügen",
 
     "clips.upload": "Clip hochladen",
     "clips.uploadHint": "Hochladen, dann per Drag &amp; Drop oder „+“ auf die Hauptspur ziehen.",
@@ -127,6 +136,7 @@ window.I18N = {
     "preview.scene.image": "Bild-Hintergrund",
     "preview.overlay.text": "Text-Overlay",
     "preview.overlay.shape": "Form-Overlay",
+    "preview.overlay.image": "Bild-Overlay",
     "preview.audio": "Audiospur",
     "preview.caption": "Untertitel",
 
@@ -166,6 +176,8 @@ window.I18N = {
     "inspector.scene": "Szene",
     "inspector.overlay.text": "Text-Overlay",
     "inspector.overlay.shape": "Form-Overlay",
+    "inspector.overlay.image": "Bild-Overlay",
+    "inspector.imageMissing": "Bild-Vorschau nicht verfügbar (nach einem Neuladen der Seite verschwindet der Zwischenspeicher - Aussehen im Render bleibt trotzdem korrekt).",
     "inspector.audio": "Audiospur",
     "inspector.caption": "Untertitel",
     "inspector.trim": "Trim",
@@ -255,10 +267,19 @@ window.I18N = {
     "confirm.deleteProject": "Permanently delete this project and ALL its clips, captions and renders?",
 
     "tabs.clips": "Clips",
+    "tabs.elements": "Elements",
     "tabs.scenes": "Scenes",
     "tabs.text": "Text",
     "tabs.shapes": "Shapes",
     "tabs.audio": "Audio",
+
+    "elements.generated": "Generated images",
+    "elements.uploads": "Uploaded images (chat)",
+    "elements.emptyGenerated": "No images generated yet.",
+    "elements.emptyUploads": "No uploaded images found.",
+    "elements.added": "Added to timeline",
+    "elements.addTitle": "Add as scene to timeline",
+    "elements.addOverlayTitle": "Add as overlay",
 
     "clips.upload": "Upload clip",
     "clips.uploadHint": "Upload, then drag onto the Main track or use “+”.",
@@ -360,6 +381,7 @@ window.I18N = {
     "preview.scene.image": "Image background",
     "preview.overlay.text": "Text overlay",
     "preview.overlay.shape": "Shape overlay",
+    "preview.overlay.image": "Image overlay",
     "preview.audio": "Audio track",
     "preview.caption": "Caption",
 
@@ -399,6 +421,8 @@ window.I18N = {
     "inspector.scene": "Scene",
     "inspector.overlay.text": "Text overlay",
     "inspector.overlay.shape": "Shape overlay",
+    "inspector.overlay.image": "Image overlay",
+    "inspector.imageMissing": "Image preview unavailable (the session cache is cleared on page reload - the rendered output is still correct).",
     "inspector.audio": "Audio track",
     "inspector.caption": "Caption",
     "inspector.trim": "Trim",

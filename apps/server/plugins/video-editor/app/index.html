@@ -55,6 +55,7 @@
     <aside class="sidebar-left" id="sidebarLeft">
       <div class="side-tabs">
         <button type="button" class="side-tab-btn active" data-side-tab="clips" data-i18n="tabs.clips">Clips</button>
+        <button type="button" class="side-tab-btn" data-side-tab="elements" data-i18n="tabs.elements" id="elementsTabBtn" style="display:none">Elemente</button>
         <button type="button" class="side-tab-btn" data-side-tab="scenes" data-i18n="tabs.scenes">Szenen</button>
         <button type="button" class="side-tab-btn" data-side-tab="text" data-i18n="tabs.text">Text</button>
         <button type="button" class="side-tab-btn" data-side-tab="shapes" data-i18n="tabs.shapes">Formen</button>
@@ -190,6 +191,18 @@
               <div class="meta"><div class="name" id="audioDragName">audio.mp3</div><div class="sub" data-i18n="clips.addTitle">Zur Timeline hinzufügen</div></div>
             </div>
             <button type="button" class="secondary-button block-btn" id="addAudioBtn" data-i18n="audio.add">+ Zur Timeline hinzufügen</button>
+          </div>
+        </div>
+
+        <!-- Elements panel (image-gen results + chat-uploaded images) -->
+        <div class="side-panel" id="side-elements">
+          <div class="panel-section">
+            <h4 data-i18n="elements.generated">Generierte Bilder</h4>
+            <div class="item-list" id="elementsGeneratedList"></div>
+          </div>
+          <div class="panel-section">
+            <h4 data-i18n="elements.uploads">Hochgeladene Bilder (Chat)</h4>
+            <div class="item-list" id="elementsUploadsList"></div>
           </div>
         </div>
 

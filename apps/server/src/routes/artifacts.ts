@@ -27,8 +27,9 @@ artifactsRouter.get("/", async (req, res, next) => {
     const conversationId = req.query["conversationId"] ? parseInt(req.query["conversationId"] as string, 10) : undefined;
     const source = typeof req.query["source"] === "string" ? (req.query["source"] as string) : undefined;
     const limit = req.query["limit"] ? parseInt(req.query["limit"] as string, 10) : undefined;
+    const offset = req.query["offset"] ? parseInt(req.query["offset"] as string, 10) : undefined;
 
-    const items = await db.listArtifacts({ conversationId, source, limit });
+    const items = await db.listArtifacts({ conversationId, source, limit, offset });
     // framesJson can be a few hundred KB per video artifact - the list view only needs enough
     // to render a card (thumbnail/title/meta), not the raw frame data.
     const stripped = items.map(({ framesJson, ...rest }) => ({ ...rest, hasFrames: !!framesJson }));

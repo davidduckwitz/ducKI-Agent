@@ -235,6 +235,20 @@ fn seed_builtin_plugins(app: &AppHandle, app_data_dir: &std::path::Path) -> std:
         return plugins_dir;
     };
     let builtin_dir = resource_dir.join("resources/server-dist/plugins-builtin");
+
+    // Runtime deps shared by multiple plugins (e.g. ffmpeg-static, @ducki/providers) are bundled
+    // ONCE into plugins-builtin/node_modules instead of duplicated into every plugin that needs
+    // them (see build.js) - Node's module resolution walks up from a plugin dir through its
+    // parent's node_modules on its own, so seeding this shared tree as a sibling of the per-plugin
+    // dirs (app_data/plugins/node_modules) is all that's needed for every plugin to resolve from
+    // it. copy_missing_recursive is additive and safe to re-run on every launch/update.
+    let shared_nm = builtin_dir.join("node_modules");
+    if shared_nm.is_dir() {
+        if let Err(e) = copy_missing_recursive(&shared_nm, &plugins_dir.join("node_modules")) {
+            eprintln!("[TAURI] Failed to seed shared plugin runtime deps: {}", e);
+        }
+    }
+
     let Ok(entries) = std::fs::read_dir(&builtin_dir) else {
         return plugins_dir;
     };
@@ -243,7 +257,7 @@ fn seed_builtin_plugins(app: &AppHandle, app_data_dir: &std::path::Path) -> std:
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        if !file_type.is_dir() {
+        if !file_type.is_dir() || entry.file_name() == "node_modules" {
             continue;
         }
         let dest = plugins_dir.join(entry.file_name());

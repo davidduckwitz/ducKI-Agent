@@ -1,22 +1,74 @@
 {
   "name": "homeassistant",
-  "version": "1.0.0",
-  "description": "Home Assistant Integration: Geräte auflisten, Zustände abfragen und über Dienste steuern (an/aus, Rollos, Thermostate, Medienplayer, ...). Eigene Dashboard-Seite zum Anzeigen und Steuern, Zustands-Cache in plugin-eigener SQLite-Datenbank.",
+  "version": "1.1.0",
+  "description": "Home Assistant Integration: Räume, Lichter, Fernseher, Wetter und andere Geräte natürlichsprachlich abfragen und sicher steuern. Mit Dashboard, Widgets und Offline-Zustandscache.",
   "author": "DucKI",
   "license": "Proprietary",
   "icon": "🏠",
   "category": "automation",
-  "trust": "node",
-  "storage": { "sqlite": true },
   "provides": {
-    "moduleTools": ["tools/homeassistant.js"],
-    "skills": ["skills/homeassistant-usage"],
-    "frontendPage": "app/index.html",
-    "settingsPage": "settings/index.html",
+    "moduleTools": [
+      "tools/homeassistant.js"
+    ],
+    "skills": [
+      "skills/homeassistant-usage"
+    ],
     "settings": [
-      { "key": "base_url", "type": "string", "required": true, "description": "Home Assistant Basis-URL, z. B. http://homeassistant.local:8123 (ohne abschließenden Slash)" },
-      { "key": "access_token", "type": "secret", "required": true, "description": "Long-Lived Access Token aus dem Home-Assistant-Benutzerprofil (Profil → Sicherheit → Langlebige Zugriffstoken)" }
+      {
+        "key": "base_url",
+        "type": "string",
+        "description": "Home Assistant Basis-URL, z. B. http://homeassistant.local:8123 (ohne abschließenden Slash)",
+        "required": true
+      },
+      {
+        "key": "access_token",
+        "type": "secret",
+        "description": "Long-Lived Access Token aus dem Home-Assistant-Benutzerprofil (Profil → Sicherheit → Langlebige Zugriffstoken)",
+        "required": true
+      }
+    ],
+    "settingsPage": "settings/index.html",
+    "frontendPage": "app/index.html",
+    "widgets": [
+      {
+        "id": "weather",
+        "page": "widgets/weather/index.html",
+        "placement": "dashboard",
+        "align": "full",
+        "frame": "card",
+        "background": "transparent",
+        "height": 190,
+        "width": "full",
+        "title": "Wetter"
+      },
+      {
+        "id": "lights",
+        "page": "widgets/lights/index.html",
+        "placement": "sidebar-after-mode",
+        "align": "full",
+        "frame": "card",
+        "background": "transparent",
+        "height": 100,
+        "width": "full",
+        "title": "Lichter"
+      },
+      {
+        "id": "media",
+        "page": "widgets/media/index.html",
+        "placement": "sidebar-after-mode",
+        "align": "full",
+        "frame": "card",
+        "background": "transparent",
+        "height": 100,
+        "width": "full",
+        "title": "Fernseher & Medien"
+      }
     ]
   },
+  "storage": {
+    "sqlite": true
+  },
+  "trust": "node",
+  "permissions": [],
   "enabled": true
 }

@@ -584,16 +584,17 @@ export class DatabaseService {
     return this.db.update(schema.artifacts).set(data).where(eq(schema.artifacts.id, id)).returning().get();
   }
 
-  async listArtifacts(args?: { conversationId?: number; source?: string; limit?: number }): Promise<ArtifactSelect[]> {
+  async listArtifacts(args?: { conversationId?: number; source?: string; limit?: number; offset?: number }): Promise<ArtifactSelect[]> {
     const limit = Math.max(1, Math.min(500, Number(args?.limit ?? 200)));
+    const offset = Math.max(0, Number(args?.offset ?? 0));
     const conditions = [];
     if (args?.conversationId !== undefined) conditions.push(eq(schema.artifacts.conversationId, args.conversationId));
     if (args?.source !== undefined) conditions.push(eq(schema.artifacts.source, args.source));
 
     if (conditions.length === 0) {
-      return this.db.select().from(schema.artifacts).orderBy(desc(schema.artifacts.id)).limit(limit).all();
+      return this.db.select().from(schema.artifacts).orderBy(desc(schema.artifacts.id)).limit(limit).offset(offset).all();
     }
-    return this.db.select().from(schema.artifacts).where(and(...conditions)).orderBy(desc(schema.artifacts.id)).limit(limit).all();
+    return this.db.select().from(schema.artifacts).where(and(...conditions)).orderBy(desc(schema.artifacts.id)).limit(limit).offset(offset).all();
   }
 
   async deleteArtifact(id: number): Promise<void> {
