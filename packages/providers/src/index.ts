@@ -8,7 +8,7 @@ import { ClaudeProvider } from "./claude-provider.js";
 import { BaseAdapter, AnthropicAdapter, GeminiAdapter, BedrockAdapter, ProviderRouter } from "./adapters/index.js";
 import { CredentialManager } from "./credential-manager.js";
 import { CredentialAwareRouter } from "./adapters/credential-aware-router.js";
-import type { SpeechToTextProvider } from "@ducki/shared";
+import type { SpeechToTextProvider, TextToSpeechProvider } from "@ducki/shared";
 // Export adapter configurations
 export type { AdapterConfig, ProviderRouterConfig } from "./adapter-config.js";
 export type { Credential, CredentialRotationConfig } from "./credential-manager.js";
@@ -16,6 +16,10 @@ import { OpenAISpeechToTextProvider } from "./openai-speech-to-text-provider.js"
 import { SileroSpeechToTextProvider } from "./silero-speech-to-text-provider.js";
 import { LocalCommandSpeechToTextProvider } from "./local-command-speech-to-text-provider.js";
 import { NodejsWhisperSpeechToTextProvider } from "./nodejs-whisper-speech-to-text-provider.js";
+import { OpenAITextToSpeechProvider } from "./openai-text-to-speech-provider.js";
+import { ElevenLabsTextToSpeechProvider } from "./elevenlabs-text-to-speech-provider.js";
+import { PiperTextToSpeechProvider, type PiperTextToSpeechProviderOptions } from "./piper-text-to-speech-provider.js";
+import { LocalCommandTextToSpeechProvider } from "./local-command-text-to-speech-provider.js";
 
 export type ProviderName = "openai" | "openrouter" | "lmstudio" | "ollama" | "claude";
 
@@ -160,4 +164,89 @@ export function getDefaultSpeechToTextProvider(): SpeechToTextProvider {
     | "local"
     | "nodejs-whisper";
   return createSpeechToTextProvider({ name: providerName });
+}
+
+// ============================================================
+// Text-to-Speech Provider Factory
+// ============================================================
+
+export type { TextToSpeechProvider };
+export { OpenAITextToSpeechProvider, ElevenLabsTextToSpeechProvider, PiperTextToSpeechProvider, LocalCommandTextToSpeechProvider };
+export { listElevenLabsVoices, type ElevenLabsVoiceSummary } from "./elevenlabs-text-to-speech-provider.js";
+
+export type TextToSpeechProviderFactoryConfig = {
+  name: "openai" | "elevenlabs" | "piper" | "local";
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  voice?: string;
+  stability?: number;
+  similarityBoost?: number;
+  // Piper-specific tuning (ignored by other providers)
+  executablePath?: string;
+  modelPath?: string;
+  lengthScale?: number;
+  noiseScale?: number;
+  noiseW?: number;
+  sentenceSilence?: number;
+  speakerId?: number;
+  // Generic local-command TTS (ignored by other providers)
+  command?: string;
+  args?: string[];
+  workingDirectory?: string;
+  timeoutMs?: number;
+  outputExt?: string;
+};
+
+export function createTextToSpeechProvider(config: TextToSpeechProviderFactoryConfig): TextToSpeechProvider {
+  switch (config.name) {
+    case "openai":
+      return new OpenAITextToSpeechProvider({
+        baseUrl: config.baseUrl ?? "https://api.openai.com/v1",
+        apiKey: config.apiKey ?? process.env["OPENAI_API_KEY"],
+        model: config.model ?? process.env["OPENAI_TTS_MODEL"] ?? "tts-1",
+        voice: config.voice ?? process.env["OPENAI_TTS_VOICE"] ?? "alloy",
+      });
+    case "elevenlabs":
+      return new ElevenLabsTextToSpeechProvider({
+        baseUrl: config.baseUrl ?? "https://api.elevenlabs.io/v1",
+        apiKey: config.apiKey ?? process.env["ELEVENLABS_API_KEY"],
+        model: config.model ?? process.env["ELEVENLABS_MODEL"] ?? "eleven_multilingual_v2",
+        voice: config.voice ?? process.env["ELEVENLABS_VOICE_ID"],
+        stability: config.stability,
+        similarityBoost: config.similarityBoost,
+      });
+    case "piper": {
+      const piperConfig: PiperTextToSpeechProviderOptions = {
+        baseUrl: "",
+        executablePath: config.executablePath,
+        modelPath: config.modelPath ?? config.voice,
+        lengthScale: config.lengthScale,
+        noiseScale: config.noiseScale,
+        noiseW: config.noiseW,
+        sentenceSilence: config.sentenceSilence,
+        speakerId: config.speakerId,
+        timeoutMs: config.timeoutMs,
+      };
+      return new PiperTextToSpeechProvider(piperConfig);
+    }
+    case "local":
+      return new LocalCommandTextToSpeechProvider({
+        baseUrl: "",
+        command: config.command,
+        args: config.args,
+        workingDirectory: config.workingDirectory,
+        timeoutMs: config.timeoutMs,
+        outputExt: config.outputExt,
+        model: config.model,
+        voice: config.voice,
+      });
+    default:
+      throw new Error(`Unknown text-to-speech provider: ${String(config.name)}`);
+  }
+}
+
+export function getDefaultTextToSpeechProvider(): TextToSpeechProvider {
+  const providerName = (process.env["DEFAULT_TEXT_TO_SPEECH_PROVIDER"] ?? "openai") as "openai" | "elevenlabs" | "piper" | "local";
+  return createTextToSpeechProvider({ name: providerName });
 }

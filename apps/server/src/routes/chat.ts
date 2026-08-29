@@ -13,6 +13,8 @@ import { join } from "path";
 import { tmpdir } from "os";
 import express from "express";
 import { transcribeAudioBuffer } from "../lib/audio-transcription.js";
+import { synthesizeSpeech } from "../lib/audio-synthesis.js";
+import { listElevenLabsVoices } from "@ducki/providers";
 
 export const chatRouter: IRouter = Router();
 
@@ -55,6 +57,61 @@ chatRouter.post("/transcribe", async (req, res, next) => {
     res.status(500).json(
       createApiError(`Transkription fehlgeschlagen: ${errorMsg}`)
     );
+  }
+});
+
+chatRouter.post("/speak", async (req, res) => {
+  const startTime = Date.now();
+
+  try {
+    const body = req.body as { text?: unknown; voice?: unknown; emotionStyle?: unknown };
+    const text = typeof body?.text === "string" ? body.text.trim() : "";
+
+    if (!text) {
+      res.status(400).json(createApiError("Text is required"));
+      return;
+    }
+
+    const db = req.app.locals["db"] as DatabaseService;
+    const { audio, mimeType } = await synthesizeSpeech(db, text, {
+      voice: typeof body?.voice === "string" ? body.voice : undefined,
+      emotionStyle: typeof body?.emotionStyle === "string" ? body.emotionStyle : undefined,
+    });
+
+    const elapsed = Date.now() - startTime;
+    logger.debug("Speak success", { elapsedMs: elapsed, textLength: text.length });
+
+    res.json(createApiResponse({ audio: audio.toString("base64"), mimeType }));
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    logger.error("Speak failed", { error: errorMsg });
+    res.status(500).json(createApiError(`Sprachausgabe fehlgeschlagen: ${errorMsg}`));
+  }
+});
+
+chatRouter.get("/tts-voices", async (req, res) => {
+  try {
+    const provider = String(req.query["provider"] ?? "");
+    if (provider !== "elevenlabs") {
+      // OpenAI's voice set is a small fixed list - nothing worth a network round-trip for.
+      res.json(createApiResponse({ voices: [] }));
+      return;
+    }
+
+    const db = req.app.locals["db"] as DatabaseService;
+    const allSettings = await db.getAllSettings();
+    const apiKey = allSettings.find((s) => s.key === "ELEVENLABS_API_KEY")?.value;
+    if (!apiKey) {
+      res.json(createApiResponse({ voices: [] }));
+      return;
+    }
+
+    const voices = await listElevenLabsVoices(apiKey);
+    res.json(createApiResponse({ voices }));
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    logger.error("TTS voice listing failed", { error: errorMsg });
+    res.status(500).json(createApiError(`Stimmen-Abruf fehlgeschlagen: ${errorMsg}`));
   }
 });
 

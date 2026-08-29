@@ -250,6 +250,15 @@ export function ChatContainer() {
     setPersistentStreamingContent("");
   }, [conversationId]);
 
+  // Marks the moment this conversation was opened - only agent messages with a createdAt
+  // after this point are eligible for TTS autoplay. Without this, opening an old conversation
+  // with autoplay on would speak every historical agent message back-to-back, since history
+  // load and a live-just-arrived turn both mount MessageRow exactly the same way.
+  const conversationOpenedAtRef = useRef<number>(Date.now());
+  useEffect(() => {
+    conversationOpenedAtRef.current = Date.now();
+  }, [conversationId]);
+
   useEffect(() => {
     // eventData.totalTokens ("Cost usage updated") is the cost governor's RUNNING total across
     // every call so far, not a per-call delta - summing it across every message that carries it
@@ -1021,6 +1030,7 @@ export function ChatContainer() {
                     compactMode={compactMode}
                     onResend={item.msg.role === "user" ? () => setComposerDraft({ value: item.msg.content, revision: Date.now() }) : undefined}
                     t={t}
+                    autoPlayVoice={new Date(item.msg.timestamp).getTime() > conversationOpenedAtRef.current}
                   />
                 )
               )}

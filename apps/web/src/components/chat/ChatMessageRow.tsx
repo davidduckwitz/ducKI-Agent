@@ -11,6 +11,9 @@ import { ReasoningDisplay } from "./ReasoningDisplay";
 import { ThinkBlockDisplay } from "./ThinkBlockDisplay";
 import { VoicePlayback } from "./VoicePlayback";
 import { useSmoothedText } from "../../hooks/useSmoothedText";
+import { useStreamingSpeech } from "../../hooks/useStreamingSpeech";
+import { useVoiceSettings } from "../../hooks/useVoiceSettings";
+import { useAgentTurnEndSignal } from "../../hooks/useAgentTurnEndSignal";
 
 /** Parsed think block with metadata */
 interface ThinkBlock {
@@ -391,7 +394,16 @@ export function MessageRow({
   dense,
   onResend,
   t,
-}: RowCommonProps & { msg: RenderedChatMessage; onResend?: () => void; t: (key: string) => string }) {
+  autoPlayVoice,
+}: RowCommonProps & {
+  msg: RenderedChatMessage;
+  onResend?: () => void;
+  t: (key: string) => string;
+  /** True only for a message that arrived live during this viewing session - never for
+   *  history loaded when a conversation is opened, which would otherwise auto-speak every
+   *  past agent message back-to-back. See ChatContainer's conversationOpenedAtRef. */
+  autoPlayVoice?: boolean;
+}) {
   const metadata = msg.metadata as
     | {
         portal?: string;
@@ -548,7 +560,7 @@ export function MessageRow({
         <div className="flex-1">
           <MessageActions content={msg.content} t={t} align="start" />
         </div>
-        <VoicePlayback text={msg.content} />
+        <VoicePlayback text={msg.content} autoPlay={autoPlayVoice} />
       </div>
     </div>
   );
@@ -562,6 +574,10 @@ export function StreamingRow({
   // Only this live-preview box animates - once text lands as a permanent message (see
   // store.ts's assistant_text handling) it renders as plain MarkdownMessage, no smoothing.
   const smoothed = useSmoothedText(streamingContent);
+  const { enableTTS, autoPlayTTS, ttsStreamingMode } = useVoiceSettings();
+  const streamingSpeechActive = enableTTS && autoPlayTTS && ttsStreamingMode;
+  const { isPlaying: isSpeakingStream } = useStreamingSpeech(streamingContent, streamingSpeechActive);
+  useAgentTurnEndSignal(isSpeakingStream, streamingSpeechActive);
   return (
     <div className={ANIMATE_IN}>
       <div className="mb-1.5 flex items-center gap-2">

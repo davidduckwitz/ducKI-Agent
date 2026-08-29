@@ -1,9 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Bot, ChevronLeft, ChevronRight, FileText, Image, Menu, Mic, Moon, Paperclip, Plus, Send, Settings, Sparkles, Speaker, Square, Sun, Trash2, Users, Video, VolumeX, X } from "lucide-react";
+import { Bot, ChevronLeft, ChevronRight, FileText, Image, Menu, Moon, Paperclip, Plus, Send, Settings, Sparkles, Speaker, Square, Sun, Trash2, Users, Video, VolumeX, X } from "lucide-react";
 import "./styles.css";
 import { AgentAvatar } from "./AgentAvatar";
 import { MarkdownMessage } from "./MarkdownMessage";
+import { VoiceOrb, type VoiceOrbState } from "./VoiceOrb";
+import { startVoiceActivityWatcher, stripMarkdownForSpeech, type VoiceActivityWatcherHandle } from "./voice";
+
+// Hard safety cap on a single recording, same idea as the max-recording-duration fallback in
+// the main web app: if the VAD watcher ever fails to fire (e.g. a browser without
+// AudioContext), this still guarantees the mic doesn't stay open forever.
+const MAX_RECORDING_MS = 30_000;
+const VAD_SILENCE_THRESHOLD = 0.02;
+const VAD_SILENCE_TIMEOUT_MS = 1200;
+const VAD_MIN_SPEECH_MS = 300;
 
 const SpeakerX = VolumeX;
 
@@ -38,7 +48,7 @@ function AttachmentPreview({ mimeType, preview, name }: { mimeType: string; prev
   return preview ? <a href={preview} download={name} onClick={e => e.stopPropagation()} title={`${name} herunterladen`}><FileText/></a> : <FileText/>;
 }
 
-function SetupWizard({ initial, onDone, onClose, dark, tts, onDark, onTts }: { initial?: Partial<Setup>; onDone: (s: Setup) => void; onClose?: () => void; dark?: boolean; tts?: boolean; onDark?: (value: boolean) => void; onTts?: (value: boolean) => void }) {
+function SetupWizard({ initial, onDone, onClose, dark, tts, onDark, onTts, continuousVoice, onContinuousVoice }: { initial?: Partial<Setup>; onDone: (s: Setup) => void; onClose?: () => void; dark?: boolean; tts?: boolean; onDark?: (value: boolean) => void; onTts?: (value: boolean) => void; continuousVoice?: boolean; onContinuousVoice?: (value: boolean) => void }) {
   const [form, setForm] = useState<Setup>({ mode: initial?.mode ?? "local", localUrl: initial?.localUrl ?? "http://127.0.0.1:3001", cloudUrl: initial?.cloudUrl ?? "", apiKey: "" });
   const [state, setState] = useState<"idle" | "testing" | "saving">("idle");
   const [notice, setNotice] = useState("");
@@ -53,7 +63,7 @@ function SetupWizard({ initial, onDone, onClose, dark, tts, onDark, onTts }: { i
       <button className={form.mode === "cloud" ? "selected" : ""} onClick={() => setForm({ ...form, mode: "cloud" })}><span className="mode-icon">☁</span><strong>Cloud</strong><small>Laravel-URL und API-Key</small></button>
     </div>
     {form.mode === "local" ? <label>Lokale Agent-URL<input value={form.localUrl} onChange={e => update("localUrl", e.target.value)} placeholder="http://127.0.0.1:3001"/></label> : <><label>Laravel-Cloud-URL<input value={form.cloudUrl} onChange={e => update("cloudUrl", e.target.value)} placeholder="https://cloud.example.de"/></label><label>API-Key<input type="password" value={form.apiKey} onChange={e => update("apiKey", e.target.value)} placeholder={initial?.apiKey ? "Leer lassen, um den Key beizubehalten" : "Dein Agent-API-Key"}/></label></>}
-    {onClose && <div className="settings-section"><span className="section-caption">Darstellung & Audio</span><label className="toggle-row"><span><strong>Dunkles Design</strong><small>Erpel mit dunkler Oberfläche anzeigen</small></span><input type="checkbox" checked={dark} onChange={e => onDark?.(e.target.checked)}/></label><label className="toggle-row"><span><strong>Antworten vorlesen</strong><small>Fertige Agentenantworten automatisch sprechen</small></span><input type="checkbox" checked={tts} onChange={e => onTts?.(e.target.checked)}/></label><div className="setting-info"><strong>Agent-Pet & Avatare</strong><small>Werden automatisch vom Main-Agenten und den angelegten Bots übernommen.</small></div></div>}
+    {onClose && <div className="settings-section"><span className="section-caption">Darstellung & Audio</span><label className="toggle-row"><span><strong>Dunkles Design</strong><small>Erpel mit dunkler Oberfläche anzeigen</small></span><input type="checkbox" checked={dark} onChange={e => onDark?.(e.target.checked)}/></label><label className="toggle-row"><span><strong>Antworten vorlesen</strong><small>Fertige Agentenantworten automatisch sprechen</small></span><input type="checkbox" checked={tts} onChange={e => onTts?.(e.target.checked)}/></label><label className="toggle-row"><span><strong>Durchgehendes Gespräch</strong><small>Mikrofon öffnet sich nach der Antwort automatisch wieder</small></span><input type="checkbox" checked={continuousVoice} onChange={e => onContinuousVoice?.(e.target.checked)}/></label><div className="setting-info"><strong>Agent-Pet & Avatare</strong><small>Werden automatisch vom Main-Agenten und den angelegten Bots übernommen.</small></div></div>}
     {notice && <div className={notice.includes("erfolgreich") ? "notice success" : "notice error"}>{notice}</div>}
     <div className="wizard-actions"><button className="secondary" disabled={state !== "idle"} onClick={test}>{state === "testing" ? "Prüfe …" : "Verbindung testen"}</button><button className="primary" disabled={state !== "idle"} onClick={save}>{state === "saving" ? "Speichere …" : "Erpel starten"}</button></div>
   </section></div>;
@@ -72,7 +82,9 @@ function App() {
   const [working, setWorking] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [tts, setTts] = useState(() => localStorage.getItem("erpel.tts") === "true");
+  const [continuousVoice, setContinuousVoice] = useState(() => localStorage.getItem("erpel.continuousVoice") !== "false");
   const [dark, setDark] = useState(() => localStorage.getItem("erpel.theme") !== "light");
   const [models, setModels] = useState<any[]>([]);
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -86,11 +98,23 @@ function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const vadHandleRef = useRef<VoiceActivityWatcherHandle | null>(null);
+  const orbRingsRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Refs mirroring the latest state for the plain (non-React-effect) voice callbacks below -
+  // utterance.onend/toggleRecording fire from browser/media APIs, not from render, so they'd
+  // otherwise close over stale values from whichever render first created them.
+  const continuousVoiceRef = useRef(continuousVoice);
+  continuousVoiceRef.current = continuousVoice;
+  const workingRef = useRef(working);
+  workingRef.current = working;
+  const recordingRef = useRef(recording);
+  recordingRef.current = recording;
 
   useEffect(() => { api("/config").then(data => { setConfigured(data.configured); setSetup(data.config); }).catch(() => setConfigured(false)); }, []);
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; localStorage.setItem("erpel.theme", dark ? "dark" : "light"); }, [dark]);
   useEffect(() => { localStorage.setItem("erpel.tts", String(tts)); }, [tts]);
+  useEffect(() => { localStorage.setItem("erpel.continuousVoice", String(continuousVoice)); }, [continuousVoice]);
   const storageKey = mode === "team" ? `erpel.messages.team.${selectedBotSlug ?? "_all"}` : "erpel.messages.agent";
   useEffect(() => {
     const saved = localStorage.getItem(storageKey);
@@ -123,7 +147,21 @@ function App() {
     const nextConversation = result.conversationId ?? result.result?.conversationId;
     if (nextConversation) setConversationId(Number(nextConversation));
     setMessages(current => current.filter(m => m.id !== `${userId}-pending`).concat({ id: crypto.randomUUID(), role: "assistant", text }));
-    if (tts && "speechSynthesis" in window) { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(text)); }
+    if (tts && "speechSynthesis" in window) {
+      speechSynthesis.cancel();
+      // Markdown syntax (**, #, code fences, ...) was previously read out literally.
+      const utterance = new SpeechSynthesisUtterance(stripMarkdownForSpeech(text));
+      utterance.onstart = () => setSpeaking(true);
+      utterance.onend = () => {
+        setSpeaking(false);
+        // Hands-free loop: once the reply finishes speaking, open the mic again automatically.
+        if (continuousVoiceRef.current && !recordingRef.current && !workingRef.current) {
+          void toggleRecording();
+        }
+      };
+      utterance.onerror = () => setSpeaking(false);
+      speechSynthesis.speak(utterance);
+    }
   };
 
   const send = async (text = draft) => {
@@ -144,13 +182,40 @@ function App() {
   };
 
   const toggleRecording = async () => {
-    if (recording) { recorderRef.current?.stop(); return; }
+    if (recording) {
+      vadHandleRef.current?.stop(); vadHandleRef.current = null;
+      recorderRef.current?.stop();
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true }); const recorder = new MediaRecorder(stream); chunksRef.current = [];
       recorder.ondataavailable = e => { if (e.data.size) chunksRef.current.push(e.data); };
-      recorder.onstop = async () => { setRecording(false); stream.getTracks().forEach(t => t.stop()); const blob = new Blob(chunksRef.current, { type: recorder.mimeType }); const buffer = await blob.arrayBuffer(); const bytes = new Uint8Array(buffer); let binary = ""; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); const audio = btoa(binary); const id = crypto.randomUUID(); setMessages(current => current.concat({ id, role: "user", text: "🎙️ Sprachnachricht" }, { id: `${id}-pending`, role: "assistant", text: "Sprache wird verarbeitet …", pending: true })); setWorking(true); try { const job = await api("/transcribe", { method: "POST", body: JSON.stringify({ audio, mode, model: selectedModel || undefined, conversationId, botSlug: mode === "team" ? selectedBotSlug ?? undefined : undefined }) }); completeResult(await pollJob(job.id), id); } catch (e) { setMessages(current => current.map(m => m.id === `${id}-pending` ? { ...m, pending: false, error: true, text: `Fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}` } : m)); } finally { setWorking(false); } };
+      recorder.onstop = async () => {
+        vadHandleRef.current?.stop(); vadHandleRef.current = null;
+        setRecording(false); stream.getTracks().forEach(t => t.stop()); const blob = new Blob(chunksRef.current, { type: recorder.mimeType }); const buffer = await blob.arrayBuffer(); const bytes = new Uint8Array(buffer); let binary = ""; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); const audio = btoa(binary); const id = crypto.randomUUID(); setMessages(current => current.concat({ id, role: "user", text: "🎙️ Sprachnachricht" }, { id: `${id}-pending`, role: "assistant", text: "Sprache wird verarbeitet …", pending: true })); setWorking(true); try { const job = await api("/transcribe", { method: "POST", body: JSON.stringify({ audio, mode, model: selectedModel || undefined, conversationId, botSlug: mode === "team" ? selectedBotSlug ?? undefined : undefined }) }); completeResult(await pollJob(job.id), id); } catch (e) { setMessages(current => current.map(m => m.id === `${id}-pending` ? { ...m, pending: false, error: true, text: `Fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}` } : m)); } finally { setWorking(false); } };
       recorderRef.current = recorder; recorder.start(); setRecording(true);
+
+      // Safety net: guarantees the mic closes even if the VAD watcher never fires (e.g. no
+      // AudioContext support) - previously there was no cap at all and a silent mic could stay
+      // open indefinitely.
+      setTimeout(() => { if (recorderRef.current === recorder && recorder.state === "recording") recorder.stop(); }, MAX_RECORDING_MS);
+
+      vadHandleRef.current = startVoiceActivityWatcher(stream, {
+        silenceThreshold: VAD_SILENCE_THRESHOLD,
+        silenceTimeoutMs: VAD_SILENCE_TIMEOUT_MS,
+        minSpeechMs: VAD_MIN_SPEECH_MS,
+        onLevel: level => { orbRingsRef.current?.style.setProperty("--level", String(Math.min(1, level * 4))); },
+        onSilenceStop: () => { if (recorderRef.current === recorder && recorder.state === "recording") recorder.stop(); },
+      });
     } catch { alert("Mikrofonzugriff wurde nicht erlaubt."); }
+  };
+
+  const voiceOrbState: VoiceOrbState = speaking ? "speaking" : recording ? "listening" : working ? "thinking" : "idle";
+  const voiceOrbTitle = speaking ? "Sprachausgabe stoppen" : recording ? "Aufnahme beenden" : working ? "Laufenden Chat stoppen" : "Sprechen";
+  const handleVoiceOrbClick = () => {
+    if (speaking) { speechSynthesis.cancel(); setSpeaking(false); return; }
+    if (working && !recording) { void stopCurrentJob(); return; }
+    void toggleRecording();
   };
 
   const mainBot = bots.find(bot => bot.slug === "main") ?? bots[0];
@@ -176,9 +241,10 @@ function App() {
     <main className="chat-main"><header><button className="icon-btn mobile-only" onClick={() => setMobileSidebar(true)}><Menu/></button><div className="header-title"><AgentAvatar avatar={mainAvatar} name={displayName} working={working} size={30}/><div><strong>{mode === "team" ? (activeBot ? activeBot.name : "Team-Chat") : "Voice-Chat"}</strong><small>{working ? "Agent arbeitet …" : setup.mode === "cloud" ? "Über Laravel verbunden" : "Direkt lokal verbunden"}</small></div></div><div className="header-actions"><button className="icon-btn" title="Chat leeren" onClick={clearChat} disabled={!messages.length}><Trash2/></button><button className="icon-btn" title="Antworten vorlesen" onClick={() => setTts(!tts)}>{tts ? <Speaker/> : <SpeakerX/>}</button><button className="model-pill" onClick={loadModels}>{selectedModel || "Agent-Modell"}</button></div></header>
       {working && <div className="work-bar"><span/></div>}
       <section className="messages">{messages.length === 0 ? <div className="empty-state"><div className="hero-duck"><AgentAvatar avatar={mainAvatar} name={displayName} size={52}/></div><span className="eyebrow">Bereit, wenn du es bist</span><h1>Was können wir heute erledigen?</h1><p>Schreibe, sprich oder hänge eine Datei an. Erpel verbindet dich mit deinem {mode === "team" ? "Agenten-Team" : "DucKI-Agenten"}.</p><div className="example-grid">{examples.map(item => <button key={item.title} onClick={() => { setDraft(item.text); void send(item.text); }}><item.icon/><strong>{item.title}</strong><span>{item.text}</span></button>)}</div></div> : messages.map(message => <article key={message.id} className={`message ${message.role} ${message.pending ? "pending" : ""} ${message.error ? "error" : ""}`}><div className="avatar">{message.role === "assistant" ? <AgentAvatar avatar={mainAvatar} name={displayName} working={message.pending} size={30}/> : "DU"}</div><div className="bubble">{message.attachment && <div className="attachment-card"><AttachmentPreview mimeType={message.attachment.mimeType} preview={message.attachment.preview} name={message.attachment.name}/><span>{message.attachment.name}</span></div>}{message.role === "assistant" && !message.pending ? <MarkdownMessage content={message.text}/> : <p>{message.text}</p>}{message.pending && <div className="typing"><i/><i/><i/></div>}</div></article>)}<div ref={bottomRef}/></section>
-      <section className="composer-wrap">{attachment && <div className="pending-file"><AttachmentPreview mimeType={attachment.mimeType} preview={attachment.preview} name={attachment.name}/><div><strong>{attachment.name}</strong><small>Wird mit der Nachricht analysiert</small></div><button className="icon-btn" onClick={() => setAttachment(null)}><X/></button></div>}<div className={`composer ${recording ? "recording" : ""}`}><button className="icon-btn attach" onClick={() => fileRef.current?.click()} title="Datei anhängen"><Paperclip/></button><input ref={fileRef} type="file" hidden accept="image/*,video/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.js,.ts,.tsx,.php,.py" onChange={e => { void pickFile(e.target.files?.[0]); e.target.value = ""; }}/><textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder={recording ? "Aufnahme läuft …" : mode === "team" ? "Aufgabe an das Team …" : "Nachricht an DucKI …"} rows={1}/><button className={`voice-btn ${recording ? "active" : ""}`} onClick={toggleRecording} disabled={working && !recording}><span className="mic-ripple"/><Mic/></button>{working ? <button className="stop-btn" onClick={() => void stopCurrentJob()} disabled={!currentJobId} title="Laufenden Chat stoppen"><Square/></button> : <button className="send-btn" onClick={() => void send()} disabled={!draft.trim() && !attachment}><Send/></button>}</div><div className="composer-hint"><span>{recording ? "Aufnahme aktiv · Tippe zum Senden" : working ? "Der Agent arbeitet · mit Stopp abbrechen" : "Enter zum Senden · Shift+Enter für neue Zeile"}</span><span>{mode === "team" ? (activeBot ? `Direkt an ${activeBot.name}` : `${bots.length || "–"} Bots im Team`) : selectedModel || "Agent-Standardmodell"}</span></div></section>
+      <section className="composer-wrap">{attachment && <div className="pending-file"><AttachmentPreview mimeType={attachment.mimeType} preview={attachment.preview} name={attachment.name}/><div><strong>{attachment.name}</strong><small>Wird mit der Nachricht analysiert</small></div><button className="icon-btn" onClick={() => setAttachment(null)}><X/></button></div>}<div className={`composer ${recording ? "recording" : ""}`}><button className="icon-btn attach" onClick={() => fileRef.current?.click()} title="Datei anhängen"><Paperclip/></button><input ref={fileRef} type="file" hidden accept="image/*,video/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.js,.ts,.tsx,.php,.py" onChange={e => { void pickFile(e.target.files?.[0]); e.target.value = ""; }}/><textarea value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder={recording ? "Aufnahme läuft …" : mode === "team" ? "Aufgabe an das Team …" : "Nachricht an DucKI …"} rows={1}/>{working ? <button className="stop-btn" onClick={() => void stopCurrentJob()} disabled={!currentJobId} title="Laufenden Chat stoppen"><Square/></button> : <button className="send-btn" onClick={() => void send()} disabled={!draft.trim() && !attachment}><Send/></button>}</div><div className="composer-hint"><span>{recording ? "Aufnahme aktiv · Tippe zum Senden oder warte auf Stille" : working ? "Der Agent arbeitet · mit Stopp abbrechen" : "Enter zum Senden · Shift+Enter für neue Zeile"}</span><span>{mode === "team" ? (activeBot ? `Direkt an ${activeBot.name}` : `${bots.length || "–"} Bots im Team`) : selectedModel || "Agent-Standardmodell"}</span></div></section>
+      <VoiceOrb ref={orbRingsRef} state={voiceOrbState} onClick={handleVoiceOrbClick} title={voiceOrbTitle}/>
     </main>
-    {settingsOpen && <SetupWizard initial={setup} dark={dark} tts={tts} onDark={setDark} onTts={setTts} onClose={() => setSettingsOpen(false)} onDone={value => { setSetup(value); setSettingsOpen(false); setMessages([]); }}/ >}
+    {settingsOpen && <SetupWizard initial={setup} dark={dark} tts={tts} onDark={setDark} onTts={setTts} continuousVoice={continuousVoice} onContinuousVoice={setContinuousVoice} onClose={() => setSettingsOpen(false)} onDone={value => { setSetup(value); setSettingsOpen(false); setMessages([]); }}/ >}
     {modelsOpen && <div className="modal-backdrop" onClick={() => setModelsOpen(false)}><section className="model-modal panel" onClick={e => e.stopPropagation()}><button className="icon-btn modal-close" onClick={() => setModelsOpen(false)}><X/></button><span className="eyebrow">Modell für Erpel</span><h2>Modell auswählen</h2><p className="muted">Die Auswahl gilt nur für Agent-Chats in Erpel.</p>{modelsLoading ? <div className="model-loading"><div><span/></div><p>Modelle werden im Hintergrund geladen …</p><small>Du kannst dieses Fenster jederzeit schließen.</small></div> : <div className="model-list"><button className={!selectedModel ? "selected" : ""} onClick={() => { setSelectedModel(""); localStorage.removeItem("erpel.model"); setModelsOpen(false); }}><strong>Agent-Standardmodell</strong><small>Globale DucKI-Einstellung verwenden</small></button>{groupedModels.map(([provider, list]) => <div className="model-group" key={provider}><span>{provider}</span>{list.map(model => <button disabled={model.error} className={selectedModel === model.id ? "selected" : ""} key={`${provider}-${model.id || model.name}`} onClick={() => { setSelectedModel(model.id); localStorage.setItem("erpel.model", model.id); setModelsOpen(false); }}><strong>{model.name || model.id}</strong><small>{model.id}</small></button>)}</div>)}</div>}</section></div>}
   </div>;
 }

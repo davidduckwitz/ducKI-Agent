@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Image as ImageIcon, Loader2, Paperclip, Sparkles, Square, Wrench, X, Zap, Mic } from "lucide-react";
+import { ArrowUp, Image as ImageIcon, Loader2, Paperclip, Sparkles, Square, Wrench, X, Zap, Mic, Volume2, VolumeX } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
+import { useVoiceSettings } from "../../hooks/useVoiceSettings";
+import { startVoiceActivityWatcher, type VoiceActivityWatcherHandle } from "../../lib/voiceActivityDetection";
+import { onAgentTurnEnded } from "../../lib/voiceConversationBus";
+import { isPlaybackActive, subscribePlaybackActivity, stopAllPlayback } from "../../lib/voicePlaybackRegistry";
 import { ToolSkillSelector, type SelectorMode } from "./ToolSkillSelector";
 import { ProviderModelSelector } from "./ProviderModelSelector";
 
@@ -55,8 +59,70 @@ export function ChatComposer({
   const [focused, setFocused] = useState(false);
   const [showLLMSelector, setShowLLMSelector] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voiceRetryAvailable, setVoiceRetryAvailable] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const shouldSendAfterTranscribeRef = useRef(false);
+  const vadHandleRef = useRef<VoiceActivityWatcherHandle | null>(null);
+  const {
+    sttMaxRecordingMs,
+    voiceRetryPromptEnabled,
+    sttMode,
+    sttSilenceThreshold,
+    sttSilenceTimeoutMs,
+    sttMinSpeechMs,
+    continuousConversationMode,
+    enableTTS,
+    autoPlayTTS,
+    setAutoPlayTTS,
+  } = useVoiceSettings();
+
+  // Direct display-level control for TTS auto-play: a long auto-spoken message needs a way to
+  // cut it off immediately without digging into Settings - see voicePlaybackRegistry.ts.
+  const [playbackActive, setPlaybackActive] = useState(false);
+  useEffect(() => {
+    setPlaybackActive(isPlaybackActive());
+    return subscribePlaybackActivity(() => setPlaybackActive(isPlaybackActive()));
+  }, []);
+
+  const handleVoicePlaybackControlClick = () => {
+    if (playbackActive) {
+      stopAllPlayback();
+      // Stopping alone would just let the very next queued sentence start speaking again -
+      // turning auto-play off too is what actually keeps a long message from talking on.
+      if (autoPlayTTS) setAutoPlayTTS(false);
+    } else {
+      setAutoPlayTTS(!autoPlayTTS);
+    }
+  };
+
+  // Hands-free loop: once the agent finishes speaking its reply, reopen the mic automatically
+  // so the user never has to click again. Refs (not state) because the bus subscription is set
+  // up once and must always act on the latest values, not the ones from the render it mounted in.
+  const continuousConversationModeRef = useRef(continuousConversationMode);
+  continuousConversationModeRef.current = continuousConversationMode;
+  const sttModeRef = useRef(sttMode);
+  sttModeRef.current = sttMode;
+  const isListeningRef = useRef(isListening);
+  isListeningRef.current = isListening;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
+  const uploadingRef = useRef(uploading);
+  uploadingRef.current = uploading;
+  const handleVoiceToggleRef = useRef<() => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    return onAgentTurnEnded(() => {
+      if (
+        continuousConversationModeRef.current &&
+        sttModeRef.current === "vad-auto" &&
+        !isListeningRef.current &&
+        !isLoadingRef.current &&
+        !uploadingRef.current
+      ) {
+        void handleVoiceToggleRef.current();
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!draftRequest) return;
@@ -89,6 +155,8 @@ export function ChatComposer({
 
   const handleVoiceToggle = async () => {
     if (isListening) {
+      vadHandleRef.current?.stop();
+      vadHandleRef.current = null;
       if (recognitionRef.current) {
         const recorder = recognitionRef.current as MediaRecorder;
         if (recorder.state !== "inactive") {
@@ -101,6 +169,7 @@ export function ChatComposer({
 
     try {
       setVoiceError(null);
+      setVoiceRetryAvailable(false);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       // Find supported MIME types
@@ -134,6 +203,8 @@ export function ChatComposer({
 
       mediaRecorder.onstop = async () => {
         stream.getTracks().forEach((track) => track.stop());
+        vadHandleRef.current?.stop();
+        vadHandleRef.current = null;
 
         try {
           setIsListening(false);
@@ -141,6 +212,7 @@ export function ChatComposer({
 
           if (!hasData || chunks.length === 0) {
             setVoiceError("Keine Sprache erkannt - bitte versuchen Sie es erneut");
+            setVoiceRetryAvailable(voiceRetryPromptEnabled);
             return;
           }
 
@@ -149,6 +221,7 @@ export function ChatComposer({
 
           if (audioBlob.size < 100) {
             setVoiceError("Zu kurze Aufnahme - bitte versuchen Sie es erneut");
+            setVoiceRetryAvailable(voiceRetryPromptEnabled);
             return;
           }
 
@@ -184,10 +257,12 @@ export function ChatComposer({
             shouldSendAfterTranscribeRef.current = true;
           } else {
             setVoiceError("Keine Sprache erkannt");
+            setVoiceRetryAvailable(voiceRetryPromptEnabled);
           }
         } catch (err) {
           console.error("Transcription error:", err);
           setVoiceError("Transkription fehlgeschlagen");
+          setVoiceRetryAvailable(voiceRetryPromptEnabled);
         }
       };
 
@@ -203,11 +278,26 @@ export function ChatComposer({
       console.log("Starting recording with MIME type:", mimeType);
       mediaRecorder.start();
 
+      // sttMaxRecordingMs is always the hard safety-net cap, even in "automatic" mode - the VAD
+      // watcher below is what makes automatic mode actually stop early, on silence.
       setTimeout(() => {
         if (recognitionRef.current === mediaRecorder && mediaRecorder.state === "recording") {
           mediaRecorder.stop();
         }
-      }, 30000);
+      }, sttMaxRecordingMs);
+
+      if (sttMode === "vad-auto") {
+        vadHandleRef.current = startVoiceActivityWatcher(stream, {
+          silenceThreshold: sttSilenceThreshold,
+          silenceTimeoutMs: sttSilenceTimeoutMs,
+          minSpeechMs: sttMinSpeechMs,
+          onSilenceStop: () => {
+            if (recognitionRef.current === mediaRecorder && mediaRecorder.state === "recording") {
+              mediaRecorder.stop();
+            }
+          },
+        });
+      }
     } catch (err) {
       if (err instanceof Error) {
         if (err.name === "NotAllowedError") {
@@ -297,14 +387,31 @@ export function ChatComposer({
       )}
 
       {voiceError && (
-        <div className="mb-2 rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2 text-xs text-destructive flex items-center justify-between">
+        <div className="mb-2 rounded-lg bg-destructive/10 border border-destructive/30 px-3 py-2 text-xs text-destructive flex items-center justify-between gap-2">
           <span>{voiceError}</span>
-          <button
-            onClick={() => setVoiceError(null)}
-            className="text-destructive/70 hover:text-destructive transition-colors"
-          >
-            <X className="h-3 w-3" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {voiceRetryAvailable && (
+              <button
+                onClick={() => {
+                  setVoiceError(null);
+                  setVoiceRetryAvailable(false);
+                  void handleVoiceToggle();
+                }}
+                className="rounded px-2 py-0.5 font-medium text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                Nochmal versuchen
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setVoiceError(null);
+                setVoiceRetryAvailable(false);
+              }}
+              className="text-destructive/70 hover:text-destructive transition-colors"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -394,6 +501,29 @@ export function ChatComposer({
             active={isListening}
             onClick={() => !isLoading && !uploading && handleVoiceToggle()}
           />
+          {enableTTS && (
+            <ComposerButton
+              icon={
+                playbackActive ? (
+                  <Square className="h-4 w-4 fill-current" />
+                ) : autoPlayTTS ? (
+                  <Volume2 className="h-4 w-4" />
+                ) : (
+                  <VolumeX className="h-4 w-4" />
+                )
+              }
+              label="Vorlesen"
+              title={
+                playbackActive
+                  ? "Sprachausgabe sofort stoppen (schaltet Auto-Vorlesen ab)"
+                  : autoPlayTTS
+                    ? "Automatisches Vorlesen ausschalten"
+                    : "Automatisches Vorlesen einschalten"
+              }
+              active={playbackActive || autoPlayTTS}
+              onClick={handleVoicePlaybackControlClick}
+            />
+          )}
           <ComposerButton
             icon={<Sparkles className="h-4 w-4" />}
             label={t("chat.skills")}

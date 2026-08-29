@@ -1,5 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,6 +21,24 @@ function parseBoolean(input: string | undefined, fallback = false): boolean {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
+}
+
+/**
+ * True if an actual CUDA Toolkit (nvcc) is installed. `withCuda: true` without this present
+ * doesn't fail cleanly - nodejs-whisper only discovers it's missing deep inside a CMake
+ * configure step, surfacing a wall of raw CMake/CUDA-CMakeLists output instead of a usable
+ * error (see the incident this guards against: NODEJS_WHISPER_USE_CUDA got set to true on a
+ * machine without CUDA, and every transcription failed with that CMake dump until someone
+ * traced it back to this setting).
+ */
+function hasCudaToolkit(): boolean {
+  if (process.env["CUDA_PATH"]) return true;
+  try {
+    execFileSync("nvcc", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function ensureWindowsCmakeInPath(): void {
@@ -118,6 +137,12 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
     const withCuda =
       this.whisperOptions.withCuda ??
       parseBoolean(process.env["NODEJS_WHISPER_USE_CUDA"], false);
+    if (withCuda && !hasCudaToolkit()) {
+      throw new Error(
+        "nodejs-whisper CUDA ist aktiviert, aber kein CUDA Toolkit gefunden (nvcc nicht im PATH, CUDA_PATH nicht gesetzt). " +
+          "CUDA Toolkit installieren oder 'nodejs-whisper CUDA' unter Settings -> Speech ausschalten."
+      );
+    }
     const language =
       options?.language?.trim() ||
       process.env["NODEJS_WHISPER_LANGUAGE"]?.trim() ||

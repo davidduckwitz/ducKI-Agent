@@ -299,6 +299,37 @@ export interface SpeechToTextProvider {
 }
 
 // ============================================================
+// Text-to-Speech Provider Types
+// ============================================================
+
+export const TextToSpeechProviderNameSchema = z.enum(["openai", "elevenlabs", "piper", "local"]);
+export type TextToSpeechProviderName = z.infer<typeof TextToSpeechProviderNameSchema>;
+
+export interface TextToSpeechProviderConfig {
+  name: TextToSpeechProviderName;
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+  voice?: string;
+}
+
+export interface TextToSpeechResult {
+  audio: Buffer;
+  mimeType: string;
+}
+
+export interface TextToSpeechSynthesizeOptions {
+  voice?: string;
+  /** Only honored by providers that support expressive style (e.g. ElevenLabs). */
+  emotionStyle?: string;
+}
+
+export interface TextToSpeechProvider {
+  readonly name: string;
+  synthesize(text: string, options?: TextToSpeechSynthesizeOptions): Promise<TextToSpeechResult>;
+}
+
+// ============================================================
 // Filesystem Utilities
 // ============================================================
 
