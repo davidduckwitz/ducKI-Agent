@@ -29,6 +29,7 @@ import {
 } from "recharts";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { WikiGraph } from "./WikiGraph";
 
 interface MemoryEntry {
   id: number;
@@ -52,6 +53,18 @@ interface InlineToast {
 const PAGE_SIZE = 10;
 type ActiveTab = "memory" | "profile" | "approvals";
 type ExtendedActiveTab = ActiveTab | "wiki";
+
+const COMMAND_TAGS = new Set(["befehl", "command"]);
+
+function wikiEntryTags(entry: unknown): string[] {
+  const metadata = (entry as { metadata?: string | null } | null)?.metadata;
+  try {
+    const meta = metadata ? JSON.parse(metadata) : {};
+    return Array.isArray(meta?.tags) ? (meta.tags as unknown[]).map((t) => String(t)) : [];
+  } catch {
+    return [];
+  }
+}
 
 function memoryTypeColor(type: string): string {
   if (type === "long-term") return "bg-blue-500/20 text-blue-300";
@@ -82,6 +95,8 @@ export function MemoryBrowser() {
   const [wikiEnabledEdit, setWikiEnabledEdit] = useState("false");
   const [wikiAutoMemoryEdit, setWikiAutoMemoryEdit] = useState("true");
   const [wikiAutoApproveEdit, setWikiAutoApproveEdit] = useState("false");
+  const [wikiSourcePathEdit, setWikiSourcePathEdit] = useState("");
+  const [wikiSourcePathTouched, setWikiSourcePathTouched] = useState(false);
   const [wikiStatusFilter, setWikiStatusFilter] = useState("all");
   const [wikiSearch, setWikiSearch] = useState("");
   const [inlineToast, setInlineToast] = useState<InlineToast | null>(null);
@@ -109,6 +124,13 @@ export function MemoryBrowser() {
     refetchInterval: 5000,
   });
 
+  useEffect(() => {
+    const sourcePath = wikiStatusQuery.data?.config.sourcePath;
+    if (sourcePath !== undefined && !wikiSourcePathTouched) {
+      setWikiSourcePathEdit(sourcePath);
+    }
+  }, [wikiStatusQuery.data?.config.sourcePath, wikiSourcePathTouched]);
+
   const wikiEntriesQuery = useQuery({
     queryKey: ["wiki", "entries"],
     queryFn: () => api.wiki.entries(400),
@@ -123,8 +145,9 @@ export function MemoryBrowser() {
   });
 
   const saveWikiConfig = useMutation({
-    mutationFn: (payload: { enabled?: boolean; autoMemory?: boolean; autoApprove?: boolean }) => api.wiki.saveConfig(payload),
+    mutationFn: (payload: { enabled?: boolean; sourcePath?: string; autoMemory?: boolean; autoApprove?: boolean }) => api.wiki.saveConfig(payload),
     onSuccess: async () => {
+      setWikiSourcePathTouched(false);
       await qc.invalidateQueries({ queryKey: ["wiki", "status"] });
     },
   });
@@ -305,7 +328,7 @@ export function MemoryBrowser() {
   }, [sortedMemories]);
 
   const pendingWrites = (pendingQuery.data ?? []) as PendingMemoryWrite[];
-  const wikiEntries = (wikiEntriesQuery.data ?? []) as Array<{ id: number; sourcePath: string; title: string; status: string; updatedAt: string }>;
+  const wikiEntries = (wikiEntriesQuery.data ?? []) as Array<{ id: number; sourcePath: string; title: string; status: string; updatedAt: string; metadata?: string | null }>;
   const wikiStatusData = wikiStatusQuery.data?.stats;
   const wikiVisibleEntries = useMemo(() => {
     const base = wikiSearch.trim().length > 1
@@ -699,6 +722,18 @@ export function MemoryBrowser() {
                   <option value="false">false</option>
                 </select>
               </div>
+              <div className="md:col-span-2">
+                <p className="text-xs text-gray-400 mb-1">WIKI_SHARED_SOURCE_PATH (z.B. Pfad zu einem Obsidian-Vault, relativ zu shared-workspace)</p>
+                <input
+                  className="input w-full"
+                  value={wikiSourcePathEdit}
+                  placeholder="llm-wiki"
+                  onChange={(e) => {
+                    setWikiSourcePathTouched(true);
+                    setWikiSourcePathEdit(e.target.value);
+                  }}
+                />
+              </div>
               <div className="flex items-end gap-2">
                 <button
                   className="btn-primary"
@@ -708,6 +743,7 @@ export function MemoryBrowser() {
                       enabled: wikiEnabledEdit === "true",
                       autoMemory: wikiAutoMemoryEdit === "true",
                       autoApprove: wikiAutoApproveEdit === "true",
+                      sourcePath: wikiSourcePathEdit.trim() || "llm-wiki",
                     })
                   }
                 >
@@ -742,6 +778,14 @@ export function MemoryBrowser() {
           </div>
 
           <div className="card space-y-2">
+            <h2 className="text-lg font-semibold">Graph</h2>
+            <p className="text-xs text-gray-500">
+              Knoten = Wiki-Notizen, Kanten = [[Wikilinks]]. Gestrichelt = Ziel nicht gefunden. Klick auf einen Knoten oeffnet die Verbindungen.
+            </p>
+            <WikiGraph />
+          </div>
+
+          <div className="card space-y-2">
             <h2 className="text-lg font-semibold">Dateien</h2>
             <div className="flex flex-wrap gap-2">
               <input
@@ -759,11 +803,28 @@ export function MemoryBrowser() {
               </select>
             </div>
             <div className="space-y-2 max-h-96 overflow-y-auto">
-              {wikiVisibleEntries.map((entry) => (
+              {wikiVisibleEntries.map((entry) => {
+                const tags = wikiEntryTags(entry);
+                const isCommand = tags.some((t) => COMMAND_TAGS.has(t.toLowerCase()));
+                return (
                 <div key={entry.id} className="border border-gray-800 rounded-lg px-3 py-2">
                   <p className="text-sm font-medium text-white">{entry.title}</p>
                   <p className="text-xs text-gray-400">{entry.sourcePath}</p>
                   <p className="text-xs text-gray-500">status={entry.status} · updated={entry.updatedAt}</p>
+                  {tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {isCommand && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300" title="Als garantiert präsente Agent-Instruktion hochgestuft">
+                          ⚡ Befehl
+                        </span>
+                      )}
+                      {tags.filter((t) => !COMMAND_TAGS.has(t.toLowerCase())).map((tag) => (
+                        <span key={tag} className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {entry.status === "candidate" && (
                     <div className="flex gap-2 mt-2">
                       <button
@@ -783,7 +844,8 @@ export function MemoryBrowser() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
               {wikiVisibleEntries.length === 0 && <p className="text-sm text-gray-500">Keine Wiki-Dateien erfasst.</p>}
             </div>
           </div>

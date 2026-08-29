@@ -376,6 +376,22 @@ export const llmWikiEntries = sqliteTable("llm_wiki_entries", {
   updatedAt: text("updated_at").notNull(),
 });
 
+// Link graph between wiki source files (note-level, not chunk-level). Entries with
+// origin "parsed" are derived from [[wikilinks]] found in the source file and are
+// re-synced on every ingest; "manual" entries are created via the graph UI and are
+// never touched by ingestion. "removed" is a soft delete so a user-deleted parsed
+// link doesn't silently reappear just because the [[...]] text is still in the file.
+export const llmWikiLinks = sqliteTable("llm_wiki_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  sourceFile: text("source_file").notNull(),
+  targetRaw: text("target_raw").notNull(),
+  targetFile: text("target_file"),
+  origin: text("origin").notNull().default("parsed"), // parsed, manual
+  status: text("status").notNull().default("active"), // active, removed
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // ============================================================
 // Crypto Payment System
 // ============================================================
@@ -585,6 +601,8 @@ export type ArchivedConversationInsert = typeof archivedConversations.$inferInse
 export type ArchivedConversationSelect = typeof archivedConversations.$inferSelect;
 export type LlmWikiEntryInsert = typeof llmWikiEntries.$inferInsert;
 export type LlmWikiEntrySelect = typeof llmWikiEntries.$inferSelect;
+export type LlmWikiLinkInsert = typeof llmWikiLinks.$inferInsert;
+export type LlmWikiLinkSelect = typeof llmWikiLinks.$inferSelect;
 export type DynamicToolInsert = typeof dynamicTools.$inferInsert;
 export type DynamicToolSelect = typeof dynamicTools.$inferSelect;
 export type PlanInsert = typeof plans.$inferInsert;

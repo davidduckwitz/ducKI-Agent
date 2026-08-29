@@ -7082,7 +7082,12 @@ export class Agent {
       // without it, a Reflection Learning with importance 4 about a similar problem is
       // invisible until the dynamic per-iteration keyword search picks it up later.
       if (effectiveInput.trim().length > 0) {
-        const relevant = await this.memory.getRelevantContext(effectiveInput, 4);
+        // Semantic memories (e.g. LLM-wiki content auto-learned as `[LLM-WIKI:...]` entries)
+        // are included for plain chat so a factual question about ingested knowledge doesn't
+        // depend on making the top-8 importance-sorted cut in buildSystemContext above. Kept
+        // to long-term only for coding runs - unchanged behavior there, per explicit scope.
+        const relevantTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
+        const relevant = await this.memory.getRelevantContext(effectiveInput, 4, relevantTypes);
         if (relevant.length > 0) {
           // Merge without duplicating: the system context block already carries a
           // `## Relevant Memory` header with lines starting "- ". Extract the plain
@@ -7611,8 +7616,11 @@ export class Agent {
           // Same keywords as the previous iteration - reuse the already-retrieved context.
           dynamicMemoryContext = cachedDynamicMemoryContext;
         } else {
+          // Same long-term-only-for-coding scoping as the getRelevantContext call above -
+          // see its comment for why semantic memories matter for plain chat.
+          const dynamicMemoryTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
           dynamicMemoryContext = memoryKeywords.length > 0
-            ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 5)
+            ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 5, dynamicMemoryTypes)
             : "";
           cachedMemoryKeywordSig = keywordSig;
           cachedDynamicMemoryContext = dynamicMemoryContext;

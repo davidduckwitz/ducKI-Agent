@@ -343,7 +343,7 @@ function buildAgentFactory(
 		agent.executor.registerTool(createWorkflowManagementTool(workflowEngineRef.current));
 		agent.executor.registerTool(createCronjobManagementTool(db));
 		agent.executor.registerTool(createToolFactoryTool(db, agent.executor));
-		agent.executor.registerTool(createWikiTool(() => wikiServiceRef.current));
+		agent.executor.registerTool(createWikiTool(() => wikiServiceRef.current, () => db));
 		// Only the main agent gets this tool - a bot's own Agent instance (BotService.
 		// createAgentForBot) is never given it, so a bot cannot delegate again (no recursion guard
 		// needed). See lib/delegate-to-bot-tool.ts.
@@ -638,7 +638,7 @@ async function bootstrap(): Promise<void> {
 	const wikiService = new LlmWikiService(db, logger.child("LlmWikiService"));
 	await wikiService.start();
 	wikiServiceRef.current = wikiService;
-	workflowExecutor.registerTool(createWikiTool(() => wikiServiceRef.current));
+	workflowExecutor.registerTool(createWikiTool(() => wikiServiceRef.current, () => db));
 	const cloudBackupScheduler = new CloudBackupScheduler(db, logger.child("CloudBackupScheduler"));
 	cloudBackupScheduler.start();
 	// Voice-App "Team" mode: run the message through the real group-chat engine

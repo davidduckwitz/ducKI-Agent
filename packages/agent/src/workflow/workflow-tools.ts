@@ -304,6 +304,12 @@ export function createWorkflowTools(db: DatabaseService, connectorRegistry?: Con
         list_memories: "list",
       };
       const action = actionAliases[rawAction] ?? (rawAction as MemoryAction);
+      // Track whether the caller actually restricted target/type, vs. getting the default
+      // silently applied - action=query widens to search semantic too when neither was
+      // given (see the query case below), since defaulting to long-term-only silently
+      // hid every LLM-wiki-derived memory (all stored as `semantic`) from a plain recall
+      // question with no way for the caller to know a whole type was excluded.
+      const explicitTargetOrType = input["target"] !== undefined || input["type"] !== undefined;
       const target = asMemoryTarget(input["target"]);
       const type = String(input["type"] ?? targetToType(target)).toLowerCase();
       const conversationIdRaw = input["conversationId"];
@@ -517,12 +523,26 @@ export function createWorkflowTools(db: DatabaseService, connectorRegistry?: Con
             // nothing and the agent concluded it had no memories at all.
             const keywords = extractKeywords(query);
             const scopedConversation = Number.isFinite(conversationId) ? conversationId : undefined;
+            // No explicit target/type -> search both long-term and semantic (round-robin
+            // merged so neither crowds out the other) instead of just whichever `type`
+            // defaulted to. A caller that DID specify target/type keeps that exact scope.
+            const queryTypes = explicitTargetOrType ? [type] : ["long-term", "semantic"];
+
             if (keywords.length === 0) {
-              const memories = await db.getMemories(scopedConversation, type);
-              return ok(memories.slice(0, limit));
+              const pools = await Promise.all(queryTypes.map((t) => db.getMemories(scopedConversation, t)));
+              const merged = pools.flat().slice(0, limit);
+              return ok(merged);
             }
 
-            const results = await db.searchMemories(keywords, scopedConversation, type, undefined, limit);
+            const pools = await Promise.all(queryTypes.map((t) => db.searchMemories(keywords, scopedConversation, t, undefined, limit)));
+            const results: Awaited<ReturnType<DatabaseService["searchMemories"]>> = [];
+            for (let i = 0; results.length < limit && pools.some((pool) => i < pool.length); i++) {
+              for (const pool of pools) {
+                if (results.length >= limit) break;
+                const row = pool[i];
+                if (row) results.push(row);
+              }
+            }
             return ok({ query, keywords, count: results.length, entries: results });
           }
           case "add": {

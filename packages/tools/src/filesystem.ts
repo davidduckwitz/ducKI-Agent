@@ -553,7 +553,10 @@ function detectLeakedQuoteEscaping(filePath: string, content: string): string | 
  * exists there, so the .bak copy would be pure clutter sitting next to the real project files
  * (checkpoints deliberately exclude *.bak from their own snapshots, see checkpoints.ts's
  * EXCLUDES, so it never even shows up in that history). The plain, unscoped tool (regular chat,
- * no checkpoint system at all) never sets this flag and keeps the .bak safety net unconditionally.
+ * no checkpoint system at all) keeps the .bak safety net by default, but a caller can opt out
+ * per-call with the public `backup: false` parameter for files that are fully regenerated from
+ * other data on every write (e.g. the LLM-wiki's auto-maintained index.md notes), where the
+ * previous version is worthless to keep and the .bak copies just accumulate.
  */
 function atomicWrite(filePath: string, content: string, skipBackup = false): void {
   if (!skipBackup && existsSync(filePath)) {
@@ -720,6 +723,12 @@ export const filesystemTool: ToolExecutor = {
         dryRun: { type: "boolean", default: false, description: "Validate and report action without changing files" },
         createDirs: { type: "boolean", default: true, description: "Create parent directories for write/append/move destination" },
         overwrite: { type: "boolean", default: true, description: "Allow overwriting existing file on write" },
+        backup: {
+          type: "boolean",
+          default: true,
+          description:
+            "For write/append/patch/replace on an existing file: keep a .bak copy of the previous version (default true). Set to false only for files that are fully machine-regenerated from other data on every write (e.g. an auto-generated index/MOC note) - the previous version has no standalone value there and the .bak copies just accumulate as clutter. Do not set this to false to hide or skip reviewing a real edit.",
+        },
         allowEmpty: { type: "boolean", default: false, description: "For write/append: permit empty content. Only set this when a 0-byte file is genuinely intended - otherwise an empty body is treated as a truncated call and refused." },
         totalParts: { type: "number", description: "For write/append of a file split across multiple calls (each part small enough to fit in one response): the TOTAL number of parts. Pass it on the write (which is always part 1) and on every append of the sequence. The tool verifies that parts arrive exactly once, in order, without gaps, and only reports the file complete when ALL parts have arrived." },
         partNumber: { type: "number", description: "For write/append of a file split across multiple calls: this part's 1-based index. write is always part 1; parts 2..totalParts go through action:append with partNumber. Omitting both partNumber and totalParts means a single, self-contained write/append." },
@@ -733,9 +742,11 @@ export const filesystemTool: ToolExecutor = {
     const dryRun = (input["dryRun"] as boolean | undefined) ?? false;
     const createDirs = (input["createDirs"] as boolean | undefined) ?? true;
     const overwrite = (input["overwrite"] as boolean | undefined) ?? true;
-    // Internal-only flag, set by createScopedFilesystemTool - never part of the tool's public
-    // schema/definition, so an LLM has no way to pass this itself. See atomicWrite's doc comment.
-    const skipBackup = input["__skipBackup"] === true;
+    // __skipBackup is internal-only, set by createScopedFilesystemTool for the CodingAgent
+    // sandbox (its checkpoint store already covers version history) - never part of the
+    // tool's public schema, so a model can't reach it directly. `backup: false` is the public,
+    // opt-in equivalent for a deliberate, skill-sanctioned case (see atomicWrite's doc comment).
+    const skipBackup = input["__skipBackup"] === true || input["backup"] === false;
     // Field aliases and non-string shapes are resolved by the shared extractor, so the agent's
     // preflight validation applies exactly the same rule (see extractFileContent).
     let content = extractFileContent(input, String(input["path"] ?? ""));

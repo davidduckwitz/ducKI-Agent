@@ -1113,7 +1113,11 @@ export const browserTool: ToolExecutor = {
         maxNodes: { type: "number", description: "For action=snapshot: max interactive elements to return", default: 120 },
         viewportOnly: { type: "boolean", description: "For action=snapshot: restrict results to the current viewport. Default false, allowing off-screen controls to be found and clicked." },
         // get_page_errors
-        clear: { type: "boolean", description: "For action=get_page_errors: clear the captured errors after reading", default: false },
+        clear: {
+          type: "boolean",
+          description:
+            "For action=get_page_errors: clear the captured errors after reading (default false). For action=type (selector/target form only): clear the field before typing (default true) - pass false to append to the existing value instead.",
+        },
         // expect
         condition: { type: "string", enum: ["element_visible", "element_hidden", "text_visible", "text_absent", "url_contains", "title_contains", "no_page_errors"], description: "Assertion to check (polls until it passes or the timeout expires). Examples: expect {condition:'text_visible', text:'Gespeichert'}; expect {condition:'no_page_errors'}" },
         urlPart: { type: "string", description: "For action=expect condition=url_contains: substring expected in the page URL" },
@@ -1420,6 +1424,18 @@ export async function executeInWorker(input: Record<string, unknown>): Promise<T
         const selector = await resolveSelector(ctx, input, { nameKey: "target" });
         await ctx.waitForSelector(selector, { visible: true, timeout });
         await ctx.click(selector);
+        // Puppeteer's ElementHandle.type() always APPENDS keystrokes - it never clears the
+        // field first. A model that calls `type` again on the same field (a retry after not
+        // seeing confirming feedback, or simply re-issuing the same step) silently doubled
+        // the field's content instead of setting it, with no error to signal anything went
+        // wrong. Default to clearing first, matching what "type this text into the field"
+        // actually means to a caller - pass clear:false to append deliberately instead.
+        if (input["clear"] !== false) {
+          await session.page.keyboard.down("Control");
+          await session.page.keyboard.press("KeyA");
+          await session.page.keyboard.up("Control");
+          await session.page.keyboard.press("Backspace");
+        }
         await ctx.type(selector, text);
         return ok({ sessionId, typed: text.length, selector });
       }

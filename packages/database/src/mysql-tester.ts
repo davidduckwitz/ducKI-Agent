@@ -30,7 +30,7 @@ export interface MysqlTestResult {
 export const EXPECTED_APP_TABLES = [
   "projects", "conversations", "messages", "tasks", "tools", "memories", "embeddings",
   "settings", "logs", "tool_executions", "cron_jobs", "archived_conversations",
-  "llm_wiki_entries", "dynamic_tools",
+  "llm_wiki_entries", "llm_wiki_links", "dynamic_tools",
 ];
 
 export async function testMysqlConnection(config: MysqlTestConfig): Promise<MysqlTestResult> {

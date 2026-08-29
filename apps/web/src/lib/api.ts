@@ -788,13 +788,13 @@ export const api = {
 
   wiki: {
     status: () =>
-      request<{ enabled: boolean; config: { autoMemory: boolean; autoApprove: boolean; maxFileSizeKb: number; intervalMs: number; chunkSizeChars: number; chunkOverlapChars: number }; stats: { scannedFiles: number; processedFiles: number; skippedFiles: number; memoriesCreated: number; updatedAt: string; lastError?: string } | null }>("/wiki/status"),
+      request<{ enabled: boolean; config: { sourcePath: string; autoMemory: boolean; autoApprove: boolean; maxFileSizeKb: number; intervalMs: number; chunkSizeChars: number; chunkOverlapChars: number }; stats: { scannedFiles: number; processedFiles: number; skippedFiles: number; memoriesCreated: number; updatedAt: string; lastError?: string } | null }>("/wiki/status"),
     entries: (limit?: number, status?: string) => {
       const params = new URLSearchParams();
       if (limit) params.set("limit", String(limit));
       if (status) params.set("status", status);
       const query = params.toString();
-      return request<Array<{ id: number; sourcePath: string; title: string; status: string; learnedAt: string; updatedAt: string }>>(`/wiki/entries${query ? `?${query}` : ""}`);
+      return request<Array<{ id: number; sourcePath: string; title: string; status: string; learnedAt: string; updatedAt: string; metadata?: string | null }>>(`/wiki/entries${query ? `?${query}` : ""}`);
     },
     search: (query: string, limit?: number, includeCandidates?: boolean) => {
       const params = new URLSearchParams();
@@ -806,11 +806,32 @@ export const api = {
     reindex: () => request<{ reindexed: boolean; stats: unknown }>("/wiki/reindex", { method: "POST" }),
     approveEntry: (id: number) => request<{ approved: boolean; id: number; status: string }>(`/wiki/entries/${id}/approve`, { method: "POST" }),
     rejectEntry: (id: number) => request<{ rejected: boolean; id: number; status: string }>(`/wiki/entries/${id}/reject`, { method: "POST" }),
-    saveConfig: (payload: { enabled?: boolean; autoMemory?: boolean; autoApprove?: boolean; maxFileSizeKb?: number; intervalMs?: number; chunkSizeChars?: number; chunkOverlapChars?: number }) =>
+    saveConfig: (payload: { enabled?: boolean; sourcePath?: string; autoMemory?: boolean; autoApprove?: boolean; maxFileSizeKb?: number; intervalMs?: number; chunkSizeChars?: number; chunkOverlapChars?: number }) =>
       request<{ saved: boolean }>("/wiki/config", {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
+    graph: () =>
+      request<{
+        nodes: Array<{ id: string; title: string; status: string; tags: string[]; degree: number; kind?: "note" | "folder" }>;
+        edges: Array<{ id: number | string; source: string; target: string; origin: "parsed" | "manual" | "folder"; resolved: boolean }>;
+      }>("/wiki/graph"),
+    createLink: (sourceFile: string, targetFile: string) =>
+      request<{ id: number; sourceFile: string; targetFile: string; origin: string; status: string }>("/wiki/links", {
+        method: "POST",
+        body: JSON.stringify({ sourceFile, targetFile }),
+      }),
+    deleteLink: (id: number) => request<{ removed: boolean; id: number }>(`/wiki/links/${id}`, { method: "DELETE" }),
+    expand: (params: { query?: string; seedIds?: string[]; maxHops?: number; maxNodes?: number }) => {
+      const search = new URLSearchParams();
+      if (params.query) search.set("query", params.query);
+      if (params.seedIds && params.seedIds.length > 0) search.set("seedIds", params.seedIds.join(","));
+      if (params.maxHops !== undefined) search.set("maxHops", String(params.maxHops));
+      if (params.maxNodes !== undefined) search.set("maxNodes", String(params.maxNodes));
+      return request<{
+        nodes: Array<{ id: string; title: string; status: string; tags: string[]; hopDistance: number; activation: number; matchedSeed: boolean }>;
+      }>(`/wiki/expand?${search.toString()}`);
+    },
   },
 
   updates: {

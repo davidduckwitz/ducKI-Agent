@@ -2,44 +2,12 @@ import { Router, type IRouter } from "express";
 import type { DatabaseService } from "@ducki/database";
 import type { PromptManager } from "../lib/prompt-manager.js";
 import { createApiResponse } from "@ducki/shared";
+import { extractPrefixed, findByPrefix, upsertProfileEntry } from "../lib/profile-memory.js";
 
 export const memoryRouter: IRouter = Router();
 
 const AGENT_BEHAVIOR_PREFIX = "[PROFILE:AGENT_BEHAVIOR]";
 const HUMAN_INFO_PREFIX = "[PROFILE:HUMAN_INFO]";
-
-function prefixedContent(prefix: string, content: string): string {
-  return `${prefix} ${content.trim()}`.trim();
-}
-
-function extractPrefixed(content: string, prefix: string): string {
-  return content.startsWith(prefix) ? content.slice(prefix.length).trim() : "";
-}
-
-async function findByPrefix(db: DatabaseService, type: string, prefix: string) {
-  const entries = await db.getMemories(undefined, type);
-  return entries.filter((entry) => entry.content.startsWith(prefix));
-}
-
-async function upsertProfileEntry(
-  db: DatabaseService,
-  type: "long-term" | "semantic",
-  prefix: string,
-  content: string,
-  importance: number
-): Promise<void> {
-  const existing = await findByPrefix(db, type, prefix);
-  for (const entry of existing) {
-    await db.deleteMemory(entry.id);
-  }
-  const normalized = content.trim();
-  if (!normalized) return;
-  await db.addMemory({
-    type,
-    content: prefixedContent(prefix, normalized),
-    importance,
-  });
-}
 
 memoryRouter.get("/", async (req, res, next) => {
   try {

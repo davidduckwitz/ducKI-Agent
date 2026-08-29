@@ -7,6 +7,9 @@ interface MockDb {
   getSetting: (key: string) => Promise<string | undefined>;
   setSetting: (key: string, value: string) => Promise<void>;
   listLlmWikiEntries: (limit?: number) => Promise<unknown[]>;
+  listLlmWikiLinks?: (status?: "active" | "all") => Promise<unknown[]>;
+  createManualLink?: (sourceFile: string, targetFile: string) => Promise<unknown>;
+  removeLlmWikiLink?: (id: number) => Promise<unknown>;
 }
 
 interface MockWikiService {
@@ -138,6 +141,206 @@ describe("wiki router", () => {
     expect(response.status).toBe(200);
     expect(body?.data?.reindexed).toBe(true);
     expect(ingestCalls).toBe(1);
+    await server.close();
+  });
+
+  it("returns the configured sourcePath in status and rejects path traversal in config", async () => {
+    const settings = new Map<string, string>([["WIKI_SHARED_SOURCE_PATH", "my-obsidian-vault"]]);
+    const db: MockDb = {
+      async getSetting(key: string) {
+        return settings.get(key);
+      },
+      async setSetting(key: string, value: string) {
+        settings.set(key, value);
+      },
+      async listLlmWikiEntries() {
+        return [];
+      },
+    };
+    const wikiService: MockWikiService = {
+      getStats: () => ({}),
+      async ingestNow() {
+        return {};
+      },
+      async listEntries() {
+        return [];
+      },
+      async search() {
+        return [];
+      },
+      async setEntryStatus() {
+        return { id: 1, status: "approved" };
+      },
+    };
+
+    const server = await startTestServer(db, wikiService);
+
+    const statusResponse = await fetch(`${server.baseUrl}/api/wiki/status`);
+    const statusBody = await statusResponse.json();
+    expect(statusBody.data.config.sourcePath).toBe("my-obsidian-vault");
+
+    const badConfigResponse = await fetch(`${server.baseUrl}/api/wiki/config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourcePath: "../../etc" }),
+    });
+    expect(badConfigResponse.status).toBe(400);
+    expect(settings.get("WIKI_SHARED_SOURCE_PATH")).toBe("my-obsidian-vault");
+
+    const goodConfigResponse = await fetch(`${server.baseUrl}/api/wiki/config`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourcePath: "second-vault" }),
+    });
+    expect(goodConfigResponse.status).toBe(200);
+    expect(settings.get("WIKI_SHARED_SOURCE_PATH")).toBe("second-vault");
+    await server.close();
+  });
+
+  it("builds one graph node per source file and reports edges", async () => {
+    const db: MockDb = {
+      async getSetting() {
+        return undefined;
+      },
+      async setSetting() {},
+      async listLlmWikiEntries() {
+        return [
+          {
+            id: 1,
+            sourcePath: "foo.md#chunk-1",
+            status: "approved",
+            metadata: JSON.stringify({ sourceFile: "foo.md", tags: ["a"] }),
+          },
+          {
+            id: 2,
+            sourcePath: "foo.md#chunk-2",
+            status: "approved",
+            metadata: JSON.stringify({ sourceFile: "foo.md", tags: ["a"] }),
+          },
+          {
+            id: 3,
+            sourcePath: "bar.md#chunk-1",
+            status: "candidate",
+            metadata: JSON.stringify({ sourceFile: "bar.md", tags: [] }),
+          },
+        ];
+      },
+      async listLlmWikiLinks() {
+        return [{ id: 10, sourceFile: "foo.md", targetRaw: "Bar", targetFile: "bar.md", origin: "parsed" }];
+      },
+    };
+
+    const wikiService: MockWikiService = {
+      getStats: () => ({}),
+      async ingestNow() {
+        return {};
+      },
+      async listEntries() {
+        return [];
+      },
+      async search() {
+        return [];
+      },
+      async setEntryStatus() {
+        return { id: 1, status: "approved" };
+      },
+    };
+
+    const server = await startTestServer(db, wikiService);
+    const response = await fetch(`${server.baseUrl}/api/wiki/graph`);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.nodes).toHaveLength(2);
+    expect(body.data.edges).toEqual([{ id: 10, source: "foo.md", target: "bar.md", origin: "parsed", resolved: true }]);
+    const fooNode = body.data.nodes.find((n: { id: string }) => n.id === "foo.md");
+    expect(fooNode.degree).toBe(1);
+    await server.close();
+  });
+
+  it("creates a manual link via POST /links", async () => {
+    let created: unknown;
+    const db: MockDb = {
+      async getSetting() {
+        return undefined;
+      },
+      async setSetting() {},
+      async listLlmWikiEntries() {
+        return [];
+      },
+      async createManualLink(sourceFile: string, targetFile: string) {
+        created = { sourceFile, targetFile };
+        return { id: 5, sourceFile, targetFile, origin: "manual", status: "active" };
+      },
+    };
+    const wikiService: MockWikiService = {
+      getStats: () => ({}),
+      async ingestNow() {
+        return {};
+      },
+      async listEntries() {
+        return [];
+      },
+      async search() {
+        return [];
+      },
+      async setEntryStatus() {
+        return { id: 1, status: "approved" };
+      },
+    };
+
+    const server = await startTestServer(db, wikiService);
+    const response = await fetch(`${server.baseUrl}/api/wiki/links`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourceFile: "foo.md", targetFile: "bar.md" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.origin).toBe("manual");
+    expect(created).toEqual({ sourceFile: "foo.md", targetFile: "bar.md" });
+    await server.close();
+  });
+
+  it("removes a link via DELETE /links/:id", async () => {
+    let removedId: number | undefined;
+    const db: MockDb = {
+      async getSetting() {
+        return undefined;
+      },
+      async setSetting() {},
+      async listLlmWikiEntries() {
+        return [];
+      },
+      async removeLlmWikiLink(id: number) {
+        removedId = id;
+        return { id, status: "removed" };
+      },
+    };
+    const wikiService: MockWikiService = {
+      getStats: () => ({}),
+      async ingestNow() {
+        return {};
+      },
+      async listEntries() {
+        return [];
+      },
+      async search() {
+        return [];
+      },
+      async setEntryStatus() {
+        return { id: 1, status: "approved" };
+      },
+    };
+
+    const server = await startTestServer(db, wikiService);
+    const response = await fetch(`${server.baseUrl}/api/wiki/links/7`, { method: "DELETE" });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.data.removed).toBe(true);
+    expect(removedId).toBe(7);
     await server.close();
   });
 });

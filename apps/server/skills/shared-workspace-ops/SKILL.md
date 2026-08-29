@@ -75,6 +75,11 @@ Recommended control fields:
 - `basePath: "./shared-workspace"`
 - `safeMode: true`
 - `createDirs: true` (for write/append)
+- Leave `backup` at its default (`true`) for hand-authored content - it keeps a `.bak` copy of
+  the previous version as a safety net. Only pass `backup: false` for a file that is fully
+  machine-regenerated from other data on every write (e.g. an auto-maintained index/MOC note,
+  see the `wiki-index` skill) - the previous version is worthless there and `.bak` copies would
+  just accumulate as clutter.
 3. Before every `write`/`append`/`move`/`copy`, run the same operation with `dryRun: true` first.
 4. After every write-like operation, verify immediately with:
 - `exists` or `stat` on the target path

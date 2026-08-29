@@ -1,4 +1,4 @@
-import type { DatabaseService } from "@ducki/database";
+import type { DatabaseService, MemorySelect } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import type { LLMMessage } from "@ducki/shared";
 import { extractKeywords, scoreKeywordRelevance, tokenizeText } from "@ducki/shared";
@@ -292,12 +292,13 @@ export class MemorySystem {
    * which only ever hit when a memory happened to contain the user's exact wording -
    * for anything longer than a single word that is effectively never.
    */
-  async getRelevantContext(query: string, limit = 5): Promise<string[]> {
+  async getRelevantContext(query: string, limit = 5, types: MemoryEntry["type"][] = ["long-term"]): Promise<string[]> {
     const keywords = extractKeywords(query);
     if (keywords.length === 0) return [];
 
-    const longTerm = await this.db.getMemories(undefined, "long-term", "approved");
-    return longTerm
+    const pools = await Promise.all(types.map((type) => this.db.getMemories(undefined, type, "approved")));
+    return pools
+      .flat()
       .map((m) => ({ content: m.content, score: scoreKeywordRelevance(m.content, keywords) }))
       .filter((item) => item.score > 0)
       .sort((a, b) => b.score - a.score)
@@ -357,7 +358,8 @@ export class MemorySystem {
   async buildDynamicContextWithKeywords(
     keywords: string[],
     conversationId?: number,
-    limit = 6
+    limit = 6,
+    types: MemoryEntry["type"][] = ["long-term"]
   ): Promise<string> {
     if (keywords.length === 0) return "";
 
@@ -365,14 +367,27 @@ export class MemorySystem {
     // deliberately, for the default agent's cross-chat recall. A bot must not get that: filter
     // down to strictly its own conversation, dropping both global (conversationId=null) and every
     // other conversation's memories after the fact rather than widening the DB query's contract.
-    const results = this.isolated
-      ? (await this.db.searchMemories(keywords, conversationId, "long-term", "approved", limit * 4)).filter(
-          (m) => m.conversationId === conversationId
-        ).slice(0, limit)
-      : await this.db.searchMemories(keywords, conversationId, "long-term", "approved", limit);
+    const fetchType = async (type: MemoryEntry["type"]): Promise<MemorySelect[]> => {
+      const rows = await this.db.searchMemories(keywords, conversationId, type, "approved", limit * 2);
+      return this.isolated ? rows.filter((m) => m.conversationId === conversationId) : rows;
+    };
 
-    if (results.length === 0) return "";
-    return `\n\n## Retrieved Memory (Keywords: ${keywords.join(", ")})\n${results.map(r => `- ${r.content}`).join("\n")}`;
+    // searchMemories has no type=in(...) support, so each requested type is queried
+    // separately (each pool already comes relevance-sorted) and round-robin merged - this
+    // keeps one type from crowding out another before the cap is reached, e.g. long-term
+    // memories burying semantic ones (or vice versa) even when the latter score higher.
+    const pools = await Promise.all(types.map(fetchType));
+    const merged: MemorySelect[] = [];
+    for (let i = 0; merged.length < limit && pools.some((pool) => i < pool.length); i++) {
+      for (const pool of pools) {
+        if (merged.length >= limit) break;
+        const row = pool[i];
+        if (row) merged.push(row);
+      }
+    }
+
+    if (merged.length === 0) return "";
+    return `\n\n## Retrieved Memory (Keywords: ${keywords.join(", ")})\n${merged.map(r => `- ${r.content}`).join("\n")}`;
   }
 
   summarizeConversation(messages: LLMMessage[]): string {

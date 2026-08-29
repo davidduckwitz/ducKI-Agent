@@ -143,6 +143,25 @@ describe("filesystem tool (PR3)", () => {
       expect(existsSync(`${filePath}.bak`)).toBe(true);
       expect(readFileSync(`${filePath}.bak`, "utf8")).toBe("original");
     });
+
+    it("skips the .bak file when backup:false is passed - for fully machine-regenerated files", async () => {
+      const filePath = join(dir, "index.md");
+      writeFileSync(filePath, "old moc content");
+
+      await exec({ action: "write", path: filePath, content: "regenerated moc content", safeMode: false, backup: false });
+
+      expect(readFileSync(filePath, "utf8")).toBe("regenerated moc content");
+      expect(existsSync(`${filePath}.bak`)).toBe(false);
+    });
+
+    it("still creates a .bak file when backup is omitted (default unchanged)", async () => {
+      const filePath = join(dir, "target2.txt");
+      writeFileSync(filePath, "original");
+
+      await exec({ action: "write", path: filePath, content: "updated", safeMode: false });
+
+      expect(existsSync(`${filePath}.bak`)).toBe(true);
+    });
   });
 
   // ── edit uniqueness guard ─────────────────────────────────────────────────

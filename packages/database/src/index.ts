@@ -30,6 +30,7 @@ import type {
   ArchivedConversationSelect,
   LlmWikiEntryInsert,
   LlmWikiEntrySelect,
+  LlmWikiLinkSelect,
   DynamicToolInsert,
   DynamicToolSelect,
   SkillUsageSelect,
@@ -159,6 +160,7 @@ export class DatabaseService {
       `CREATE TABLE IF NOT EXISTS cron_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, schedule TEXT NOT NULL, target_type TEXT NOT NULL, target_ref TEXT, payload TEXT, enabled INTEGER NOT NULL DEFAULT 1, conversation_id INTEGER REFERENCES conversations(id), last_run_at TEXT, next_run_at TEXT, last_status TEXT, last_error TEXT, last_result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS archived_conversations (id INTEGER PRIMARY KEY AUTOINCREMENT, original_conversation_id INTEGER NOT NULL, name TEXT NOT NULL, project_id INTEGER, message_count INTEGER NOT NULL, archived_at TEXT NOT NULL, metadata TEXT)`,
       `CREATE TABLE IF NOT EXISTS llm_wiki_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, source_path TEXT NOT NULL UNIQUE, title TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', metadata TEXT, learned_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+      `CREATE TABLE IF NOT EXISTS llm_wiki_links (id INTEGER PRIMARY KEY AUTOINCREMENT, source_file TEXT NOT NULL, target_raw TEXT NOT NULL, target_file TEXT, origin TEXT NOT NULL DEFAULT 'parsed', status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS dynamic_tools (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL, parameters TEXT NOT NULL, script TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS crypto_addresses (id INTEGER PRIMARY KEY AUTOINCREMENT, currency TEXT NOT NULL, address TEXT NOT NULL UNIQUE, public_key TEXT, encrypted_private_key TEXT, label TEXT, balance TEXT DEFAULT '0', balance_usd REAL, is_master INTEGER DEFAULT 0, derivation_path TEXT, last_balance_sync TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
       `CREATE TABLE IF NOT EXISTS crypto_transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, address_id INTEGER REFERENCES crypto_addresses(id), currency TEXT NOT NULL, hash TEXT UNIQUE, from_address TEXT, to_address TEXT, amount TEXT NOT NULL, fee TEXT, status TEXT DEFAULT 'pending', confirmations INTEGER DEFAULT 0, timestamp INTEGER, block_number INTEGER, note TEXT, synced_at TEXT, created_at TEXT NOT NULL)`,
@@ -1310,6 +1312,133 @@ export class DatabaseService {
       .where(eq(schema.llmWikiEntries.id, id))
       .returning()
       .get();
+  }
+
+  // ============================================================
+  // LLM Wiki Links (link graph between wiki source files)
+  // ============================================================
+
+  /**
+   * Reconciles the "parsed" links of one source file against a freshly parsed set
+   * without touching manual links or links a user soft-deleted. A previously-active
+   * parsed link that disappeared from the file is marked "removed" (content-driven);
+   * one a user already removed stays removed even if the [[...]] text is still there.
+   */
+  async syncParsedLlmWikiLinks(
+    sourceFile: string,
+    links: { targetRaw: string; targetFile: string | null }[]
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    const existing = await this.db
+      .select()
+      .from(schema.llmWikiLinks)
+      .where(and(eq(schema.llmWikiLinks.sourceFile, sourceFile), eq(schema.llmWikiLinks.origin, "parsed")))
+      .all();
+    const existingByRaw = new Map(existing.map((row) => [row.targetRaw, row]));
+    const seenRaw = new Set<string>();
+
+    for (const link of links) {
+      seenRaw.add(link.targetRaw);
+      const current = existingByRaw.get(link.targetRaw);
+      if (current) {
+        if (current.targetFile !== link.targetFile) {
+          await this.db
+            .update(schema.llmWikiLinks)
+            .set({ targetFile: link.targetFile, updatedAt: now })
+            .where(eq(schema.llmWikiLinks.id, current.id))
+            .run();
+        }
+        continue;
+      }
+      await this.db
+        .insert(schema.llmWikiLinks)
+        .values({
+          sourceFile,
+          targetRaw: link.targetRaw,
+          targetFile: link.targetFile,
+          origin: "parsed",
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+    }
+
+    for (const row of existing) {
+      if (row.status === "active" && !seenRaw.has(row.targetRaw)) {
+        await this.db
+          .update(schema.llmWikiLinks)
+          .set({ status: "removed", updatedAt: now })
+          .where(eq(schema.llmWikiLinks.id, row.id))
+          .run();
+      }
+    }
+  }
+
+  async createManualLink(sourceFile: string, targetFile: string): Promise<LlmWikiLinkSelect> {
+    const now = new Date().toISOString();
+    const created = await this.db
+      .insert(schema.llmWikiLinks)
+      .values({
+        sourceFile,
+        targetRaw: targetFile,
+        targetFile,
+        origin: "manual",
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning()
+      .get();
+    if (!created) throw new Error("Failed to create manual wiki link");
+    return created;
+  }
+
+  async removeLlmWikiLink(id: number): Promise<LlmWikiLinkSelect | undefined> {
+    return this.db
+      .update(schema.llmWikiLinks)
+      .set({ status: "removed", updatedAt: new Date().toISOString() })
+      .where(eq(schema.llmWikiLinks.id, id))
+      .returning()
+      .get();
+  }
+
+  /** File was deleted from the vault on disk - its own outgoing links no longer mean anything. */
+  async removeLlmWikiLinksBySourceFile(sourceFile: string): Promise<number> {
+    const now = new Date().toISOString();
+    const rows = await this.db
+      .select()
+      .from(schema.llmWikiLinks)
+      .where(and(eq(schema.llmWikiLinks.sourceFile, sourceFile), eq(schema.llmWikiLinks.status, "active")))
+      .all();
+    for (const row of rows) {
+      await this.db.update(schema.llmWikiLinks).set({ status: "removed", updatedAt: now }).where(eq(schema.llmWikiLinks.id, row.id)).run();
+    }
+    return rows.length;
+  }
+
+  /**
+   * File was deleted from the vault - links that pointed AT it stay as edges (the
+   * linking note's own content still says so) but flip to unresolved, same as an
+   * Obsidian link to a note that no longer exists.
+   */
+  async unresolveLlmWikiLinksByTargetFile(targetFile: string): Promise<number> {
+    const now = new Date().toISOString();
+    const rows = await this.db
+      .select()
+      .from(schema.llmWikiLinks)
+      .where(and(eq(schema.llmWikiLinks.targetFile, targetFile), eq(schema.llmWikiLinks.status, "active")))
+      .all();
+    for (const row of rows) {
+      await this.db.update(schema.llmWikiLinks).set({ targetFile: null, updatedAt: now }).where(eq(schema.llmWikiLinks.id, row.id)).run();
+    }
+    return rows.length;
+  }
+
+  async listLlmWikiLinks(status: "active" | "all" = "active"): Promise<LlmWikiLinkSelect[]> {
+    const query = this.db.select().from(schema.llmWikiLinks);
+    if (status === "all") return query.all();
+    return query.where(eq(schema.llmWikiLinks.status, "active")).all();
   }
 
   // ============================================================

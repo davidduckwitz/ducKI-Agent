@@ -90,6 +90,25 @@ describe.skipIf(!browserAvailable)("browser tool - snapshot / text-based targeti
     expect(String((ev.data as { result?: unknown }).result ?? "")).toBe("Max Mustermann");
   }, 30000);
 
+  it("clears the field before typing by default - a repeated type call does not duplicate the text", async () => {
+    const first = await executeInWorker({ action: "type", sessionId, target: "Name", text: "Erste Eingabe" });
+    expect(first.success).toBe(true);
+    const second = await executeInWorker({ action: "type", sessionId, target: "Name", text: "Erste Eingabe" });
+    expect(second.success).toBe(true);
+    const ev = await executeInWorker({ action: "evaluate", sessionId, script: "document.querySelector('#name').value" });
+    // Bug regression: type() used to always append (Puppeteer's ElementHandle.type never
+    // clears), so calling it twice with the same text silently doubled the field's value -
+    // exactly what happened in the reported PubMed search box duplication.
+    expect(String((ev.data as { result?: unknown }).result ?? "")).toBe("Erste Eingabe");
+  }, 30000);
+
+  it("appends instead of clearing when clear:false is passed explicitly", async () => {
+    await executeInWorker({ action: "type", sessionId, target: "Name", text: "A" });
+    await executeInWorker({ action: "type", sessionId, target: "Name", text: "B", clear: false });
+    const ev = await executeInWorker({ action: "evaluate", sessionId, script: "document.querySelector('#name').value" });
+    expect(String((ev.data as { result?: unknown }).result ?? "")).toBe("AB");
+  }, 30000);
+
   it("forwards normalized pointer and raw keyboard input for the shared UI browser", async () => {
     // The button sits near the top of the default viewport. This verifies the coordinate
     // path used by the live sidebar without relying on semantic selectors.

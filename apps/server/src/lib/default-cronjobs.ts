@@ -60,6 +60,26 @@ export async function setupDefaultCronjobs(db: DatabaseService, logger: Logger):
         description: "Runs daily at 7 AM, pushes a notification for each event scheduled today",
       });
     }
+
+    const hasWikiIndexJob = existing.some((job) => job.name === "Wiki Index Curator");
+    if (!hasWikiIndexJob) {
+      await db.createCronJob({
+        name: "Wiki Index Curator",
+        schedule: "0 * * * *", // Stündlich
+        targetType: "skill",
+        targetRef: "wiki-index",
+        enabled: 1,
+        payload: JSON.stringify({
+          prompt:
+            "Regenerate the wiki's index.md files as a Map of Content: one for llm-wiki/ itself, plus one per subfolder (llm-wiki/<folder>/index.md), each with a short grounded summary of that folder's contents plus [[wikilink]] links to that folder's own notes and to its immediate subfolders' index notes (use the full relative path, e.g. [[Finanzen/Bitcoin_and_Crypto/index]], never a bare folder name). Also check for and fix any broken [[links]] left over from a previous run. Do not create any file other than these index.md files - no scripts, backups, or scratch notes.",
+        }),
+      });
+
+      logger.info("Default wiki index cronjob created", {
+        schedule: "0 * * * *",
+        description: "Runs hourly, keeps one index.md per wiki folder (root + every subfolder) as maintained entry points into the wiki graph",
+      });
+    }
   } catch (error) {
     logger.warn("Failed to setup default cronjobs", {
       error: error instanceof Error ? error.message : String(error),
