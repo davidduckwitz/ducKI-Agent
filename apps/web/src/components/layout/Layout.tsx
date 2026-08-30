@@ -6,17 +6,11 @@ import {
   MessageSquare,
   FolderOpen,
   CheckSquare,
-  Wrench,
-  BookOpen,
   Share2,
   Brain,
-  ScrollText,
   Settings,
-  Send,
   GitBranch,
   CalendarClock,
-  PlugZap,
-  Puzzle,
   Code2,
   Wallet,
   Bot,
@@ -126,11 +120,6 @@ export function Layout() {
       title: t("nav.groups.automation"),
       items: [
         { to: "/cronjobs", icon: CalendarClock, label: t("nav.cronjobs") },
-        { to: "/gateway", icon: Send, label: t("nav.gateway") },
-        { to: "/mcp", icon: PlugZap, label: t("nav.mcp") },
-        { to: "/tools", icon: Wrench, label: t("nav.tools") },
-        { to: "/skills", icon: BookOpen, label: t("nav.skills") },
-        { to: "/plugins", icon: Puzzle, label: t("nav.plugins") },
       ],
     },
     {
@@ -140,7 +129,6 @@ export function Layout() {
     {
       title: t("nav.groups.system"),
       items: [
-        { to: "/logs", icon: ScrollText, label: t("nav.logs") },
         { to: "/crypto", icon: Wallet, label: "Crypto Payment" },
         { to: "/settings", icon: Settings, label: t("nav.settings") },
       ],

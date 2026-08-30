@@ -252,7 +252,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const isLastStep = step === 5;
   const steps = [
     t("setupWizard.steps.llm"),
-    "Backend",
+    t("setupWizard.steps.backend"),
     t("setupWizard.steps.connectors"),
     t("setupWizard.steps.features"),
     t("setupWizard.steps.agent"),
@@ -295,6 +295,10 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
           <button className="text-gray-400 hover:text-white" onClick={onClose}>
             <X className="w-4 h-4" />
           </button>
+        </div>
+
+        <div className="border-b border-gray-800 bg-gray-900/40 px-5 py-3">
+          <p className="text-sm leading-6 text-gray-300">{t(`setupWizard.stepDescriptions.${["llm", "backend", "connectors", "features", "agent", "summary"][step]}`)}</p>
         </div>
 
         <div className="p-5 space-y-4">

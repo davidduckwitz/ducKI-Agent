@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, Wallet, Server, CloudUpload, Bot, type LucideIcon } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, Wallet, Server, CloudUpload, Bot, Wrench, BookOpen, Puzzle, PlugZap, ScrollText, Send, Search, X, type LucideIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
@@ -18,6 +19,7 @@ import { VoiceSettings } from "./VoiceSettings";
 import { CodingAgentSettings } from "./CodingAgentSettings";
 import { BotsSettings } from "./BotsSettings";
 import { BackgroundReviewSettings } from "./BackgroundReviewSettings";
+import { PetSettingsPanel } from "./PetSettingsPanel";
 import { PROVIDER_META, PROVIDER_FIELD_MAP, PROVIDER_BORDER_CLASS, SUBSECTIONS, TAB_ICONS } from "./settingsGroups";
 
 interface Setting {
@@ -1556,7 +1558,42 @@ const PREDEFINED_FIELDS: SettingField[] = [
 ];
 
 const SECTIONS: Array<SettingField["section"]> = ["Provider", "API", "Speech", "Agent", "Memory", "Database", "Browser", "Crypto"];
-type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character" | "Backend" | "Voice" | "Cloud-Backup" | "Bots";
+type SettingsTab = SettingField["section"] | "Other" | "Theme" | "Overview" | "Chat Cleanup" | "LLM Provider Config" | "Credentials" | "Character" | "Pets" | "Backend" | "Voice" | "Cloud-Backup" | "Bots";
+
+type SettingsNavItem = { id: string; icon: LucideIcon; tab?: SettingsTab; route?: string };
+
+const SETTINGS_NAV_GROUPS: Array<{ id: string; items: SettingsNavItem[] }> = [
+  { id: "personal", items: [
+    { id: "overview", icon: SettingsIcon, tab: "Overview" },
+    { id: "appearance", icon: Palette, tab: "Theme" },
+    { id: "pets", icon: Sparkles, tab: "Pets" },
+    { id: "voice", icon: Send, tab: "Voice" },
+  ] },
+  { id: "ai", items: [
+    { id: "models", icon: Cpu, tab: "Provider" },
+    { id: "providerConfig", icon: Sliders, tab: "LLM Provider Config" },
+    { id: "credentials", icon: Lock, tab: "Credentials" },
+    { id: "agent", icon: Sparkles, tab: "Agent" },
+    { id: "bots", icon: Bot, tab: "Bots" },
+  ] },
+  { id: "system", items: [
+    { id: "data", icon: Database, tab: "Database" },
+    { id: "memory", icon: BookOpen, tab: "Memory" },
+    { id: "backup", icon: CloudUpload, tab: "Cloud-Backup" },
+    { id: "browser", icon: Monitor, tab: "Browser" },
+    { id: "backend", icon: Server, tab: "Backend" },
+    { id: "cleanup", icon: Trash2, tab: "Chat Cleanup" },
+    { id: "other", icon: SettingsIcon, tab: "Other" },
+  ] },
+  { id: "management", items: [
+    { id: "tools", icon: Wrench, route: "/tools" },
+    { id: "skills", icon: BookOpen, route: "/skills" },
+    { id: "plugins", icon: Puzzle, route: "/plugins" },
+    { id: "mcp", icon: PlugZap, route: "/mcp" },
+    { id: "gateway", icon: Send, route: "/gateway" },
+    { id: "logs", icon: ScrollText, route: "/logs" },
+  ] },
+];
 
 const TAB_ICON_LOOKUP: Record<string, LucideIcon> = {
   ...TAB_ICONS,
@@ -1649,6 +1686,8 @@ function ThemeSettingsTab() {
 export function Settings() {
   const { t } = useI18n();
   const { setSetupModalOpen } = useAppStore();
+  const location = useLocation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const { data: settings = [] } = useQuery({
     queryKey: ["settings"],
@@ -1663,7 +1702,8 @@ export function Settings() {
   });
 
   const [edits, setEdits] = useState<Record<string, string>>({});
-  const [activeTab, setActiveTab] = useState<SettingsTab>("Provider");
+  const [activeTab, setActiveTab] = useState<SettingsTab>("Overview");
+  const [openSection, setOpenSection] = useState<{ name: string; fields: SettingField[] } | null>(null);
 
   const save = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) =>
@@ -1703,6 +1743,11 @@ export function Settings() {
   const predefinedKeys = new Set(allFields.map((field) => field.key));
   const customSettings = (settings as Setting[]).filter((entry) => !predefinedKeys.has(entry.key));
   const tabs: SettingsTab[] = customSettings.length > 0 ? ["Theme", "Character", ...SECTIONS, "Bots", "Voice", "Backend", "Cloud-Backup", "LLM Provider Config", "Credentials", "Chat Cleanup", "Other"] : ["Theme", "Character", ...SECTIONS, "Bots", "Voice", "Backend", "Cloud-Backup", "LLM Provider Config", "Credentials", "Chat Cleanup"];
+  const settingsSearch = edits.__settingsSearch ?? "";
+  const visibleSettingsNav = useMemo(() => SETTINGS_NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !settingsSearch || `${t(`settingsNavigation.items.${item.id}.label`)} ${t(`settingsNavigation.items.${item.id}.description`)}`.toLocaleLowerCase().includes(settingsSearch.toLocaleLowerCase())),
+  })).filter((group) => group.items.length > 0), [settingsSearch]);
 
   const getDisplayValue = (field: SettingField): string =>
     edits[field.key] ?? settingsMap.get(field.key) ?? field.defaultValue;
@@ -1774,6 +1819,31 @@ export function Settings() {
     );
   };
 
+  const renderSectionCard = (name: string, icon: LucideIcon, fields: SettingField[]) => {
+    const Icon = icon;
+    const configuredCount = fields.filter((field) => {
+      const value = getDisplayValue(field);
+      return value !== "" && value !== field.defaultValue;
+    }).length;
+    return (
+      <button
+        key={name}
+        type="button"
+        onClick={() => setOpenSection({ name, fields })}
+        className="card group flex min-h-28 w-full items-center gap-4 p-4 text-left transition-colors hover:border-primary/60 hover:bg-accent/40"
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <Icon className="h-5 w-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block font-semibold">{name}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">{fields.length} Einstellungen · {configuredCount} angepasst</span>
+        </span>
+        <span className="text-sm font-medium text-primary opacity-80 transition-transform group-hover:translate-x-0.5">Bearbeiten →</span>
+      </button>
+    );
+  };
+
   const saveField = (key: string, value: string): void => {
     save.mutate({ key, value });
   };
@@ -1785,9 +1855,39 @@ export function Settings() {
   };
 
   return (
-    <div className="p-3 sm:p-6 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">{t("settingsPage.title")}</h1>
+    <div className="flex min-h-full flex-col gap-4 p-3 sm:p-6 lg:flex-row">
+      <aside className="w-full shrink-0 space-y-3 lg:w-64">
+        <div>
+          <h1 className="text-2xl font-bold">{t("settingsPage.title")}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Alles rund um deinen DucKI-Arbeitsbereich.</p>
+        </div>
+        <label className="relative block">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input className="input w-full pl-9" value={settingsSearch} onChange={(event) => setEdits((current) => ({ ...current, __settingsSearch: event.target.value }))} placeholder="Einstellungen durchsuchen …" aria-label="Einstellungen durchsuchen" />
+        </label>
+        <nav className="card space-y-4 p-2 lg:sticky lg:top-4" aria-label="Settings-Navigation">
+          {visibleSettingsNav.map((group) => (
+            <div key={group.id}>
+              <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{t(`settingsNavigation.groups.${group.id}`)}</p>
+              <div className="space-y-0.5">
+                {group.items.map((item) => {
+                  const active = item.route ? location.pathname === item.route || location.pathname.startsWith(`${item.route}/`) : activeTab === item.tab;
+                  const Icon = item.icon;
+                  const label = t(`settingsNavigation.items.${item.id}.label`);
+                  const description = t(`settingsNavigation.items.${item.id}.description`);
+                  return <button key={item.id} type="button" onClick={() => item.route ? navigate(item.route) : setActiveTab(item.tab!)} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors", active ? "bg-primary text-primary-foreground" : "hover:bg-accent")}>
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0"><span className="block truncate text-sm font-medium">{label}</span><span className={cn("block truncate text-xs", active ? "text-primary-foreground/75" : "text-muted-foreground")}>{description}</span></span>
+                  </button>;
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      <main className="min-w-0 flex-1 space-y-4">
+      <div className="flex flex-wrap items-center justify-end gap-3">
         <div className="flex items-center gap-2">
           <button onClick={() => setSetupModalOpen(true)} className="btn-secondary flex items-center gap-2">
             <Sparkles className="w-4 h-4" />
@@ -1800,30 +1900,30 @@ export function Settings() {
         </div>
       </div>
 
-      <div className="card p-2">
-        <div className="flex flex-wrap gap-2">
-          {tabs.map((tab) => {
-            const isActive = activeTab === tab;
-            let label: string = tab;
-            if (tab === "Other") label = t("settingsPage.otherSettings");
-            else if (tab === "Theme") label = t("themeSettings.tabLabel");
-
-            const Icon = TAB_ICON_LOOKUP[tab];
-
-            return (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => setActiveTab(tab)}
-                className={cn(isActive ? "btn-primary" : "btn-secondary", "flex items-center gap-2")}
-              >
-                {Icon && <Icon className="w-4 h-4" />}
-                {label}
+      {activeTab === "Overview" && (
+        <div className="space-y-4">
+          <div>
+            <h2 className="text-xl font-semibold">Willkommen in den Einstellungen</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Hier siehst du den wichtigsten Status deines Arbeitsbereichs und gelangst direkt zu den häufigsten Konfigurationen.</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {[
+              { label: "Aktiver Provider", value: settingsMap.get("DEFAULT_PROVIDER") ?? "Nicht eingerichtet", tab: "Provider" as SettingsTab },
+              { label: "Backend", value: "Verbindung verwalten", tab: "Backend" as SettingsTab },
+              { label: "Agent", value: "Verhalten und Limits", tab: "Agent" as SettingsTab },
+              { label: "Sprache", value: "STT & TTS konfigurieren", tab: "Voice" as SettingsTab },
+              { label: "Daten & Speicher", value: "Datenbank und Backups", tab: "Database" as SettingsTab },
+              { label: "Oberfläche", value: "Theme und Animationen", tab: "Theme" as SettingsTab },
+            ].map((card) => (
+              <button key={card.label} type="button" onClick={() => setActiveTab(card.tab)} className="card space-y-2 p-4 text-left transition-colors hover:border-primary/60 hover:bg-accent/40">
+                <p className="text-sm font-semibold">{card.label}</p>
+                <p className="text-sm text-muted-foreground">{card.value}</p>
+                <span className="text-xs font-medium text-primary">Öffnen →</span>
               </button>
-            );
-          })}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {activeTab === "Theme" && (
         <div className="card space-y-3">
@@ -1836,6 +1936,21 @@ export function Settings() {
         <div className="card space-y-3">
           <h2 className="text-lg font-semibold">🎨 Character & Animation</h2>
           <AnimationSettings />
+        </div>
+      )}
+
+      {activeTab === "Pets" && (
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-xl font-semibold">Desk Pet</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Wähle deinen kleinen Begleiter und passe sein Verhalten, seine Größe und seine Reaktionen an.</p>
+          </div>
+          <div className="card">
+            <PetSettingsPanel />
+          </div>
+          <div className="card">
+            <AnimationSettings />
+          </div>
         </div>
       )}
 
@@ -1870,13 +1985,7 @@ export function Settings() {
               const Icon = group.icon;
 
               return (
-                <div key={group.name} className="card space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Icon className="w-4 h-4 text-primary" />
-                    <h3 className="font-semibold">{group.name}</h3>
-                  </div>
-                  <div className="space-y-3">{fields.map((field) => renderField(field))}</div>
-                </div>
+                  renderSectionCard(group.name, Icon, fields)
               );
             })}
           </div>
@@ -1961,7 +2070,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Cloud-Backup" && activeTab !== "Voice" && activeTab !== "Agent" && activeTab !== "Bots" && (
+      {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Overview" && activeTab !== "Pets" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Cloud-Backup" && activeTab !== "Voice" && activeTab !== "Agent" && activeTab !== "Bots" && (
         <div className="space-y-4">
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);
@@ -1969,15 +2078,7 @@ export function Settings() {
             if (fields.length === 0) return null;
             const Icon = group.icon;
 
-            return (
-              <div key={group.name} className="card space-y-3">
-                <div className="flex items-center gap-2">
-                  <Icon className="w-4 h-4 text-primary" />
-                  <h3 className="font-semibold">{group.name}</h3>
-                </div>
-                <div className="space-y-3">{fields.map((field) => renderField(field))}</div>
-              </div>
-            );
+              return renderSectionCard(group.name, Icon, fields);
           })}
 
           {(() => {
@@ -2019,12 +2120,35 @@ export function Settings() {
         </div>
       )}
 
+      {openSection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpenSection(null); }}>
+          <section className="flex max-h-[min(90vh,48rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="settings-detail-title">
+            <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+              <div>
+                <h2 id="settings-detail-title" className="text-lg font-semibold">{openSection.name}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">Passe die zugehörigen Einstellungen an. Änderungen können einzeln gespeichert werden.</p>
+              </div>
+              <button type="button" onClick={() => setOpenSection(null)} className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" aria-label="Details schließen">
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+            <div className="space-y-4 overflow-y-auto p-5">
+              {openSection.fields.map((field) => renderField(field))}
+            </div>
+            <footer className="flex justify-end border-t border-border px-5 py-3">
+              <button type="button" onClick={() => setOpenSection(null)} className="btn-secondary">Schließen</button>
+            </footer>
+          </section>
+        </div>
+      )}
+
       {(settings as Setting[]).length === 0 && (
         <div className="text-center text-muted-foreground py-8">
           <SettingsIcon className="w-10 h-10 mx-auto mb-3 text-muted-foreground/60" />
           <p>{t("settingsPage.defaultsHint")}</p>
         </div>
       )}
+      </main>
     </div>
   );
 }
