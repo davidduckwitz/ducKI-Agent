@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { CodingAgent } from "../src/coding/coding-agent";
@@ -62,7 +62,10 @@ function stubBrowserTool(
       // The Executor auto-launches a browser session before any non-"launch" browser action
       // when none exists yet (see executor.ts) - the stub must answer it the same way the real
       // browser tool does, or every call fails on "browser auto-launch failed".
-      if (action === "launch") return { success: true, data: { sessionId: "stub-session" } };
+      if (action === "launch") {
+        onGoto?.(String(input["url"]));
+        return { success: true, data: { sessionId: "stub-session" } };
+      }
       if (action === "goto") {
         onGoto?.(String(input["url"]));
         return { success: true, data: { url: String(input["url"]), title: "" } };
@@ -202,6 +205,78 @@ describe("CodingAgent falls back to a browser check when no shell verifyCommand 
     expect((codingAgent as any).todos.snapshot()[1]?.status).toBe("in_progress");
   });
 
+  it("turns browser stack locations into mandatory source-level repair targets", () => {
+    const codingAgent = new CodingAgent(scriptedProvider([PLAN_JSON]), stubDb(), undefined, {});
+    const prompt = (codingAgent as any).buildFollowUpPrompt(
+      "build a clock page",
+      "10 console/page error(s) after loading index.html in the browser:\n[pageerror] Assignment to constant variable.\nformatTime (http://preview.test/api/coding/projects/demo/serve/script.js:283:13)",
+      "browser_verification_failed",
+      true,
+      false,
+      true,
+    );
+
+    expect(prompt).toContain("failure in YOUR generated page code");
+    expect(prompt).toContain("script.js:283:13");
+    expect(prompt).toContain("at least 25 lines before and after");
+    expect(prompt).toContain("Assignment to constant variable");
+  });
+
+  it("runs a browser preflight only when a todo update would close the full checklist", () => {
+    const codingAgent = new CodingAgent(scriptedProvider([PLAN_JSON]), stubDb(), undefined, {});
+    (codingAgent as any).todos.replace([
+      { title: "Build page", status: "done" },
+      { title: "Verify page", status: "in_progress" },
+    ]);
+
+    expect((codingAgent as any).todoInputClosesChecklist({ action: "update", id: 2, status: "done" })).toBe(true);
+    expect((codingAgent as any).todoInputClosesChecklist({ action: "update", id: 2, status: "in_progress" })).toBe(false);
+    expect((codingAgent as any).todoInputClosesChecklist({
+      action: "write",
+      items: [{ title: "Build", status: "done" }, { title: "Verify", status: "done" }],
+    })).toBe(true);
+  });
+
+  it("treats an implicit favicon 404 as a non-blocking browser warning", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-browser-favicon-warning-"));
+    sandboxes.push(sandbox);
+    writeFileSync(join(sandbox, "index.html"), "<html><body>ok</body></html>");
+    const codingAgent = new CodingAgent(scriptedProvider([PLAN_JSON]), stubDb(), undefined, {
+      sandboxRoot: sandbox,
+      previewBaseUrl: "http://preview.test",
+      extraTools: [stubBrowserTool([{
+        type: "console",
+        text: "Failed to load resource: the server responded with a status of 404 (Not Found): favicon.ico",
+        url: "http://preview.test/favicon.ico",
+      }])],
+    });
+
+    const result = await (codingAgent as any).runBrowserVerify("index.html");
+
+    expect(result.success).toBe(true);
+    expect(result.data.benignWarnings).toHaveLength(1);
+  });
+
+  it("keeps an explicitly declared missing favicon actionable", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-browser-favicon-explicit-"));
+    sandboxes.push(sandbox);
+    writeFileSync(join(sandbox, "index.html"), '<html><head><link rel="icon" href="favicon.ico"></head><body>ok</body></html>');
+    const codingAgent = new CodingAgent(scriptedProvider([PLAN_JSON]), stubDb(), undefined, {
+      sandboxRoot: sandbox,
+      previewBaseUrl: "http://preview.test",
+      extraTools: [stubBrowserTool([{
+        type: "console",
+        text: "Failed to load resource: the server responded with a status of 404 (Not Found): favicon.ico",
+        url: "http://preview.test/favicon.ico",
+      }])],
+    });
+
+    const result = await (codingAgent as any).runBrowserVerify("index.html");
+
+    expect(result.success).toBe(false);
+    expect(result.data.pageErrors).toHaveLength(1);
+  });
+
   it("reports the concrete console error and retries when the page has a JS error", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-browser-verify-fail-"));
     sandboxes.push(sandbox);
@@ -256,10 +331,11 @@ describe("CodingAgent falls back to a browser check when no shell verifyCommand 
 
     const result = await codingAgent.run("build a static world clock page", { maxAttempts: 3 });
 
-    // Three attempts, each routed through the browser check (never the shell tool) - if the bug
-    // were back, attempt 2+ would shell-execute the label and the summary would contain the
+    // The preflight catches the first premature completion, then the three configured attempts
+    // plus the default browser-repair reservation are each routed through the browser check
+    // (never the shell tool). If the bug were back, attempt 2+ would shell-execute the label and the summary would contain the
     // Windows "not recognized" text instead of the browser's actual console error.
-    expect(gotoCallCount).toBe(3);
+    expect(gotoCallCount).toBe(5);
     expect(result.summary).toContain("ReferenceError: x is not defined");
     expect(result.summary).not.toContain("not recognized");
   });

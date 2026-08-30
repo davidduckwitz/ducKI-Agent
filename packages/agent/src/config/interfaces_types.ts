@@ -149,6 +149,21 @@ export interface AgentRunOptions {
    *  user had typed it. Only affects what gets written to the conversation transcript; the
    *  model still receives the full `userInput`. */
   displayContent?: string;
+  /** When false, skips persisting this turn's user message to the DB entirely (it still feeds
+   *  the model as part of `userInput`). Default true. CodingAgent sets this false on retry
+   *  attempts (attempt > 1): the original goal was already persisted as the user's turn on
+   *  attempt 1, so calling run() again for attempt 2..N with the same displayContent would
+   *  otherwise write a fresh duplicate "user" row per attempt. */
+  persistUserTurn?: boolean;
+  /** Sandbox root of the coding-area project this turn's [CODING_CONTEXT] marker resolved to
+   *  (see apps/server/src/websocket/index.ts's extractCodingProjectSlug). Only ever set by a
+   *  caller that already scoped this turn's filesystem tool to that directory - undefined for
+   *  every other conversation (normal chat, custom bots, tests), which keeps them byte-for-byte
+   *  unchanged. When set AND agentMode is "plan", runPlanMode() grounds the Planner in a cheap,
+   *  synchronous repo snapshot (see repo-snapshot.ts's buildRepositorySnapshot) instead of
+   *  planning blind - the same grounding CodingAgent already gives its own plans, minus the
+   *  extra LLM round-trip CodingAgent's explore-before-plan step would cost here. */
+  codingSandboxRoot?: string;
   /** A plan the caller already built (e.g. the user-approved plan from the UI's Plan tab).
    *  When set, the run loop uses this INSTEAD OF calling the internal Planner - the agent
    *  otherwise always re-derives its own plan from the prompt text, discarding whatever
@@ -168,6 +183,16 @@ export interface AgentRunOptions {
    *  run. Honors EXECUTION_MODE_VALIDATION_INTERVAL; the checklist otherwise re-verifies
    *  as soon as new evidence arrives, which this throttles for expensive verify passes. */
   checklistMinVerifyIntervalMs?: number;
+  /**
+   * Coding-only recovery for a likely stale-read loop. When configured, the generic Agent
+   * gives the model one or more explicit recovery turns before it aborts. Content hashes from
+   * filesystem/read are used when requireSameContent is true, avoiding a false loop verdict
+   * after a file changed outside the agent.
+   */
+  staleReadRecovery?: {
+    maxRecoveries: number;
+    requireSameContent?: boolean;
+  };
   /** Seeds this run's Run Journal instead of starting empty - lets a caller that makes
    *  several run() calls in sequence on purpose (CodingAgent's plan->verify->iterate attempt
    *  loop) carry prior attempts' journal entries forward, so a retry after a failed verify
@@ -474,6 +499,13 @@ export interface AgentRuntimeControls {
   reasonerUseToolMinConfidence: number;
   maxConsecutiveToolFailures: number;
   maxRepeatedToolCall: number;
+  /**
+   * A malformed provider/native tool envelope (for example filesystem action:"todo") is
+   * feedback for the model, not evidence that the work itself failed. When enabled, those
+   * protocol mistakes do not advance the consecutive-failure stop counter.
+   * Settings key: AGENT_PROTOCOL_ERROR_RECOVERY
+   */
+  protocolErrorRecovery: boolean;
   /**
    * Consecutive iterations re-issuing the EXACT SAME read-only call set (no mutation in
    * between) before the run aborts as a non-converging loop. Catches a model stuck

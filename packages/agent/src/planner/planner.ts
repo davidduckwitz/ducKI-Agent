@@ -24,6 +24,8 @@ export interface PlanCostOptions {
   requiredPlanType?: "coding" | "general";
   /** Bounded, trusted repository facts collected by the caller before planning. */
   repositoryContext?: Record<string, unknown>;
+  /** Whether advisory `toolsNeeded` metadata must be limited to the supplied executor tools. */
+  filterUnavailableTools?: boolean;
 }
 
 export interface Plan {
@@ -104,6 +106,12 @@ export interface PlanValidationResult {
   stepCount: number;
   cyclicDependencies: string[];
   unusedSteps: string[];
+}
+
+/** Result of removing advisory tool names that are not present in the executor. */
+export interface PlanToolSanitizationResult {
+  plan: Plan;
+  removedTools: string[];
 }
 
 export interface DependencyGraph {
@@ -197,7 +205,7 @@ export class Planner {
 
     const toolsContext =
       availableTools.length > 0
-        ? `\nAvailable tools: ${availableTools.join(", ")}`
+        ? `\nAvailable tools (closed allow-list): ${availableTools.join(", ")}\nOnly put exact names from this list into toolsNeeded. A product feature, library, or domain word such as "clock", "timer", "calendar", or "database" is not a tool unless it appears verbatim above. Use [] when no tool is required.`
         : "";
     const requiredTypeContext = costOptions?.requiredPlanType
       ? `\nRequired plan type: "${costOptions.requiredPlanType}". This is fixed by the execution context; return that exact planType and shape every step accordingly.`
@@ -231,14 +239,27 @@ export class Planner {
         let parsedPlan = this.parsePlanJSON(response.content);
         if (parsedPlan) {
           parsedPlan = this.initializePlanSteps(parsedPlan);
+          const toolSanitization = costOptions?.filterUnavailableTools === false
+            ? { plan: parsedPlan, removedTools: [] }
+            : this.sanitizePlanTools(parsedPlan, availableTools);
+          parsedPlan = toolSanitization.plan;
           if (costOptions?.requiredPlanType && parsedPlan.planType !== costOptions.requiredPlanType) {
             throw new Error(
               `Planner returned planType "${parsedPlan.planType}" but execution requires "${costOptions.requiredPlanType}"`
             );
           }
           parsedPlan = await this.analyzeDependencies(parsedPlan);
-          parsedPlan = await this.validatePlan(parsedPlan);
+          parsedPlan = await this.validatePlan(
+            parsedPlan,
+            costOptions?.repositoryContext,
+            Boolean(costOptions?.repositoryContext || costOptions?.requiredPlanType === "coding")
+          );
           parsedPlan = this.computeCostAndRisk(parsedPlan, costOptions);
+          if (toolSanitization.removedTools.length > 0) {
+            parsedPlan.validationResult?.warnings.push(
+              `Removed unavailable advisory tools: ${toolSanitization.removedTools.join(", ")}`
+            );
+          }
 
           this.logger.info("Plan created successfully", {
             goal,
@@ -361,7 +382,11 @@ export class Planner {
           throw new Error(`Refined plan type ${normalized.planType} does not match required type ${costOptions.requiredPlanType}`);
         }
         normalized = await this.analyzeDependencies(normalized);
-        normalized = await this.validatePlan(normalized);
+        normalized = await this.validatePlan(
+          normalized,
+          costOptions?.repositoryContext,
+          Boolean(costOptions?.repositoryContext || costOptions?.requiredPlanType === "coding")
+        );
         return this.computeCostAndRisk(normalized, costOptions);
       }
 
@@ -567,7 +592,11 @@ export class Planner {
     return "sequential";
   }
 
-  private async validatePlan(plan: Plan): Promise<Plan> {
+  private async validatePlan(
+    plan: Plan,
+    repositoryContext?: Record<string, unknown>,
+    enforceCodingContracts = false
+  ): Promise<Plan> {
     const validation: PlanValidationResult = {
       isValid: true,
       issues: [],
@@ -594,7 +623,26 @@ export class Planner {
         validation.warnings.push(`Step ${step.id} has no description`);
       }
       if (plan.planType === "coding" && (!step.acceptanceCriteria || step.acceptanceCriteria.length === 0)) {
-        validation.warnings.push(`Coding step ${step.id} has no observable acceptance criteria`);
+        if (enforceCodingContracts) {
+          validation.isValid = false;
+          validation.issues.push(`Coding step ${step.id} has no observable acceptance criteria`);
+        } else {
+          validation.warnings.push(`Coding step ${step.id} has no observable acceptance criteria`);
+        }
+      }
+
+      for (const expectedFile of step.expectedFiles ?? []) {
+        if (!this.isSafeRelativePath(expectedFile)) {
+          validation.isValid = false;
+          validation.issues.push(`Step ${step.id} has an invalid expected file path: ${expectedFile}`);
+        }
+      }
+
+      for (const command of step.verificationCommands ?? []) {
+        if (repositoryContext && !this.isKnownVerificationCommand(command, repositoryContext)) {
+          validation.isValid = false;
+          validation.issues.push(`Step ${step.id} has an unavailable verification command: ${command}`);
+        }
       }
     }
 
@@ -618,6 +666,82 @@ export class Planner {
 
     plan.validationResult = validation;
     return plan;
+  }
+
+  /**
+   * `toolsNeeded` is plan metadata, never a runtime requirement. Keep it truthful so a
+   * hallucinated term (for example "clock" in a time-related feature request) cannot steer
+   * the executor into an unavailable tool call or make a valid plan look unexecutable.
+   *
+   * When no tool inventory is supplied, leave the plan untouched: callers may intentionally
+   * create a portable plan before attaching it to an executor.
+   */
+  sanitizePlanTools(plan: Plan, availableTools: string[]): PlanToolSanitizationResult {
+    if (availableTools.length === 0) return { plan, removedTools: [] };
+
+    const allowed = new Map(
+      availableTools.map((name) => [name.trim().toLowerCase(), name])
+    );
+    const removed = new Set<string>();
+    const filterTools = (tools?: string[]): string[] | undefined => {
+      if (!Array.isArray(tools)) return tools;
+      const retained: string[] = [];
+      for (const candidate of tools) {
+        const original = String(candidate ?? "").trim();
+        const knownName = allowed.get(original.toLowerCase());
+        if (knownName) {
+          if (!retained.includes(knownName)) retained.push(knownName);
+        } else if (original) {
+          removed.add(original);
+        }
+      }
+      return retained;
+    };
+
+    const steps = plan.steps.map((step) => ({
+      ...step,
+      toolsNeeded: filterTools(step.toolsNeeded),
+      subtasks: step.subtasks?.map((subtask) => ({
+        ...subtask,
+        toolsNeeded: filterTools(subtask.toolsNeeded),
+      })),
+    }));
+    const removedTools = [...removed];
+    if (removedTools.length > 0) {
+      this.logger.warn("Removed unavailable tools from plan metadata", { removedTools });
+    }
+    return { plan: { ...plan, steps }, removedTools };
+  }
+
+  /** Expected files may be new, but they must always stay inside the project root. */
+  private isSafeRelativePath(filePath: string): boolean {
+    const value = String(filePath ?? "").trim().replace(/\\/g, "/");
+    return Boolean(value) && !value.startsWith("/") && !/^[A-Za-z]:\//.test(value) && !value.split("/").includes("..");
+  }
+
+  /**
+   * Check a verification command against facts supplied by CodingAgent. This deliberately
+   * accepts only commands whose executable/script can be proven from the repository snapshot;
+   * unknown commands are rejected instead of becoming a false confidence signal.
+   */
+  private isKnownVerificationCommand(command: string, context: Record<string, unknown>): boolean {
+    const value = String(command ?? "").trim();
+    const files = Array.isArray(context["files"]) ? context["files"].map(String) : [];
+    const hasFile = (name: string) => files.includes(name) || files.includes(`./${name}`);
+    const packageInfo = context["package"] && typeof context["package"] === "object"
+      ? context["package"] as Record<string, unknown>
+      : undefined;
+    const scripts = packageInfo?.["scripts"] && typeof packageInfo["scripts"] === "object"
+      ? packageInfo["scripts"] as Record<string, unknown>
+      : undefined;
+    const scriptMatch = /^(?:npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9:_-]+)(?:\s|$)/.exec(value);
+    const scriptName = scriptMatch?.[1];
+    if (scriptName) return Boolean(scripts && typeof scripts[scriptName] === "string");
+    if (/^(?:npx\s+)?tsc(?:\s|$)/.test(value)) return context["hasTsconfig"] === true;
+    if (/^cargo\s+(?:check|test|build)(?:\s|$)/.test(value)) return hasFile("Cargo.toml");
+    if (/^go\s+(?:test|build)(?:\s|$)/.test(value)) return hasFile("go.mod");
+    if (/^python(?:3)?\s+-m\s+compileall(?:\s|$)/.test(value)) return hasFile("pyproject.toml") || hasFile("requirements.txt");
+    return false;
   }
 
   /**

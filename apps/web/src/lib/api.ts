@@ -701,6 +701,11 @@ export const api = {
         /** "Plan Mode" toggle in the composer: create/refresh the plan and report it, never
          *  execute (no file/shell tool call happens) - see CodingRunOptions.planOnly. */
         planOnly?: boolean;
+        /** Client-generated UUID for this submit - forwarded so the server can tag the
+         *  persisted messages with it (see CodingWorkspace.tsx's sendCodingPrompt) and so a
+         *  duplicate 409 response (a second submit for the same conversation while the first
+         *  is still running) can be told apart from a real failure. */
+        requestId?: string;
       }
     ) =>
       request<{
@@ -721,6 +726,7 @@ export const api = {
           provider: options?.provider,
           model: options?.model,
           planOnly: options?.planOnly,
+          requestId: options?.requestId,
         }),
       }),
   },

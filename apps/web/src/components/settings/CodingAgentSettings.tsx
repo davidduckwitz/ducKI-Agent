@@ -27,6 +27,21 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
     "CODING_AGENT_EXPLORE_TIMEOUT_MS",
     "CODING_AGENT_ENABLE_VERIFY",
     "AGENT_CODING_ALLOW_GIT_COMMIT",
+    "CODING_AGENT_PREPLAN_RESEARCH",
+    "CODING_AGENT_PREPLAN_MAX_TOOL_CALLS",
+    "CODING_AGENT_STALE_READ_RECOVERY",
+    "CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT",
+    "CODING_AGENT_STALE_READ_MAX_RECOVERIES",
+    "CODING_AGENT_ENFORCE_TOOL_ALLOWLIST",
+    "CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS",
+    "CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL",
+    "CODING_AGENT_BROWSER_PREFLIGHT",
+    "CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS",
+    "CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE",
+    "AGENT_STALE_READ_STREAK",
+    "AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES",
+    "AGENT_RUN_JOURNAL_ENABLED",
+    "AGENT_PROTOCOL_ERROR_RECOVERY",
   ];
 
   const save = useMutation({
@@ -66,6 +81,21 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_EXPLORE_TIMEOUT_MS: "600000",
       CODING_AGENT_ENABLE_VERIFY: "true",
       AGENT_CODING_ALLOW_GIT_COMMIT: "false",
+      CODING_AGENT_PREPLAN_RESEARCH: "false",
+      CODING_AGENT_PREPLAN_MAX_TOOL_CALLS: "12",
+      CODING_AGENT_STALE_READ_RECOVERY: "true",
+      CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT: "true",
+      CODING_AGENT_STALE_READ_MAX_RECOVERIES: "1",
+      CODING_AGENT_ENFORCE_TOOL_ALLOWLIST: "true",
+      CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS: "1",
+      CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL: "true",
+      CODING_AGENT_BROWSER_PREFLIGHT: "true",
+      CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS: "true",
+      CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE: "true",
+      AGENT_STALE_READ_STREAK: "4",
+      AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES: "3",
+      AGENT_RUN_JOURNAL_ENABLED: "true",
+      AGENT_PROTOCOL_ERROR_RECOVERY: "true",
     };
     return defaults[key] ?? "";
   };
@@ -90,6 +120,36 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
         "Automatische Shell- und Browser-Verifikation am Ende eines Coding-Agent-Versuchs. Wenn deaktiviert, wird der Lauf schneller beendet, aber das Ergebnis als ungeprüft markiert.",
       AGENT_CODING_ALLOW_GIT_COMMIT:
         "Standard aus: der Coding Agent darf git nur zum Ansehen (status/diff/log) nutzen, niemals selbst 'add' oder 'commit' ausführen - Checkpoints werden ohnehin automatisch nach jeder Änderung mitgeschnitten (Tab 'Änderungen'), ein eigenes Commit wäre nur eine zweite, redundante Historie. Aktivieren, wenn der Agent eigenständig in einem im Sandbox-Projekt selbst angelegten git-Repo committen soll.",
+      CODING_AGENT_PREPLAN_RESEARCH:
+        "Startet vor einer neuen Planerstellung einen zusätzlichen, nur lesenden Modell-Research-Lauf. Aus nutzt ausschließlich den schnellen deterministischen Projekt-Snapshot; aktivieren bei großen oder ungewöhnlich strukturierten Projekten.",
+      CODING_AGENT_PREPLAN_MAX_TOOL_CALLS:
+        "Maximale Tool-Aufrufe für die optionale Vorab-Recherche. Begrenzt Kosten und Wartezeit, ohne den späteren normalen Explore-Schritt einzuschränken.",
+      CODING_AGENT_STALE_READ_RECOVERY:
+        "Bei mehrfach identischen Lesevorgängen wird zuerst eine gezielte Recovery-Anweisung gegeben statt sofort abzubrechen. Der Agent soll dann Status, neue Suche, andere Range, Diagnose oder einen blockierten Schritt wählen.",
+      CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT:
+        "Die Recovery greift nur, wenn die zurückgelieferten Datei-Inhalte identisch sind. Verhindert Fehlabbrüche, falls eine Datei extern geändert wurde.",
+      CODING_AGENT_STALE_READ_MAX_RECOVERIES:
+        "Wie viele Recovery-Runden vor einem echten Read-Loop-Abbruch erlaubt sind. 0 deaktiviert die Recovery; 1 ist meist ausreichend.",
+      CODING_AGENT_ENFORCE_TOOL_ALLOWLIST:
+        "Entfernt aus Plan-Schritten Toolnamen, die im aktuellen Executor nicht registriert sind. So kann ein Begriff wie 'clock' bei einer Zeit-/Uhr-Funktion keinen Lauf abbrechen.",
+      CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS:
+        "Zusätzliche gezielte Reparaturversuche nur nach einem Browser-Laufzeitfehler. Der Agent muss die betroffene JavaScript-Stelle lesen und reparieren, bevor erneut geprüft wird.",
+      CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL:
+        "Übergibt Browser-Fehler mit Datei und Zeile als verbindliche Code-Debug-Aufgabe. Der Agent repariert den erzeugten JavaScript-Code statt den Browser-Check erneut auszuführen.",
+      CODING_AGENT_BROWSER_PREFLIGHT:
+        "Prüft eine statische Webseite automatisch, bevor der Agent alle Plan-Schritte als fertig markiert. Ein JavaScript-Laufzeitfehler wird noch im selben Versuch an den Agenten zur Reparatur zurückgegeben.",
+      CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS:
+        "Behandelt die implizite Browser-Anfrage nach favicon.ico bei 404 als Warnung statt als Verifikationsfehler. Explizit referenzierte oder andere fehlende Ressourcen bleiben prüfpflichtig.",
+      CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE:
+        "Vor einer Änderung wegen eines fehlenden Assets muss der Agent dessen konkrete Referenz im Projekt nachweisen. Das verhindert Hinzufügen-und-Entfernen-Schleifen bei Browser-Standardanfragen.",
+      AGENT_STALE_READ_STREAK:
+        "Anzahl identischer reiner Lese-Iterationen, nach der die Read-Loop-Regel greift. Die Recovery oben wird vorher angewendet, sofern sie aktiv ist.",
+      AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES:
+        "Wie oft derselbe Verifikationsfehler aufeinanderfolgen darf, bevor der Coding-Lauf als nicht konvergent endet. Danach wird keine identische Reparatur weiter wiederholt.",
+      AGENT_RUN_JOURNAL_ENABLED:
+        "Speichert die letzten Tool-Aktionen im Laufzeitkontext, damit der Agent keine bereits erfolgreichen Aktionen wiederholt. Für mehrschrittige Coding-Läufe empfohlen.",
+      AGENT_PROTOCOL_ERROR_RECOVERY:
+        "Erkennt fehlerhaft vermischte native Tool-Aufrufe wie filesystem(action:'todo'), meldet die richtige Aufrufform zurück und zählt sie nicht als Arbeitsfehler für den Abbruchschutz.",
     };
     return descriptions[key] ?? "";
   };
@@ -105,6 +165,21 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_EXPLORE_TIMEOUT_MS: "Explore-Timeout (ms)",
       CODING_AGENT_ENABLE_VERIFY: "Automatische Verifikation",
       AGENT_CODING_ALLOW_GIT_COMMIT: "Git commit erlauben",
+      CODING_AGENT_PREPLAN_RESEARCH: "LLM-Vorrecherche vor dem Plan",
+      CODING_AGENT_PREPLAN_MAX_TOOL_CALLS: "Vorrecherche: max. Tool-Aufrufe",
+      CODING_AGENT_STALE_READ_RECOVERY: "Read-Loop-Recovery",
+      CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT: "Nur bei identischem Dateiinhalt",
+      CODING_AGENT_STALE_READ_MAX_RECOVERIES: "Read-Loop: max. Recoveries",
+      CODING_AGENT_ENFORCE_TOOL_ALLOWLIST: "Nur verfügbare Plan-Tools zulassen",
+      CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS: "Browserfehler: Reparaturversuche",
+      CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL: "Browserfehler als Code-Debugging behandeln",
+      CODING_AGENT_BROWSER_PREFLIGHT: "Browser-Preflight vor Abschluss",
+      CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS: "Favicon-404 als Warnung behandeln",
+      CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE: "Asset-Änderungen nur mit Quellnachweis",
+      AGENT_STALE_READ_STREAK: "Read-Loop-Schwelle",
+      AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES: "Gleiche Verify-Fehler erlauben",
+      AGENT_RUN_JOURNAL_ENABLED: "Run-Journal aktivieren",
+      AGENT_PROTOCOL_ERROR_RECOVERY: "Tool-Protokollfehler abfangen",
     };
     return labels[key] ?? key;
   };
@@ -251,6 +326,65 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
                     disabled={save.isPending}
                   >
                     <Save className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Deterministic planning and read-loop recovery */}
+        <div className="space-y-3 border-t border-border pt-4">
+          <h4 className="text-sm font-medium">Planung &amp; Lese-Recovery</h4>
+          <div className="space-y-3 pl-4">
+            {[
+              "CODING_AGENT_PREPLAN_RESEARCH",
+              "CODING_AGENT_STALE_READ_RECOVERY",
+              "CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT",
+              "CODING_AGENT_ENFORCE_TOOL_ALLOWLIST",
+              "CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL",
+              "CODING_AGENT_BROWSER_PREFLIGHT",
+              "CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS",
+              "CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE",
+              "AGENT_RUN_JOURNAL_ENABLED",
+              "AGENT_PROTOCOL_ERROR_RECOVERY",
+            ].map((key) => (
+              <div key={key} className="flex items-center justify-between gap-4 border-b border-border pb-3 last:border-b-0 last:pb-0">
+                <div>
+                  <label className="block text-sm font-medium text-foreground">{getLabel(key)}</label>
+                  <p className="mt-1 max-w-xl text-xs text-muted-foreground">{getDescription(key)}</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={getDisplayValue(key) === "true"}
+                  onChange={(e) => {
+                    const value = e.target.checked ? "true" : "false";
+                    setEdits((prev) => ({ ...prev, [key]: value }));
+                    save.mutate({ key, value });
+                  }}
+                  className="h-4 w-4 shrink-0 rounded accent-primary"
+                />
+              </div>
+            ))}
+            {[
+              "CODING_AGENT_PREPLAN_MAX_TOOL_CALLS",
+              "CODING_AGENT_STALE_READ_MAX_RECOVERIES",
+              "AGENT_STALE_READ_STREAK",
+              "AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES",
+              "CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS",
+            ].map((key) => (
+              <div key={key} className="space-y-1 border-b border-border pb-3 last:border-b-0 last:pb-0">
+                <label className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-foreground">{getLabel(key)}</span>
+                  <span className="text-xs text-muted-foreground">Standard: {getDefaultValue(key)}</span>
+                </label>
+                <p className="text-xs text-muted-foreground">{getDescription(key)}</p>
+                <div className="flex items-start gap-2">
+                  <input type="number" min={key === "AGENT_STALE_READ_STREAK" ? 2 : 0} max={key === "CODING_AGENT_PREPLAN_MAX_TOOL_CALLS" ? 100 : 20} step="1"
+                    value={getDisplayValue(key)} onChange={(e) => setEdits((prev) => ({ ...prev, [key]: e.target.value }))}
+                    className="input flex-1" />
+                  <button onClick={() => handleSaveField(key)} className="btn-primary flex items-center gap-1" disabled={save.isPending}>
+                    <Save className="h-4 w-4" />
                   </button>
                 </div>
               </div>

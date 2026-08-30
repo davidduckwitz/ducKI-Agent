@@ -6,7 +6,12 @@ import type { AgentEventEmitter } from "@ducki/agent";
 import { isAbortError, type LLMProvider } from "@ducki/providers";
 import { EventEmitter } from "node:events";
 import { agentRegistry } from "../lib/agent-registry.js";
-import { registerCodingRun, unregisterCodingRun } from "../lib/coding-run-registry.js";
+import {
+  registerCodingRun,
+  unregisterCodingRun,
+  acquireCodingRunLock,
+  releaseCodingRunLock,
+} from "../lib/coding-run-registry.js";
 import { notifyCodingRunFinished } from "../lib/coding-notify.js";
 import { loadProviderFromSettings } from "../lib/provider-settings.js";
 import { resolveCodingSandboxRoot } from "./coding.js";
@@ -96,6 +101,11 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       /** "Plan Mode" from the coding chat composer: create/refresh the plan and report it, never
        *  enter the EXPLORE/EDIT/VERIFY loop - see CodingRunOptions.planOnly. */
       planOnly?: boolean;
+      /** Client-generated UUID identifying this specific submit (see CodingWorkspace.tsx's
+       *  sendCodingPrompt). Forwarded to CodingAgent as localMessageId so the persisted user/
+       *  assistant messages carry it, letting the UI merge its optimistic bubble with the
+       *  persisted one instead of showing both. */
+      requestId?: string;
     };
     const goal = String(body.goal ?? "").trim();
     if (!goal) {
@@ -148,10 +158,25 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       typeof body.conversationId === "number" && Number.isFinite(body.conversationId) && body.conversationId > 0
         ? body.conversationId
         : undefined;
+    // Claimed synchronously (no await before this line since requestedConversationId was
+    // computed) so two near-simultaneous requests for the same conversation can't both pass -
+    // see acquireCodingRunLock's doc comment for why the `active` map alone isn't enough.
+    let lockedConversationId: number | undefined;
+    if (requestedConversationId !== undefined) {
+      if (!acquireCodingRunLock(requestedConversationId)) {
+        res
+          .status(409)
+          .json(createApiError("A coding run is already in progress for this conversation"));
+        return;
+      }
+      lockedConversationId = requestedConversationId;
+    }
+
     let reuseConversationId: number | undefined;
     if (requestedConversationId !== undefined) {
       const existing = await db.getConversation(requestedConversationId).catch(() => undefined);
       if (!existing) {
+        releaseCodingRunLock(requestedConversationId);
         res.status(404).json(createApiError(`Conversation ${requestedConversationId} not found`));
         return;
       }
@@ -216,6 +241,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),
         ...(timeoutMs > 0 ? { timeoutMs } : {}),
         ...(body.planOnly === true ? { planOnly: true } : {}),
+        ...(body.requestId ? { localMessageId: body.requestId } : {}),
         // Same chat:chunk channel/room the regular chat agent streams into - the frontend
         // store already accumulates these into `streamingContent` and shows them in the
         // "currently writing" bubble, with no coding-specific UI changes needed for this.
@@ -264,6 +290,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
     } finally {
       if (runConversationId !== undefined) unregisterCodingRun(runConversationId);
       if (agentRegistryRunId !== undefined) agentRegistry.unregister(agentRegistryRunId);
+      if (lockedConversationId !== undefined) releaseCodingRunLock(lockedConversationId);
     }
   } catch (error) {
     next(error);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createExploreTool } from "../src/coding/explore-tool";
@@ -178,6 +178,111 @@ describe("explore sub-agent hang protection", () => {
 
       expect(result.success).toBe(true);
       expect((result.data as any)?.answer).toContain("found it");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * A literal "list <path>" / "read <path>" question should never reach the LLM sub-agent at
+ * all - it is answered with one deterministic filesystem call. This is what keeps a batch of
+ * several such explore calls (the model may legitimately issue more than one per turn) from
+ * turning into that many concurrent LLM requests to the provider.
+ */
+describe("explore tool deterministic shortcut", () => {
+  it("falls through to the LLM sub-agent when the named path does not exist", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "explore-det-list-missing-"));
+    try {
+      const spy = vi.spyOn(Agent.prototype, "run").mockImplementation(async function (this: Agent) {
+        return { response: "no such directory", iterations: 1, toolsUsed: [] } as any;
+      });
+      const tool = createExploreTool(stubProvider(), stubDb(), { sandboxRoot: dir });
+
+      const result = await tool.execute({ question: "list src" }); // "src" does not exist in dir
+
+      expect(result.success).toBe(true);
+      expect(spy).toHaveBeenCalledOnce(); // deterministic lookup failed - the sub-agent takes over
+      spy.mockRestore();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers 'list <dir>' with the real directory listing, deterministically", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "explore-det-list-real-"));
+    try {
+      const sub = join(dir, "src");
+      mkdirSync(sub);
+      writeFileSync(join(sub, "a.ts"), "export {}");
+      writeFileSync(join(sub, "b.ts"), "export {}");
+      const spy = vi.spyOn(Agent.prototype, "run");
+      const tool = createExploreTool(neverResolvingProvider(), stubDb(), { sandboxRoot: dir });
+
+      const result = await tool.execute({ question: "list src" });
+
+      expect(result.success).toBe(true);
+      expect((result.data as any)?.deterministic).toBe(true);
+      expect((result.data as any)?.iterations).toBe(0);
+      expect((result.data as any)?.answer).toContain("a.ts");
+      expect((result.data as any)?.answer).toContain("b.ts");
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("answers 'read <file>' with the real file content, deterministically", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "explore-det-read-"));
+    try {
+      writeFileSync(join(dir, "a.txt"), "hello world");
+      const spy = vi.spyOn(Agent.prototype, "run");
+      const tool = createExploreTool(neverResolvingProvider(), stubDb(), { sandboxRoot: dir });
+
+      const result = await tool.execute({ question: "read a.txt" });
+
+      expect(result.success).toBe(true);
+      expect((result.data as any)?.deterministic).toBe(true);
+      expect((result.data as any)?.answer).toContain("hello world");
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("self-corrects 'list <file>' into a read instead of failing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "explore-det-selfcorrect-"));
+    try {
+      writeFileSync(join(dir, "a.txt"), "hello world");
+      const spy = vi.spyOn(Agent.prototype, "run");
+      const tool = createExploreTool(neverResolvingProvider(), stubDb(), { sandboxRoot: dir });
+
+      const result = await tool.execute({ question: "list a.txt" });
+
+      expect(result.success).toBe(true);
+      expect((result.data as any)?.answer).toContain("hello world");
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still routes a genuine open-ended question to the LLM sub-agent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "explore-det-fallthrough-"));
+    try {
+      const spy = vi.spyOn(Agent.prototype, "run").mockImplementation(async function (this: Agent) {
+        return { response: "answer", iterations: 1, toolsUsed: [] } as any;
+      });
+      const tool = createExploreTool(stubProvider(), stubDb(), { sandboxRoot: dir });
+
+      const result = await tool.execute({ question: "where is the login handler defined?" });
+
+      expect(result.success).toBe(true);
+      expect(spy).toHaveBeenCalledOnce();
+      spy.mockRestore();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

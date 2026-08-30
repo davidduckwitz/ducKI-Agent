@@ -9,6 +9,17 @@ import type { CodingAgent } from "@ducki/agent";
  */
 const active = new Map<number, CodingAgent>();
 
+/**
+ * Per-conversation run lock, separate from `active` above: `active` is only populated once
+ * CodingAgent.run() has gotten far enough to call onConversationStarted (async, after project
+ * resolution etc.), which leaves a window where two near-simultaneous HTTP POST /coding-agent/run
+ * requests for the SAME conversationId (a fast double-submit before the UI can react, or a
+ * network retry) both see "nothing running yet" and both proceed - producing duplicate runs with
+ * competing file edits and duplicate transcript messages. This set is acquired synchronously at
+ * the very top of the route handler, before any await, so the check-and-set is atomic.
+ */
+const locked = new Set<number>();
+
 export function registerCodingRun(conversationId: number, agent: CodingAgent): void {
   active.set(conversationId, agent);
 }
@@ -23,4 +34,17 @@ export function stopCodingRun(conversationId: number): boolean {
   if (!agent) return false;
   agent.stop();
   return true;
+}
+
+/** Atomically claims the run lock for a conversation. False means a run is already in
+ *  progress for it - the caller must not start a second one. */
+export function acquireCodingRunLock(conversationId: number): boolean {
+  if (locked.has(conversationId)) return false;
+  locked.add(conversationId);
+  return true;
+}
+
+/** Releases a lock acquired via {@link acquireCodingRunLock}. Always call from a `finally`. */
+export function releaseCodingRunLock(conversationId: number): void {
+  locked.delete(conversationId);
 }

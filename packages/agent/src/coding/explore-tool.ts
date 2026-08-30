@@ -55,6 +55,87 @@ function createReadOnlyFilesystemTool(sandboxRoot: string | undefined): ToolExec
  *  loop's explicit "I am done" path; everything else is stripped (see below). */
 const EXPLORER_TOOLS: ReadonlySet<string> = new Set(["filesystem", "submit_solution"]);
 
+// Deliberately narrow to unambiguous IMPERATIVE verbs only ("list X", "read X", "cat X", ...) -
+// NOT phrasings like "what's in X?" or "what is X?". Those read as simple lookups to a human but
+// are indistinguishable, by verb alone, from a genuine open-ended question ("what is the routing
+// convention here?") that legitimately needs the sub-agent's reasoning - misreading one of those
+// as a bare path lookup would silently return the wrong kind of answer instead of the real one.
+const LIST_INTENT = /^(?:list|ls|dir)\b/i;
+const READ_INTENT = /^(?:read|cat|show(?:\s+me)?|view|display|open)\b/i;
+
+/**
+ * Pulls a single bare path token out of a short, literal "list X" / "read X" question, or
+ * returns undefined if the question doesn't reduce to exactly one. A real relative path never
+ * contains whitespace in this codebase's projects; a genuine open-ended question ("where is the
+ * login handler defined?") almost always does - that asymmetry is what keeps this conservative:
+ * anything that doesn't collapse to one clean token falls through to the LLM sub-agent below
+ * instead of being misread as a path.
+ */
+function extractPathCandidate(question: string): string | undefined {
+  let cleaned = question.trim().replace(/[?!.]+$/, "").trim();
+  cleaned = cleaned.replace(/^["'`]|["'`]$/g, "").trim();
+  cleaned = cleaned.replace(/^(?:read|cat|show(?:\s+me)?|view|display|open|list|ls|dir)\s+/i, "");
+  cleaned = cleaned.replace(/^(?:the\s+)?(?:contents?\s+of\s+)?(?:the\s+)?(?:file|directory|folder|dir)\s+/i, "").trim();
+
+  const quoted = cleaned.match(/["'`]([^"'`]+)["'`]/);
+  const candidate = (quoted?.[1] ?? cleaned).replace(/[.,;:]+$/, "").trim();
+
+  if (!candidate || /\s/.test(candidate)) return undefined;
+  if (!/^[\w.][\w./-]*$/.test(candidate)) return undefined;
+  return candidate;
+}
+
+function formatDeterministicAnswer(path: string, data: unknown): string {
+  if (typeof data === "string") {
+    return `Contents of ${path}:\n${data}`;
+  }
+  const entries = Array.isArray(data)
+    ? (data as Array<{ name: string; type: string }>)
+    : Array.isArray((data as { entries?: unknown })?.entries)
+      ? ((data as { entries: Array<{ name: string; type?: string }> }).entries)
+      : undefined;
+  if (entries) {
+    const lines = entries.map((e) => `${e.type === "directory" ? "[dir] " : ""}${e.name}`);
+    return `Contents of directory ${path}:\n${lines.join("\n") || "(empty)"}`;
+  }
+  return `Contents of ${path}:\n${JSON.stringify(data)}`;
+}
+
+/**
+ * Answers a literal "list <path>" / "read <path>" exploration question with a single
+ * deterministic filesystem call - no LLM sub-agent, no extra request. This is deliberately
+ * narrow: it only fires when the question reduces to one unambiguous verb + one bare path
+ * token (see extractPathCandidate). Anything else - real search/reasoning questions, which are
+ * the vast majority of explore calls per EXPLORE_DIRECTIVE's own guidance - falls through to
+ * the sub-agent below completely unchanged.
+ *
+ * "read" is tried even for a directory-shaped question ("what's in X") because the underlying
+ * filesystem tool already degrades a read-on-a-directory into the same listing "list" would
+ * give (see filesystem.ts's read case) - no need to pre-classify file vs. directory ourselves.
+ * "list" on an actual file fails with a clear, recognizable error, which is retried once as a
+ * read instead of being treated as a dead end.
+ */
+async function tryDeterministicAnswer(
+  question: string,
+  fsTool: ToolExecutor
+): Promise<{ answer: string } | undefined> {
+  const trimmed = question.trim();
+  const isListIntent = LIST_INTENT.test(trimmed);
+  const isReadIntent = !isListIntent && READ_INTENT.test(trimmed);
+  if (!isListIntent && !isReadIntent) return undefined;
+
+  const path = extractPathCandidate(trimmed);
+  if (!path) return undefined;
+
+  let result = await fsTool.execute({ action: isListIntent ? "list" : "read", path });
+  if (!result.success && isListIntent && /is a file, not a directory/i.test(result.error ?? "")) {
+    result = await fsTool.execute({ action: "read", path });
+  }
+  if (!result.success || result.data == null) return undefined;
+
+  return { answer: formatDeterministicAnswer(path, result.data) };
+}
+
 export interface ExploreToolOptions {
   sandboxRoot?: string;
   /** Optional per-call profile. This keeps the explorer disposable while allowing its provider,
@@ -127,6 +208,18 @@ export function createExploreTool(
         return { success: false, data: null, error: "question required, e.g. \"where is the coding router mounted?\"" };
       }
 
+      // A literal "list <path>" / "read <path>" question needs no LLM at all - answer it with
+      // one deterministic filesystem call instead of spinning up a whole sub-agent conversation.
+      // This is what keeps a batch of several such explore calls (the model is free to issue
+      // more than one per turn - see agent.ts's parallel tool-batch execution) from turning into
+      // that many CONCURRENT LLM requests to the provider; a real search/reasoning question
+      // (the normal case) is unaffected and falls straight through to the sub-agent below.
+      const readOnlyFs = createReadOnlyFilesystemTool(options.sandboxRoot);
+      const deterministic = await tryDeterministicAnswer(question, readOnlyFs);
+      if (deterministic) {
+        return { success: true, data: { question, answer: deterministic.answer, iterations: 0, deterministic: true } };
+      }
+
       const profile = await options.resolveProfile?.();
       const rootHint = options.sandboxRoot
         ? `\n\nProject root: ${options.sandboxRoot}. Address every path RELATIVE to it.`
@@ -142,7 +235,7 @@ export function createExploreTool(
         ...(profile?.allowedSkillSlugs ? { allowedSkillSlugs: profile.allowedSkillSlugs } : {}),
         disableQualityPasses: true,
       });
-      subAgent.executor.registerTool(createReadOnlyFilesystemTool(options.sandboxRoot));
+      subAgent.executor.registerTool(readOnlyFs);
 
       // Strip everything the Agent constructor auto-registers (memory, project, task, history,
       // gateway, vision, script and plan tools). Two reasons, both disqualifying:

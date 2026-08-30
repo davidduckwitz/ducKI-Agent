@@ -87,11 +87,16 @@ export class ConversationManager {
    *   conversation transcript and later shown as if the user had typed it. Safe to lose on
    *   reload: each new attempt/run rebuilds its own full instruction prompt from scratch, it
    *   never depends on a past turn's exact scaffolding text still being in history.
+   * @param persist When false, skips the DB write entirely while still keeping the message in
+   *   this run's in-memory context (`this.messages`). Used by CodingAgent's retry attempts: the
+   *   original goal was already persisted as the user's turn on attempt 1, and every later
+   *   attempt calling Agent.run() again with the same displayContent would otherwise insert a
+   *   fresh duplicate "user" row per attempt - see CodingAgent's per-attempt Agent.run() call.
    */
-  async addMessage(message: LLMMessage, displayContent?: string): Promise<void> {
+  async addMessage(message: LLMMessage, displayContent?: string, persist = true): Promise<void> {
     this.messages.push(message);
 
-    if (this.conversationId !== undefined) {
+    if (persist && this.conversationId !== undefined) {
       let metadataRecord: Record<string, unknown> | undefined;
       if (typeof message.metadata === "object" && message.metadata !== null) {
         metadataRecord = { ...message.metadata };

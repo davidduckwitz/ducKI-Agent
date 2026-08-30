@@ -202,4 +202,54 @@ describe("CodingAgent syncs the Plan when the model rewrites the checklist", () 
     expect(steps.find((s: any) => s.title === "Step A").status).toBe("completed");
     expect(steps.find((s: any) => s.title === "Step B").status).toBe("pending");
   });
+
+  it("also syncs the plans-table row for a plan started from opts.existingPlan (UI-triggered execution)", async () => {
+    // Regression: /plans/:id/execute (and the Plan tab's "Ausfuehren"/auto-execute-after-
+    // refine paths) always runs with opts.existingPlan since the caller already owns that
+    // plans-table row - CodingAgent used to leave currentPlanDb undefined for that whole case,
+    // silently disabling the write-back below for EVERY plan run started from the UI. Once the
+    // live "plan"/"decision" events aged out of the paginated message window, the Plan tab and
+    // checklist both fell back to this exact row and found it frozen at its original all-pending
+    // shape - looking like the run had lost track of its own progress.
+    const { db, plans } = makeMemoryDb();
+    const seeded = await db.createPlan({
+      conversationId: 1,
+      goal: "build the thing",
+      title: "build the thing",
+      complexity: 1,
+      steps: JSON.stringify([
+        { id: "step_1", title: "Step A", status: "pending" },
+        { id: "step_2", title: "Step B", status: "pending" },
+      ]),
+      tools: "[]",
+      markdown: "",
+      status: "active",
+      version: 1,
+      parentPlanId: null,
+      repositorySnapshot: null,
+    });
+
+    const provider = scriptedProvider(["[TOOL:todo action=update id=1 status=done]", "Fertig."]);
+    const codingAgent = new CodingAgent(provider, db, undefined, {});
+    (codingAgent as any).agent.enablePlanning = false;
+
+    await codingAgent.run("build the thing", {
+      maxAttempts: 1,
+      existingPlan: {
+        goal: "build the thing",
+        planType: "coding",
+        estimatedComplexity: "low",
+        steps: [
+          { id: "step_1", title: "Step A", status: "pending" },
+          { id: "step_2", title: "Step B", status: "pending" },
+        ],
+      } as any,
+      planRunContext: { planId: seeded.id, planVersion: 1, runId: "test-run" },
+    });
+
+    expect(plans).toHaveLength(1); // still no NEW row created
+    const steps = JSON.parse(plans[0]!["steps"] as string);
+    expect(steps.find((s: any) => s.title === "Step A").status).toBe("completed");
+    expect(steps.find((s: any) => s.title === "Step B").status).toBe("pending");
+  });
 });

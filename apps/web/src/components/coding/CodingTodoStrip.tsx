@@ -1,9 +1,9 @@
-import { Check, CircleDashed, Loader2, TriangleAlert } from "lucide-react";
+import { Ban, Check, CircleDashed, HelpCircle, Loader2, TriangleAlert } from "lucide-react";
 
 export interface CodingTodoItem {
   id: number;
   title: string;
-  status: "pending" | "in_progress" | "done" | "blocked";
+  status: "pending" | "in_progress" | "done" | "blocked" | "failed" | "skipped" | "unverified" | "unknown";
   note?: string;
 }
 
@@ -12,6 +12,10 @@ const STATUS_ICON = {
   in_progress: Loader2,
   done: Check,
   blocked: TriangleAlert,
+  failed: TriangleAlert,
+  skipped: Ban,
+  unverified: TriangleAlert,
+  unknown: HelpCircle,
 } as const;
 
 const STATUS_CLASS = {
@@ -19,7 +23,22 @@ const STATUS_CLASS = {
   in_progress: "text-primary",
   done: "text-emerald-500",
   blocked: "text-amber-500",
+  failed: "text-destructive",
+  skipped: "text-muted-foreground",
+  unverified: "text-amber-500",
+  unknown: "text-muted-foreground",
 } as const;
+
+const STATUS_LABEL: Record<CodingTodoItem["status"], string> = {
+  pending: "Offen",
+  in_progress: "Aktuell",
+  done: "Erfolgreich",
+  blocked: "Fehlgeschlagen",
+  failed: "Fehlgeschlagen",
+  skipped: "Übersprungen",
+  unverified: "Unbestätigt",
+  unknown: "Unbekannt",
+};
 
 /**
  * The agent's live checklist.
@@ -58,6 +77,7 @@ export function CodingTodoStrip({ items }: { items: CodingTodoItem[] }) {
                 }`}
               >
                 {item.title}
+                <span className="ml-1 text-[10px] text-muted-foreground">({STATUS_LABEL[item.status] ?? "Unbekannt"})</span>
                 {item.note && <span className="ml-1 text-[10px] text-muted-foreground">— {item.note}</span>}
               </span>
             </li>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, CheckCircle2, Circle, ListChecks, Loader2, Play, Sparkles } from "lucide-react";
+import { AlertCircle, CheckCircle2, Circle, HelpCircle, ListChecks, Loader2, Play, Sparkles } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
@@ -87,15 +87,29 @@ export function CodingPlanPanel({
   useEffect(() => {
     if (!conversationId) return;
     let active = true;
-    void api.plans.list(conversationId).then((items) => {
-      if (active) setPlanHistory(items as Plan[]);
-    }).catch(() => undefined);
-    return () => { active = false; };
+    const fetchPlans = () => {
+      void api.plans.list(conversationId).then((items) => {
+        if (active) setPlanHistory(items as Plan[]);
+      }).catch(() => undefined);
+    };
+    fetchPlans();
+    // While a run is in progress, latestPersistedPlan (this list's first entry) is the ONLY
+    // source that still reflects live per-step progress once the "plan"/"decision" events that
+    // drove `checklist` above age out of the paginated message window (long runs routinely
+    // exceed the 40-message page) - see CodingAgent's syncPlanFromTodos, which writes each
+    // checklist change back to this exact row. A one-shot fetch on mount/refinement means this
+    // list is stuck at whatever it was when first loaded (usually all-pending) for a run's
+    // entire remaining duration, which is exactly the "Plan tab looks frozen" symptom this
+    // fixes - poll it like conversationMessagesQuery already does, only while there is
+    // something actually running to catch up with.
+    if (!isLoading) return () => { active = false; };
+    const interval = setInterval(fetchPlans, 3000);
+    return () => { active = false; clearInterval(interval); };
     // Re-fetches whenever a refinement lands (existing behavior) AND whenever the live-derived
     // plan gets a new id (a fresh plan was just created this session) - otherwise planHistory
     // would only ever reflect whatever existed at mount time and never pick up a plan created
     // after that without a full remount.
-  }, [conversationId, refinedPlan?.id, derivedPlan?.id]);
+  }, [conversationId, refinedPlan?.id, derivedPlan?.id, isLoading]);
 
   useEffect(() => {
     if (derivedPlan?.id && refinedPlan?.parentPlanId !== derivedPlan.id && (derivedPlan.version ?? 0) > (refinedPlan?.version ?? 0)) {
@@ -116,7 +130,12 @@ export function CodingPlanPanel({
     runId: String(latestRun["runId"]),
     ...(Number.isFinite(Number(latestRun["planId"])) ? { planId: Number(latestRun["planId"]) } : {}),
   } : plan?.id !== undefined ? { planId: plan.id } : undefined;
-  const completionEvidence = latestRun?.["completionEvidence"] as { changedFiles?: string[]; openChecklistItems?: string[] } | undefined;
+  const completionEvidence = latestRun?.["completionEvidence"] as {
+    changedFiles?: string[];
+    openChecklistItems?: string[];
+    stepStatuses?: string[];
+    stepNotes?: Array<string | undefined>;
+  } | undefined;
 
   // Real per-step state from the agent's own checklist (see lib/planChecklist for why this
   // replaced a tool-call counter, and why the logic lives in a testable module). Falls back to
@@ -151,10 +170,15 @@ export function CodingPlanPanel({
     : undefined;
 
   const steps = plan?.steps ?? [];
-  const statusOf = (step: { id?: string; title: string }, index: number) => resolveStepStatus(checklist, step, index);
-  const noteOf = (step: { title: string }, index: number) => resolveStepNote(checklist, step, index);
+  const terminalEvidenceStatuses = completionEvidence?.stepStatuses;
+  const statusOf = (step: { id?: string; title: string }, index: number) =>
+    terminalEvidenceStatuses?.[index] ?? resolveStepStatus(checklist, step, index);
+  const noteOf = (step: { title: string }, index: number) =>
+    completionEvidence?.stepNotes?.[index] ?? resolveStepNote(checklist, step, index);
   const runningIndex = useMemo(() => firstOpenStepIndex(checklist, steps), [checklist, steps]);
-  const doneCount = checklist?.doneCount ?? 0;
+  const doneCount = terminalEvidenceStatuses
+    ? terminalEvidenceStatuses.filter((status) => status === "completed").length
+    : checklist?.doneCount ?? 0;
 
   const formatBudget = (ms: number): string => {
     const minutes = Math.round(ms / 60000);
@@ -277,7 +301,7 @@ export function CodingPlanPanel({
         {completionEvidence && (
           <div className="mt-2 rounded border border-border bg-background/40 p-2 text-[10px] text-muted-foreground">
             {completionEvidence.changedFiles?.length ? <div>Geänderte Dateien: {completionEvidence.changedFiles.join(", ")}</div> : <div>Keine Dateiänderung nachgewiesen.</div>}
-            {completionEvidence.openChecklistItems?.length ? <div className="mt-1 text-amber-500">Offen: {completionEvidence.openChecklistItems.join(", ")}</div> : null}
+            {completionEvidence.openChecklistItems?.length ? <div className="mt-1 text-amber-500">Offen/unbekannt: {completionEvidence.openChecklistItems.join(", ")}</div> : null}
           </div>
         )}
       </div>
@@ -289,11 +313,13 @@ export function CodingPlanPanel({
           </button>
         )}
         {steps.map((step, index) => {
-          const status = statusOf(step, index);
+          const resolvedStatus = statusOf(step, index);
+          const status = resolvedStatus ?? (isLoading ? "unknown" : "pending");
           const done = status === "done";
           const failed = status === "failed";
           const unverified = status === "unverified";
           const skipped = status === "skipped";
+          const unknown = status === "unknown";
           // "in_progress" is the agent's own "I am working on this NOW" signal (the todo tool
           // says to mark a step in_progress before starting it). Prefer it; fall back to the
           // positional guess only when the model never marks in_progress.
@@ -320,6 +346,8 @@ export function CodingPlanPanel({
                   <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
                 ) : unverified ? (
                   <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                ) : unknown ? (
+                  <HelpCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 ) : running ? (
                   <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
                 ) : (
@@ -332,7 +360,7 @@ export function CodingPlanPanel({
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium">
                     {index + 1}. {step.title}
-                    {(failed || unverified || skipped) && (
+                    {(failed || unverified || skipped || unknown) && (
                       <span
                         className={`ml-1.5 text-[10px] font-normal ${
                           failed ? "text-destructive" : unverified ? "text-amber-500" : "text-muted-foreground"
@@ -343,6 +371,8 @@ export function CodingPlanPanel({
                           ? t("codingPage.stepFailed")
                           : unverified
                             ? t("codingPage.stepUnverified")
+                          : unknown
+                            ? "Unbekannt"
                             : t("codingPage.stepSkipped")}
                         )
                       </span>

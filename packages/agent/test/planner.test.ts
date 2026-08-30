@@ -28,6 +28,42 @@ describe("Planner - Enhanced Features", () => {
   });
 
   describe("Hierarchical Plans with Subtasks", () => {
+    it("removes hallucinated plan tools without rejecting the plan", async () => {
+      vi.mocked(mockProvider.generate).mockResolvedValue({
+        content: JSON.stringify({
+          goal: "Add a world clock component",
+          planType: "coding",
+          steps: [{
+            id: "step_1",
+            title: "Implement the clock component",
+            description: "Create the UI component and wire its state.",
+            toolsNeeded: ["clock", "filesystem"],
+            acceptanceCriteria: ["The component renders a current time."],
+            subtasks: [{
+              id: "step_1_a",
+              title: "Add component state",
+              description: "Keep the displayed time current.",
+              toolsNeeded: ["clock", "shell"],
+              status: "pending",
+            }],
+            status: "pending",
+          }],
+          estimatedComplexity: "low",
+        }),
+        usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 },
+      });
+
+      const plan = await planner.createPlan("Add a world clock component", ["filesystem", "shell"]);
+
+      expect(plan.steps[0].toolsNeeded).toEqual(["filesystem"]);
+      expect(plan.steps[0].subtasks?.[0].toolsNeeded).toEqual(["shell"]);
+      expect(plan.validationResult?.warnings).toContain("Removed unavailable advisory tools: clock");
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        "Removed unavailable tools from plan metadata",
+        expect.objectContaining({ removedTools: ["clock"] })
+      );
+    });
+
     it("should create plan with subtasks", async () => {
       const mockResponse = {
         goal: "Build a web application",
@@ -250,6 +286,40 @@ describe("Planner - Enhanced Features", () => {
 
       expect(plan.validationResult?.isValid).toBe(true);
       expect(plan.validationResult?.issues).toHaveLength(0);
+    });
+
+    it("should reject unverifiable coding contracts against repository facts", async () => {
+      vi.mocked(mockProvider.generate).mockResolvedValue({
+        content: JSON.stringify({
+          goal: "Add endpoint",
+          planType: "coding",
+          steps: [{
+            id: "step_1",
+            title: "Add endpoint",
+            description: "Implement the endpoint",
+            expectedFiles: ["../outside.ts"],
+            acceptanceCriteria: ["The endpoint returns HTTP 200"],
+            verificationCommands: ["npm run nonexistent"],
+          }],
+          estimatedComplexity: "low",
+        }),
+        usage: { promptTokens: 100, completionTokens: 200, totalTokens: 300 },
+      });
+
+      const plan = await planner.createPlan("Add endpoint", [], {
+        requiredPlanType: "coding",
+        repositoryContext: {
+          files: ["package.json"],
+          package: { scripts: { test: "vitest" } },
+          hasTsconfig: false,
+        },
+      });
+
+      expect(plan.validationResult?.isValid).toBe(false);
+      expect(plan.validationResult?.issues).toEqual(expect.arrayContaining([
+        expect.stringContaining("invalid expected file path"),
+        expect.stringContaining("unavailable verification command"),
+      ]));
     });
 
     it("should detect missing step titles", async () => {

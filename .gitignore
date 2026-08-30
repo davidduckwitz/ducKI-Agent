@@ -22,7 +22,8 @@ coverage/
 *.sqlite-shm
 *.sqlite-wal
 *.sqlite-journal
-apps/server/plugins/*/data/
+apps/server/plugins/*
+apps/server/plugins/*/data/*
 storage/
 *.log
 
@@ -45,13 +46,11 @@ Thumbs.db
 *.zip
 *.msi
 *.dmg
+*.sqlite
 
-apps/server/shared-workspace/llm-wiki/
-apps/server/shared-workspace/chat-uploads/
-apps/server/shared-workspace/btc-puzzle/
-apps/server/shared-workspace/coding/
-apps/server/shared-workspace/bitcoin-puzzle-attempts/
+apps/server/shared-workspace/*
 apps/server/dist/
+apps/server/.plugin-staging/*
 # Tauri
 target/
 apps/tauri-desktop/target/
@@ -61,3 +60,6 @@ apps/tauri-server/target/
 apps/tauri-server/src-tauri/target/
 apps/tauri-server/dist/
 Cargo.lock
+apps/server/plugins/notes/data/notes.sqlite
+apps/server/plugins/news/data/news.sqlite-wal
+apps/server/plugins/.state.json

@@ -10,7 +10,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve, basename, sep } from "node:path";
 import { listPluginSkillDirs } from "./plugins/index.js";
 import { skillsRoot as resolveSkillsRoot } from "@ducki/shared";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
 import { Planner, type Plan } from "./planner/planner.js";
@@ -38,6 +38,7 @@ import { taskRulesGuidance, platformHintGuidance, type PlatformChannel } from ".
 import { ConversationCompressor } from "./conversation/compressor.js";
 import { TokenCounter } from "./context/token-counter.js";
 import { extractFileContent, EMPTY_CONTENT_ERROR, isIntentionalEmptyWrite, SHARED_WORKSPACE_ROOT } from "@ducki/tools";
+import { buildRepositorySnapshot } from "./coding/repo-snapshot.js";
 import { modeDetector } from "./config/mode-detector.js";
 import { toolTraceCollector } from "./executor/tool-traces.js";
 import { createDynamicToolResolver } from "./dynamic-tools/dynamic-tool-resolver.js";
@@ -544,10 +545,9 @@ export class Agent {
    *  unseen even after the user clicked Stop. */
   private abortController: AbortController | undefined;
   private toolGraph: ToolExecutionGraph;
-  /** Skills loaded into the current/most recent run's prompt - lets resolveToolNameAndInput
-   *  recognize a model calling a skill's slug directly (e.g. [TOOL:datum-uhrzeit-tag()])
-   *  instead of the documented skill_manage(action:"execute") wrapper, which smaller/local
-   *  models routinely do once a skill is merely visible in context. */
+  /** Skills loaded into the current/most recent run's prompt. They are guidance already in
+   *  context, not executable tools. Kept only to turn a legacy/direct skill call into a safe
+   *  documentation lookup instead of attempting to execute a documentation-only skill. */
   private activeSkillSlugsForRun = new Set<string>();
   private conversationCompressor: ConversationCompressor;
   private readonly maxConsecutiveToolFailures = parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3");
@@ -1944,11 +1944,10 @@ export class Agent {
       normalizedInput["action"] = normalizedInput["feedback"] !== undefined ? "refine" : "create";
     }
 
-    // A model that sees a skill's slug in its "Loaded Skills" context (e.g. datum-uhrzeit-tag)
-    // routinely calls it as if it were a tool - [TOOL:datum-uhrzeit-tag()] - instead of the
-    // documented skill_manage(action:"execute", name:...) wrapper. Without this, that call
-    // resolves to no real tool, silently produces no result, and the run ends with a generic
-    // "no answer" fallback despite having picked the right skill.
+    // A model can still emit a loaded skill's slug as if it were a tool
+    // ([TOOL:datum-uhrzeit-tag()]). Skills are guidance, not commands: never try to execute
+    // them. The guarded fallback only re-reads the already-loaded documentation, preserving a
+    // useful recovery path for older prompts/models without producing an execution error.
     // Guarded against real tool names ("plan" and "memory" exist as both a tool and a skill
     // slug) so this never hijacks a genuine tool call for one of those.
     if (
@@ -1957,8 +1956,22 @@ export class Agent {
     ) {
       return {
         toolName: "skill_manage",
-        input: { action: "execute", name: normalized, input: normalizedInput },
+        input: { action: "view", name: normalized },
       };
+    }
+
+    // Legacy prompts sometimes explicitly ask for skill_manage(action:"execute"). An active
+    // skill is already present in the system context and is normally documentation-only, so
+    // downgrade that request to a harmless lookup rather than failing because it has no script.
+    if (
+      normalized === "skill_manage" &&
+      String(normalizedInput["action"] ?? "").toLowerCase() === "execute" &&
+      this.activeSkillSlugsForRun.has(String(normalizedInput["name"] ?? normalizedInput["skillName"] ?? "").trim().toLowerCase())
+    ) {
+      normalizedInput["action"] = "view";
+      delete normalizedInput["input"];
+      delete normalizedInput["context"];
+      delete normalizedInput["script_file"];
     }
 
     // Generic tool-name alias resolution (e.g. browser_control -> browser, task_split -> task)
@@ -4048,6 +4061,13 @@ export class Agent {
 
     // Filesystem recovery hints in English: recovery steps are LLM/agent-specific, not user-facing.
     if (normalizedTool === "filesystem") {
+      // Some OpenAI-compatible backends occasionally combine a text marker for the local
+      // checklist tool with a stale native `filesystem` envelope. Executing
+      // filesystem({action:"todo"}) can never be useful; say precisely what crossed wires
+      // instead of making the model infer it from the filesystem action list.
+      if (String(toolInput["action"] ?? "").trim().toLowerCase() === "todo" && /unknown action/.test(normalizedError)) {
+        return "Protocol hint: 'todo' is the checklist TOOL NAME, not a filesystem action. Do not call filesystem with action:'todo'. Continue the current coding step, or call todo only as todo({action:'update', id:<step id>, status:'in_progress'|'done'}).";
+      }
       if (/oldstring is not unique/.test(normalizedError)) {
         return "Expand oldString with more surrounding context to make it unique, or set replaceAll:true to replace all occurrences. For a very long or highly repetitive block, action:'edit_lines' with startLine/endLine is often simpler than making oldString unique.";
       }
@@ -4115,6 +4135,22 @@ export class Agent {
     }
 
     return undefined;
+  }
+
+  /**
+   * Provider/native-call framing can be wrong independently of the model's actual work.
+   * Treat this narrow, known cross-tool mix-up as a recoverable protocol error: the normal
+   * tool result (including its repair hint) still reaches the model, but three copies must
+   * not make the coding run abort before it gets a chance to use that hint.
+   */
+  private isRecoverableToolProtocolFailure(
+    toolName: string | undefined,
+    input: Record<string, unknown> | undefined,
+    result: ToolResult
+  ): boolean {
+    if (result.success || !result.error || toolName?.toLowerCase() !== "filesystem") return false;
+    const action = typeof input?.["action"] === "string" ? input["action"].trim().toLowerCase() : "";
+    return action === "todo" && /unknown action:\s*todo\b/i.test(result.error);
   }
 
   /**
@@ -4491,6 +4527,7 @@ export class Agent {
       reasonerUseToolMinConfidence: 0.65,
       maxConsecutiveToolFailures: this.maxConsecutiveToolFailures,
       maxRepeatedToolCall: this.maxRepeatedToolCall,
+      protocolErrorRecovery: true,
       staleReadLoopThreshold: this.staleReadLoopThreshold,
       selfRepairEnabled: true,
       // Two, not one: the first attempt is usually the free mechanical fix (a renamed field,
@@ -4627,6 +4664,7 @@ export class Agent {
         reasonerUseToolMinConfidence: this.parseFloatSetting(get("AGENT_REASONER_USE_TOOL_MIN_CONFIDENCE"), defaults.reasonerUseToolMinConfidence, 0, 1),
         maxConsecutiveToolFailures: this.parseNumberSetting(get("AGENT_MAX_TOOL_FAILURES"), defaults.maxConsecutiveToolFailures, 1, 20),
         maxRepeatedToolCall: this.parseNumberSetting(get("AGENT_MAX_REPEATED_TOOL_CALL"), defaults.maxRepeatedToolCall, 1, 20),
+        protocolErrorRecovery: this.parseBooleanSetting(get("AGENT_PROTOCOL_ERROR_RECOVERY"), defaults.protocolErrorRecovery),
         staleReadLoopThreshold: this.parseNumberSetting(get("AGENT_STALE_READ_STREAK"), defaults.staleReadLoopThreshold, 2, 20),
         selfRepairEnabled: this.parseBooleanSetting(get("AGENT_SELF_REPAIR"), defaults.selfRepairEnabled),
         maxOutputTokens: this.parseNumberSetting(get("AGENT_MAX_OUTPUT_TOKENS"), defaults.maxOutputTokens, 512, 128000),
@@ -5415,8 +5453,24 @@ export class Agent {
     emit("plan", "Erstelle Plan...", { source: "plan_mode", phase: "start", goal: userInput });
 
     const availableToolNames = this.executor.listTools().map((tool) => tool.name);
+    // Ground the plan in the actual project when this turn is scoped to a coding-area sandbox
+    // (see AgentRunOptions.codingSandboxRoot's doc comment) - undefined for every other
+    // conversation, so normal chat Plan Mode is unaffected. The snapshot is a cheap, synchronous
+    // fs read (no extra LLM round-trip), unlike CodingAgent's own explore-before-plan step.
+    let repositoryContext: Record<string, unknown> | undefined;
+    if (options.codingSandboxRoot) {
+      try {
+        repositoryContext = buildRepositorySnapshot(options.codingSandboxRoot);
+      } catch (error) {
+        this.logger.warn("Failed to build repository snapshot for Plan Mode, planning without it", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     const plan = await this.planner.createPlan(userInput, availableToolNames, {
       currentModel: this.provider.model,
+      ...(repositoryContext ? { repositoryContext } : {}),
+      ...(options.codingSandboxRoot ? { requiredPlanType: "coding" as const } : {}),
     });
     const response = formatPlanAsMarkdown(plan);
 
@@ -6878,7 +6932,7 @@ export class Agent {
       content: await this.buildUserTurnContent(effectiveInput, options.attachments),
       metadata: Object.keys(userMetadata).length > 0 ? userMetadata : undefined,
     };
-    await this.conversation.addMessage(userMessage, options.displayContent);
+    await this.conversation.addMessage(userMessage, options.displayContent, options.persistUserTurn !== false);
     this.history.add(userMessage);
 
     let activeSkills: SkillSummary[];
@@ -7316,7 +7370,7 @@ export class Agent {
       : "";
 
     const requestedSkillsContext = activeSkills.length > 0
-      ? `\n\n## Loaded Skills\n${activeSkills
+      ? `\n\n## Loaded Skills (guidance only — already available; never call or execute them as tools)\n${activeSkills
           .map((skill) => `### ${skill.slug}\n${skill.content}`)
           .join("\n\n")}`
       : "";
@@ -7325,7 +7379,7 @@ export class Agent {
       ? activeSkills.filter((skill) => skill.slug === "workflow-orchestrator")
       : [];
     const compactRequestedSkillsContext = compactSkillManifests.length > 0
-      ? `\n\n## Loaded Skills\n${compactSkillManifests
+      ? `\n\n## Loaded Skills (guidance only — already available; never call or execute them as tools)\n${compactSkillManifests
           .map((skill) => `### ${skill.slug}\n${skill.content}`)
           .join("\n\n")}`
       : "";
@@ -7499,6 +7553,11 @@ export class Agent {
     // streak survives iterations; reset by any mutation or a changed read set.
     let staleReadStreak = 0;
     let previousReadCallSignatures: string[] | undefined;
+    let previousReadContentSignatures: string[] | undefined;
+    let staleReadContentUnchanged = false;
+    // A CodingAgent may request a bounded recovery turn before this generic guardrail aborts.
+    // Kept per run so retries cannot silently accumulate across unrelated conversations.
+    let staleReadRecoveryCount = 0;
     // Repeated-identical-error detection: consecutive iterations whose FAILING calls produce
     // the exact same error text are the "model keeps retrying the same broken thing, slightly
     // varied" loop (e.g. the same edit failing with "oldString not found"). The existing
@@ -8181,9 +8240,20 @@ export class Agent {
         // checklist is active there are still steps to do, so steer to CONTINUE the plan (act
         // on the current step) rather than to wrap up — otherwise the model treats the last
         // tool result as the final answer and later steps never get done.
+        //
+        // options.getCurrentStepId is CodingAgent's own signal that IT is tracking an active,
+        // multi-step checklist externally (its own TodoList, not this Agent's internal
+        // ChecklistManager - CodingAgent deliberately never activates that subsystem, see
+        // checklistActive's own gating above). Without also checking it here, every CodingAgent
+        // run got the "how does it answer the original question" wording meant for a one-shot
+        // chat turn - on a multi-step coding task, especially once conversation compression has
+        // trimmed the original goal out of context, the model took that literally and started
+        // hunting for "the original question" instead of continuing the work (observed as a
+        // repeating "I need to find the original question" loop).
+        const hasActiveChecklist = checklistActive || Boolean(options.getCurrentStepId);
         const recoveryPrompt: LLMMessage = {
           role: "user",
-          content: checklistActive
+          content: hasActiveChecklist
             ? "You executed the tools. Briefly note what they returned, then CONTINUE with the current checklist step shown above: if that step requires an action (write a file, send a message, fetch data), call the appropriate tool now. Do not stop until every checklist step is done."
             : "You executed the tools. Please provide a concise response based on their results. What information did they return? How does it answer the original question?",
           metadata: { internal: true, kind: "empty_response_recovery" },
@@ -8315,6 +8385,29 @@ export class Agent {
         hasScreenshot: !!this.currentScreenshotMessage,
       });
 
+      // A successful explicit completion is terminal. The task tool persists the task as
+      // completed, while the outer loop previously ignored that signal and asked the model for
+      // another turn. Any later exploratory/tool call could then trip a failure guardrail and
+      // make an already-completed task look aborted (the UI showed exactly that sequence).
+      // Only trust an actually successful completion call; a failed completion attempt must
+      // remain recoverable and continue through the normal guardrails.
+      const explicitCompletion = executedCalls.some((call) => {
+        const result = toolResultsMap.get(call.id);
+        if (!result?.success) return false;
+        const action = String(call.input["action"] ?? "").trim().toLowerCase();
+        if (call.toolName === "task" && (action === "complete" || String(call.input["status"] ?? "").toLowerCase() === "completed")) {
+          return true;
+        }
+        const data = result.data as Record<string, unknown> | null;
+        return data?.["completed"] === true && data?.["completesRun"] === true;
+      });
+      if (explicitCompletion) {
+        emit("decision", "Expliziter Abschluss erfolgreich - Lauf wird beendet.", { explicitCompletion: true });
+        finalResponse = cleanedResponse;
+        toolsJustExecuted = false;
+        break;
+      }
+
       if (browserToolsCount > 0 && this.currentScreenshotMessage) {
         screenshotCapturedThisRun = true;
       }
@@ -8346,7 +8439,20 @@ export class Agent {
         // Resets the moment anything succeeds. The counter and its cap already existed in
         // config (AGENT_MAX_TOOL_FAILURES / maxConsecutiveToolFailures, with a settings-UI
         // description already promising this exact stop) but were never actually enforced.
-        const anyToolSucceeded = Array.from(toolResultsMap.values()).some((r) => r.success);
+        const protocolFailures = adjustedControls.protocolErrorRecovery
+          ? executedCalls.filter((call) => this.isRecoverableToolProtocolFailure(
+              call.toolName,
+              call.input,
+              toolResultsMap.get(call.id) ?? { success: false, data: null }
+            ))
+          : [];
+        if (protocolFailures.length > 0) {
+          emit("guardrail", "Fehlerhaftes Tool-Protokoll erkannt – der Lauf wird fortgesetzt", {
+            toolNames: protocolFailures.map((call) => call.toolName),
+            actions: protocolFailures.map((call) => call.input["action"]),
+          });
+        }
+        const anyToolSucceeded = Array.from(toolResultsMap.values()).some((r) => r.success) || protocolFailures.length > 0;
         consecutiveToolFailures = anyToolSucceeded ? 0 : consecutiveToolFailures + 1;
 
         // Tracks whether a filesystem write/append/edit has EVER actually succeeded in this
@@ -8395,9 +8501,12 @@ export class Agent {
         // The other guardrails miss it: maxRepeatedToolCall only blocks byte-identical calls,
         // consecutiveToolFailures only counts iterations where EVERY call failed (a successful
         // read in between resets it), and ToolErrorTracker is keyed on the input signature.
-        const failingErrors = Array.from(toolResultsMap.values())
-          .filter((r) => !r.success && r.error)
-          .map((r) => String(r.error).replace(/\s+/g, " ").trim())
+        const failingErrors = executedCalls
+          .map((call) => ({ call, result: toolResultsMap.get(call.id) }))
+          .filter(({ call, result }) => !result?.success && !!result?.error && !(
+            adjustedControls.protocolErrorRecovery && this.isRecoverableToolProtocolFailure(call.toolName, call.input, result)
+          ))
+          .map(({ result }) => String(result!.error).replace(/\s+/g, " ").trim())
           .sort();
         const failureSignature = failingErrors.length > 0 ? JSON.stringify(failingErrors) : undefined;
         if (failureSignature !== undefined) {
@@ -8437,17 +8546,84 @@ export class Agent {
           const signatures = executedCalls
             .map((c) => this.buildToolCallSignature(c.toolName, c.input))
             .sort();
+          const contentSignatures = executedCalls
+            .map((c) => {
+              const base = this.buildToolCallSignature(c.toolName, c.input);
+              const data = toolResultsMap.get(c.id)?.data;
+              const hash = c.toolName === "filesystem" && String(c.input["action"] ?? "").toLowerCase() === "read" &&
+                typeof data === "string"
+                ? createHash("sha256").update(data).digest("hex").slice(0, 16)
+                : undefined;
+              return hash ? `${base}:content=${hash}` : base;
+            })
+            .sort();
           const sameSetAsBefore =
             previousReadCallSignatures !== undefined &&
             JSON.stringify(signatures) === JSON.stringify(previousReadCallSignatures);
+          const sameContentAsBefore =
+            previousReadContentSignatures !== undefined &&
+            JSON.stringify(contentSignatures) === JSON.stringify(previousReadContentSignatures);
           previousReadCallSignatures = signatures;
+          previousReadContentSignatures = contentSignatures;
           staleReadStreak = sameSetAsBefore ? staleReadStreak + 1 : 0;
+          staleReadContentUnchanged = sameContentAsBefore;
         } else {
           previousReadCallSignatures = undefined;
+          previousReadContentSignatures = undefined;
           staleReadStreak = 0;
+          staleReadContentUnchanged = false;
         }
 
         if (staleReadStreak >= adjustedControls.staleReadLoopThreshold) {
+          const recovery = options.staleReadRecovery;
+          const hashesAvailable = previousReadContentSignatures?.every((signature) => signature.includes(":content=")) ?? false;
+          const recoveryEligible = recovery && (!recovery.requireSameContent || (hashesAvailable && staleReadContentUnchanged));
+          const recoveryCount = staleReadRecoveryCount;
+          if (recoveryEligible && recoveryCount < Math.max(0, recovery.maxRecoveries)) {
+            staleReadRecoveryCount++;
+            staleReadStreak = 0;
+            previousReadCallSignatures = undefined;
+            previousReadContentSignatures = undefined;
+            emit("guardrail", "Wiederholte Leseaufrufe erkannt — fordere gezielte Recovery statt Abbruch an", {
+              recovery: staleReadRecoveryCount,
+              maxRecoveries: recovery.maxRecoveries,
+              requireSameContent: recovery.requireSameContent === true,
+            });
+            // The single most common cause of this loop: the model keeps re-reading a file that
+            // does not exist yet (or exists but is still empty) instead of just writing it - a
+            // missing/empty file never changes no matter how many times it's read, so the loop
+            // never breaks on its own. Naming that explicitly and telling the model to write it
+            // NOW resolves the loop in one recovery turn instead of relying on the generic
+            // alternatives list below (or, if recoveries run out, the whole attempt being
+            // aborted and burning an extra CodingAgent macro-attempt just to retry the same
+            // thing correctly).
+            const missingOrEmptyReads = executedCalls
+              .filter((c) => c.toolName === "filesystem" && String(c.input["action"] ?? "").toLowerCase() === "read")
+              .map((c) => {
+                const result = toolResultsMap.get(c.id);
+                const path = String(c.input["path"] ?? "").trim();
+                if (!path) return undefined;
+                if (result?.success === false && /not found/i.test(String(result?.error ?? ""))) {
+                  return { path, missing: true };
+                }
+                if (result?.success === true && typeof result.data === "string" && result.data.trim().length === 0) {
+                  return { path, missing: false };
+                }
+                return undefined;
+              })
+              .filter((v): v is { path: string; missing: boolean } => v !== undefined);
+            const recoveryContent = missingOrEmptyReads.length > 0
+              ? `READ-LOOP RECOVERY: You keep reading ${missingOrEmptyReads.map((r) => `"${r.path}"`).join(", ")} without it changing - ` +
+                `${missingOrEmptyReads.some((r) => r.missing) ? "it does not exist yet" : "it is empty"}, so re-reading it will never show different content. ` +
+                `Stop reading it and WRITE it now with real content (action:"write") instead. If a different file is the actual blocker, use status, grep/outline ` +
+                `with a new query, a different offset, diagnostics, make the next justified edit, or mark the current step blocked with the concrete reason.`
+              : "READ-LOOP RECOVERY: The last reads returned the same file version. Do not repeat that read. Use status, grep/outline with a new query, a different offset, diagnostics, make the next justified edit, or mark the current step blocked with the concrete reason.";
+            await this.conversation.addMessage({
+              role: "user",
+              content: recoveryContent,
+            });
+            continue;
+          }
           this.logger.warn("[RUNLOOP] Stopping: repeated identical read-only calls without progress", {
             staleReadStreak,
             threshold: adjustedControls.staleReadLoopThreshold,
@@ -8612,9 +8788,18 @@ export class Agent {
           // Requesting "analyze the results / provide a summary" made the model wrap
           // trivial answers (e.g. the current time) in Analysis/How-this-answers/Summary
           // sections. Ask for the plain answer in the user's language instead.
+          // See the recovery-prompt branch above for why this also checks
+          // options.getCurrentStepId, not just checklistActive: CodingAgent runs its own
+          // external checklist (TodoList) and never activates this Agent's internal
+          // ChecklistManager, so without this OR every one of its tool turns got steered
+          // toward "answer my original question" - a one-shot-chat framing that, combined with
+          // a long run's conversation compression eventually trimming the actual goal out of
+          // context, made the model start searching for "the original question" instead of
+          // continuing the task (the repeating "I need to find the original question" loop).
+          const hasActiveChecklist = checklistActive || Boolean(options.getCurrentStepId);
           analyzePrompt = {
             role: "user",
-            content: checklistActive
+            content: hasActiveChecklist
               // Mid-checklist: a direct "answer the original question" prompt makes the model
               // finalize after one step and abandon the rest. Steer it to keep executing the plan.
               ? `The ${toolNames} tool(s) just returned results. Briefly use them for the current checklist step, then CONTINUE to the next open step — if it needs an action (write/send/fetch), call the tool now. Only give a final answer once every checklist step is done. Any prose you write (progress notes, the eventual final answer) stays in the same language the user used - the checklist/tool text above is working material, not a language cue.`

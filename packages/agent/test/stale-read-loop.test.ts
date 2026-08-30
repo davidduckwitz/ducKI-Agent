@@ -10,13 +10,17 @@ import { Agent } from "../src/agent";
  * single calls (and only the 4th), and maxConsecutiveToolFailures only counts iterations
  * where every call FAILED - a model re-reading the same file succeeds every time.
  */
-function stubDb(settings: Array<{ key: string; value: string }> = []) {
+function stubDb(settings: Array<{ key: string; value: string }> = [], capturedMessages?: Array<Record<string, unknown>>) {
   const known: Record<string, (...args: any[]) => any> = {
     getAllSettings: async () => settings,
     getDynamicToolByName: async () => undefined,
     getSetting: async () => undefined,
     getEverUsedSkills: async () => [],
     createConversation: async (data: { name: string }) => ({ id: 1, name: data.name }),
+    addMessage: async (data: Record<string, unknown>) => {
+      capturedMessages?.push(data);
+      return { id: (capturedMessages?.length ?? 0), ...data };
+    },
   };
   return new Proxy(known, {
     get(target, prop: string) {
@@ -47,7 +51,7 @@ function scriptedProvider(contents: string[]) {
   } as any;
 }
 
-function buildAgent(provider: any, db?: any): Agent {
+function buildAgent(provider: any, db?: any, fsExecute?: (input: any) => Promise<any>): Agent {
   const agent = new Agent(provider, db ?? stubDb(), undefined, {
     enablePlanning: false,
     enableReflection: false,
@@ -61,7 +65,7 @@ function buildAgent(provider: any, db?: any): Agent {
       description: "test",
       parameters: { type: "object", properties: {} },
     },
-    execute: async () => ({ success: true, data: "file contents", error: null }),
+    execute: fsExecute ?? (async () => ({ success: true, data: "file contents", error: null })),
   } as any);
   return agent;
 }
@@ -114,5 +118,57 @@ describe("stale read-only loop guardrail", () => {
     expect(result.iterations).toBe(3); // sooner than the default threshold of 4
     expect(result.response).toContain("Abgebrochen");
     expect(result.response).toContain("kein Fortschritt erkennbar");
+  });
+
+  it("gives a configured coding recovery turn before aborting an identical-content read loop", async () => {
+    // The fifth identical read reaches the default guard. A CodingAgent can spend one
+    // recovery turn instead, and this scripted model then exits without repeating the read.
+    const agent = buildAgent(
+      scriptedProvider([READ, READ, READ, READ, READ, "done"]),
+      stubDb([{ key: "AGENT_MAX_REPEATED_TOOL_CALL", value: "20" }])
+    );
+    const events: any[] = [];
+    const result = await agent.run(LONG_INPUT, {
+      agentMode: "full",
+      staleReadRecovery: { maxRecoveries: 1, requireSameContent: true },
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.iterations).toBe(6);
+    expect(result.response).not.toContain("Abgebrochen");
+    expect(events.some((event) => event.message.includes("Recovery"))).toBe(true);
+  });
+
+  it("steers the model to WRITE an empty file instead of repeating the read that will never change", async () => {
+    // Regression: re-reading an empty (or not-yet-created) file never changes, so the generic
+    // "the last reads returned the same file version" recovery text didn't tell the model what
+    // was actually different about THIS loop - it kept re-reading instead of just writing the
+    // file, sometimes for several whole CodingAgent macro-attempts before one happened to write
+    // it. The recovery message now names the file and says WRITE it explicitly. Uses a
+    // successful-but-empty read (not a failing "not found" read) because a failing read trips
+    // the separate consecutive-tool-failures guardrail (default threshold 3) before the
+    // stale-read-loop threshold (4) is even reached - a successful empty read is both the
+    // reachable case AND what the reported run actually showed (the read tool call itself
+    // succeeded; the file just had nothing useful in it).
+    const capturedMessages: Array<Record<string, unknown>> = [];
+    const agent = buildAgent(
+      scriptedProvider([READ, READ, READ, READ, READ, "done"]),
+      stubDb([{ key: "AGENT_MAX_REPEATED_TOOL_CALL", value: "20" }], capturedMessages),
+      async () => ({ success: true, data: "", error: null })
+    );
+    await agent.startConversation({ name: "test" });
+    const result = await agent.run(LONG_INPUT, {
+      agentMode: "full",
+      staleReadRecovery: { maxRecoveries: 1, requireSameContent: false },
+    });
+
+    expect(result.response).not.toContain("Abgebrochen");
+    const recoveryMessage = capturedMessages.find(
+      (m) => m["role"] === "user" && String(m["content"]).includes("READ-LOOP RECOVERY")
+    );
+    expect(recoveryMessage).toBeDefined();
+    expect(String(recoveryMessage!["content"])).toContain("a.txt");
+    expect(String(recoveryMessage!["content"])).toContain("it is empty");
+    expect(String(recoveryMessage!["content"])).toContain('WRITE it now');
   });
 });

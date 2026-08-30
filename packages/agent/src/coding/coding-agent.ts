@@ -11,8 +11,6 @@ import {
   skillsTool,
   listIncompletePartSequences,
   clearIncompletePartSequences,
-  outlineFile,
-  renderOutline,
 } from "@ducki/tools";
 import { existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute, basename } from "node:path";
@@ -29,6 +27,7 @@ import { createCheckpoint, diffCheckpoint, discardNoopCheckpoint, CHECKPOINT_DIR
 import { withPerEditCheckpoints } from "./checkpoint-on-write.js";
 import { createExploreTool, type ExploreToolOptions } from "./explore-tool.js";
 import { createStatusTool, type StatusProvider } from "./status-tool.js";
+import { buildRepositorySnapshot as buildSandboxSnapshot } from "./repo-snapshot.js";
 import { Planner, type Plan, type PlanStep } from "../planner/planner.js";
 import { formatPlanAsMarkdown, toPlanEventPayload } from "../planner/plan-tool.js";
 
@@ -149,7 +148,7 @@ const PLAN_ONLY_EXPLORE_READONLY_GIT_ACTIONS = new Set(["status", "diff", "log",
  *  is cut off and the Planner is called with whatever was learned so far. Small on purpose: this
  *  is meant to ground the plan in a quick look at the project, not to run a full exploration -
  *  a goal that genuinely needs more than this benefits more from actually being executed. */
-const PLAN_ONLY_EXPLORE_MAX_ITERATIONS = 12;
+const DEFAULT_PLAN_ONLY_EXPLORE_MAX_TOOL_CALLS = 12;
 
 export interface CodingAgentOptions {
   name?: string;
@@ -200,6 +199,12 @@ export interface CodingRunOptions {
    * Omit it only for genuinely headless runs (cronjobs), which have no conversation to join.
    */
   conversationId?: number;
+  /** Client-generated UUID for this specific submit, forwarded to Agent.run() as
+   *  localMessageId so the persisted user/assistant messages carry it - lets the UI merge its
+   *  optimistic bubble with the persisted one instead of showing both. Only applied to
+   *  attempt 1 (see persistUserTurn), since that is the only attempt whose Agent.run() call
+   *  actually persists a fresh user turn for this goal. */
+  localMessageId?: string;
   /** Shell command run directly (no LLM round-trip) to deterministically check success. */
   verifyCommand?: string;
   /** Overrides the instance's default macro attempt budget for this run only. */
@@ -269,6 +274,10 @@ export interface CodingRunResult {
     fileChangesObserved: boolean;
     changedFiles: string[];
     openChecklistItems: string[];
+    /** Terminal per-step truth. Open/in-progress items are deliberately `unknown`,
+     * never silently reported as completed just because the overall run ended. */
+    stepStatuses: Array<"completed" | "failed" | "unknown">;
+    stepNotes: Array<string | undefined>;
   };
 }
 
@@ -496,8 +505,10 @@ export class CodingAgent {
   private planOnlyExploreActive = false;
   /** Tool-call budget consumed so far during the CURRENT Plan-Mode investigation sub-run - reset
    *  each time one starts. Counts every tool call (not just refused ones) so a model that keeps
-   *  investigating forever still gets cut off - see PLAN_ONLY_EXPLORE_MAX_ITERATIONS. */
+   *  investigating forever still gets cut off. Its limit is configured per run from
+   *  CODING_AGENT_PREPLAN_MAX_TOOL_CALLS. */
   private planOnlyExploreToolCalls = 0;
+  private planOnlyExploreMaxToolCalls = DEFAULT_PLAN_ONLY_EXPLORE_MAX_TOOL_CALLS;
   /**
    * The most advanced phase-event already emitted per phase this run, used to deduplicate the
    * live emission path (updatePhaseFromResponse) against the end-of-attempt backfill
@@ -517,6 +528,15 @@ export class CodingAgent {
   /** Bounded like phaseLockRefusals/readBeforeEditRefusals: one warning per file pair, then the
    *  guard gets out of the way rather than deadlocking a run that insists on editing anyway. */
   private diagnosticGuardRefusals = 0;
+  /** Controller-owned browser preflight before a static-page plan is marked complete. */
+  private browserPreflightEnabled = true;
+  /** Favicon requests are browser defaults unless a project explicitly makes them part of scope. */
+  private browserIgnoreBenignAssetErrors = true;
+  /** Increments after a successful source mutation so unchanged code is not rechecked. */
+  private browserPreflightRevision = 0;
+  /** A failed preflight blocks exactly one premature completion per source revision. */
+  private browserPreflightBlockedRevision: number | undefined;
+  private browserPreflightPassedRevision: number | undefined;
   /** Read by withPerEditCheckpoints' label closure - kept as instance state because tools are
    *  registered ONCE in the constructor, before any attempt number exists yet. */
   private currentAttempt = 0;
@@ -546,91 +566,12 @@ export class CodingAgent {
    *  changes - see this.currentPlanDbId's doc comment there for why that matters. */
   private currentPlanDb: { id: number; version: number } | undefined;
 
+  /** Thin instance wrapper around the shared, sandbox-agnostic snapshot builder - see
+   *  repo-snapshot.ts (also used by the regular chat agent's Plan Mode, gated on
+   *  AgentRunOptions.codingSandboxRoot, so both surfaces ground plans in the same facts). */
   private buildRepositorySnapshot(): Record<string, unknown> | undefined {
-    if (!this.sandboxRoot || !existsSync(this.sandboxRoot)) return undefined;
-    const ignored = new Set(["node_modules", ".git", "dist", "build", "coverage", ".next"]);
-    const files: string[] = [];
-    const walk = (dir: string, depth: number) => {
-      if (depth > 3 || files.length >= 300) return;
-      for (const entry of readdirSync(dir, { withFileTypes: true })) {
-        if (ignored.has(entry.name) || files.length >= 300) continue;
-        const absolute = join(dir, entry.name);
-        const relative = absolute.slice(this.sandboxRoot!.length + 1).replace(/\\/g, "/");
-        if (entry.isDirectory()) walk(absolute, depth + 1);
-        else files.push(relative);
-      }
-    };
-    try { walk(this.sandboxRoot, 0); } catch { /* partial snapshot is still useful */ }
-    let packageInfo: Record<string, unknown> | undefined;
-    const packagePath = join(this.sandboxRoot, "package.json");
-    if (existsSync(packagePath)) {
-      try {
-        const parsed = JSON.parse(readFileSync(packagePath, "utf8")) as Record<string, unknown>;
-        packageInfo = { name: parsed["name"], scripts: parsed["scripts"], dependencies: parsed["dependencies"], devDependencies: parsed["devDependencies"] };
-      } catch { /* malformed package.json will be discovered during execution */ }
-    }
-    return {
-      root: this.sandboxRoot,
-      files,
-      package: packageInfo,
-      hasTsconfig: existsSync(join(this.sandboxRoot, "tsconfig.json")),
-      ...(files.length > 0 ? { outline: this.buildRepositoryOutline(files) } : {}),
-    };
-  }
-
-  /** Extensions outlineFile() can say something useful about - either via its TypeScript AST
-   *  path or its regex heuristic fallback (see outline.ts). Skipping everything else (assets,
-   *  lockfiles, markdown, ...) keeps this pass fast and its output free of noise. */
-  private static readonly OUTLINE_SOURCE_EXTENSIONS =
-    /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|cpp|h|hpp|cs)$/i;
-  private static readonly MAX_OUTLINE_FILES = 60;
-  private static readonly MAX_OUTLINE_CHARS = 15_000;
-
-  /**
-   * A compact, multi-file symbol map (function/class/interface names + line numbers) so the
-   * Planner and the model's own EXPLORE phase start from a repo-wide overview instead of having
-   * to `read`/`grep` their way to it call by call - the same idea as Aider's ctags-based "repo
-   * map", built on outline.ts (already used per-file via the filesystem tool's action:"outline")
-   * instead of introducing a new dependency.
-   *
-   * Deterministic and per-file fault-tolerant: one unparsable file is skipped, never aborts the
-   * whole pass - same "never a gate" principle as the checkpoint system. Bounded by both file
-   * count and total characters so a huge project cannot blow out the prompt this feeds into
-   * (buildRepositorySnapshot's repositoryContext, handed to the Planner).
-   */
-  private buildRepositoryOutline(files: string[]): string | undefined {
     if (!this.sandboxRoot) return undefined;
-    const candidates = files.filter((path) => CodingAgent.OUTLINE_SOURCE_EXTENSIONS.test(path));
-    if (candidates.length === 0) return undefined;
-
-    const selected = candidates.slice(0, CodingAgent.MAX_OUTLINE_FILES);
-    const sections: string[] = [];
-    let totalChars = 0;
-    let truncated = candidates.length > selected.length;
-
-    for (const relativePath of selected) {
-      if (totalChars >= CodingAgent.MAX_OUTLINE_CHARS) {
-        truncated = true;
-        break;
-      }
-      try {
-        const outline = outlineFile(join(this.sandboxRoot, relativePath));
-        if (outline.symbols.length === 0) continue; // nothing worth listing for this file
-        const rendered = renderOutline(relativePath, outline);
-        const section = `### ${relativePath}\n${rendered}`;
-        if (totalChars + section.length > CodingAgent.MAX_OUTLINE_CHARS) {
-          truncated = true;
-          break;
-        }
-        sections.push(section);
-        totalChars += section.length;
-      } catch {
-        // Unreadable/binary-ish file slipped past the extension filter - skip it, not fatal.
-      }
-    }
-
-    if (sections.length === 0) return undefined;
-    return sections.join("\n\n") + (truncated ? "\n\n[...repo map truncated]" : "");
+    return buildSandboxSnapshot(this.sandboxRoot);
   }
 
   /**
@@ -775,6 +716,51 @@ export class CodingAgent {
         },
       },
       {
+        // A static page's first useful test is its own browser runtime, not the model's prose.
+        // Intercept only the transition that would close the whole checklist: this avoids
+        // checking intentionally incomplete intermediate files while still returning the exact
+        // runtime stack to the SAME Agent.run() before it can declare completion.
+        name: "coding-browser-preflight-before-completion",
+        priority: 58,
+        handler: async (context: any) => {
+          if (context.toolName !== "todo" || !this.browserPreflightEnabled) return { proceed: true };
+          const input = (context.input as Record<string, unknown>) ?? {};
+          if (!this.todoInputClosesChecklist(input)) return { proceed: true };
+
+          const entryFile = this.detectStaticEntryFile();
+          if (!entryFile || this.browserPreflightRevision === 0) return { proceed: true };
+          if (this.browserPreflightPassedRevision === this.browserPreflightRevision) return { proceed: true };
+          // Do not turn a model that ignores a preflight result into a generic failed-tool loop.
+          if (this.browserPreflightBlockedRevision === this.browserPreflightRevision) return { proceed: true };
+
+          const result = await this.runBrowserVerify(entryFile);
+          if (result.success) {
+            this.browserPreflightPassedRevision = this.browserPreflightRevision;
+            this.emit("decision", `Browser-Preflight fuer ${entryFile} erfolgreich.`, {
+              classification: "project_runtime_preflight",
+              entryFile,
+              revision: this.browserPreflightRevision,
+            });
+            return { proceed: true };
+          }
+
+          this.browserPreflightBlockedRevision = this.browserPreflightRevision;
+          const error = condenseVerifyOutput(result.error ?? JSON.stringify(result.data ?? ""));
+          this.emit("decision", "Projekt-Laufzeitfehler vor Abschluss erkannt – Reparatur im aktuellen Versuch erforderlich.", {
+            classification: "project_runtime_error",
+            entryFile,
+            revision: this.browserPreflightRevision,
+            error: error.slice(0, 500),
+          });
+          return {
+            proceed: false,
+            reason:
+              `PROJECT RUNTIME ERROR in the code you generated (not an agent/tool error). ` +
+              `Do NOT mark the checklist done. Read and repair the exact source location below, then retry completion:\n${error}`,
+          };
+        },
+      },
+      {
         // Runs before every other discipline hook (highest priority) so nothing else - not the
         // phase lock's one-time bypass, not the shell-approval allowlist - gets a chance to let
         // a call through first. Only active during CodingAgent's own Plan-Mode investigation
@@ -787,7 +773,7 @@ export class CodingAgent {
           const input = (context.input as Record<string, unknown>) ?? {};
 
           this.planOnlyExploreToolCalls++;
-          if (this.planOnlyExploreToolCalls > PLAN_ONLY_EXPLORE_MAX_ITERATIONS) {
+          if (this.planOnlyExploreToolCalls > this.planOnlyExploreMaxToolCalls) {
             return {
               proceed: false,
               reason:
@@ -1048,6 +1034,9 @@ export class CodingAgent {
           if (!result?.success) return { proceed: true };
           const action = String((context.input as Record<string, unknown> | undefined)?.["action"] ?? "");
           if (action !== "write" && action !== "edit" && action !== "append") return { proceed: true };
+          this.browserPreflightRevision++;
+          this.browserPreflightBlockedRevision = undefined;
+          this.browserPreflightPassedRevision = undefined;
           // Best-effort: no browser session may exist yet, and that's fine (mark_dirty no-ops
           // in that case) - a coding run must never fail or slow down because of this signal.
           await this.agent.executor.execute("browser", { action: "mark_dirty" }).catch(() => undefined);
@@ -1318,6 +1307,33 @@ export class CodingAgent {
   }
 
   /**
+   * Whether a checklist item's own named file(s) actually exist, right now, on disk - the same
+   * grounding the end-of-attempt "newlyDone" demotion applies (see that call site's doc comment
+   * for the concrete failure it guards against: a step reported done because SOME file changed
+   * this attempt, not necessarily the one the step itself is about). Shared by the LIVE
+   * reconciliation paths (reconcileAnnouncedStep, reconcilePhaseCompletion) so a false "done"
+   * never even reaches the UI mid-attempt, instead of only being corrected in retrospect once
+   * the whole attempt has already finished.
+   *
+   * A step that needs no evidence at all (pure read/check work) or that names no specific file
+   * always passes - there is nothing concrete to verify, so this defers entirely to whatever
+   * other signal triggered the close.
+   */
+  private stepHasFileEvidence(item: TodoItem): boolean {
+    if (!checklistItemNeedsEvidence(item.title)) return true;
+    const step = this.currentPlan?.steps.find(
+      (s) => s.title.trim().toLowerCase() === item.title.trim().toLowerCase()
+    );
+    const hints = step?.expectedFiles?.length
+      ? step.expectedFiles
+      : step
+        ? this.extractFileHints(`${step.title} ${step.description ?? ""}`)
+        : [];
+    if (hints.length === 0) return true;
+    return hints.some((hint) => this.sandboxContainsFile(hint));
+  }
+
+  /**
    * package.json's "scripts" map, or undefined when there is no package.json (i.e. this is not
    * an npm project at all) or it fails to parse. The single place that reads it, so every
    * npm-command decision below is gated on the same "does this project actually have this
@@ -1395,17 +1411,26 @@ export class CodingAgent {
    */
   private async runBrowserVerify(entryFile: string): Promise<ToolResult> {
     const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot!)}/serve/${entryFile}`;
-    const gotoResult = await this.agent.executor.execute("browser", {
-      action: "goto",
+    // A fresh run cannot assume that a named browser session still exists. Launch first and
+    // carry the actual returned session id into the inspection call; a direct goto with a
+    // guessed/stale id produces "session not found" and falsely fails a working project.
+    const launchResult = await this.agent.executor.execute("browser", {
+      action: "launch",
       url: previewUrl,
       waitUntil: "networkidle2",
       timeout: 10000,
     });
-    if (!gotoResult.success) {
-      return { success: false, data: null, error: `Browser could not load ${entryFile}: ${gotoResult.error ?? "unknown error"}` };
+    if (!launchResult.success) {
+      return { success: false, data: null, error: `Browser could not load ${entryFile}: ${launchResult.error ?? "unknown error"}` };
     }
 
-    const errorsResult = await this.agent.executor.execute("browser", { action: "get_page_errors" });
+    const launchData = launchResult.data as { sessionId?: string } | null;
+    const sessionId = typeof launchData?.sessionId === "string" ? launchData.sessionId : undefined;
+    if (!sessionId) {
+      return { success: false, data: null, error: "Browser launch succeeded without returning a session id." };
+    }
+
+    const errorsResult = await this.agent.executor.execute("browser", { action: "get_page_errors", sessionId });
     if (!errorsResult.success) {
       return { success: false, data: null, error: `Browser check could not read page errors: ${errorsResult.error ?? "unknown error"}` };
     }
@@ -1416,23 +1441,86 @@ export class CodingAgent {
     };
     const pageErrors = data.pageErrors ?? [];
     const networkErrors = data.networkErrors ?? [];
+    const benignWarnings = this.browserIgnoreBenignAssetErrors
+      ? pageErrors.filter((error) => this.isBenignBrowserAssetWarning(error))
+      : [];
+    const actionablePageErrors = benignWarnings.length > 0
+      ? pageErrors.filter((error) => !this.isBenignBrowserAssetWarning(error))
+      : pageErrors;
 
-    if (pageErrors.length === 0) {
+    if (actionablePageErrors.length === 0) {
       return {
         success: true,
-        data: { entryFile, networkErrorCount: networkErrors.length },
+        data: {
+          entryFile,
+          networkErrorCount: networkErrors.length,
+          benignWarnings: benignWarnings.map((error) => ({ type: error.type, text: error.text, url: error.url })),
+        },
       };
     }
 
-    const detail = pageErrors
+    const detail = actionablePageErrors
       .slice(0, 10)
       .map((e) => `[${e.type}] ${e.text} (${e.url})`)
       .join("\n");
     return {
       success: false,
-      data: null,
-      error: `${pageErrors.length} console/page error(s) after loading ${entryFile} in the browser:\n${detail}`,
+      data: {
+        classification: "project_runtime_error",
+        entryFile,
+        pageErrors: actionablePageErrors,
+        benignWarnings: benignWarnings.map((error) => ({ type: error.type, text: error.text, url: error.url })),
+      },
+      error: `${actionablePageErrors.length} console/page error(s) after loading ${entryFile} in the browser:\n${detail}`,
     };
+  }
+
+  private isBenignBrowserAssetWarning(error: { type?: string; text?: string; url?: string }): boolean {
+    const detail = `${error.type ?? ""} ${error.text ?? ""} ${error.url ?? ""}`.toLowerCase();
+    // Chromium may request /favicon.ico even when the page has no icon declaration. That
+    // request has no bearing on JavaScript execution or the requested page behavior. Do not
+    // generalize this to arbitrary 404s: a missing script, stylesheet, image, or explicit asset
+    // reference remains actionable and must still reach the repair loop.
+    return !this.hasExplicitFaviconReference() &&
+      /favicon(?:\.ico)?(?:\?|\s|\)|$)/.test(detail) &&
+      /(404|not found|failed to load resource)/.test(detail);
+  }
+
+  private hasExplicitFaviconReference(): boolean {
+    const entryFile = this.detectStaticEntryFile();
+    if (!entryFile || !this.sandboxRoot) return false;
+    try {
+      const html = readFileSync(join(this.sandboxRoot, entryFile), "utf8");
+      // An explicit rel="icon" is part of the page's declared asset contract. Do not hide a
+      // missing asset in that case; it is different from the browser's unsolicited /favicon.ico
+      // probe and should remain visible to the normal repair flow.
+      return /<link\b(?=[^>]*\brel\s*=\s*["'][^"']*\bicon\b[^"']*["'])[^>]*>/i.test(html);
+    } catch {
+      return false;
+    }
+  }
+
+  private todoInputClosesChecklist(input: Record<string, unknown>): boolean {
+    const action = String(input["action"] ?? "").toLowerCase();
+    if (action === "write") {
+      const items = input["items"];
+      return Array.isArray(items) && items.length > 0 && items.every((item) => {
+        const record = (item ?? {}) as Record<string, unknown>;
+        return record["status"] === "done";
+      });
+    }
+    if (action !== "update") return false;
+
+    const prospective = this.todos.snapshot().map((item) => ({ id: item.id, status: item.status }));
+    const updates = Array.isArray(input["updates"])
+      ? input["updates"]
+      : [{ id: input["id"], status: input["status"] }];
+    for (const update of updates) {
+      const record = (update ?? {}) as Record<string, unknown>;
+      const item = prospective.find((candidate) => candidate.id === Number(record["id"]));
+      if (item && typeof record["status"] === "string") item.status = record["status"] as TodoStatus;
+    }
+    return prospective.length > 0 && prospective.every((item) => item.status === "done");
   }
 
   get executor() {
@@ -1468,6 +1556,9 @@ export class CodingAgent {
     this.livePhaseEmitted = new Map<string, { rank: number; hasResult: boolean; hasError: boolean }>();
     this.pendingDiagnosticErrors = new Map<string, { count: number; errors: string[] }>();
     this.diagnosticGuardRefusals = 0;
+    this.browserPreflightRevision = 0;
+    this.browserPreflightBlockedRevision = undefined;
+    this.browserPreflightPassedRevision = undefined;
     this.currentPlan = undefined;
     this.currentPlanDb = undefined;
     this.suppressPlanSync = false;
@@ -1482,7 +1573,7 @@ export class CodingAgent {
     // not be reported as if THIS run started it (see finalizeRun's end-of-run warning).
     clearIncompletePartSequences(this.sandboxFilter());
 
-    const maxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
+    const baseMaxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
     // How many consecutive attempts may fail verification with the EXACT SAME error before the
     // run gives up as non-converging (see the identicalFailureStreak check below). Settings key:
     // AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES. Default 3 preserves the previous hardcoded behavior.
@@ -1496,6 +1587,44 @@ export class CodingAgent {
     // history inside the sandbox (on top of the automatic checkpoint system, which always runs
     // regardless of this setting).
     const allowGitCommit = ((await this.db.getSetting("AGENT_CODING_ALLOW_GIT_COMMIT")) ?? "false").trim().toLowerCase() === "true";
+    const settingEnabled = async (key: string, fallback: boolean): Promise<boolean> => {
+      const value = await this.db.getSetting(key);
+      if (value === undefined || value === null || value.trim() === "") return fallback;
+      return value.trim().toLowerCase() === "true";
+    };
+    const settingInt = async (key: string, fallback: number, min: number, max: number): Promise<number> => {
+      const value = Number.parseInt((await this.db.getSetting(key)) ?? "", 10);
+      return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+    };
+    // Optional LLM research before planning is deliberately configurable: repository snapshots
+    // are deterministic and free, while an extra planning turn is valuable only for projects
+    // where structure alone cannot resolve the target.
+    const prePlanResearchEnabled = await settingEnabled("CODING_AGENT_PREPLAN_RESEARCH", false);
+    this.planOnlyExploreMaxToolCalls = await settingInt(
+      "CODING_AGENT_PREPLAN_MAX_TOOL_CALLS", DEFAULT_PLAN_ONLY_EXPLORE_MAX_TOOL_CALLS, 1, 100
+    );
+    const staleReadRecoveryEnabled = await settingEnabled("CODING_AGENT_STALE_READ_RECOVERY", true);
+    const staleReadRecoveryRequireSameContent = await settingEnabled("CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT", true);
+    const staleReadRecoveryMax = await settingInt("CODING_AGENT_STALE_READ_MAX_RECOVERIES", 1, 0, 5);
+    const enforceToolAllowlist = await settingEnabled("CODING_AGENT_ENFORCE_TOOL_ALLOWLIST", true);
+    const browserVerifyRepairAttempts = await settingInt("CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS", 1, 0, 3);
+    const browserRuntimeRepairProtocol = await settingEnabled(
+      "CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL",
+      true,
+    );
+    this.browserIgnoreBenignAssetErrors = await settingEnabled(
+      "CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS",
+      true,
+    );
+    const browserRequireAssetEvidence = await settingEnabled(
+      "CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE",
+      true,
+    );
+    // A browser exception is actionable runtime evidence, not merely a failed command. Reserve
+    // this small, configurable budget only after browser verification becomes active; regular
+    // shell-verified work still respects the caller's exact maxAttempts setting.
+    let maxAttempts = baseMaxAttempts;
+    let browserVerifyRetryBudgetApplied = false;
 
     // Join the caller's conversation when there is one; only open a new one otherwise.
     // The callback fires either way - callers use it to register the run so the Stop button
@@ -1529,11 +1658,17 @@ export class CodingAgent {
         .snapshot()
         .filter((item) => item.status === "pending" || item.status === "in_progress")
         .map((item) => item.title);
+      const terminalStepStatus = this.todos.snapshot().map((item) =>
+        item.status === "done" ? "completed" as const : item.status === "blocked" ? "failed" as const : "unknown" as const
+      );
+      const terminalStepNotes = this.todos.snapshot().map((item) => item.note);
       const completionEvidence = {
         mutationExpected,
         fileChangesObserved,
         changedFiles: [...changedFiles].sort(),
         openChecklistItems,
+        stepStatuses: terminalStepStatus,
+        stepNotes: terminalStepNotes,
       };
 
       let result = candidate;
@@ -1641,6 +1776,9 @@ export class CodingAgent {
     const verificationEnabled = ((await this.db.getSetting("CODING_AGENT_ENABLE_VERIFY")) ?? "true")
       .trim()
       .toLowerCase() === "true";
+    this.browserPreflightEnabled = verificationEnabled && ((await this.db.getSetting("CODING_AGENT_BROWSER_PREFLIGHT")) ?? "true")
+      .trim()
+      .toLowerCase() === "true";
     let verifyCommand = opts.verifyCommand;
     // Set together with verifyCommand the first time the browser-check fallback fires (see the
     // attempt loop below) and never reset per-attempt - verifyCommand itself persists across
@@ -1679,23 +1817,21 @@ export class CodingAgent {
     // the checklist status (what was already done) carries over — not the plan steps.
     const persisted = isResuming && !opts.existingPlan ? await this.loadPersistedState(conversationId) : undefined;
 
-    // Plan Mode's own bounded investigation: reads/browses/read-only-shells the project so the
-    // Planner call below is grounded in what's actually there instead of only a bare file listing
-    // (buildRepositorySnapshot). Model-driven, not mandatory - a trivial goal the model already
-    // understands can just skip straight to a final answer with zero tool calls, exactly like the
-    // normal EXPLORE phase already behaves. Bounded by PLAN_ONLY_EXPLORE_MAX_ITERATIONS via the
-    // coding-plan-only-explore-lock hook, which also hard-blocks every mutating call for the
-    // whole sub-run - no bypass, since "Plan Mode changed nothing" must hold regardless of what
-    // the model tries.
+    // Read-only investigation happens BEFORE every newly generated plan. This grounds expected
+    // files and verification commands in the actual project instead of asking the Planner to
+    // guess from the goal alone. It is bounded and mutation-locked; the normal execution pass
+    // still performs its own EXPLORE phase after the draft plan exists.
     let explorationNotes: string | undefined;
-    if (opts.planOnly && !opts.existingPlan) {
-      this.emit("decision", "Plan-Modus: Recherche vor der Planerstellung.", { plan_only_explore: true });
+    const prePlanningSnapshot = this.buildRepositorySnapshot();
+    const hasRepositoryToExplore = Array.isArray(prePlanningSnapshot?.["files"]) && (prePlanningSnapshot["files"] as unknown[]).length > 0;
+    if (prePlanResearchEnabled && !opts.existingPlan && hasRepositoryToExplore) {
+      this.emit("decision", opts.planOnly ? "Plan-Modus: Recherche vor der Planerstellung." : "Recherche vor der Planerstellung.", { plan_only_explore: opts.planOnly === true });
       this.planOnlyExploreToolCalls = 0;
       this.planOnlyExploreActive = true;
       try {
         const exploreResult = await this.agent.run(
           `Goal to plan for: ${goal}\n\n` +
-            "Before you plan, investigate the project as needed: read relevant files, browse the " +
+            "Before the planner runs, investigate the project as needed: read relevant files, browse the " +
             "running preview if useful, or run read-only shell inspection commands. You may call " +
             "zero tools if the goal is already clear. You CANNOT edit, write, install, build, run " +
             "tests, or make any git changes this turn - every such call will be refused. Stop as " +
@@ -1724,11 +1860,22 @@ export class CodingAgent {
     // downgrade that explicit context into a general/research plan: such a plan can write a
     // Markdown research artifact, create a real checkpoint diff, and then make this run look
     // successful without ever implementing the requested software.
-    const repositoryContext = { ...this.buildRepositorySnapshot(), ...(explorationNotes ? { explorationNotes } : {}) };
-    const plan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames, {
+    const repositoryContext = { ...prePlanningSnapshot, ...(explorationNotes ? { explorationNotes } : {}) };
+    const rawPlan = opts.existingPlan ?? (await this.planner.createPlan(goal, toolNames, {
       requiredPlanType: "coding",
       repositoryContext,
+      filterUnavailableTools: enforceToolAllowlist,
     }));
+    const toolSanitization = enforceToolAllowlist
+      ? this.planner.sanitizePlanTools(rawPlan, toolNames)
+      : { plan: rawPlan, removedTools: [] };
+    const plan = toolSanitization.plan;
+    if (toolSanitization.removedTools.length > 0) {
+      this.emit("decision", `Unbekannte Plan-Tools entfernt: ${toolSanitization.removedTools.join(", ")}`, {
+        plan_tool_allowlist: true,
+        removed_tools: toolSanitization.removedTools,
+      });
+    }
     this.currentPlan = plan;
     // CodingAgent is an execution surface, so mutation is the safe default - but a plan whose
     // steps are ENTIRELY check/diagnostic work (see CHECKLIST_CHECK_KEYWORDS: explore, inspect,
@@ -1752,7 +1899,21 @@ export class CodingAgent {
     // from it. GET /plans?conversationId=... lets the frontend look the plan up independently of
     // which page of messages happens to be loaded - see the id/version passed to emitPlanEvent
     // below. Best-effort: a failed write degrades the Plan tab, never the run itself.
-    this.currentPlanDb = opts.existingPlan ? undefined : await this.persistPlan(plan, repositoryContext, conversationId);
+    //
+    // opts.existingPlan means the CALLER already owns that row (e.g. /plans/:id/execute), not
+    // that no row exists - opts.planRunContext carries its id/version for exactly this case.
+    // Without threading it into currentPlanDb here, syncPlanFromTodos()'s own DB write-back
+    // (gated on currentPlanDb, see its doc comment) never fires for ANY plan run started from
+    // the UI's Plan tab: the `plans` row stays frozen at its original all-pending steps for the
+    // run's entire duration, so the Plan tab and checklist both go stale the moment the live
+    // "plan"/"decision" events age out of the paginated message window - looking exactly like
+    // the run lost track of its own progress, even though it kept working correctly underneath.
+    const existingPlanId = opts.existingPlan ? opts.planRunContext?.planId : undefined;
+    this.currentPlanDb = opts.existingPlan
+      ? typeof existingPlanId === "number" && Number.isFinite(existingPlanId)
+        ? { id: existingPlanId, version: opts.planRunContext?.planVersion ?? 1 }
+        : undefined
+      : await this.persistPlan(plan, repositoryContext, conversationId);
     this.emitPlanEvent(plan, this.currentPlanDb);
     // Pre-seeds the checklist with the planner's steps so the UI shows real progress from the
     // very first tool call, instead of an empty list until the model gets around to calling
@@ -1810,7 +1971,7 @@ export class CodingAgent {
     const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
 
     let lastSummary = "";
-    let nextAttemptReason: "verification_failed" | "checklist_open" | "guardrail" = "verification_failed";
+    let nextAttemptReason: "verification_failed" | "browser_verification_failed" | "checklist_open" | "guardrail" = "verification_failed";
     // A model may narrate the same next step forever without calling a tool. One retry is useful
     // for EXPLORE -> EDIT; repeating the identical ungrounded transition is a stall, not progress.
     const retriedUngroundedAnnouncements = new Set<number>();
@@ -1877,8 +2038,16 @@ export class CodingAgent {
 
       const prompt =
         attempt === 1
-          ? this.buildInitialPrompt(goal, verifyCommand, detectedSkill, plan, isResuming, mutationExpected, allowGitCommit)
-          : this.buildFollowUpPrompt(goal, lastSummary, nextAttemptReason, mutationExpected, allowGitCommit);
+          ? this.buildInitialPrompt(goal, verifyCommand, plan, isResuming, mutationExpected, allowGitCommit)
+          : this.buildFollowUpPrompt(
+              goal,
+              lastSummary,
+              nextAttemptReason,
+              mutationExpected,
+              allowGitCommit,
+              browserRuntimeRepairProtocol,
+              browserRequireAssetEvidence,
+            );
       // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
       // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
       // (possibly still "explore" if it timed out early) would permanently lock every retry
@@ -1906,6 +2075,12 @@ export class CodingAgent {
         runResult = await this.agent.run(prompt, {
           initialRunJournal: journal,
           getCurrentStepId: () => this.todos.currentStepId(),
+          ...(staleReadRecoveryEnabled ? {
+            staleReadRecovery: {
+              maxRecoveries: staleReadRecoveryMax,
+              requireSameContent: staleReadRecoveryRequireSameContent,
+            },
+          } : {}),
           onModelResponse: (response) => {
             this.updatePhaseFromResponse(response);
             // Needs no checkpoint diff at all (read-only phases never produce one) - see its own
@@ -1958,6 +2133,12 @@ export class CodingAgent {
           // same goal, so the transcript should keep showing that goal, not the internal
           // "diagnose and fix" retry instructions.
           displayContent: goal,
+          // The goal was already persisted as the user's turn on attempt 1 - every later
+          // attempt re-runs Agent.run() for the SAME goal (see displayContent above), and
+          // without this, each one would insert another duplicate "user" row (the exact bug
+          // behind seeing the same follow-up message several times in a row in the DB).
+          persistUserTurn: attempt === 1,
+          ...(attempt === 1 && opts.localMessageId ? { localMessageId: opts.localMessageId } : {}),
         });
       } catch (error) {
         // Agent.run() surfaces its progress timeout as a THROWN error (the race in run()
@@ -2136,7 +2317,9 @@ export class CodingAgent {
               // exists is equally valid evidence - see sandboxContainsFile's doc comment. Only
               // demote when the file is verifiably absent, not merely "wasn't (re)written now".
               const step = planStepByTitle.get(item.title.trim().toLowerCase());
-              const hints = step ? this.extractFileHints(`${step.title} ${step.description ?? ""}`) : [];
+              const hints = step?.expectedFiles?.length
+                ? step.expectedFiles
+                : step ? this.extractFileHints(`${step.title} ${step.description ?? ""}`) : [];
               if (hints.length > 0) {
                 return !hints.some((hint) => this.sandboxContainsFile(hint));
               }
@@ -2161,7 +2344,9 @@ export class CodingAgent {
             const mismatchNotes = new Map<number, string>();
             for (const item of newlyDone) {
               const step = planStepByTitle.get(item.title.trim().toLowerCase());
-              const hints = step ? this.extractFileHints(`${step.title} ${step.description ?? ""}`) : [];
+              const hints = step?.expectedFiles?.length
+                ? step.expectedFiles
+                : step ? this.extractFileHints(`${step.title} ${step.description ?? ""}`) : [];
               if (hints.length > 0) {
                 mismatchNotes.set(
                   item.id,
@@ -2222,6 +2407,10 @@ export class CodingAgent {
         if (staticEntryFile && this.agent.executor.listTools().some((tool) => tool.name === "browser")) {
           verifyCommand = `browser check: ${staticEntryFile} (console/page errors)`;
           usingBrowserVerify = true;
+          if (!browserVerifyRetryBudgetApplied) {
+            maxAttempts += browserVerifyRepairAttempts;
+            browserVerifyRetryBudgetApplied = true;
+          }
         }
       }
 
@@ -2350,7 +2539,13 @@ export class CodingAgent {
       identicalFailureStreak = isIdenticalToPreviousFailure ? identicalFailureStreak + 1 : 0;
       previousVerifyError = verifyError;
 
-      if (identicalFailureStreak >= maxIdenticalVerifyFailures - 1) {
+      if (
+        identicalFailureStreak >= maxIdenticalVerifyFailures - 1 &&
+        // Browser errors need the targeted source-level repair attempt below. They still stop
+        // at the (small) extended budget, but must not be cut off by the generic repeated-error
+        // guard before that repair has a chance to run.
+        (!usingBrowserVerify || attempt >= maxAttempts)
+      ) {
         // maxIdenticalVerifyFailures attempts in a row produced the exact same verify error: the
         // model's edits are provably not changing the outcome. Burning the rest of maxAttempts
         // would just repeat this - stop now with a clear, honest diagnosis instead of a generic
@@ -2373,7 +2568,7 @@ export class CodingAgent {
       lastSummary = isIdenticalToPreviousFailure
         ? `${lastSummary}\n\nVerification command "${verifyCommand}" failed with the EXACT SAME error as your previous attempt - your last change had NO effect on this outcome. Do not repeat it. Diagnose why that edit didn't fix this specific error, or try a fundamentally different approach:\n${verifyError}`
         : `${lastSummary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`;
-      nextAttemptReason = "verification_failed";
+      nextAttemptReason = usingBrowserVerify ? "browser_verification_failed" : "verification_failed";
 
       if (attempt === maxAttempts) {
         return finalize({
@@ -2533,6 +2728,19 @@ export class CodingAgent {
     const target =
       inProgress.length === 1 ? inProgress[0]! : inProgress.find((item) => stepIdsWithWrite.has(String(item.id)));
     if (!target) return;
+    // changedFileCount>0 only proves SOME file changed this attempt, not that it was the one
+    // THIS step names - e.g. a todo:update write on the plan file, or another step's edit, is
+    // enough to satisfy the check above while the file this step is actually about is still
+    // missing. Same grounding the end-of-attempt demotion already applies, just moved here so
+    // the live UI never shows a false "done" in the first place instead of only self-correcting
+    // once the whole attempt has finished (see this method's call site and the end-of-attempt
+    // newlyDone filter for the sibling check).
+    if (!this.stepHasFileEvidence(target)) {
+      this.emit("decision", `"<< EDIT COMPLETE" gemeldet, aber die von Schritt "${target.title}" genannte(n) Datei(en) existieren noch nicht - Checkliste bleibt offen.`, {
+        stepTitle: target.title,
+      });
+      return;
+    }
 
     this.todos.update(
       target.id,
@@ -2617,6 +2825,16 @@ export class CodingAgent {
     for (let index = 0; index <= predecessorIndex; index++) {
       const item = items[index];
       if (item && item.status !== "done" && item.status !== "blocked") {
+        // changedFileCount>0 only proves SOME file changed this attempt, not that it was the
+        // file THIS specific predecessor step names - the same gap reconcilePhaseCompletion
+        // guards against (see its doc comment). Left in_progress rather than closed when its
+        // own named file still doesn't exist, so the live UI doesn't claim it before it's true.
+        if (!this.stepHasFileEvidence(item)) {
+          this.emit("decision", `Schritt "${item.title}" wurde übersprungen gemeldet, aber die dort genannte(n) Datei(en) existieren noch nicht - bleibt offen.`, {
+            stepTitle: item.title,
+          });
+          continue;
+        }
         this.todos.update(item.id, "done", `Automatisch konsolidiert: Modell wechselte nach Dateiänderung zu Schritt ${announcedNumber}.`);
         changed = true;
       }
@@ -3048,12 +3266,13 @@ export class CodingAgent {
     if (step.dependsOn && step.dependsOn.length > 0) meta.push(`depends on: ${step.dependsOn.join(", ")}`);
     if (step.riskLevel && step.riskLevel !== "low") meta.push(`risk: ${step.riskLevel}`);
     if (step.toolsNeeded && step.toolsNeeded.length > 0) meta.push(`tools: ${step.toolsNeeded.join(", ")}`);
-    // Matched against THIS step's own title+description, not the whole goal - lets different
-    // steps of the same plan (e.g. a "write tests" step vs. a "scaffold the page" step) pull in
-    // different skills instead of the one goal-level skill picked once for the entire run.
-    const stepSkill = this.matchSkillForText(`${step.title} ${step.description ?? ""}`);
-    if (stepSkill) meta.push(`skill: ${stepSkill}`);
-    return meta.length > 0 ? `${line} [${meta.join(" · ")}]` : line;
+    if (step.expectedFiles && step.expectedFiles.length > 0) meta.push(`files: ${step.expectedFiles.join(", ")}`);
+    const contract = [
+      step.acceptanceCriteria?.length ? `done when: ${step.acceptanceCriteria.join(" | ")}` : "",
+      step.verificationCommands?.length ? `verify: ${step.verificationCommands.join(" && ")}` : "",
+    ].filter(Boolean);
+    const renderedMeta = meta.length > 0 ? ` [${meta.join(" · ")}]` : "";
+    return `${line}${renderedMeta}${contract.length > 0 ? `\n   CONTRACT: ${contract.join(" · ")}` : ""}`;
   }
 
   /**
@@ -3115,20 +3334,16 @@ export class CodingAgent {
     ];
     if (this.previewBaseUrl) {
       const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot)}/serve/index.html`;
-      const browserSessionId = `coding-${basename(this.sandboxRoot)}`;
       lines.push(
         "BROWSER PREVIEW / TESTING:",
         `- To look at or test this project in the browser tool, navigate to: ${previewUrl}`,
         `- NEVER use a 'file://' URL for this project - it looks like it works, but Chromium blocks`,
         `  ES module scripts and fetch() under file:, so the page silently fails in ways that look`,
         `  like a real bug. The URL above is a real HTTP server and serves the project correctly.`,
-        `- Pass sessionId:"${browserSessionId}" on EVERY browser call this run (launch, screenshot_url,`,
-        `  goto, click, evaluate, screenshot, everything) - always this exact literal string, never`,
-        `  something a previous tool result returned. The first call that uses it creates a dedicated`,
-        `  session under this name; every later call with the same string reuses that same session.`,
-        `  Do NOT omit sessionId "to keep it simple" - omitting it falls back to the ONE shared`,
-        `  default browser session, which is process-wide and has nothing to do with this project`,
-        `  (it could be sitting on a completely different page from an unrelated chat or task).`,
+        `- For a new browser check, the FIRST browser call MUST be action:"launch" with url:${previewUrl}.`,
+        `  Do not call goto with a guessed or fixed sessionId. Read the launch result and use its`,
+        `  exact returned sessionId for every later screenshot/click/evaluate/get_page_errors call.`,
+        `  If the tool supports screenshot_url or verify_page, those macros may be used instead.`,
         `- Use browser snapshot before clicking. Prefer role/name targeting over coordinate guesses;`,
         `  snapshots include rendered off-screen controls and Puppeteer will scroll them into view.`,
         `- After click/type/scroll, read a fresh snapshot or use expect/get_content before deciding`,
@@ -3147,7 +3362,6 @@ export class CodingAgent {
   private buildInitialPrompt(
     goal: string,
     verifyCommand: string | undefined,
-    detectedSkill: string | undefined,
     plan: Plan,
     isResuming: boolean,
     mutationExpected: boolean,
@@ -3200,6 +3414,13 @@ export class CodingAgent {
       "",
       plan.steps.map((step, i) => this.renderPlanStep(step, i)).join("\n"),
       "",
+      "STEP CONTRACTS ARE EXECUTABLE REQUIREMENTS:",
+      "- Treat each step's CONTRACT as the definition of done, not as optional documentation.",
+      "- Work only on the expected files named for the current step unless EXPLORE proves the plan wrong; if so, update the checklist explicitly.",
+      "- Before marking a step done, satisfy every acceptance criterion and run every listed verification command.",
+      "- Run the listed verification command exactly as written when it is available. Do not replace it with a weaker check or claim success from intent.",
+      "- If a criterion or verification cannot be proven, mark the step blocked with a short note instead of done.",
+      "",
       "Work in these phases, and EXPLICITLY STATE the phase you are starting and completing:",
       "1. EXPLORE - locate the relevant files and read them before changing anything.",
       "   At start: \">> PHASE: EXPLORE\"",
@@ -3222,10 +3443,9 @@ export class CodingAgent {
       "   their own step's edit and their own todo:update call. The checklist the user watches is driven ONLY",
       "   by these todo:update calls, not by prose - a step every step is genuinely, individually done before",
       "   moving to the next.",
-      "   Some steps above are tagged \"[skill: <name>]\" - that skill was matched against THAT step's own",
-      "   title/description, not the whole goal, so different steps of the same plan can pull in different",
-      "   skills. Load it via the skill tool right before starting that specific step (not earlier, not for",
-      "   the whole run) and follow it only while working on that step.",
+      "   Loaded skills are guidance already included in your context, not executable tools. Never call a",
+      "   skill slug and never use skill_manage action:\"execute\" to apply a skill; perform the actual",
+      "   filesystem, shell, browser, git, diagnostics, or todo action directly.",
       "   At start: \">> PHASE: EDIT\"",
       "   At end (only once every plan step above is marked done): \"<< EDIT COMPLETE\"",
       "4. VERIFY - re-read what you changed and run the verification command below. If a plan step's own",
@@ -3257,27 +3477,24 @@ export class CodingAgent {
       );
     }
 
-    if (detectedSkill) {
-      parts.push(
-        "",
-        `A "${detectedSkill}" skill looks relevant for the goal AS A WHOLE - load it via the skill tool before phase 3 and follow it if it applies. This is separate from the per-step "[skill: ...]" tags on individual plan steps above, which take precedence for that specific step's own edit.`
-      );
-    }
-
     return parts.join("\n");
   }
 
   private buildFollowUpPrompt(
     goal: string,
     previousSummaryWithVerification: string,
-    reason: "verification_failed" | "checklist_open" | "guardrail",
+    reason: "verification_failed" | "browser_verification_failed" | "checklist_open" | "guardrail",
     mutationExpected: boolean,
-    allowGitCommit: boolean
+    allowGitCommit: boolean,
+    browserRuntimeRepairProtocol = true,
+    browserRequireAssetEvidence = true,
   ): string {
     // The checklist carries across attempts. Each attempt is a fresh agent.run(), so without
     // replaying it here the agent would re-plan from scratch and redo steps it already finished.
     const checklist = this.todos.render();
-    const opening = reason === "verification_failed"
+    const opening = reason === "browser_verification_failed"
+      ? "Browser verification found a real JavaScript runtime exception. Repair that exact exception before opening the browser again."
+      : reason === "verification_failed"
       ? "Your previous attempt failed its verification command. Diagnose the ACTUAL failure below and fix it - do not repeat the same approach blindly."
       : reason === "guardrail"
         ? "Your previous attempt was stopped by a loop guardrail. Continue from structured state without repeating the blocked action."
@@ -3295,12 +3512,50 @@ export class CodingAgent {
       "BEFORE YOU ACT, call the status tool. It tells you in one call what normally takes several reads: which steps are already done (from the checklist), what files you actually changed (from the checkpoint diff - not your memory), and whether any diagnostics are still failing. Your conversation context may have been trimmed and earlier results may no longer be visible, so do NOT rely on what you remember - ask the status tool for ground truth.",
       this.pathHandlingBlock().join("\n"),
       `Original goal: ${goal}`,
+      (reason === "browser_verification_failed" ? [
+        "BROWSER-ERROR REPAIR PROTOCOL (mandatory):",
+        ...(browserRuntimeRepairProtocol ? [
+          "This is a failure in YOUR generated page code, not a browser/tool failure. Treat every reported file:line:column as a mandatory source-level debugging target.",
+          this.renderBrowserRuntimeRepairTargets(previousSummaryWithVerification),
+          "1. Call status once. For EACH source target above, read that exact file around the reported line (at least 25 lines before and after) BEFORE editing. Never repair from memory or only change index.html.",
+          "2. Fix the exception at its cause. An 'Assignment to constant variable' requires removing the reassignment or changing only that reassigned binding from const to let. A 'Cannot read properties of undefined' requires validating the receiver before accessing the named property, including the empty/select/loading state.",
+          ...(browserRequireAssetEvidence ? [
+            "ASSET EVIDENCE RULE: A missing-resource message alone is not permission to add or remove HTML links, icons, or assets. First search the exact requested path in the project. If no explicit reference exists, make no asset edit. A browser-default favicon.ico 404 is non-blocking and requires no edit; an explicitly referenced required asset remains a real project error.",
+          ] : []),
+          "3. Make the smallest targeted edit, then re-read the changed range. Do not add a second feature or redesign while repairing a runtime error.",
+          "4. The controller will load the page again. Do NOT call the browser check yourself, do not mark the step done, and do not claim success until the fresh check has zero page errors.",
+        ] : [
+          "1. Call status once, then use filesystem search/read (or shell grep) to find the exact failing property/identifier from the error in the actual JavaScript files loaded by index.html.",
+          "2. Read the code that initializes that object and the code that reads it. Do not guess from the HTML or merely re-run the browser check.",
+          "3. Make one targeted edit that guarantees the value exists before the property is accessed (or guard the access with the correct empty/loading state).",
+          "4. Re-read the edited file, then let the controller perform the fresh browser verification. Do not mark the step done until that check passes.",
+        ]),
+      ].join("\n") : ""),
       checklist
         ? `Your checklist so far (keep updating it, do not start it over):\n${checklist}\n\n${this.checklistMaintenanceBlock().join("\n")}`
         : "",
-      reason === "verification_failed" ? "Previous attempt summary and verification output:" : "Continuation context:",
+      (reason === "verification_failed" || reason === "browser_verification_failed") ? "Previous attempt summary and verification output:" : "Continuation context:",
       previousSummaryWithVerification,
     ].filter((part) => part !== "").join("\n\n");
+  }
+
+  private renderBrowserRuntimeRepairTargets(verificationOutput: string): string {
+    const targets = new Map<string, string>();
+    const sourceLocation = /(?:\[pageerror\]\s*)?(.+?)\s*\((?:https?:\/\/[^\s)]+\/serve\/)?([^/()\s]+):(\d+):(\d+)\)/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = sourceLocation.exec(verificationOutput)) !== null) {
+      const [, rawMessage, file, line, column] = match;
+      const message = (rawMessage ?? "").replace(/\s+/g, " ").trim();
+      const location = `${file}:${line}:${column}`;
+      targets.set(location, `${location} — ${message || "browser runtime error"}`);
+    }
+
+    if (targets.size === 0) {
+      return "The verification output did not contain a line number. Extract the exact failing identifier from it, locate every use in the files loaded by index.html, and read those ranges before editing.";
+    }
+
+    return `Exact runtime repair targets:\n${[...targets.values()].slice(0, 8).map((target) => `- ${target}`).join("\n")}`;
   }
 }
 

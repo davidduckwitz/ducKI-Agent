@@ -1,4 +1,4 @@
-import { Play, MessageSquare, X, CheckCircle2, Clock, AlertCircle } from "lucide-react";
+import { Play, MessageSquare, X, CheckCircle2, Clock, AlertCircle, Ban, HelpCircle, CircleDashed } from "lucide-react";
 import { DuckyMascot } from "./DuckyMascot";
 
 export interface Plan {
@@ -34,7 +34,7 @@ export interface PlanStep {
   status?: string;
 }
 
-export type StepStatus = "pending" | "in_progress" | "completed" | "failed";
+export type StepStatus = "pending" | "in_progress" | "completed" | "skipped" | "failed" | "unverified" | "unknown";
 
 interface PlanExecutionPanelProps {
   plan: Plan;
@@ -47,6 +47,8 @@ interface PlanExecutionPanelProps {
   executionProgress?: number;
   /** Status of each step */
   stepStatuses?: Record<number, StepStatus>;
+  /** Explanation emitted by the checklist for a step (failure/demotion/skip reason). */
+  stepNotes?: Record<number, string>;
   /** Every step has already been completed (live or replayed from a past conversation) -
    *  hides "Umsetzen" (nothing left to run) and relabels "Plan verbessern" accordingly. */
   isCompleted?: boolean;
@@ -62,7 +64,7 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
   try {
     const {
       plan, onRefine, onExecute, onClose, isExecuting = false, executionProgress, isCompleted = false,
-      completionSummary, changedFiles,
+      completionSummary, changedFiles, stepStatuses, stepNotes,
     } = props;
 
     if (!plan?.goal) {
@@ -113,13 +115,27 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
 
             {steps.length > 0 && (
               <div>
-                <p className="text-sm text-muted-foreground">Schritte ({steps.length}):</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <p className="text-sm">Schritte ({steps.length})</p>
+                  <span className="text-green-300">Erfolgreich: {steps.filter((_, i) => stepStatuses?.[i] === "completed").length}</span>
+                  <span className="text-amber-300">Übersprungen: {steps.filter((_, i) => stepStatuses?.[i] === "skipped").length}</span>
+                  <span className="text-red-300">Fehlgeschlagen: {steps.filter((_, i) => stepStatuses?.[i] === "failed").length}</span>
+                  <span>Unbekannt: {steps.filter((_, i) => stepStatuses?.[i] === "unknown").length}</span>
+                </div>
+                {steps.some((_, i) => stepStatuses?.[i] === "in_progress") && (
+                  <p className="mt-1 text-xs text-blue-300">
+                    Aktuelle Arbeit: {steps.find((_, i) => stepStatuses?.[i] === "in_progress")?.title}
+                  </p>
+                )}
                 <ul className="space-y-2 mt-2">
                   {steps.map((step, idx) => {
-                    const status = (props.stepStatuses?.[idx] ?? "pending") as StepStatus;
+                    const status = (stepStatuses?.[idx] ?? "pending") as StepStatus;
                     const isCompleted = status === "completed";
                     const isFailed = status === "failed";
                     const isInProgress = status === "in_progress";
+                    const isSkipped = status === "skipped";
+                    const isUnverified = status === "unverified";
+                    const isUnknown = status === "unknown";
 
                     return (
                       <li
@@ -129,22 +145,29 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
                             ? "bg-green-500/10 border-green-500/30"
                             : isFailed
                               ? "bg-red-500/10 border-red-500/30"
-                              : isInProgress
-                                ? "bg-blue-500/10 border-blue-500/30"
-                                : "bg-muted/50 border-border/70"
+                              : isSkipped || isUnverified
+                                ? "bg-amber-500/10 border-amber-500/30"
+                                : isUnknown
+                                  ? "bg-slate-500/10 border-slate-500/30"
+                                  : isInProgress
+                                    ? "bg-blue-500/10 border-blue-500/30"
+                                    : "bg-muted/50 border-border/70"
                         }`}
                       >
                         <div className="flex items-start gap-3">
                           <div className="mt-0.5 flex items-center gap-1">
                             {isCompleted && <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />}
                             {isFailed && <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />}
+                            {isSkipped && <Ban className="w-4 h-4 text-amber-400 shrink-0" />}
+                            {isUnverified && <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />}
+                            {isUnknown && <HelpCircle className="w-4 h-4 text-slate-400 shrink-0" />}
                             {isInProgress && (
                               <>
                                 <Clock className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
                                 <DuckyMascot working={true} size={20} className="ml-1" title="DucKI arbeitet daran" />
                               </>
                             )}
-                            {status === "pending" && <div className="w-4 h-4 rounded-full border border-border shrink-0" />}
+                            {status === "pending" && <CircleDashed className="w-4 h-4 text-muted-foreground shrink-0" />}
                           </div>
                           <div className="flex-1">
                             <div className="flex items-center gap-2">
@@ -153,15 +176,21 @@ export const PlanExecutionPanel = (props: PlanExecutionPanelProps) => {
                                 <span className={`text-xs px-2 py-0.5 rounded ${
                                   isCompleted ? "bg-green-500/20 text-green-300" :
                                   isFailed ? "bg-red-500/20 text-red-300" :
+                                  isSkipped || isUnverified ? "bg-amber-500/20 text-amber-300" :
+                                  isUnknown ? "bg-slate-500/20 text-slate-300" :
                                   "bg-blue-500/20 text-blue-300"
                                 }`}>
                                   {status === "completed" ? "Erledigt" :
                                    status === "failed" ? "Fehler" :
+                                   status === "skipped" ? "Übersprungen" :
+                                   status === "unverified" ? "Unbestätigt" :
+                                   status === "unknown" ? "Unbekannt" :
                                    "In Bearbeitung"}
                                 </span>
                               )}
                             </div>
                             {step.description && <p className="text-xs text-muted-foreground mt-1">{step.description}</p>}
+                            {stepNotes?.[idx] && <p className="text-xs text-amber-300 mt-1 whitespace-pre-wrap">{stepNotes[idx]}</p>}
                           </div>
                         </div>
                       </li>

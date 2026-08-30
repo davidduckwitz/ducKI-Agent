@@ -55,6 +55,28 @@ export function normalizeScopedPath(rawPath: string, sandboxRoot: string): strin
     }
   }
 
+  // Bare reserved workspace-layout words as a leading segment, even with NO project slug
+  // following - a model that ignores "never include shared-workspace or coding in your paths"
+  // sometimes writes e.g. "coding/STATUS.md" outright, which the sandbox-tail loop above never
+  // catches (it only matches a repeated SANDBOX path, and a bare "coding" is normally not the
+  // sandbox's own tail). Left unstripped, that lands as a real, unwanted "coding" subfolder
+  // INSIDE the sandbox - a write to "coding/index.html" and a same-session read of the same
+  // literal path both silently "succeed" there, while the file the run loop, browser-verify and
+  // the user actually look for (sandboxRoot/index.html) never gets written at all. Strip
+  // reserved segments one at a time, in order, so "shared-workspace/coding/STATUS.md" reduces
+  // fully to "STATUS.md". A real subfolder that merely STARTS WITH one of these words
+  // ("coding-notes/...") is untouched - this compares whole path segments, not substrings.
+  const RESERVED_LEADING_SEGMENTS = new Set(["shared-workspace", "coding"]);
+  let segs = pSegs;
+  let segsLc = pLc;
+  while (segs.length > 1 && RESERVED_LEADING_SEGMENTS.has(segsLc[0] ?? "")) {
+    segs = segs.slice(1);
+    segsLc = segsLc.slice(1);
+  }
+  if (segs.length !== pSegs.length) {
+    return segs.join("/") || ".";
+  }
+
   return original;
 }
 

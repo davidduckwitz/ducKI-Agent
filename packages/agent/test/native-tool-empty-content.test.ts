@@ -81,4 +81,55 @@ describe("native tool calls with empty text content", () => {
     expect(events.some((event) => event.message.includes("antwortete leer"))).toBe(false);
     expect(result.response).toBe("Done.");
   });
+
+  it("does not abort a coding run after repeated filesystem/todo protocol mix-ups", async () => {
+    const malformedCall = {
+      id: "call_todo",
+      type: "function" as const,
+      function: { name: "filesystem", arguments: '{"action":"todo","path":"ignored"}' },
+    };
+    let generation = 0;
+    const generate = vi.fn(async () => {
+      const index = generation++;
+      return {
+        content: index < 3 ? "" : "Recovered and continued.",
+        model: "native-test-model",
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        finishReason: "stop",
+        toolCalls: index < 3 ? [malformedCall] : [],
+      };
+    });
+    const provider = {
+      model: "native-test-model",
+      generate,
+      generateStream: generate,
+      supportsStreaming: () => false,
+      supportsNativeTools: () => true,
+    } as any;
+    const events: Array<{ type: string; message: string }> = [];
+    const agent = new Agent(provider, stubDb(), undefined, {
+      enablePlanning: false,
+      enableReflection: false,
+      disableQualityPasses: true,
+      maxIterations: 6,
+    });
+    agent.executor.registerTool({
+      name: "filesystem",
+      description: "test filesystem",
+      definition: { name: "filesystem", description: "test", parameters: { type: "object", properties: {} } },
+      execute: async () => ({ success: false, data: null, error: "Unknown action: todo. Valid actions: read, write." }),
+    } as any);
+
+    const result = await agent.run("Continue the coding task.", {
+      agentMode: "full",
+      onEvent: (event: any) => events.push({ type: event.type, message: event.message }),
+    });
+
+    // The agent may run a final quality pass after the recovered answer; the important
+    // assertion is that it reached a later generation instead of stopping at the failure cap.
+    expect(generate.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(result.response).toBe("Recovered and continued.");
+    expect(events.some((event) => event.message.includes("Tool-Protokoll erkannt"))).toBe(true);
+    expect(events.some((event) => event.message.includes("3x in Folge ohne Erfolg"))).toBe(false);
+  });
 });

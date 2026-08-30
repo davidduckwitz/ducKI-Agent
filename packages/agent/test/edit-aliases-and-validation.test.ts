@@ -13,6 +13,24 @@ function registerFilesystem(agent: ReturnType<typeof createAgentForParserTests>)
 }
 
 describe("Edit Aliases & Validation (PR2-A3,A4,A5)", () => {
+  describe("loaded skill recovery", () => {
+    it("turns a direct loaded-skill call into a documentation lookup, never execution", () => {
+      const agent = createAgentForParserTests();
+      (agent as any).activeSkillSlugsForRun = new Set(["code-review"]);
+
+      const direct = (agent as any).resolveToolNameAndInput("code-review", {});
+      const explicitExecute = (agent as any).resolveToolNameAndInput("skill_manage", {
+        action: "execute",
+        name: "code-review",
+        input: { ignored: true },
+      });
+
+      expect(direct).toEqual({ toolName: "skill_manage", input: { action: "view", name: "code-review" } });
+      expect(explicitExecute.input).toMatchObject({ action: "view", name: "code-review" });
+      expect(explicitExecute.input.input).toBeUndefined();
+    });
+  });
+
   describe("edit action alias mapping", () => {
     it("resolves 'edit' as valid filesystem action", () => {
       const agent = createAgentForParserTests();

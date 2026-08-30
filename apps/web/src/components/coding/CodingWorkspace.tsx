@@ -38,6 +38,7 @@ import { PlanExecutionPanel, type Plan, type StepStatus } from "../chat/PlanExec
 import type { CodingFileItem } from "./CodingFileTree";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import { parsePersistedEvent } from "../../lib/persistedEventTypes";
+import { findLatestChecklist, resolveStepStatus, resolveStepNote } from "../../lib/planChecklist";
 
 interface PersistedMessage {
   id: number;
@@ -229,6 +230,23 @@ export function CodingWorkspace() {
   const [renameTarget, setRenameTarget] = useState("");
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [isEnsuringConversation, setIsEnsuringConversation] = useState(false);
+  // Blocks a second submit from the moment of click, not just from `isLoading` (which only
+  // flips true once the server's chat:start socket event round-trips back - a window of one or
+  // more seconds in which a fast double-click/double-Enter could fire two independent HTTP
+  // runs for the same conversation). sendGuardRef is checked/set synchronously so it also
+  // covers two submits that both fire before React re-renders isSendPending; isSendPending
+  // exists purely to actually disable the composer in the UI.
+  const sendGuardRef = useRef(false);
+  const [isSendPending, setIsSendPending] = useState(false);
+  // Hands the lock off to the real, socket-driven isLoading once chat:start actually arrives -
+  // from that point on isLoading alone already disables the composer, so isSendPending only
+  // needs to cover the gap between click and chat:start.
+  useEffect(() => {
+    if (isLoading) {
+      sendGuardRef.current = false;
+      setIsSendPending(false);
+    }
+  }, [isLoading]);
 
   // Inline AI edit (select text in the editor, describe a change, get a suggestion applied in
   // place with accept/reject) - see the floating toolbar rendered next to the Editor below.
@@ -505,6 +523,71 @@ export function CodingWorkspace() {
     }
     return { plan: null as Plan | null, planIndex: -1 };
   }, [messages]);
+
+  // One authoritative live status source for both the coding Plan tab and the modal:
+  // CodingAgent emits the complete todo snapshot after every checklist change. The modal
+  // previously had a stepStatuses prop but never received this snapshot, so it showed every
+  // step as pending while the Plan tab showed real progress.
+  const currentPlanRun = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const data = messages[i]?.eventData;
+      if (data?.["plan_event"] !== "run_status" || typeof data["runId"] !== "string") continue;
+      if (currentPlan?.id !== undefined && Number(data["planId"]) !== currentPlan.id) continue;
+      return data;
+    }
+    return undefined;
+  }, [messages, currentPlan?.id]);
+
+  const currentPlanChecklist = useMemo(() => {
+    if (!currentPlan) return null;
+    const scope = currentPlanRun
+      ? { runId: String(currentPlanRun["runId"]), ...(Number.isFinite(Number(currentPlanRun["planId"])) ? { planId: Number(currentPlanRun["planId"]) } : {}) }
+      : currentPlan.id !== undefined ? { planId: currentPlan.id } : undefined;
+    return findLatestChecklist(messages, scope);
+  }, [messages, currentPlan, currentPlanRun]);
+
+  const currentPlanStepStatuses = useMemo<Record<number, StepStatus> | undefined>(() => {
+    if (!currentPlan) return undefined;
+    const terminalEvidence = currentPlanRun?.["completionEvidence"] as { stepStatuses?: string[] } | undefined;
+    const statuses: Record<number, StepStatus> = {};
+    currentPlan.steps?.forEach((step, index) => {
+      const terminalStatus = terminalEvidence?.stepStatuses?.[index];
+      if (terminalStatus === "completed") {
+        statuses[index] = "completed";
+        return;
+      }
+      if (terminalStatus === "failed") {
+        statuses[index] = "failed";
+        return;
+      }
+      if (terminalStatus === "unknown") {
+        statuses[index] = "unknown";
+        return;
+      }
+      const raw = currentPlanChecklist
+        ? resolveStepStatus(currentPlanChecklist, step, index)
+        : undefined;
+      if (raw === "done" || raw === "completed") statuses[index] = "completed";
+      else if (raw === "in_progress" || raw === "running") statuses[index] = "in_progress";
+      else if (raw === "failed" || raw === "blocked") statuses[index] = "failed";
+      else if (raw === "skipped") statuses[index] = "skipped";
+      else if (raw === "unverified") statuses[index] = "unverified";
+      else if (raw === "pending") statuses[index] = "pending";
+      else if (isLoading) statuses[index] = "unknown";
+      else statuses[index] = "pending";
+    });
+    return statuses;
+  }, [currentPlan, currentPlanChecklist, isLoading]);
+
+  const currentPlanStepNotes = useMemo<Record<number, string> | undefined>(() => {
+    if (!currentPlan || !currentPlanChecklist) return undefined;
+    const notes: Record<number, string> = {};
+    currentPlan.steps?.forEach((step, index) => {
+      const note = resolveStepNote(currentPlanChecklist, step, index);
+      if (note) notes[index] = note;
+    });
+    return Object.keys(notes).length > 0 ? notes : undefined;
+  }, [currentPlan, currentPlanChecklist]);
 
   // Once the agent stops working on this plan (isLoading flips false, having been true for
   // this same plan - see wasExecutingPlanRef below), collect what actually happened: the
@@ -824,6 +907,12 @@ export function CodingWorkspace() {
 
   const sendCodingPrompt = async (text: string, options: { planMode: boolean; includeFile: string | null }) => {
     if (!text || !selectedProject) return;
+    // Blocks a second submit from the very first click, synchronously - see sendGuardRef's
+    // doc comment. Without this, a fast double-click/double-Enter before isLoading (socket-
+    // driven) flips true could fire two independent HTTP runs for the same conversation.
+    if (sendGuardRef.current) return;
+    sendGuardRef.current = true;
+    setIsSendPending(true);
 
     setIsEnsuringConversation(true);
     let ensuredConversationId = projectConversationMapRef.current[selectedProject];
@@ -849,6 +938,8 @@ export function CodingWorkspace() {
       setConversationId(ensuredConversationId);
     } catch {
       setIsEnsuringConversation(false);
+      sendGuardRef.current = false;
+      setIsSendPending(false);
       return;
     }
 
@@ -878,15 +969,25 @@ export function CodingWorkspace() {
     //
     // Fire-and-forget: the server emits chat:start → chat:event* → chat:complete through the
     // WebSocket channel we just joined, so isLoading and message rendering work automatically.
+    // The isLoading effect below (which watches the real, socket-driven isLoading) clears
+    // sendGuardRef/isSendPending once chat:start actually arrives; this catch only has to
+    // handle the request never getting that far at all (network failure, or a 409 from the
+    // server's per-conversation lock rejecting a genuine duplicate).
     void api.coding
       .runFollowUp(selectedProject, text, ensuredConversationId, {
         includeFile: options.includeFile,
         provider: chatProvider,
         model: chatModel,
         planOnly: options.planMode,
+        requestId: messageId,
       })
       .catch((error) => {
         console.error("[sendCodingPrompt] Follow-up failed:", error);
+        // No run was actually started for this submit - drop the optimistic bubble instead of
+        // leaving it stuck forever with no response, and release the send guard.
+        setMessages((prev) => prev.filter((m) => m.id !== messageId));
+        sendGuardRef.current = false;
+        setIsSendPending(false);
       });
 
     setIsEnsuringConversation(false);
@@ -1266,7 +1367,7 @@ export function CodingWorkspace() {
             >
               <CodingAgentPanel
                 messages={messages as RenderedChatMessage[]}
-                isLoading={isLoading || isEnsuringConversation}
+                isLoading={isLoading || isEnsuringConversation || isSendPending}
                 streamingContent={streamingContent}
                 conversationId={activeConversationId}
                 project={selectedProject}
@@ -1537,6 +1638,8 @@ export function CodingWorkspace() {
           }}
           onClose={() => setShowPlanPanel(false)}
           isExecuting={isLoading}
+          stepStatuses={currentPlanStepStatuses}
+          stepNotes={currentPlanStepNotes}
           isCompleted={Boolean(planCompletion)}
           completionSummary={planCompletion?.summary}
           changedFiles={planCompletion?.changedFiles}

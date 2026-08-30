@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { resolve } from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Agent, AgentRunResult, Plan, PlanStep } from "@ducki/agent";
 import { formatPlanAsMarkdown, Planner } from "@ducki/agent";
@@ -109,7 +109,17 @@ plansRouter.post("/refine", async (req, res, next) => {
       return;
     }
     const planner = new Planner(provider, getRootLogger().child("PlanRefine"));
-    const refined = await planner.refinePlan(plan, feedback);
+    // The plan being refined may already carry the repository snapshot it was originally
+    // created with (see /:id/execute's repositorySnapshot persistence) - reuse it so a
+    // refinement stays grounded in the same real files/facts instead of the model re-guessing
+    // from the plan text alone. Absent for a plan that never had one (e.g. a chat-created
+    // general plan), which keeps refinePlan's behavior unchanged for that case.
+    const rawSnapshot = (body["plan"] as Record<string, unknown>)?.["repositorySnapshot"];
+    const repositoryContext = rawSnapshot && typeof rawSnapshot === "object" ? rawSnapshot as Record<string, unknown> : undefined;
+    const refined = await planner.refinePlan(plan, feedback, {
+      ...(repositoryContext ? { repositoryContext } : {}),
+      ...(plan.planType === "coding" ? { requiredPlanType: "coding" as const } : {}),
+    });
     const markdown = formatPlanAsMarkdown(refined);
     const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
     const sourceId = Number((body["plan"] as Record<string, unknown>)?.["id"]);
@@ -259,6 +269,33 @@ function safeProjectSlug(raw: string): string {
     .slice(0, 80);
 }
 
+/** Resolve a coding folder without confusing the display/name value with its persisted slug.
+ * Project rows can outlive a rename or an older importer may store `coding/<slug>` in `folder`.
+ * The folder is authoritative; the name and a case-insensitive directory scan are fallbacks. */
+function resolveExistingCodingProject(raw: string, folder?: string): string | undefined {
+  const candidates = [folder, raw]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => safeProjectSlug(value.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) ?? ""))
+    .filter(Boolean);
+
+  for (const slug of candidates) {
+    const direct = resolve(CODING_WORKSPACE_ROOT, slug);
+    if (existsSync(direct)) return direct;
+  }
+
+  // Preserve the actual on-disk casing/name when the DB or client normalized the slug.
+  try {
+    const wanted = new Set(candidates);
+    const entry = readdirSync(CODING_WORKSPACE_ROOT, { withFileTypes: true }).find(
+      (item) => item.isDirectory() && wanted.has(safeProjectSlug(item.name))
+    );
+    if (entry) return resolve(CODING_WORKSPACE_ROOT, entry.name);
+  } catch {
+    // The caller decides whether an explicit missing project may be created.
+  }
+  return undefined;
+}
+
 interface ProjectData {
   id: number;
   name: string;
@@ -349,8 +386,13 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
       try {
         const project = await db.getProject(body.projectId) as ProjectData | null;
         if (project) {
-          const projectSlug = safeProjectSlug(project.name);
-          codingSandboxRoot = resolve(CODING_WORKSPACE_ROOT, projectSlug);
+          codingSandboxRoot = resolveExistingCodingProject(project.name, project.folder);
+          // A valid DB project is still an explicit coding target even when its folder is
+          // currently empty; only the path resolution failed, not the project selection.
+          if (!codingSandboxRoot) {
+            const projectSlug = safeProjectSlug(project.folder || project.name);
+            if (projectSlug) codingSandboxRoot = resolve(CODING_WORKSPACE_ROOT, projectSlug);
+          }
           codingProjectDbId = project.id;
         }
       } catch {
@@ -359,7 +401,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     }
     if (!codingSandboxRoot && body.projectSlug) {
       const slug = safeProjectSlug(String(body.projectSlug));
-      if (slug) codingSandboxRoot = resolve(CODING_WORKSPACE_ROOT, slug);
+      if (slug) codingSandboxRoot = resolveExistingCodingProject(slug) ?? resolve(CODING_WORKSPACE_ROOT, slug);
     }
     // EXECUTION_MODE_AUTO_CREATE_PROJECT: no project was given at all - create a fresh
     // coding sandbox from the goal so a plan executed without a pre-selected project still
@@ -590,11 +632,20 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             await savePlanProgress(result, codingAgent);
             const terminalStatus = result.success ? "completed" : result.completionStatus === "incomplete" ? "completed_with_warnings" : "failed";
             await db?.updatePlanRun(runId, { status: terminalStatus, result: JSON.stringify(result), finishedAt: new Date().toISOString() });
-            const openTitles = new Set(result.completionEvidence?.openChecklistItems ?? []);
-            const persistedSteps = existingPlan.steps.map((step) => ({
-              ...step,
-              status: (openTitles.has(step.title) ? (terminalStatus === "failed" ? "failed" : "pending") : "completed") as PlanStep["status"],
-            }));
+            // The controller supplies terminal evidence per step. Never infer that a step was
+            // completed merely because it is absent from the open-title list: an interrupted
+            // run has unknown steps, and converting those to completed made a reload lie about
+            // progress. PlanStep has no "unknown" value, so unknown becomes pending/active and
+            // remains visibly actionable rather than receiving a green checkmark.
+            const terminalStepStatuses = result.completionEvidence?.stepStatuses ?? [];
+            const persistedSteps = existingPlan.steps.map((step, index) => {
+              const evidence = terminalStepStatuses[index];
+              const status: PlanStep["status"] =
+                evidence === "completed" ? "completed" :
+                evidence === "failed" ? "failed" :
+                step.status === "completed" || step.status === "failed" ? step.status : "pending";
+              return { ...step, status };
+            });
             if (planId) await db?.updatePlan(planId, { status: result.success ? "completed" : "active", steps: JSON.stringify(persistedSteps) });
             emitRunState(terminalStatus, { completionEvidence: result.completionEvidence, summary: result.summary });
             if (db) notifyCodingRunFinished(db, req.app.locals["logger"] || console, existingPlan.goal.slice(0, 60), result);

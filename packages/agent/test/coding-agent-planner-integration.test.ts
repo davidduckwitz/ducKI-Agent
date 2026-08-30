@@ -63,11 +63,11 @@ const PLAN_JSON = JSON.stringify({
 });
 
 describe("CodingAgent + Planner integration", () => {
-  it("does not select a planning skill for a website implementation goal", () => {
+  it("selects the available frontend scaffold skill for a website implementation goal", () => {
     const provider = scriptedProvider([PLAN_JSON]);
     const codingAgent = new CodingAgent(provider, stubDb(), undefined, {});
 
-    expect((codingAgent as any).autoSelectCodingSkill("Plan and design a bakery website")).toBeUndefined();
+    expect((codingAgent as any).autoSelectCodingSkill("Plan and design a bakery website")).toBe("frontend-scaffold");
   });
 
   it("requires a coding-shaped plan for a website run", async () => {

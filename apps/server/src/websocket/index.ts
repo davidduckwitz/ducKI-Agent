@@ -624,7 +624,10 @@ export function setupWebSocket(
             registerActiveAgent(socket.id, runAgent);
             runAgents.push(runAgent);
             await runAgent.loadConversation(resolvedConversationId);
-            return await runAgent.run(prompt, runOptions);
+            // Only affects Plan Mode (see AgentRunOptions.codingSandboxRoot) and only when this
+            // attempt actually resolved a coding-project sandbox above - undefined for every
+            // normal chat, so this changes nothing for the common case.
+            return await runAgent.run(prompt, { ...runOptions, ...(sandboxRoot ? { codingSandboxRoot: sandboxRoot } : {}) });
           } finally {
             // No-op cleanup runs on every exit path (success, failure, user Stop). The
             // "Checkpoint erstellt" decision event is emitted only when the snapshot

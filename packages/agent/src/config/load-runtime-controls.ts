@@ -226,6 +226,7 @@ export function loadAgentRuntimeControls(): AgentRuntimeControls {
     ),
     maxConsecutiveToolFailures: parseInt(process.env["AGENT_MAX_TOOL_FAILURES"] ?? "3"),
     maxRepeatedToolCall: envInt("AGENT_MAX_REPEATED_TOOL_CALL", profile.maxRepeatedToolCall),
+    protocolErrorRecovery: envBool("AGENT_PROTOCOL_ERROR_RECOVERY", true),
     staleReadLoopThreshold: envInt("AGENT_STALE_READ_STREAK", profile.staleReadLoopThreshold),
 
     selfRepairEnabled: envBool("AGENT_SELF_REPAIR", true, "AGENT_SELF_REPAIR_ENABLED"),
