@@ -1,9 +1,0 @@
-{
-  "id": "github",
-  "authUrl": "https://github.com/login/oauth/authorize",
-  "tokenUrl": "https://github.com/login/oauth/access_token",
-  "scopes": ["read:user", "repo"],
-  "clientIdSetting": "client_id",
-  "clientSecretSetting": "client_secret",
-  "storeTokenAs": "access_token"
-}

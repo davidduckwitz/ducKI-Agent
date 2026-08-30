@@ -6,7 +6,7 @@ import { agentRegistry } from "./agent-registry";
 import { closeAllPluginDbs } from "@ducki/database";
 
 // Point at the repo's real plugins/ so loadPlugins finds the reference plugins.
-process.env.DUCKI_PLUGINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../plugins");
+process.env.DUCKI_PLUGINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../../../apps/server/plugins");
 
 afterEach(() => {
   closeAllPluginDbs();

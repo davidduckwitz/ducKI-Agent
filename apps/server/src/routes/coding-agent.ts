@@ -9,6 +9,7 @@ import { agentRegistry } from "../lib/agent-registry.js";
 import { registerCodingRun, unregisterCodingRun } from "../lib/coding-run-registry.js";
 import { notifyCodingRunFinished } from "../lib/coding-notify.js";
 import { loadProviderFromSettings } from "../lib/provider-settings.js";
+import { resolveCodingSandboxRoot } from "./coding.js";
 
 export const codingAgentRouter: IRouter = Router();
 
@@ -190,12 +191,13 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       },
     };
 
+    const requestedSandboxRoot = body.sandboxRoot ?? body.project;
     const codingAgent = createCodingAgent({
       ...(providerOverride ? { provider: providerOverride } : {}),
       // When only the project slug is provided (follow-up chat), use it as sandboxRoot;
       // the factory resolves it against CODING_ROOT. An explicit sandboxRoot from a plan
       // execution or initial run still wins.
-      sandboxRoot: body.sandboxRoot ?? body.project,
+      sandboxRoot: requestedSandboxRoot ? resolveCodingSandboxRoot(requestedSandboxRoot) : undefined,
       maxIterations: maxIterationsPerAttempt,
       eventEmitter: phaseEventEmitter,
       exploreTimeoutMs,

@@ -17,6 +17,7 @@
     "@ducki/database": "workspace:*",
     "@ducki/logger": "workspace:*",
     "@ducki/providers": "workspace:*",
+    "@ducki/shared": "workspace:*",
     "@ducki/tools": "workspace:*",
     "dotenv": "^16.4.0",
     "readline": "^1.3.0"

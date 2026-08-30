@@ -62,7 +62,7 @@ import { initScreenshotStorage } from "./lib/screenshot-storage.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
-import { codingRouter, CODING_ROOT } from "./routes/coding.js";
+import { codingRouter, CODING_ROOT, resolveCodingSandboxRoot } from "./routes/coding.js";
 import { codingAgentRouter } from "./routes/coding-agent.js";
 import { gatewayRouter } from "./routes/gateway.js";
 import { logsRouter } from "./routes/logs.js";
@@ -568,7 +568,7 @@ async function bootstrap(): Promise<void> {
 		// Frontend sends just the project slug, server combines it with CODING_ROOT
 		let resolvedSandboxRoot = CODING_ROOT;
 		if (options?.sandboxRoot) {
-			resolvedSandboxRoot = resolve(CODING_ROOT, options.sandboxRoot);
+			resolvedSandboxRoot = resolveCodingSandboxRoot(options.sandboxRoot);
 		}
 		const codingDelegationTool = createDelegateToBotTool(() => botServiceRef.current, {
 			mode: "coding",

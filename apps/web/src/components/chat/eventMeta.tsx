@@ -69,6 +69,59 @@ export function eventLabel(t: (key: string) => string, eventType?: AgentEventTyp
 
 const INTERNAL_TEXT_FIELDS = ["thinking", "preview", "response", "responsePreview"] as const;
 
+export interface NormalizedEventContent {
+  /** User-readable content recovered from a structured or JSON-string result. */
+  text?: string;
+  /** The decoded result object, kept available for technical-detail rendering. */
+  decodedResult?: unknown;
+}
+
+function tryParseJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const text = value.trim();
+  if (!text.startsWith("{") && !text.startsWith("[")) return value;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function readSummary(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const object = value as Record<string, unknown>;
+  const summary = object.summary ?? object.Summary;
+  return typeof summary === "string" && summary.trim().length > 0 ? summary.trim() : undefined;
+}
+
+/**
+ * Recovers user-readable text from hidden/internal event payloads.
+ *
+ * Tools and coding phases historically put their useful response in `result`, sometimes
+ * as an object and sometimes as a JSON string. The event label/content only contains the
+ * status title, so without this normalization a valid summary was visible only inside the
+ * raw JSON details block.
+ */
+export function normalizeEventContent(eventData?: Record<string, unknown>): NormalizedEventContent {
+  if (!eventData) return {};
+
+  const directSummary = readSummary(eventData);
+  if (directSummary) return { text: directSummary, decodedResult: eventData };
+
+  for (const field of ["result", "output", "response"] as const) {
+    const raw = eventData[field];
+    if (raw === undefined || raw === null) continue;
+    const decoded = tryParseJson(raw);
+    const summary = readSummary(decoded);
+    if (summary) return { text: summary, decodedResult: decoded };
+    if (typeof decoded === "string" && decoded.trim().length > 0) {
+      return { text: decoded.trim(), decodedResult: decoded };
+    }
+  }
+
+  return {};
+}
+
 /**
  * Reasoning/decision events carry a slice of the agent's internal LLM output
  * (e.g. reasoner "thinking", the raw response preview). Pull that out so it

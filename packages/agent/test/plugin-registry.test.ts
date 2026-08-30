@@ -5,7 +5,7 @@ import { loadPlugins, listPluginSkillDirs } from "../src/plugins/index.ts";
 import { closeAllPluginDbs } from "@ducki/database";
 
 // Relative to THIS test file (vitest's process.cwd() is the repo root, not packages/agent).
-const REPO_PLUGINS = resolve(dirname(fileURLToPath(import.meta.url)), "../../../plugins");
+const REPO_PLUGINS = resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/server/plugins");
 
 beforeAll(() => {
   process.env.DUCKI_PLUGINS_DIR = REPO_PLUGINS;

@@ -1,8 +1,8 @@
-import { resolve, dirname } from "node:path";
+import { resolve, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, cpSync } from "node:fs";
-import { homedir } from "node:os";
 import { config as loadEnv } from "dotenv";
+import { duckiHome } from "@ducki/shared";
 
 /**
  * Pins the shared-workspace root before `@ducki/tools` captures it (see the server's
@@ -16,17 +16,34 @@ import { config as loadEnv } from "dotenv";
  */
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 loadEnv({ path: resolve(moduleDir, "../../../.env") });
-if (!process.env["SHARED_WORKSPACE_PATH"]) {
-  const homeWorkspace = resolve(homedir(), "DucKI", "shared-workspace");
-  migrateLegacyRepoWorkspace(moduleDir, homeWorkspace);
-  process.env["SHARED_WORKSPACE_PATH"] = homeWorkspace;
+if (!process.env["DUCKI_HOME"] && !process.env["SHARED_WORKSPACE_PATH"] && !process.env["DUCKI_PLUGINS_DIR"] && !process.env["SKILLS_PATH"]) {
+  const home = duckiHome();
+  migrateLegacyRepoRuntime(moduleDir, home);
+  process.env["DUCKI_HOME"] = home;
 }
+const home = duckiHome();
+if (!process.env["SHARED_WORKSPACE_PATH"]) process.env["SHARED_WORKSPACE_PATH"] = resolve(home, "shared-workspace");
+if (!process.env["DUCKI_PLUGINS_DIR"]) process.env["DUCKI_PLUGINS_DIR"] = resolve(home, "plugins");
+if (!process.env["SKILLS_PATH"]) process.env["SKILLS_PATH"] = resolve(home, "skills");
 
-function migrateLegacyRepoWorkspace(moduleDir: string, homeWorkspace: string): void {
+function migrateLegacyRepoRuntime(moduleDir: string, home: string): void {
   const legacyWorkspace = resolve(moduleDir, "../../server/shared-workspace");
-  if (!existsSync(legacyWorkspace) || legacyWorkspace === homeWorkspace) return;
-  mkdirSync(homeWorkspace, { recursive: true });
-  cpSync(legacyWorkspace, homeWorkspace, { recursive: true, force: false, errorOnExist: false });
+  const legacyPlugins = resolve(moduleDir, "../../server/plugins");
+  const legacySkills = resolve(moduleDir, "../../server/skills");
+  for (const [source, target] of [[legacyWorkspace, resolve(home, "shared-workspace")], [legacyPlugins, resolve(home, "plugins")], [legacySkills, resolve(home, "skills")]] as const) {
+    if (!existsSync(source) || source === target) continue;
+    mkdirSync(target, { recursive: true });
+    try {
+      cpSync(source, target, {
+        recursive: true,
+        force: false,
+        errorOnExist: false,
+        filter: (entry) => !entry.split(sep).some((part) => part === ".ducki-checkpoints" || part === ".git" || part === "node_modules" || part === "models"),
+      });
+    } catch (error) {
+      console.error(`[DucKI] Could not migrate runtime data from ${source} to ${target}:`, error);
+    }
+  }
 }
 
 /**

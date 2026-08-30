@@ -8,6 +8,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"
+    },
+    "./runtime-paths": {
+      "types": "./src/runtime-paths.ts",
+      "import": "./dist/runtime-paths.js"
     }
   },
   "scripts": {

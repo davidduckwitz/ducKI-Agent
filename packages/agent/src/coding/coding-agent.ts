@@ -1638,6 +1638,9 @@ export class CodingAgent {
     };
 
     const detectedSkill = this.autoSelectCodingSkill(goal);
+    const verificationEnabled = ((await this.db.getSetting("CODING_AGENT_ENABLE_VERIFY")) ?? "true")
+      .trim()
+      .toLowerCase() === "true";
     let verifyCommand = opts.verifyCommand;
     // Set together with verifyCommand the first time the browser-check fallback fires (see the
     // attempt loop below) and never reset per-attempt - verifyCommand itself persists across
@@ -2200,6 +2203,11 @@ export class CodingAgent {
       // Safety net for the same reason the two calls above also run here, not just live: catches
       // it if onModelResponse never fired for the response that carried the marker.
       this.reconcileReadOnlyPhaseCompletion(lastSummary);
+
+      if (!verificationEnabled) {
+        this.emit("decision", "Verifikation deaktiviert - Ergebnis bleibt ungeprueft.", { attempt });
+        return finalize({ success: true, verified: false, summary: lastSummary, attempts: attempt, conversationId });
+      }
 
       // Re-checked fresh every attempt UNTIL it fires once (not just once before the loop): a
       // static HTML/CSS/JS project's index.html typically does not exist yet on attempt 1 - it

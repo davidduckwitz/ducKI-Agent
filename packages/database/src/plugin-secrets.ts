@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { pluginsRoot as resolvePluginsRoot } from "@ducki/shared";
 
 /**
  * Symmetric secret encryption for plugin settings (AES-256-GCM). Plugin secrets (OAuth
@@ -16,7 +17,7 @@ const ENC_PREFIX = "enc:v1:";
 
 /** Mirror the plugins-root resolution used by plugin-storage (no cross-package import). */
 function pluginsRoot(): string {
-  return process.env["DUCKI_PLUGINS_DIR"] ?? resolve(process.cwd(), "plugins");
+  return resolvePluginsRoot();
 }
 
 let cachedKey: Buffer | undefined;

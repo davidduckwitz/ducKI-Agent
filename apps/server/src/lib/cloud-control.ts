@@ -24,6 +24,7 @@ import { SHARED_WORKSPACE_ROOT, browserTool } from "@ducki/tools";
 import { installSkillFromSource } from "./skill-install.js";
 import { transcribeAudioBuffer } from "./audio-transcription.js";
 import { listActiveProviderModels } from "./provider-settings.js";
+import { skillsRoot as resolveSkillsRoot } from "@ducki/shared";
 
 export const SETTING_CLOUD_CONTROL_ENABLED = "CLOUD_CONTROL_ENABLED";
 
@@ -56,14 +57,6 @@ export async function isCloudControlEnabled(db: DatabaseService): Promise<boolea
 
 export async function setCloudControlEnabled(db: DatabaseService, enabled: boolean): Promise<void> {
   await db.setSetting(SETTING_CLOUD_CONTROL_ENABLED, enabled ? "true" : "false");
-}
-
-function resolveSkillsRoot(): string {
-  const configured = process.env["SKILLS_PATH"]?.trim();
-  if (configured) return join(configured);
-  const monorepoCandidate = join(process.cwd(), "../../skills");
-  if (existsSync(monorepoCandidate)) return monorepoCandidate;
-  return join(process.cwd(), "skills");
 }
 
 function listSkillSlugs(): string[] {

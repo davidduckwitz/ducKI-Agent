@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { readSkillFrontmatter } from "@ducki/agent";
+import { skillsRoot as resolveConfiguredSkillsRoot } from "@ducki/shared";
 
 export interface CliSkillEntry {
   slug: string;
@@ -15,11 +16,7 @@ export interface CliSkillEntry {
  * what makes `ducki skills`/`/skills` show the SAME skills the chat agent actually loads.
  */
 function resolveSkillsRoot(): string {
-  const configured = process.env["SKILLS_PATH"]?.trim();
-  if (configured) return resolve(configured);
-  const monorepoCandidate = resolve(process.cwd(), "../../skills");
-  const cwdLocal = resolve(process.cwd(), "skills");
-  return existsSync(monorepoCandidate) ? monorepoCandidate : cwdLocal;
+  return resolveConfiguredSkillsRoot();
 }
 
 export function listInstalledSkills(): CliSkillEntry[] {

@@ -36,6 +36,7 @@ import {
 } from "@ducki/database";
 import { pluginsRoot, loadPlugins } from "@ducki/agent";
 import { SHARED_WORKSPACE_ROOT } from "@ducki/tools";
+import { skillsRoot as resolveSkillsRoot } from "@ducki/shared";
 
 const logger = getRootLogger().child("CloudSync");
 
@@ -77,14 +78,6 @@ export interface BackupSummary {
 
 export interface CreateBackupResult {
   backup: BackupSummary;
-}
-
-function resolveSkillsRoot(): string {
-  const configured = process.env["SKILLS_PATH"]?.trim();
-  if (configured) return resolve(configured);
-  const monorepoCandidate = resolve(process.cwd(), "../../skills");
-  if (existsSync(monorepoCandidate)) return monorepoCandidate;
-  return resolve(process.cwd(), "skills");
 }
 
 async function readAgentVersion(): Promise<string> {

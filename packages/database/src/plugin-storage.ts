@@ -1,6 +1,7 @@
 import { createClient, type Client } from "@libsql/client";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { pluginsRoot as resolvePluginsRoot } from "@ducki/shared";
 
 /**
  * Per-plugin SQLite storage. Each plugin that opts into `storage.sqlite` gets its OWN
@@ -50,7 +51,7 @@ function applyPragmas(client: Client): Promise<void> {
 
 /** Resolve the plugins root once; kept overridable for tests via env. */
 function pluginsRoot(): string {
-  return process.env["DUCKI_PLUGINS_DIR"] ?? resolve(process.cwd(), "plugins");
+  return resolvePluginsRoot();
 }
 
 /** Strict single-segment plugin name -> no path traversal into other folders. */

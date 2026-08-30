@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * CI check: validate core skills in ./skills AND plugin skills declared via
+ * CI check: validate core skills in apps/server/skills AND plugin skills declared via
  * provides.skills in apps/server/plugins/<plugin>/plugin.json against the agentskills.io spec.
  *
  * Additionally checks:
@@ -161,7 +161,7 @@ if (isCli) {
 
   const { validateSkillDirectory } = await import(pathToFileURL(validatorPath).href);
 
-  const skillsDir = join(root, "skills");
+  const skillsDir = join(root, "apps", "server", "skills");
   const pluginsDir = join(root, "apps", "server", "plugins");
   if (!existsSync(skillsDir)) {
     console.error(`skills directory not found: ${skillsDir}`);

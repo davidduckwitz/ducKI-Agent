@@ -5,6 +5,7 @@ import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { skillsRoot } from "@ducki/shared";
 
 
 /**
@@ -12,7 +13,7 @@ import { join } from "node:path";
  */
 function loadSkillsFromDirectory(): SkillManifest[] {
   const skills: SkillManifest[] = [];
-  const skillsDir = join(process.cwd(), "skills");
+  const skillsDir = skillsRoot();
 
   try {
     const skillDirs = readdirSync(skillsDir, { withFileTypes: true })

@@ -13,19 +13,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { runScriptInSandbox } from "./sandbox.js";
 import { safeRelativePath, resolveScriptSource } from "./script-source.js";
-
-function resolveSkillsRoot(): string {
-  const configured = process.env["SKILLS_PATH"]?.trim();
-  if (configured) return resolve(configured);
-
-  const monorepoCandidate = resolve(process.cwd(), "../../skills");
-  if (existsSync(monorepoCandidate)) return monorepoCandidate;
-
-  const cwdLocal = resolve(process.cwd(), "skills");
-  if (existsSync(cwdLocal)) return cwdLocal;
-
-  return cwdLocal;
-}
+import { skillsRoot as resolveSkillsRoot } from "@ducki/shared";
 
 const SKILLS_ROOT = resolveSkillsRoot();
 const SKILL_FILE = "SKILL.md";

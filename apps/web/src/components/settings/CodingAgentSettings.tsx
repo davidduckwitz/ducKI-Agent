@@ -25,6 +25,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
     "CODING_AGENT_MAX_ATTEMPTS",
     "CODING_AGENT_TIMEOUT_MS",
     "CODING_AGENT_EXPLORE_TIMEOUT_MS",
+    "CODING_AGENT_ENABLE_VERIFY",
     "AGENT_CODING_ALLOW_GIT_COMMIT",
   ];
 
@@ -63,6 +64,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_MAX_ATTEMPTS: "3",
       CODING_AGENT_TIMEOUT_MS: "1800000",
       CODING_AGENT_EXPLORE_TIMEOUT_MS: "600000",
+      CODING_AGENT_ENABLE_VERIFY: "true",
       AGENT_CODING_ALLOW_GIT_COMMIT: "false",
     };
     return defaults[key] ?? "";
@@ -84,6 +86,8 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
         "Timeout in Millisekunden für den gesamten Coding Agent Run. Standard: 30 Minuten (1800000ms). Grosszügig gewählt: die eigentliche Begrenzung sind Max Iterationen x Max Retry-Versuche - dies ist nur ein äusseres Sicherheitsnetz gegen einen wirklich hängenden Lauf.",
       CODING_AGENT_EXPLORE_TIMEOUT_MS:
         "Timeout in Millisekunden für EINEN Aufruf des Explore-Subagenten (das read-only 'schau dir den Code an, bevor du änderst'-Tool). Standard: 10 Minuten (600000ms). Bei langsamen/lokalen Modellen erhöhen, wenn 'Exploration timed out' Fehler auftreten.",
+      CODING_AGENT_ENABLE_VERIFY:
+        "Automatische Shell- und Browser-Verifikation am Ende eines Coding-Agent-Versuchs. Wenn deaktiviert, wird der Lauf schneller beendet, aber das Ergebnis als ungeprüft markiert.",
       AGENT_CODING_ALLOW_GIT_COMMIT:
         "Standard aus: der Coding Agent darf git nur zum Ansehen (status/diff/log) nutzen, niemals selbst 'add' oder 'commit' ausführen - Checkpoints werden ohnehin automatisch nach jeder Änderung mitgeschnitten (Tab 'Änderungen'), ein eigenes Commit wäre nur eine zweite, redundante Historie. Aktivieren, wenn der Agent eigenständig in einem im Sandbox-Projekt selbst angelegten git-Repo committen soll.",
     };
@@ -99,6 +103,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_MAX_ATTEMPTS: "Max Retry-Versuche",
       CODING_AGENT_TIMEOUT_MS: "Timeout (ms)",
       CODING_AGENT_EXPLORE_TIMEOUT_MS: "Explore-Timeout (ms)",
+      CODING_AGENT_ENABLE_VERIFY: "Automatische Verifikation",
       AGENT_CODING_ALLOW_GIT_COMMIT: "Git commit erlauben",
     };
     return labels[key] ?? key;
@@ -250,6 +255,33 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* Verification */}
+        <div className="space-y-3 border-t border-border pt-4">
+          <h4 className="text-sm font-medium">Verifikation</h4>
+          <div className="pl-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <label className="block text-sm font-medium text-foreground">
+                  {getLabel("CODING_AGENT_ENABLE_VERIFY")}
+                </label>
+                <p className="text-xs text-muted-foreground mt-1 max-w-xl">
+                  {getDescription("CODING_AGENT_ENABLE_VERIFY")}
+                </p>
+              </div>
+              <input
+                type="checkbox"
+                checked={getDisplayValue("CODING_AGENT_ENABLE_VERIFY") === "true"}
+                onChange={(e) => {
+                  const value = e.target.checked ? "true" : "false";
+                  setEdits((prev) => ({ ...prev, CODING_AGENT_ENABLE_VERIFY: value }));
+                  save.mutate({ key: "CODING_AGENT_ENABLE_VERIFY", value });
+                }}
+                className="w-4 h-4 accent-primary rounded shrink-0"
+              />
+            </div>
           </div>
         </div>
 

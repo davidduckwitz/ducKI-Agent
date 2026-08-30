@@ -7,6 +7,7 @@ import { skillRegistry, parseFrontmatter, normalizeFrontmatter, validateSkillCon
 import { installSkillFromSource } from "../lib/skill-install.js";
 import { runSkillCommand, SkillRunnerError } from "../lib/skill-runner.js";
 import { SkillBuilderSpecSchema, createValidatedSkill, previewSkill } from "../lib/skill-builder.js";
+import { skillsRoot as resolveConfiguredSkillsRoot } from "@ducki/shared";
 
 export const skillsRouter: IRouter = Router();
 
@@ -27,20 +28,7 @@ interface SkillRuntimePayload {
   context?: unknown;
 }
 
-function resolveSkillsRoot(): string {
-  const configured = process.env["SKILLS_PATH"]?.trim();
-  if (configured) return resolve(configured);
-
-  const monorepoCandidate = resolve(process.cwd(), "../../skills");
-  if (existsSync(monorepoCandidate)) return monorepoCandidate;
-
-  const cwdLocal = resolve(process.cwd(), "skills");
-  if (existsSync(cwdLocal)) return cwdLocal;
-
-  return cwdLocal;
-}
-
-const skillsRoot = resolveSkillsRoot();
+const skillsRoot = resolveConfiguredSkillsRoot();
 
 skillsRouter.post("/builder/preview", (req, res) => {
   const parsed = SkillBuilderSpecSchema.safeParse(req.body);

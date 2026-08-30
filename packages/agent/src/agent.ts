@@ -9,6 +9,7 @@ import { getRootLogger } from "@ducki/logger";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve, basename, sep } from "node:path";
 import { listPluginSkillDirs } from "./plugins/index.js";
+import { skillsRoot as resolveSkillsRoot } from "@ducki/shared";
 import { randomUUID } from "node:crypto";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
@@ -631,14 +632,7 @@ export class Agent {
     this.projectSkillManifests = options.projectSkillManifests ?? [];
 
     this.logger = getRootLogger().child(`Agent:${this.name}`);
-    const configuredSkillsPath = process.env["SKILLS_PATH"]?.trim();
-    if (configuredSkillsPath) {
-      this.skillsRoot = resolve(configuredSkillsPath);
-    } else {
-      const monorepoCandidate = resolve(process.cwd(), "../../skills");
-      const cwdLocal = resolve(process.cwd(), "skills");
-      this.skillsRoot = existsSync(monorepoCandidate) ? monorepoCandidate : existsSync(cwdLocal) ? cwdLocal : cwdLocal;
-    }
+    this.skillsRoot = resolveSkillsRoot();
 
     // Phase 1: Initialize hook registry and event emitter V2
     this.hookRegistry = new HookRegistry(this.logger);

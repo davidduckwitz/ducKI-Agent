@@ -193,7 +193,7 @@ fn copy_missing_recursive(src: &std::path::Path, dest: &std::path::Path) -> std:
 fn seed_core_runtime(app: &AppHandle, app_data_dir: &std::path::Path) -> Result<(), String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let source_root = resource_dir.join("resources/server-dist/core-runtime");
-    for name in ["prompts", "skills"] {
+    for name in ["prompts"] {
         let source = source_root.join(name);
         if !source.is_dir() {
             return Err(format!(
@@ -205,6 +205,13 @@ fn seed_core_runtime(app: &AppHandle, app_data_dir: &std::path::Path) -> Result<
             .map_err(|e| format!("Failed to seed {}: {}", name, e))?;
     }
     Ok(())
+}
+
+fn seed_core_skills(app: &AppHandle, skills_dir: &std::path::Path) -> Result<(), String> {
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let source = resource_dir.join("resources/server-dist/core-runtime/skills");
+    if !source.is_dir() { return Err(format!("Bundled core skills directory missing: {}", source.display())); }
+    copy_missing_recursive(&source, skills_dir).map_err(|e| format!("Failed to seed skills: {}", e))
 }
 
 fn newest_legacy_data_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -293,10 +300,10 @@ fn migrate_legacy_data(
 /// The built-in plugin folders (calendar, notes, pet-companion, ...) are bundled read-only as a
 /// Tauri resource. Plugins need a writable directory (per-plugin SQLite, encrypted settings, a
 /// freshly generated .secret-key), so on first run each bundled plugin gets copied into the
-/// writable app-data plugins dir - but only if it isn't already there, so app updates can add new
+/// writable user plugins dir - but only if it isn't already there, so app updates can add new
 /// built-in plugins without ever clobbering a user's existing install/customization of one.
-fn seed_builtin_plugins(app: &AppHandle, app_data_dir: &std::path::Path) -> std::path::PathBuf {
-    let plugins_dir = app_data_dir.join("plugins");
+fn seed_builtin_plugins(app: &AppHandle, home: &std::path::Path) -> std::path::PathBuf {
+    let plugins_dir = home.join("DucKI").join("plugins");
     let _ = std::fs::create_dir_all(&plugins_dir);
 
     let Ok(resource_dir) = app.path().resource_dir() else {
@@ -416,7 +423,10 @@ fn start_backend_server(app: &AppHandle) -> Result<(), String> {
 
     let (app_data_dir, shared_workspace_path) = app_data_and_workspace(app)?;
     seed_core_runtime(app, &app_data_dir)?;
-    let plugins_dir = seed_builtin_plugins(app, &app_data_dir);
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(home.join("DucKI").join("skills")).map_err(|e| e.to_string())?;
+    seed_core_skills(app, &home.join("DucKI").join("skills"))?;
+    let plugins_dir = seed_builtin_plugins(app, &home);
     migrate_legacy_data(app, &app_data_dir, &shared_workspace_path)?;
 
     println!("[TAURI] Server index: {}", server_index_path.display());
@@ -443,6 +453,7 @@ fn start_backend_server(app: &AppHandle) -> Result<(), String> {
             "DUCKI_PLUGINS_DIR",
             plugins_dir.to_string_lossy().to_string(),
         )
+        .env("SKILLS_PATH", home.join("DucKI").join("skills").to_string_lossy().to_string())
         .spawn()
         .map_err(|e| format!("Failed to start server sidecar: {}", e))?;
 

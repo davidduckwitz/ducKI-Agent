@@ -90,6 +90,9 @@ importers:
       '@ducki/providers':
         specifier: workspace:*
         version: link:../../packages/providers
+      '@ducki/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@ducki/tools':
         specifier: workspace:*
         version: link:../../packages/tools

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Check, Copy, FileText, GitCompare, RotateCcw, User } from "lucide-react";
 import { DuckyMascot } from "./DuckyMascot";
-import { eventDataWithoutInternalText, eventIcon, eventLabel, eventTone, extractInternalLlmText } from "./eventMeta";
+import { eventDataWithoutInternalText, eventIcon, eventLabel, eventTone, extractInternalLlmText, normalizeEventContent } from "./eventMeta";
 import type { RenderedChatMessage } from "./chatTypes";
 import { api } from "../../lib/api";
 import { BrowserPreview } from "./BrowserPreview";
@@ -99,6 +99,7 @@ export function EventRow({
   onToggle: (open: boolean) => void;
 }) {
   const internalText = extractInternalLlmText(msg.eventData);
+  const normalizedContent = normalizeEventContent(msg.eventData);
   const resolvedPath = typeof msg.eventData?.["path"] === "string" ? (msg.eventData["path"] as string) : undefined;
   const checkpointSha = typeof msg.eventData?.["checkpointSha"] === "string" ? (msg.eventData["checkpointSha"] as string) : undefined;
   const restDataRaw = eventDataWithoutInternalText(msg.eventData);
@@ -216,7 +217,7 @@ export function EventRow({
           <span className="font-medium whitespace-nowrap opacity-90">
             {toolName ?? eventLabel(t, msg.eventType)}
           </span>
-          <span className="truncate opacity-80">{msg.content}</span>
+          <span className="truncate opacity-80">{normalizedContent.text ?? msg.content}</span>
           {resolvedPath && (
             <span
               className="truncate font-mono text-[10px] opacity-50"
@@ -237,7 +238,7 @@ export function EventRow({
         </span>
       </summary>
       <div className="mt-2 pl-6 space-y-2">
-        <div className="whitespace-pre-wrap opacity-90">{msg.content}</div>
+        <div className="whitespace-pre-wrap opacity-90">{normalizedContent.text ?? msg.content}</div>
         {checkpointSha && onOpenCheckpoint && (
           <button
             type="button"

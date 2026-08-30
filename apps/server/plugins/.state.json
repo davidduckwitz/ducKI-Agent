@@ -2,14 +2,19 @@
   "disabled": [
     "bitcoin-puzzle",
     "btc-preis-tes",
+    "btc-widget",
     "docs-generator",
     "github-connector",
+    "image-gen",
     "invoicing",
     "meal-planner",
+    "nous-provider",
     "shopping-list",
+    "social-media",
     "task-sync",
     "telegram-connector",
     "time-tracking",
-    "video-editor"
+    "video-editor",
+    "video-gen"
   ]
 }

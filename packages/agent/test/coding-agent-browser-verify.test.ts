@@ -14,12 +14,12 @@ import type { ToolExecutor, ToolResult } from "@ducki/shared";
  * exactly this case, routed through the identical success/failure/retry handling a shell
  * verifyCommand would get.
  */
-function stubDb() {
+function stubDb(settings: Record<string, string> = {}) {
   let nextId = 1;
   const known: Record<string, (...args: any[]) => any> = {
     getAllSettings: async () => [],
     getDynamicToolByName: async () => undefined,
-    getSetting: async () => undefined,
+    getSetting: async (key: string) => settings[key],
     createConversation: async (data: { name: string }) => ({ id: nextId++, name: data.name }),
   };
   return new Proxy(known, {
@@ -84,6 +84,15 @@ const PLAN_JSON = JSON.stringify({
   ],
 });
 
+const NO_ENTRY_PLAN_JSON = JSON.stringify({
+  goal: "build a static world clock page",
+  estimatedComplexity: "low",
+  steps: [
+    { id: "step_1", title: "Write main.js", description: "..." },
+    { id: "step_2", title: "Verify it works", description: "..." },
+  ],
+});
+
 const sandboxes: string[] = [];
 afterEach(() => {
   for (const dir of sandboxes) rmSync(dir, { recursive: true, force: true });
@@ -117,6 +126,38 @@ describe("CodingAgent falls back to a browser check when no shell verifyCommand 
     // ES module scripts and fetch() under file:, which would report false-positive "errors" that
     // are really just the CORS restriction (see detectStaticEntryFile's doc comment).
     expect(gotoUrl).toBe("http://preview.test/api/coding/projects/" + basename(sandbox) + "/serve/index.html");
+  });
+
+  it("skips the automatic browser check when CODING_AGENT_ENABLE_VERIFY is false", async () => {
+    const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-browser-verify-disabled-"));
+    sandboxes.push(sandbox);
+    const provider = scriptedProvider([
+      PLAN_JSON,
+      "[TOOL:filesystem action=write path=index.html]\n<html></html>\n[/TOOL]",
+      '[TOOL:todo({"action":"write","items":[{"title":"Write index.html","status":"done"},{"title":"Verify it works","status":"done"}]})]',
+      "Fertig.",
+    ]);
+    let browserCalls = 0;
+    const browser = stubBrowserTool([]);
+    const originalExecute = browser.execute.bind(browser);
+    browser.execute = async (input) => {
+      const action = String(input["action"] ?? "");
+      if (action === "goto" || action === "get_page_errors") browserCalls++;
+      return originalExecute(input);
+    };
+    const codingAgent = new CodingAgent(provider, stubDb({ CODING_AGENT_ENABLE_VERIFY: "false" }), undefined, {
+      sandboxRoot: sandbox,
+      previewBaseUrl: "http://preview.test",
+      extraTools: [browser],
+    });
+    (codingAgent as any).agent.enablePlanning = false;
+
+    const result = await codingAgent.run("build a static world clock page", { maxAttempts: 3 });
+
+    expect(result.success).toBe(true);
+    expect(result.verified).toBe(false);
+    expect(result.verifyCommand).toBeUndefined();
+    expect(browserCalls).toBe(0);
   });
 
   it("closes the sole final checklist step when the verified report explicitly completes it", async () => {
@@ -227,12 +268,12 @@ describe("CodingAgent falls back to a browser check when no shell verifyCommand 
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-browser-verify-no-entry-"));
     sandboxes.push(sandbox);
     const provider = scriptedProvider([
-      PLAN_JSON,
+      NO_ENTRY_PLAN_JSON,
       "[TOOL:filesystem action=write path=main.js]\nconsole.log('hi');\n[/TOOL]",
-      '[TOOL:todo({"action":"write","items":[{"title":"Write index.html","status":"done"},{"title":"Verify it works","status":"done"}]})]',
+      '[TOOL:todo({"action":"write","items":[{"title":"Write main.js","status":"done"},{"title":"Verify it works","status":"done"}]})]',
       "Fertig.",
     ]);
-    const codingAgent = new CodingAgent(provider, stubDb(), undefined, {
+    const codingAgent = new CodingAgent(provider, stubDb({ CODING_AGENT_ENABLE_VERIFY: "false" }), undefined, {
       sandboxRoot: sandbox,
       previewBaseUrl: "http://preview.test",
       extraTools: [stubBrowserTool([])],

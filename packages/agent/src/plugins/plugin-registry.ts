@@ -11,6 +11,7 @@ import { withManifestCache } from "../skill-selector/skill-cache.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { OpenAIProvider, type LLMProvider, type ProviderOptions } from "@ducki/providers";
 import type { PluginLLMProviderSpec } from "./plugin-manifest.js";
+import { pluginsRoot as resolvePluginsRoot } from "@ducki/shared";
 
 /**
  * Runtime context handed to a plugin's async script tools and module tools. Sandboxed sync
@@ -150,7 +151,7 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
   new (...args: string[]) => (...a: unknown[]) => Promise<unknown>;
 
 export function pluginsRoot(): string {
-  return process.env["DUCKI_PLUGINS_DIR"] ?? resolve(process.cwd(), "plugins");
+  return resolvePluginsRoot();
 }
 
 interface DisabledState { disabled?: string[] }

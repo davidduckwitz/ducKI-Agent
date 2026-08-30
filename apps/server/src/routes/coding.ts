@@ -3,7 +3,7 @@ import { createApiError, createApiResponse } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { listCheckpoints, diffCheckpoint, restoreCheckpoint } from "@ducki/agent";
 import type { LLMProvider, LLMMessage } from "@ducki/providers";
@@ -12,6 +12,28 @@ export const codingRouter: IRouter = Router();
 
 const SHARED_ROOT = SHARED_WORKSPACE_ROOT;
 export const CODING_ROOT = CODING_WORKSPACE_ROOT;
+
+/**
+ * Resolves a coding-agent sandbox input.
+ *
+ * Relative values are project references, not filesystem paths. In particular,
+ * `../bitcoin-dashboard` must not escape CODING_ROOT and become
+ * `shared-workspace/bitcoin-dashboard`; it still refers to the project slug
+ * `bitcoin-dashboard` and must resolve to `shared-workspace/coding/bitcoin-dashboard`.
+ * Absolute paths are retained for trusted internal callers such as plugin staging.
+ */
+export function resolveCodingSandboxRoot(input?: string): string {
+  const raw = String(input ?? "").trim();
+  if (!raw) return CODING_ROOT;
+  if (isAbsolute(raw)) return resolve(raw);
+
+  const segments = raw.replaceAll("\\", "/").split("/").filter(Boolean);
+  const slug = segments.at(-1) ?? "";
+  if (!/^[A-Za-z0-9_.-]+$/.test(slug) || slug === "." || slug === "..") {
+    throw new Error(`Invalid coding project path: ${input}`);
+  }
+  return resolve(CODING_ROOT, slug);
+}
 
 /** /read liefert den kompletten Inhalt im JSON-Body - eine hunderte-MB-Datei würde hier
  *  den Speicher sprengen (Base64 für Binärdateien vervielfacht das noch). Der Coding-Agent
