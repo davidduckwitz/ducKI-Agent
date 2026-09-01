@@ -306,24 +306,39 @@ export class MemorySystem {
       .map((item) => item.content);
   }
 
-  async buildSystemContext(conversationId?: number): Promise<string> {
+  /**
+   * Consolidated replacement for the old buildSystemContext + getRelevantContext pair. Both
+   * used to run separately and get concatenated under two different headers in agent.ts, with
+   * only exact-string dedup between them - near-duplicate phrasing of the same fact (e.g. a
+   * profile note and an auto-learned rephrasing of it) showed up twice, and the always-on
+   * top-N-by-importance pool had no query awareness at all. Here both pools are merged into
+   * ONE capped, similarity-deduped list, query-relevant hits first (most useful for what the
+   * model is about to do) then filled up to `cap` with the highest-importance remainder.
+   */
+  async buildConsolidatedSystemContext(
+    conversationId: number | undefined,
+    query: string,
+    relevantTypes: Array<"long-term" | "semantic"> = ["long-term"],
+    cap = 8
+  ): Promise<string> {
     const scoped = await this.getKnowledgePool(conversationId, true);
     const global = this.isolated ? [] : await this.getKnowledgePool(undefined, true);
-    // Merge by importance (both pools already come importance-sorted from the DB, but a plain
-    // concatenation loses that once combined) before capping at 8. Without this, an active
-    // conversation with 8+ scoped auto-learned memories filled the cap and `break`d before the
-    // global pool - where the user's saved Memory/Profile info lives (importance 9, no
-    // conversationId) - was ever reached, so the agent silently never saw it.
-    const merged = [...scoped, ...global].sort((a, b) => b.importance - a.importance);
+    const byImportance = [...scoped, ...global].sort((a, b) => b.importance - a.importance);
+
+    const queryHits = query.trim().length > 0
+      ? await this.getRelevantContext(query, cap, relevantTypes)
+      : [];
 
     const combined: string[] = [];
-    for (const item of merged) {
-      const normalized = this.normalize(item.content);
-      if (!normalized) continue;
-      if (combined.some((existing) => this.similarity(existing, normalized) >= 0.9)) continue;
+    const tryAdd = (raw: string): void => {
+      if (combined.length >= cap) return;
+      const normalized = this.normalize(raw);
+      if (!normalized) return;
+      if (combined.some((existing) => this.similarity(existing, normalized) >= 0.85)) return;
       combined.push(normalized);
-      if (combined.length >= 8) break;
-    }
+    };
+    for (const content of queryHits) tryAdd(content);
+    for (const item of byImportance) tryAdd(item.content);
 
     if (combined.length === 0) return "";
     return `\n\n## Relevant Memory\n${combined.map((content) => `- ${content}`).join("\n")}`;
@@ -359,7 +374,12 @@ export class MemorySystem {
     keywords: string[],
     conversationId?: number,
     limit = 6,
-    types: MemoryEntry["type"][] = ["long-term"]
+    types: MemoryEntry["type"][] = ["long-term"],
+    // Content already shown elsewhere this turn (e.g. the consolidated system-prompt block
+    // from buildConsolidatedSystemContext) - skipped here via similarity, not just exact
+    // match, so a near-identical rephrasing isn't repeated a second time in the per-iteration
+    // hint. Kept optional/empty by default so existing callers are unaffected.
+    excludeSimilarTo: string[] = []
   ): Promise<string> {
     if (keywords.length === 0) return "";
 
@@ -376,13 +396,17 @@ export class MemorySystem {
     // separately (each pool already comes relevance-sorted) and round-robin merged - this
     // keeps one type from crowding out another before the cap is reached, e.g. long-term
     // memories burying semantic ones (or vice versa) even when the latter score higher.
+    const excludeNormalized = excludeSimilarTo.map((c) => this.normalize(c)).filter(Boolean);
     const pools = await Promise.all(types.map(fetchType));
     const merged: MemorySelect[] = [];
     for (let i = 0; merged.length < limit && pools.some((pool) => i < pool.length); i++) {
       for (const pool of pools) {
         if (merged.length >= limit) break;
         const row = pool[i];
-        if (row) merged.push(row);
+        if (!row) continue;
+        const normalized = this.normalize(row.content);
+        if (excludeNormalized.some((existing) => this.similarity(existing, normalized) >= 0.85)) continue;
+        merged.push(row);
       }
     }
 

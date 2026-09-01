@@ -234,6 +234,24 @@ export function ChatContainer() {
     return () => clearTimeout(timer);
   }, [isLoading, persistentStreamingContent]);
 
+  // Also clear the live-preview box shortly after each block closes off MID-RUN (the server
+  // resets streamingContent to "" every time a text block commits as its own message row -
+  // see store.ts's assistant_text handling - which happens once per iteration, not just once
+  // per whole run). Without this, persistentStreamingContent only ever cleared once the run
+  // fully ended, so from iteration 2 onward the box kept showing iteration 1's now-stale,
+  // already-committed text instead of falling back to the duck+dots "still working" state -
+  // making it look like the agent had stopped even while it kept iterating.
+  useEffect(() => {
+    if (!isLoading) return; // the end-of-run effect above already handles this case
+    if (streamingContent.trim().length > 0) return; // still actively streaming this block
+    if (persistentStreamingContent.trim().length === 0) return;
+
+    const timer = setTimeout(() => {
+      setPersistentStreamingContent("");
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [isLoading, streamingContent, persistentStreamingContent]);
+
   // Belt and braces: a new turn must never inherit the previous turn's streamed text, even if
   // the clear above was somehow skipped (an error path, a reconnect, a run that ended without
   // ever going idle). Fires only on the idle -> running edge, so it cannot wipe mid-stream.

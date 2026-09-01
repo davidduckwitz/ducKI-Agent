@@ -1,9 +1,9 @@
 import { Router, type IRouter } from "express";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, basename, relative, sep } from "node:path";
 import { Script, createContext } from "node:vm";
 import { createApiError, createApiResponse } from "@ducki/shared";
-import { skillRegistry, parseFrontmatter, normalizeFrontmatter, validateSkillContent } from "@ducki/agent";
+import { skillRegistry, parseFrontmatter, normalizeFrontmatter, validateSkillContent, listPluginSkillDirs, pluginsRoot as resolvePluginsRoot } from "@ducki/agent";
 import { installSkillFromSource } from "../lib/skill-install.js";
 import { runSkillCommand, SkillRunnerError } from "../lib/skill-runner.js";
 import { SkillBuilderSpecSchema, createValidatedSkill, previewSkill } from "../lib/skill-builder.js";
@@ -11,16 +11,22 @@ import { skillsRoot as resolveConfiguredSkillsRoot } from "@ducki/shared";
 
 export const skillsRouter: IRouter = Router();
 
+type SkillSource = "builtin" | "plugin";
+
 interface SkillSummary {
   slug: string;
   name: string;
   description?: string;
+  source: SkillSource;
+  pluginName?: string;
+  internal?: boolean;
 }
 
 interface SkillFrontmatter {
   name?: string;
   description?: string;
   script?: string;
+  internal?: boolean;
 }
 
 interface SkillRuntimePayload {
@@ -107,6 +113,7 @@ function readFrontmatter(content: string): SkillFrontmatter {
     name: fm.name,
     description: fm.description,
     script: fm.script,
+    internal: fm.internal === true,
   };
 }
 
@@ -252,25 +259,75 @@ function runSkillScript(script: string, runtime?: SkillRuntimePayload): { logs: 
   return { logs, result };
 }
 
+interface ResolvedSkillFile {
+  skillDir: string;
+  skillFile: string;
+  source: SkillSource;
+  pluginName?: string;
+}
+
+/** Same slug-collision rule as the agent's manifest loader: builtin skills win over plugin-bundled ones. */
+function resolveSkillFile(slug: string): ResolvedSkillFile | null {
+  const builtinDir = join(skillsRoot, slug);
+  const builtinFile = join(builtinDir, "SKILL.md");
+  if (existsSync(builtinFile)) {
+    return { skillDir: builtinDir, skillFile: builtinFile, source: "builtin" };
+  }
+
+  const root = resolvePluginsRoot();
+  for (const dir of listPluginSkillDirs(root)) {
+    if (basename(dir) !== slug) continue;
+    const skillFile = join(dir, "SKILL.md");
+    if (!existsSync(skillFile)) continue;
+    const pluginName = relative(root, dir).split(sep)[0];
+    return { skillDir: dir, skillFile, source: "plugin", pluginName };
+  }
+
+  return null;
+}
+
 function listSkills(): SkillSummary[] {
   ensureSkillsRoot();
-  if (!existsSync(skillsRoot)) return [];
-  const entries = readdirSync(skillsRoot, { withFileTypes: true });
   const result: SkillSummary[] = [];
+  const seen = new Set<string>();
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const slug = entry.name;
-    const skillFile = join(skillsRoot, slug, "SKILL.md");
+  if (existsSync(skillsRoot)) {
+    for (const entry of readdirSync(skillsRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const slug = entry.name;
+      const skillFile = join(skillsRoot, slug, "SKILL.md");
+      if (!existsSync(skillFile)) continue;
+
+      const frontmatter = readFrontmatter(readFileSync(skillFile, "utf8"));
+      result.push({
+        slug,
+        name: frontmatter.name ?? slug,
+        description: frontmatter.description,
+        source: "builtin",
+        internal: frontmatter.internal === true,
+      });
+      seen.add(slug);
+    }
+  }
+
+  const pluginsRootDir = resolvePluginsRoot();
+  for (const dir of listPluginSkillDirs(pluginsRootDir)) {
+    const slug = basename(dir);
+    if (seen.has(slug)) continue; // builtin wins on collision, matches the agent's own manifest merge
+    const skillFile = join(dir, "SKILL.md");
     if (!existsSync(skillFile)) continue;
 
-    const content = readFileSync(skillFile, "utf8");
-    const frontmatter = readFrontmatter(content);
+    const frontmatter = readFrontmatter(readFileSync(skillFile, "utf8"));
+    const pluginName = relative(pluginsRootDir, dir).split(sep)[0];
     result.push({
       slug,
       name: frontmatter.name ?? slug,
       description: frontmatter.description,
+      source: "plugin",
+      pluginName,
+      internal: frontmatter.internal === true,
     });
+    seen.add(slug);
   }
 
   return result;
@@ -557,13 +614,13 @@ skillsRouter.get("/:slug", (req, res) => {
     return;
   }
 
-  const skillFile = join(skillsRoot, slug, "SKILL.md");
-  if (!existsSync(skillFile)) {
+  const resolved = resolveSkillFile(slug);
+  if (!resolved) {
     res.status(404).json(createApiError("Skill not found"));
     return;
   }
 
-  const content = readFileSync(skillFile, "utf8");
+  const content = readFileSync(resolved.skillFile, "utf8");
   const frontmatter = readFrontmatter(content);
   res.json(
     createApiResponse({
@@ -571,6 +628,9 @@ skillsRouter.get("/:slug", (req, res) => {
       name: frontmatter.name ?? slug,
       description: frontmatter.description,
       content,
+      source: resolved.source,
+      pluginName: resolved.pluginName,
+      internal: frontmatter.internal === true,
     })
   );
 });
@@ -614,13 +674,17 @@ skillsRouter.put("/:slug", (req, res) => {
     return;
   }
 
-  const skillFile = join(skillsRoot, slug, "SKILL.md");
-  if (!existsSync(skillFile)) {
+  const resolved = resolveSkillFile(slug);
+  if (!resolved) {
     res.status(404).json(createApiError("Skill not found"));
     return;
   }
+  if (resolved.source === "plugin") {
+    res.status(400).json(createApiError("Plugin-Skills werden über die Plugins-Seite verwaltet, nicht hier."));
+    return;
+  }
 
-  writeFileSync(skillFile, content, "utf8");
+  writeFileSync(resolved.skillFile, content, "utf8");
   res.json(createApiResponse({ slug, updated: true }));
 });
 
@@ -637,19 +701,23 @@ skillsRouter.patch("/:slug", (req, res) => {
     return;
   }
 
-  const skillFile = join(skillsRoot, slug, "SKILL.md");
-  if (!existsSync(skillFile)) {
+  const resolved = resolveSkillFile(slug);
+  if (!resolved) {
     res.status(404).json(createApiError("Skill not found"));
     return;
   }
+  if (resolved.source === "plugin") {
+    res.status(400).json(createApiError("Plugin-Skills werden über die Plugins-Seite verwaltet, nicht hier."));
+    return;
+  }
 
-  const content = readFileSync(skillFile, "utf8");
+  const content = readFileSync(resolved.skillFile, "utf8");
   if (!content.includes(oldString)) {
     res.status(400).json(createApiError("oldString not found"));
     return;
   }
 
-  writeFileSync(skillFile, content.replace(oldString, newString ?? ""), "utf8");
+  writeFileSync(resolved.skillFile, content.replace(oldString, newString ?? ""), "utf8");
   res.json(createApiResponse({ slug, patched: true }));
 });
 
@@ -660,13 +728,17 @@ skillsRouter.delete("/:slug", (req, res) => {
     return;
   }
 
-  const skillDir = join(skillsRoot, slug);
-  if (!existsSync(skillDir)) {
+  const resolved = resolveSkillFile(slug);
+  if (!resolved) {
     res.status(404).json(createApiError("Skill not found"));
     return;
   }
+  if (resolved.source === "plugin") {
+    res.status(400).json(createApiError("Plugin-Skills werden über die Plugins-Seite verwaltet, nicht hier."));
+    return;
+  }
 
-  rmSync(skillDir, { recursive: true, force: true });
+  rmSync(resolved.skillDir, { recursive: true, force: true });
   res.json(createApiResponse({ slug, deleted: true }));
 });
 
@@ -678,16 +750,15 @@ skillsRouter.post("/:slug/execute", (req, res) => {
   }
 
   const { scriptFile, input, context } = (req.body ?? {}) as { scriptFile?: string; input?: unknown; context?: unknown };
-  const skillDir = join(skillsRoot, slug);
-  const skillFile = join(skillDir, "SKILL.md");
-  if (!existsSync(skillFile)) {
+  const resolved = resolveSkillFile(slug);
+  if (!resolved) {
     res.status(404).json(createApiError("Skill not found"));
     return;
   }
 
   try {
-    const content = readFileSync(skillFile, "utf8");
-    const loaded = loadSkillScript(skillDir, content, scriptFile);
+    const content = readFileSync(resolved.skillFile, "utf8");
+    const loaded = loadSkillScript(resolved.skillDir, content, scriptFile);
     const executed = runSkillScript(loaded.script, { input, context });
 
     res.json(

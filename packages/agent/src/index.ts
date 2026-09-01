@@ -177,6 +177,7 @@ export { validateSkillContent, validateSkillDirectory } from "./skill-selector/v
 // Plugin system (file-first bundles: data-source/script tools + skills + mappings + settings)
 export {
   loadPlugins,
+  listPluginSkillDirs,
   setPluginEnabled,
   readDisabledState,
   pluginsRoot,

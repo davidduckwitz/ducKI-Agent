@@ -796,10 +796,14 @@ export function createWorkflowTools(db: DatabaseService, connectorRegistry?: Con
 
   const historyTool: ToolExecutor = {
     name: "history",
-    description: "Search and inspect older conversations and messages",
+    description:
+      "Search and inspect PAST CHAT conversations and messages stored in this system. " +
+      "NOT for real-world news, current events, or anything happening outside this chat " +
+      "(the German word \"Nachrichten\" is ambiguous between chat messages and news - this " +
+      "tool is only the former). For current events/news, use tool_search to find a news tool.",
     definition: {
       name: "history",
-      description: "Conversation history search and retrieval",
+      description: "Conversation history search and retrieval — past chat messages only, not real-world news",
       parameters: {
         type: "object",
         properties: {
@@ -842,7 +846,13 @@ export function createWorkflowTools(db: DatabaseService, connectorRegistry?: Con
           }
           case "search": {
             const query = String(input["query"] ?? "").trim().toLowerCase();
-            if (!query) return fail("history:search requires query");
+            if (!query) {
+              return fail(
+                "history:search requires a query string to search PAST CHAT messages. " +
+                "If you're looking for real-world news/current events instead, this tool " +
+                "cannot help — call tool_search to find a news-capable tool."
+              );
+            }
 
             const projectIdRaw = input["projectId"];
             const projectId = projectIdRaw !== undefined ? Number(projectIdRaw) : undefined;

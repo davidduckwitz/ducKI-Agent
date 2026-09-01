@@ -7141,45 +7141,27 @@ export class Agent {
     }
 
     let memoryContext = "";
+    // Normalized content of every line actually placed in memoryContext this run - passed to
+    // the per-iteration dynamic memory lookup below so it can skip near-duplicates of what's
+    // already sitting in the system prompt, instead of repeating the same fact under a third
+    // header every iteration.
+    let memoryContextLines: string[] = [];
     try {
-      // Importance-sorted pool: the top-8 memories from scoped + global, the same set
-      // that has always fed the system prompt.
-      memoryContext = await this.memory.buildSystemContext(this.conversation.id);
-
-      // Query-relevant overlay: pull memories whose content matches the user's actual
-      // question, not just high-importance ones. This catches learnings from past runs
-      // that had a different importance score but are semantically relevant to this task —
-      // without it, a Reflection Learning with importance 4 about a similar problem is
-      // invisible until the dynamic per-iteration keyword search picks it up later.
-      if (effectiveInput.trim().length > 0) {
-        // Semantic memories (e.g. LLM-wiki content auto-learned as `[LLM-WIKI:...]` entries)
-        // are included for plain chat so a factual question about ingested knowledge doesn't
-        // depend on making the top-8 importance-sorted cut in buildSystemContext above. Kept
-        // to long-term only for coding runs - unchanged behavior there, per explicit scope.
-        const relevantTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
-        const relevant = await this.memory.getRelevantContext(effectiveInput, 4, relevantTypes);
-        if (relevant.length > 0) {
-          // Merge without duplicating: the system context block already carries a
-          // `## Relevant Memory` header with lines starting "- ". Extract the plain
-          // content of each, deduplicate against the relevance hits, and append the
-          // new entries under a separate header so the model can distinguish the two
-          // sources.
-          const existingContents = new Set(
-            memoryContext
-              .split("\n")
-              .filter((line) => line.startsWith("- "))
-              .map((line) => line.slice(2).trim())
-          );
-          const newEntries = relevant
-            .map((content) => content.trim())
-            .filter((content) => content.length > 0 && !existingContents.has(content));
-          if (newEntries.length > 0) {
-            memoryContext =
-              memoryContext +
-              `\n\n## Task-Relevant Memory\n${newEntries.map((content) => `- ${content}`).join("\n")}`;
-          }
-        }
-      }
+      // Single consolidated pool: importance-sorted memories plus memories whose content
+      // matches the user's actual question, merged and similarity-deduped into one capped
+      // list (see buildConsolidatedSystemContext) - replaces what used to be two separately
+      // built, only-exact-match-deduped blocks ("Relevant Memory" + "Task-Relevant Memory")
+      // that could both show near-identical phrasings of the same fact.
+      const relevantTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
+      memoryContext = await this.memory.buildConsolidatedSystemContext(
+        this.conversation.id,
+        effectiveInput,
+        relevantTypes
+      );
+      memoryContextLines = memoryContext
+        .split("\n")
+        .filter((line) => line.startsWith("- "))
+        .map((line) => line.slice(2).trim());
     } catch (memoryError) {
       this.logger.warn("Failed to build system memory context", {
         error: memoryError instanceof Error ? memoryError.message : String(memoryError),
@@ -7694,8 +7676,12 @@ export class Agent {
           // Same long-term-only-for-coding scoping as the getRelevantContext call above -
           // see its comment for why semantic memories matter for plain chat.
           const dynamicMemoryTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
+          // Lower cap than before (3, was 5) and excludes anything similar to what's already
+          // in the system prompt's consolidated memory block (memoryContextLines) - this hint
+          // exists to surface NEW recall as the run's own actions narrow the query, not to
+          // repeat the same facts under a third header every iteration.
           dynamicMemoryContext = memoryKeywords.length > 0
-            ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 5, dynamicMemoryTypes)
+            ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 3, dynamicMemoryTypes, memoryContextLines)
             : "";
           cachedMemoryKeywordSig = keywordSig;
           cachedDynamicMemoryContext = dynamicMemoryContext;

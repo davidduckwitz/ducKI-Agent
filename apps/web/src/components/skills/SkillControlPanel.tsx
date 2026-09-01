@@ -1,12 +1,9 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import {
   Download,
   Trash2,
-  Eye,
-  EyeOff,
   Power,
-  Settings,
   AlertCircle,
 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -16,32 +13,27 @@ interface SkillControlPanelProps {
   skillName: string;
   isEnabled: boolean;
   isInstalled: boolean;
-  isHidden: boolean;
+  /** false for skills managed elsewhere (e.g. plugin-bundled skills managed on the Plugins page). */
+  canDelete?: boolean;
   onToggleEnabled: (enabled: boolean) => Promise<void>;
-  onToggleHidden: (hidden: boolean) => Promise<void>;
   onDelete: () => Promise<void>;
   isPending?: boolean;
 }
 
 export function SkillControlPanel({
-  skillId,
-  skillName,
+  skillId: _skillId,
+  skillName: _skillName,
   isEnabled,
   isInstalled,
-  isHidden,
+  canDelete = true,
   onToggleEnabled,
-  onToggleHidden,
   onDelete,
-  isPending = false,
+  isPending: _isPending = false,
 }: SkillControlPanelProps) {
   const [showDelete, setShowDelete] = useState(false);
 
   const toggleEnabledMutation = useMutation({
     mutationFn: () => onToggleEnabled(!isEnabled),
-  });
-
-  const toggleHiddenMutation = useMutation({
-    mutationFn: () => onToggleHidden(!isHidden),
   });
 
   const deleteMutation = useMutation({
@@ -77,18 +69,11 @@ export function SkillControlPanel({
               Disabled
             </span>
           )}
-
-          {isHidden && (
-            <span className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">
-              <EyeOff className="w-3 h-3" />
-              Hidden
-            </span>
-          )}
         </div>
       </div>
 
       {/* Control Buttons */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
         {/* Enable/Disable */}
         <button
           onClick={() => toggleEnabledMutation.mutate()}
@@ -104,21 +89,6 @@ export function SkillControlPanel({
           {isEnabled ? "Disable" : "Enable"}
         </button>
 
-        {/* Hide/Show */}
-        <button
-          onClick={() => toggleHiddenMutation.mutate()}
-          disabled={toggleHiddenMutation.isPending}
-          className={cn(
-            "p-2 rounded text-xs font-medium flex items-center justify-center gap-1 transition",
-            isHidden
-              ? "bg-orange-600 hover:bg-orange-700 text-white"
-              : "bg-gray-300 dark:bg-gray-700 hover:bg-gray-400 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100"
-          )}
-        >
-          {isHidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-          {isHidden ? "Hidden" : "Public"}
-        </button>
-
         {/* Install/Remove */}
         <button
           disabled={true}
@@ -130,37 +100,35 @@ export function SkillControlPanel({
         </button>
 
         {/* Delete */}
-        {!showDelete ? (
+        {canDelete ? (
+          !showDelete ? (
+            <button
+              onClick={() => setShowDelete(true)}
+              className="p-2 rounded text-xs font-medium flex items-center justify-center gap-1 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 text-red-700 dark:text-red-400"
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete
+            </button>
+          ) : (
+            <button
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              className="p-2 rounded text-xs font-bold flex items-center justify-center gap-1 bg-red-600 hover:bg-red-700 text-white animate-pulse"
+            >
+              <AlertCircle className="w-3 h-3" />
+              Confirm?
+            </button>
+          )
+        ) : (
           <button
-            onClick={() => setShowDelete(true)}
-            className="p-2 rounded text-xs font-medium flex items-center justify-center gap-1 bg-red-100 dark:bg-red-900/30 hover:bg-red-200 dark:hover:bg-red-900/50 text-red-700 dark:text-red-400"
+            disabled
+            className="p-2 rounded text-xs font-medium flex items-center justify-center gap-1 bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed"
+            title="Managed on the Plugins page"
           >
             <Trash2 className="w-3 h-3" />
             Delete
           </button>
-        ) : (
-          <button
-            onClick={() => deleteMutation.mutate()}
-            disabled={deleteMutation.isPending}
-            className="p-2 rounded text-xs font-bold flex items-center justify-center gap-1 bg-red-600 hover:bg-red-700 text-white animate-pulse"
-          >
-            <AlertCircle className="w-3 h-3" />
-            Confirm?
-          </button>
         )}
-      </div>
-
-      {/* Settings Info */}
-      <div className="text-xs text-gray-600 dark:text-gray-400 space-y-1">
-        <p>
-          🔒 <strong>Privacy:</strong> {isHidden ? "Hidden from sync" : "Included in sync"}
-        </p>
-        <p>
-          ⚙️ <strong>State:</strong> {isEnabled ? "Running" : "Inactive"}
-        </p>
-        <p className="text-xs text-gray-500 dark:text-gray-500">
-          💡 Skills you hide won't appear on the public landing page even if sync is enabled
-        </p>
       </div>
     </div>
   );

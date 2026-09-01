@@ -43,6 +43,8 @@ export interface NormalizedSkillFrontmatter {
   priority?: string;
   scripts?: Record<string, string>;
   version?: string;
+  /** Marks a skill as internal/system tooling - not meant to be auto-selected mid-conversation. */
+  internal?: boolean;
   /** The raw metadata map, always present (possibly empty). */
   metadata: Record<string, string>;
   // Hermes pattern: conditional activation (metadata.hermes namespace)
@@ -255,6 +257,7 @@ export function normalizeFrontmatter(data: Record<string, unknown>): NormalizedS
     priority: toStr(pick("priority")),
     scripts,
     version: toStr(pick("version")),
+    internal: String(pick("internal") ?? "").trim().toLowerCase() === "true",
     metadata,
     fallbackForToolsets: toStringArray(hermesMeta["fallback_for_toolsets"]),
     requiresToolsets: toStringArray(hermesMeta["requires_toolsets"]),

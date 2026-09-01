@@ -5,10 +5,11 @@ import { api } from "../../lib/api";
 import { CodePreview } from "../common/CodePreview";
 import { useI18n } from "../../lib/i18n";
 import { SkillsManagementSettings } from "../settings/SkillsManagementSettings";
-import { SkillsPrivacySettings } from "./SkillsPrivacySettings";
 import { SkillControlPanel } from "./SkillControlPanel";
 import { SkillDiscovery } from "./SkillDiscovery";
 import { cn } from "../../lib/utils";
+
+type SkillSource = "builtin" | "plugin";
 
 interface SkillItem {
   slug: string;
@@ -16,6 +17,9 @@ interface SkillItem {
   description?: string;
   isPrivate?: boolean;
   isInstalled?: boolean;
+  source?: SkillSource;
+  pluginName?: string;
+  internal?: boolean;
 }
 
 interface SkillDetail {
@@ -23,6 +27,9 @@ interface SkillDetail {
   name: string;
   description?: string;
   content: string;
+  source?: SkillSource;
+  pluginName?: string;
+  internal?: boolean;
 }
 
 interface SettingEntry {
@@ -384,7 +391,24 @@ export function SkillManager() {
     });
   }, [sortedSkills, enabledSet, visibilityFilter, search]);
 
+  const skillGroups = useMemo(() => {
+    const internal: SkillItem[] = [];
+    const plugin: SkillItem[] = [];
+    const catalog: SkillItem[] = [];
+    for (const skill of visibleSkills) {
+      if (skill.internal) internal.push(skill);
+      else if (skill.source === "plugin") plugin.push(skill);
+      else catalog.push(skill);
+    }
+    return [
+      { key: "internal" as const, label: t("skillsPage.groupInternal"), hint: t("skillsPage.groupInternalHint"), items: internal },
+      { key: "plugin" as const, label: t("skillsPage.groupPlugin"), hint: t("skillsPage.groupPluginHint"), items: plugin },
+      { key: "catalog" as const, label: t("skillsPage.groupCatalog"), hint: t("skillsPage.groupCatalogHint"), items: catalog },
+    ];
+  }, [visibleSkills, t]);
+
   const hasUnsavedChanges = Boolean(selectedDetail.data && selectedDetail.data.content !== editorContent);
+  const isPluginSkill = selectedDetail.data?.source === "plugin";
 
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -467,6 +491,78 @@ export function SkillManager() {
     await qc.invalidateQueries({ queryKey: ["skills"] });
   };
 
+  const renderSkillCard = (skill: SkillItem) => {
+    const enabled = enabledSet.has(skill.slug);
+    const selected = selectedSlug === skill.slug;
+    return (
+      <div
+        key={skill.slug}
+        className={`rounded-lg border px-3 py-3 ${
+          selected ? "border-blue-500 bg-blue-500/10" : "border-gray-800 bg-gray-900/40"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <button
+            onClick={() => selectSkill(skill.slug)}
+            className="text-left min-w-0 flex-1"
+          >
+            <p className="text-sm font-semibold text-white truncate">{skill.name}</p>
+            <p className="text-xs text-gray-500 truncate">
+              /{skill.slug}
+              {skill.source === "plugin" && skill.pluginName && (
+                <span className="ml-1.5 text-purple-400">· {skill.pluginName}</span>
+              )}
+            </p>
+            <p className="text-xs text-gray-400 mt-1 line-clamp-2">
+              {skill.description ?? t("skillsPage.noDescription")}
+            </p>
+          </button>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => toggleAlwaysLoad(skill.slug)}
+              disabled={saveAlwaysLoadedSkills.isPending}
+              className={`inline-flex items-center justify-center p-1.5 rounded-md text-xs border transition ${
+                alwaysLoadedSet.has(skill.slug)
+                  ? "border-purple-500/50 bg-purple-500/15 text-purple-200"
+                  : "border-gray-700 bg-gray-800 text-gray-400"
+              }`}
+              title={alwaysLoadedSet.has(skill.slug) ? "Always Load aktiv" : "Zum Always Load hinzufügen"}
+            >
+              <span className="text-xs font-bold">∞</span>
+            </button>
+
+            <button
+              onClick={() => togglePinned(skill.slug)}
+              disabled={savePinnedSkills.isPending}
+              className={`inline-flex items-center justify-center p-1.5 rounded-md text-xs border transition ${
+                pinnedSet.has(skill.slug)
+                  ? "border-amber-500/50 bg-amber-500/15 text-amber-200"
+                  : "border-gray-700 bg-gray-800 text-gray-400"
+              }`}
+              title={pinnedSet.has(skill.slug) ? "Unpin" : "Pin"}
+            >
+              <Star className="w-3.5 h-3.5" />
+            </button>
+
+            <button
+              onClick={() => toggleSkill(skill.slug)}
+              disabled={saveEnabledSkills.isPending}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs border transition ${
+                enabled
+                  ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-200"
+                  : "border-gray-700 bg-gray-800 text-gray-300"
+              }`}
+            >
+              {enabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              {enabled ? t("skillsPage.on") : t("skillsPage.off")}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="p-3 sm:p-6 space-y-4 h-full">
       <div className="flex items-start justify-between gap-3">
@@ -497,8 +593,10 @@ export function SkillManager() {
         </div>
       </div>
 
-      {/* Privacy Settings Panel */}
-      <SkillsPrivacySettings />
+      <p className="text-xs text-gray-500 flex items-center gap-1.5">
+        <Lock className="w-3.5 h-3.5 shrink-0" />
+        {t("skillsPage.privacyNote")}
+      </p>
 
       {/* Tab Navigation */}
       <div className="card p-2 flex gap-2">
@@ -614,73 +712,20 @@ export function SkillManager() {
             <p className="text-xs text-gray-500">{t("skillsPage.hits")}: {visibleSkills.length}</p>
           </div>
 
-          <div className="space-y-2">
-            {visibleSkills.map((skill) => {
-              const enabled = enabledSet.has(skill.slug);
-              const selected = selectedSlug === skill.slug;
-              return (
-                <div
-                  key={skill.slug}
-                  className={`rounded-lg border px-3 py-3 ${
-                    selected ? "border-blue-500 bg-blue-500/10" : "border-gray-800 bg-gray-900/40"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <button
-                      onClick={() => selectSkill(skill.slug)}
-                      className="text-left min-w-0 flex-1"
-                    >
-                      <p className="text-sm font-semibold text-white truncate">{skill.name}</p>
-                      <p className="text-xs text-gray-500 truncate">/{skill.slug}</p>
-                      <p className="text-xs text-gray-400 mt-1 line-clamp-2">
-                        {skill.description ?? t("skillsPage.noDescription")}
-                      </p>
-                    </button>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => toggleAlwaysLoad(skill.slug)}
-                        disabled={saveAlwaysLoadedSkills.isPending}
-                        className={`inline-flex items-center justify-center p-1.5 rounded-md text-xs border transition ${
-                          alwaysLoadedSet.has(skill.slug)
-                            ? "border-purple-500/50 bg-purple-500/15 text-purple-200"
-                            : "border-gray-700 bg-gray-800 text-gray-400"
-                        }`}
-                        title={alwaysLoadedSet.has(skill.slug) ? "Always Load aktiv" : "Zum Always Load hinzufügen"}
-                      >
-                        <span className="text-xs font-bold">∞</span>
-                      </button>
-
-                      <button
-                        onClick={() => togglePinned(skill.slug)}
-                        disabled={savePinnedSkills.isPending}
-                        className={`inline-flex items-center justify-center p-1.5 rounded-md text-xs border transition ${
-                          pinnedSet.has(skill.slug)
-                            ? "border-amber-500/50 bg-amber-500/15 text-amber-200"
-                            : "border-gray-700 bg-gray-800 text-gray-400"
-                        }`}
-                        title={pinnedSet.has(skill.slug) ? "Unpin" : "Pin"}
-                      >
-                        <Star className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        onClick={() => toggleSkill(skill.slug)}
-                        disabled={saveEnabledSkills.isPending}
-                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs border transition ${
-                          enabled
-                            ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-200"
-                            : "border-gray-700 bg-gray-800 text-gray-300"
-                        }`}
-                      >
-                        {enabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                        {enabled ? t("skillsPage.on") : t("skillsPage.off")}
-                      </button>
-                    </div>
+          <div className="space-y-4">
+            {skillGroups.map((group) =>
+              group.items.length === 0 ? null : (
+                <div key={group.key} className="space-y-2">
+                  <div className="px-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                      {group.label} <span className="text-gray-600">({group.items.length})</span>
+                    </p>
+                    <p className="text-[11px] text-gray-600">{group.hint}</p>
                   </div>
+                  {group.items.map(renderSkillCard)}
                 </div>
-              );
-            })}
+              )
+            )}
 
             {visibleSkills.length === 0 && (
               <div className="text-center text-gray-500 py-10">
@@ -729,7 +774,7 @@ export function SkillManager() {
                   <button
                     onClick={() => updateSkill.mutate({ slug: selectedDetail.data.slug, content: editorContent })}
                     className="btn-primary text-sm flex items-center gap-2"
-                    disabled={updateSkill.isPending || !hasUnsavedChanges}
+                    disabled={updateSkill.isPending || !hasUnsavedChanges || isPluginSkill}
                   >
                     <Save className="w-4 h-4" />
                     {t("common.save")}
@@ -737,7 +782,7 @@ export function SkillManager() {
                   <button
                     onClick={() => deleteSkill.mutate(selectedDetail.data.slug)}
                     className="btn-secondary text-sm flex items-center gap-2"
-                    disabled={deleteSkill.isPending}
+                    disabled={deleteSkill.isPending || isPluginSkill}
                   >
                     <Trash2 className="w-4 h-4" />
                     {t("skillsPage.delete")}
@@ -749,18 +794,24 @@ export function SkillManager() {
                 <p className="text-sm text-gray-300">{selectedDetail.data.description}</p>
               )}
 
-              {/* Skill Control Panel - Enable/Disable/Hide */}
+              {isPluginSkill && (
+                <p className="text-xs text-purple-300 bg-purple-500/10 border border-purple-500/30 rounded-lg px-3 py-2">
+                  Dieser Skill wird vom Plugin "{selectedDetail.data.pluginName}" bereitgestellt. Inhalt und Löschen werden auf der Plugins-Seite verwaltet - hier kannst du ihn nur ansehen und für Auto-Selection aktivieren.
+                </p>
+              )}
+
+              {/* Skill Controls */}
               <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-4">
                 <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
                   <Lock className="w-4 h-4" />
-                  Skill Controls & Privacy
+                  Skill Controls
                 </h3>
                 <SkillControlPanel
                   skillId={selectedDetail.data.slug}
                   skillName={selectedDetail.data.name}
                   isEnabled={enabledSet.has(selectedDetail.data.slug)}
                   isInstalled={true}
-                  isHidden={false}
+                  canDelete={!isPluginSkill}
                   onToggleEnabled={async (enabled) => {
                     const next = new Set(enabledSet);
                     if (enabled) {
@@ -769,10 +820,6 @@ export function SkillManager() {
                       next.delete(selectedDetail.data.slug);
                     }
                     await saveEnabledSkills.mutateAsync(Array.from(next).sort());
-                  }}
-                  onToggleHidden={async (hidden) => {
-                    // TODO: Implement hide functionality
-                    console.log("Toggle hidden:", hidden);
                   }}
                   onDelete={async () => {
                     await deleteSkill.mutateAsync(selectedDetail.data.slug);
@@ -784,6 +831,7 @@ export function SkillManager() {
                 className="input w-full min-h-[60vh] font-mono text-sm leading-6"
                 value={editorContent}
                 onChange={(e) => setEditorContent(e.target.value)}
+                readOnly={isPluginSkill}
               />
               <div className="rounded-lg border border-gray-800 overflow-hidden">
                 <div className="px-3 py-2 text-xs text-gray-400 border-b border-gray-800 bg-gray-900/60">
