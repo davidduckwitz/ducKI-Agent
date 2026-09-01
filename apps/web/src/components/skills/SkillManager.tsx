@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, Check, Eye, EyeOff, Play, Plus, Save, Search, Star, Trash2, UploadCloud, X, Sparkles, Lock, Download, Settings } from "lucide-react";
+import { BookOpen, Check, Eye, EyeOff, Play, Plus, Save, Search, Star, Trash2, UploadCloud, X, Sparkles, Lock, Download } from "lucide-react";
 import { api } from "../../lib/api";
 import { CodePreview } from "../common/CodePreview";
 import { useI18n } from "../../lib/i18n";
-import { SkillsManagementSettings } from "../settings/SkillsManagementSettings";
 import { SkillControlPanel } from "./SkillControlPanel";
 import { SkillDiscovery } from "./SkillDiscovery";
 import { cn } from "../../lib/utils";
@@ -205,7 +204,7 @@ const importedSkillTemplates: Array<{ name: string; description: string; content
 export function SkillManager() {
   const { t } = useI18n();
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"my-skills" | "discover" | "settings">("my-skills");
+  const [activeTab, setActiveTab] = useState<"my-skills" | "discover">("my-skills");
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
   const [editorContent, setEditorContent] = useState("");
   const [draftSkill, setDraftSkill] = useState<DraftSkill>({ name: "", description: "" });
@@ -624,18 +623,6 @@ export function SkillManager() {
           <Download className="w-4 h-4" />
           Discover
         </button>
-        <button
-          onClick={() => setActiveTab("settings")}
-          className={cn(
-            "px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2",
-            activeTab === "settings"
-              ? "bg-purple-600 text-white"
-              : "bg-gray-800 text-gray-300 hover:bg-gray-700"
-          )}
-        >
-          <Settings className="w-4 h-4" />
-          Settings
-        </button>
       </div>
 
       {activeTab === "my-skills" ? (
@@ -668,11 +655,6 @@ export function SkillManager() {
       {/* Discover Tab */}
       {activeTab === "discover" && (
         <SkillDiscovery installedSkills={skills.map((s) => s.slug)} />
-      )}
-
-      {/* Settings Tab */}
-      {activeTab === "settings" && (
-        <SkillsManagementSettings />
       )}
 
       {/* My Skills Tab */}

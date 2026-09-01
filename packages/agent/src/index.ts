@@ -156,14 +156,9 @@ export type { ModelTokenConfig } from "./context/token-counter.js";
 export { ContextManager } from "./context/context-manager.js";
 export type { ContextManagerConfig, PruningStrategy } from "./context/context-manager.js";
 // Skill bundling & advanced features
-export { SkillBundleManager, DEFAULT_SKILL_BUNDLES } from "./skill-selector/skill-bundle.js";
-export type { SkillBundle } from "./skill-selector/skill-bundle.js";
-export { AdvancedSkillSelector } from "./skill-selector/advanced-selector.js";
-export type { SelectionContext, SelectionResult } from "./skill-selector/advanced-selector.js";
-export { SkillSelectionService, skillSelectionService } from "./skill-selector/skill-selection-service.js";
 export { SkillSelector, skillSelector } from "./skill-selector/selector.js";
 export type { SkillMetrics } from "./skill-selector/selector.js";
-export { SkillRegistry, skillRegistry, AVAILABLE_SKILLS, populateSkillBundles } from "./skill-selector/skill-registry.js";
+export { SkillRegistry, skillRegistry, AVAILABLE_SKILLS } from "./skill-selector/skill-registry.js";
 export { jaccardSimilarity } from "./utils/text-similarity.js";
 export {
   parseFrontmatter,
