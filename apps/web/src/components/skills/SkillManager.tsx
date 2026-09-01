@@ -391,20 +391,23 @@ export function SkillManager() {
   }, [sortedSkills, enabledSet, visibilityFilter, search]);
 
   const skillGroups = useMemo(() => {
+    const alwaysLoaded: SkillItem[] = [];
     const internal: SkillItem[] = [];
     const plugin: SkillItem[] = [];
     const catalog: SkillItem[] = [];
     for (const skill of visibleSkills) {
-      if (skill.internal) internal.push(skill);
+      if (alwaysLoadedSet.has(skill.slug)) alwaysLoaded.push(skill);
+      else if (skill.internal) internal.push(skill);
       else if (skill.source === "plugin") plugin.push(skill);
       else catalog.push(skill);
     }
     return [
+      { key: "alwaysLoaded" as const, label: t("skillsPage.groupAlwaysLoaded"), hint: t("skillsPage.groupAlwaysLoadedHint"), items: alwaysLoaded },
       { key: "internal" as const, label: t("skillsPage.groupInternal"), hint: t("skillsPage.groupInternalHint"), items: internal },
       { key: "plugin" as const, label: t("skillsPage.groupPlugin"), hint: t("skillsPage.groupPluginHint"), items: plugin },
       { key: "catalog" as const, label: t("skillsPage.groupCatalog"), hint: t("skillsPage.groupCatalogHint"), items: catalog },
     ];
-  }, [visibleSkills, t]);
+  }, [visibleSkills, alwaysLoadedSet, t]);
 
   const hasUnsavedChanges = Boolean(selectedDetail.data && selectedDetail.data.content !== editorContent);
   const isPluginSkill = selectedDetail.data?.source === "plugin";
