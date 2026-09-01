@@ -3646,6 +3646,24 @@ export class Agent {
   }
 
   /**
+   * True when a response opens like a finished report to the user ("Here is...", "Das
+   * Ergebnis ist...", "Zusammenfassung", ...) rather than narration about work still to do.
+   * Shared by the "announced but didn't act" guards (detectForwardIntentClaim) and the
+   * tool_staging continuation nudge, so a genuinely complete final answer is never re-nagged
+   * just because some other, possibly non-essential, staged chunk was left unread.
+   */
+  private looksLikeFinalReport(response: string): boolean {
+    // Strip leading markdown decoration (headings, bold/italic markers, list bullets, quotes)
+    // before anchoring - a real report very often opens with "## News-Bericht ..." or
+    // "**Zusammenfassung**" rather than plain prose, and the opener check must still see past
+    // that to the actual first word.
+    const stripped = response.replace(/^[\s#*_>\-"'`]+/, "");
+    const reportOpeners =
+      /^\s*(here is|here's|hier ist|hier sind|das ergebnis|das ist|das hier ist|ergebnis|fertig|abgeschlossen|zusammenfassung|übersicht|uebersicht|news-?bericht|bericht|done|the result|the final|ich habe)\b/i;
+    return reportOpeners.test(stripped);
+  }
+
+  /**
    * Detects the "announced future work, then stopped" failure mode: the model writes prose
    * COMMITTING to an action ("I will now create X", "I'll edit Y", "als Nächstes schreibe ich
    * Z") but emits no [TOOL:...] marker and no native tool_call, so the promise simply becomes
@@ -3663,9 +3681,7 @@ export class Agent {
     if (response.includes("[TOOL:")) return false; // a real marker is present, handled elsewhere
 
     // A response that is a pure report/summary is the legitimate end of a run - do not nag it.
-    const reportOpeners =
-      /^\s*(here is|here's|das ergebnis|das ist|das hier ist|ergebnis|fertig|abgeschlossen|zusammenfassung|done|the result|the final)\b/i;
-    if (reportOpeners.test(response)) return false;
+    if (this.looksLikeFinalReport(response)) return false;
 
     // The response must reference SOMETHING concrete to act on. This is what separates
     // "I will create the README" (a promise to act) from "I will keep that in mind" (a reply).
@@ -6448,14 +6464,16 @@ export class Agent {
       })
       .join("\n");
     return (
-      `\n\n## Task checklist (${doneCount}/${all.length} done)\n` +
+      `\n\n## Step checklist (${doneCount}/${all.length} done)\n` +
       `${list}\n\n` +
       `CURRENT STEP: ${open.stepIndex + 1}. ${open.title}\n` +
       `Done when: ${open.acceptanceCriteria ?? open.title}\n` +
       (priorFailure ? `Your previous attempt failed: ${priorFailure} — fix exactly this.\n` : "") +
       `Instructions: Actually perform this step now with the right tool (write the file, ` +
       `send the message, fetch the data — do not just describe it). Do ONLY this one step, ` +
-      `then continue. Never skip ahead or redo a step already marked [x].`
+      `then continue. Never skip ahead or redo a step already marked [x]. This checklist ` +
+      `advances automatically once your work is verified — do NOT call the "task" tool to ` +
+      `mark a step done, it manages unrelated tracked tasks and has no knowledge of these steps.`
     );
   }
 
@@ -9008,7 +9026,17 @@ export class Agent {
         // extract the actual articles from the JSON body"). Letting that narration stand as
         // the final answer means the user never sees the actual result. Force the exact next
         // call instead of hoping the model rereads its own system-prompt instructions.
-        if (pendingToolStagingContinuation && toolStagingContinuationNudges < 2) {
+        //
+        // Exception: a response that already reads like a finished report (see
+        // looksLikeFinalReport) is trusted as-is and never re-nagged here. The model may well
+        // have synthesized a complete answer from other, already-fully-read sources while one
+        // unrelated staged chunk stayed unread - forcing another read in that case only wastes
+        // a turn and produces a redundant, sometimes conflicting second answer.
+        if (
+          pendingToolStagingContinuation &&
+          toolStagingContinuationNudges < 2 &&
+          !this.looksLikeFinalReport(cleanedResponse)
+        ) {
           toolStagingContinuationNudges++;
           const { id, nextOffset } = pendingToolStagingContinuation;
           this.logger.warn("[TOOL-CALLS] Large tool result still has unread content, nudging model to continue reading it", {

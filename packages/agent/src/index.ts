@@ -127,6 +127,7 @@ export { AgentBenchmark, type BenchmarkResult } from "./performance/benchmarks.j
 // by the server/workflows through the compatible subclass that adds bounded failure-only
 // reflection when deterministic verification repeats unchanged.
 export { CodingAgent } from "./coding/coding-agent.js";
+export { buildRepositorySnapshot } from "./coding/repo-snapshot.js";
 export { FailureAwareCodingAgent, createFailureAwareCodingAgent as createCodingAgent } from "./coding/failure-aware-coding-agent.js";
 export type { CodingAgentOptions, CodingRunOptions, CodingRunResult } from "./coding/coding-agent.js";
 export { CodingRunState } from "./coding/coding-run-state.js";

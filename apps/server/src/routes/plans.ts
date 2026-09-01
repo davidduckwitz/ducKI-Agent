@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Agent, AgentRunResult, Plan, PlanStep } from "@ducki/agent";
-import { formatPlanAsMarkdown, Planner } from "@ducki/agent";
+import { buildRepositorySnapshot, formatPlanAsMarkdown, Planner } from "@ducki/agent";
 import { createApiResponse, createApiError } from "@ducki/shared";
 import { parseMarkdownToPlan } from "@ducki/planer";
 import { CODING_WORKSPACE_ROOT } from "@ducki/tools";
@@ -109,19 +109,47 @@ plansRouter.post("/refine", async (req, res, next) => {
       return;
     }
     const planner = new Planner(provider, getRootLogger().child("PlanRefine"));
-    // The plan being refined may already carry the repository snapshot it was originally
-    // created with (see /:id/execute's repositorySnapshot persistence) - reuse it so a
-    // refinement stays grounded in the same real files/facts instead of the model re-guessing
-    // from the plan text alone. Absent for a plan that never had one (e.g. a chat-created
-    // general plan), which keeps refinePlan's behavior unchanged for that case.
-    const rawSnapshot = (body["plan"] as Record<string, unknown>)?.["repositorySnapshot"];
-    const repositoryContext = rawSnapshot && typeof rawSnapshot === "object" ? rawSnapshot as Record<string, unknown> : undefined;
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
+
+    // Re-scan the plan's coding sandbox NOW, right before refining, instead of trusting
+    // whatever repositorySnapshot the plan happened to carry from when it was first created -
+    // files can have changed since (e.g. a prior partial/failed execution attempt already wrote
+    // some of them), so a stale snapshot would have the refinement reason about a structure that
+    // no longer matches reality. Falls back to the plan's own stored snapshot (old behavior) if
+    // the sandbox can't be resolved (e.g. a plain chat-created "general" plan with no project).
+    let repositoryContext: Record<string, unknown> | undefined;
+    try {
+      const planBody = body["plan"] as Record<string, unknown>;
+      let sandboxRoot: string | undefined;
+      const conversationId = Number(planBody?.["conversationId"]);
+      if (db && Number.isFinite(conversationId)) {
+        const conversation = await db.getConversation(conversationId) as { projectId?: number | null } | null;
+        if (conversation?.projectId) {
+          const project = await db.getProject(conversation.projectId) as ProjectData | null;
+          if (project) sandboxRoot = resolveExistingCodingProject(project.name, project.folder);
+        }
+      }
+      if (!sandboxRoot && db) {
+        const projectId = Number(planBody?.["projectId"]);
+        if (Number.isFinite(projectId)) {
+          const project = await db.getProject(projectId) as ProjectData | null;
+          if (project) sandboxRoot = resolveExistingCodingProject(project.name, project.folder);
+        }
+      }
+      if (sandboxRoot) repositoryContext = buildRepositorySnapshot(sandboxRoot);
+    } catch {
+      // Grounding is a nice-to-have, not a requirement - fall through to the stored snapshot.
+    }
+    if (!repositoryContext) {
+      const rawSnapshot = (body["plan"] as Record<string, unknown>)?.["repositorySnapshot"];
+      repositoryContext = rawSnapshot && typeof rawSnapshot === "object" ? rawSnapshot as Record<string, unknown> : undefined;
+    }
+
     const refined = await planner.refinePlan(plan, feedback, {
       ...(repositoryContext ? { repositoryContext } : {}),
       ...(plan.planType === "coding" ? { requiredPlanType: "coding" as const } : {}),
     });
     const markdown = formatPlanAsMarkdown(refined);
-    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService | undefined;
     const sourceId = Number((body["plan"] as Record<string, unknown>)?.["id"]);
     const sourceVersion = Number((body["plan"] as Record<string, unknown>)?.["version"] ?? 1);
     const saved = db ? await db.createPlan({
@@ -136,7 +164,7 @@ plansRouter.post("/refine", async (req, res, next) => {
       status: "draft",
       version: Number.isFinite(sourceVersion) ? sourceVersion + 1 : 2,
       parentPlanId: Number.isFinite(sourceId) ? sourceId : null,
-      repositorySnapshot: typeof (body["plan"] as Record<string, unknown>)?.["repositorySnapshot"] === "object" ? JSON.stringify((body["plan"] as Record<string, unknown>)["repositorySnapshot"]) : null,
+      repositorySnapshot: repositoryContext ? JSON.stringify(repositoryContext) : null,
     }) : null;
     res.json(createApiResponse({ plan: saved ? { ...refined, ...presentPlan(saved) } : refined, markdown }));
   } catch (error) {
@@ -180,6 +208,26 @@ plansRouter.post("/import/markdown", async (req, res, next) => {
     }
 
     res.json(createApiResponse(plan));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Completed/failed/skipped session-checklist items for a conversation, used by the "Erledigt"
+ * (done) tab. Independent of the paginated message list, so it doesn't lose history once old
+ * messages age out of that window. MUST be BEFORE /:id routes to avoid being matched as :id.
+ */
+plansRouter.get("/checklist/:conversationId", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as import("@ducki/database").DatabaseService;
+    const conversationId = Number(req.params.conversationId);
+    if (!Number.isFinite(conversationId)) {
+      res.status(400).json(createApiError("conversationId must be a number"));
+      return;
+    }
+    const items = await db.getChecklist(conversationId);
+    res.json(createApiResponse(items));
   } catch (error) {
     next(error);
   }

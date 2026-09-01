@@ -79,7 +79,7 @@ function nodeAt(nodes: SimNode[], x: number, y: number, activationById?: Map<str
  * Selecting a node opens a panel that can add/remove connections directly against
  * the llm_wiki_links table (see apps/server/src/routes/wiki.ts /graph, /links).
  */
-export function WikiGraph() {
+export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?: string }) {
   const qc = useQueryClient();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -92,7 +92,7 @@ export function WikiGraph() {
   const hoveredRef = useRef<string | null>(null);
 
   const [width, setWidth] = useState(800);
-  const height = 520;
+  const [height, setHeight] = useState(520);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addTarget, setAddTarget] = useState("");
   const [activationQuery, setActivationQuery] = useState("");
@@ -133,7 +133,9 @@ export function WikiGraph() {
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
-      if (entry) setWidth(Math.max(320, entry.contentRect.width));
+      if (!entry) return;
+      setWidth(Math.max(320, entry.contentRect.width));
+      setHeight(Math.max(360, entry.contentRect.height));
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -476,8 +478,8 @@ export function WikiGraph() {
           über <code>wiki action=expand</code> lesen würde.
         </p>
       )}
-      <div className="flex gap-3">
-      <div ref={containerRef} className="relative flex-1 min-w-0 border border-gray-800 rounded-lg overflow-hidden bg-gray-950">
+      <div className={`flex gap-3 ${className}`}>
+      <div ref={containerRef} className="relative flex-1 min-w-0 h-full border border-gray-800 rounded-lg overflow-hidden bg-gray-950">
         <canvas
           ref={canvasRef}
           style={{ width: `${width}px`, height: `${height}px`, cursor: draggingRef.current ? "grabbing" : "grab" }}
@@ -516,7 +518,7 @@ export function WikiGraph() {
       </div>
 
       {selectedNode && (
-        <div className="w-72 shrink-0 border border-gray-800 rounded-lg p-3 space-y-3 bg-gray-900">
+        <div className="w-72 shrink-0 border border-gray-800 rounded-lg p-3 space-y-3 bg-gray-900 overflow-y-auto">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-semibold text-white">{selectedNode.title}</p>

@@ -30,6 +30,7 @@ import {
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { WikiGraph } from "./WikiGraph";
+import { WikiFileExplorer } from "./WikiFileExplorer";
 
 interface MemoryEntry {
   id: number;
@@ -92,6 +93,7 @@ export function MemoryBrowser() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [activeTab, setActiveTab] = useState<ExtendedActiveTab>("memory");
+  const [wikiSubTab, setWikiSubTab] = useState<"dashboard" | "files" | "graph">("dashboard");
   const [wikiEnabledEdit, setWikiEnabledEdit] = useState("false");
   const [wikiAutoMemoryEdit, setWikiAutoMemoryEdit] = useState("true");
   const [wikiAutoApproveEdit, setWikiAutoApproveEdit] = useState("false");
@@ -679,6 +681,34 @@ export function MemoryBrowser() {
 
       {activeTab === "wiki" && (
         <>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={`btn-secondary flex items-center gap-2 ${wikiSubTab === "dashboard" ? "ring-2 ring-blue-500" : ""}`}
+              onClick={() => setWikiSubTab("dashboard")}
+            >
+              <LayoutGrid className="w-4 h-4" />
+              Dashboard
+            </button>
+            <button
+              className={`btn-secondary flex items-center gap-2 ${wikiSubTab === "files" ? "ring-2 ring-blue-500" : ""}`}
+              onClick={() => setWikiSubTab("files")}
+            >
+              <Database className="w-4 h-4" />
+              Filemanager
+            </button>
+            <button
+              className={`btn-secondary flex items-center gap-2 ${wikiSubTab === "graph" ? "ring-2 ring-blue-500" : ""}`}
+              onClick={() => setWikiSubTab("graph")}
+            >
+              <BarChart3 className="w-4 h-4" />
+              Graph Editor
+            </button>
+          </div>
+        </>
+      )}
+
+      {activeTab === "wiki" && wikiSubTab === "dashboard" && (
+        <>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="card">
               <p className="text-xs text-gray-400">Wiki Enabled</p>
@@ -778,15 +808,7 @@ export function MemoryBrowser() {
           </div>
 
           <div className="card space-y-2">
-            <h2 className="text-lg font-semibold">Graph</h2>
-            <p className="text-xs text-gray-500">
-              Knoten = Wiki-Notizen, Kanten = [[Wikilinks]]. Gestrichelt = Ziel nicht gefunden. Klick auf einen Knoten oeffnet die Verbindungen.
-            </p>
-            <WikiGraph />
-          </div>
-
-          <div className="card space-y-2">
-            <h2 className="text-lg font-semibold">Dateien</h2>
+            <h2 className="text-lg font-semibold">Dateien (Memory-Kandidaten)</h2>
             <div className="flex flex-wrap gap-2">
               <input
                 className="input min-w-[240px]"
@@ -850,6 +872,29 @@ export function MemoryBrowser() {
             </div>
           </div>
         </>
+      )}
+
+      {activeTab === "wiki" && wikiSubTab === "files" && (
+        <div className="card space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">Filemanager</h2>
+            <p className="text-xs text-gray-500">
+              Durchsucht das Shared-Workspace-Verzeichnis des LLM-Wiki ({wikiStatusQuery.data?.config.sourcePath || "llm-wiki"}). Änderungen
+              werden erst beim nächsten Reindex als Memory übernommen.
+            </p>
+          </div>
+          <WikiFileExplorer rootPath={(wikiStatusQuery.data?.config.sourcePath || "llm-wiki").replace(/\/+$/, "")} />
+        </div>
+      )}
+
+      {activeTab === "wiki" && wikiSubTab === "graph" && (
+        <div className="card space-y-2">
+          <h2 className="text-lg font-semibold">Graph Editor</h2>
+          <p className="text-xs text-gray-500">
+            Knoten = Wiki-Notizen, Kanten = [[Wikilinks]]. Gestrichelt = Ziel nicht gefunden. Klick auf einen Knoten oeffnet die Verbindungen.
+          </p>
+          <WikiGraph className="h-[75vh] min-h-[520px]" />
+        </div>
       )}
 
       {activeTab === "profile" && (

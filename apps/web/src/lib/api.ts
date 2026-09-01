@@ -13,6 +13,25 @@ export type ClarifyingQuestion = AgentQuestion;
  *  frontend's own Plan.steps type needs - a superset is fine, Plan only reads what it declares. */
 export type RefinedPlan = Plan;
 
+/** Mirrors packages/database/src/schema.ts's sessionChecklist table - one row per plan step
+ *  per run, independent of the (paginated) chat message list. */
+export interface SessionChecklistItem {
+  id: number;
+  conversationId: number;
+  runId: string | null;
+  stepIndex: number;
+  title: string;
+  description: string | null;
+  acceptanceCriteria: string | null;
+  constraintKind: string | null;
+  status: "pending" | "in_progress" | "done" | "failed" | "unverified" | "skipped";
+  confidence: string | null;
+  verifyState: string | null;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   // No localhost fallback: it used to retry every failed request against
   // http://localhost:3001, which silently queried the wrong machine in remote mode and
@@ -392,6 +411,8 @@ export const api = {
       return request<unknown[]>(`/plans${query ? `?${query}` : ""}`);
     },
     get: (id: number) => request<unknown>(`/plans/${id}`),
+    checklist: (conversationId: number) =>
+      request<SessionChecklistItem[]>(`/plans/checklist/${conversationId}`),
     create: (data: {
       conversationId?: number;
       projectId?: number;
@@ -780,6 +801,11 @@ export const api = {
       }),
     deleteFile: (path: string) =>
       request<{ deleted: boolean; path: string }>(`/shared/file?path=${encodeURIComponent(path)}`, { method: "DELETE" }),
+    createDir: (path: string) =>
+      request<{ created: boolean; path: string }>("/shared/mkdir", {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      }),
   },
 
   logs: {

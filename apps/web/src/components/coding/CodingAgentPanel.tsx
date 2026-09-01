@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ChevronDown, Clock, FileCode2, GitCompare, Gauge, ListChecks, MessageSquare, PanelRightClose, Send, Sparkles, Square, Trash2, Zap } from "lucide-react";
+import { Activity, CheckCircle2, ChevronDown, Clock, FileCode2, GitCompare, Gauge, ListChecks, MessageSquare, PanelRightClose, Send, Sparkles, Square, Trash2, Zap } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { useUiStore, type CodingAgentTab } from "../../lib/uiStore";
 import { useAppStore } from "../../lib/store";
@@ -16,6 +16,7 @@ import type { Plan } from "../chat/PlanExecutionPanel";
 import { extractChangedFiles, stripToolMarkers } from "../../lib/extractChangedFiles";
 import { PanelEmpty } from "../ui/panel";
 import { CodingPlanPanel } from "./CodingPlanPanel";
+import { CodingDonePanel } from "./CodingDonePanel";
 import { CodingChangesPanel } from "./CodingChangesPanel";
 import { CodingTodoStrip, type CodingTodoItem } from "./CodingTodoStrip";
 import { CodingAttemptTimeline } from "./CodingAttemptTimeline";
@@ -364,6 +365,7 @@ export function CodingAgentPanel({
     { key: "plan", label: t("codingPage.tabPlan"), icon: ListChecks },
     { key: "changes", label: "Änderungen", icon: GitCompare },
     { key: "activity", label: t("codingPage.tabActivity"), icon: Activity, count: events.length },
+    { key: "done", label: t("codingPage.tabDone"), icon: CheckCircle2 },
   ];
 
   return (
@@ -543,6 +545,10 @@ export function CodingAgentPanel({
           )}
           <div ref={activityBottomRef} />
         </div>
+      )}
+
+      {codingAgentTab === "done" && (
+        <CodingDonePanel conversationId={conversationId} isLoading={isLoading} />
       )}
 
       {/* Composer stays mounted on every tab - the plan tab needs it for "Verfeinern". */}

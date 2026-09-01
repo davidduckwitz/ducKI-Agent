@@ -13,6 +13,13 @@ import { PlanRefinementDialog } from "./PlanRefinementDialog";
 
 const COMPLEXITY_LABEL: Record<number, string> = { 1: "niedrig", 3: "mittel", 5: "hoch" };
 
+/** Newer (higher id) of the two wins; falls back to whichever one is non-null. */
+function pickNewerPlan(a: Plan | null, b: Plan | null): Plan | null {
+  if (!a) return b;
+  if (!b) return a;
+  return (b.id ?? -1) > (a.id ?? -1) ? b : a;
+}
+
 /**
  * Plan view for the coding agent panel.
  *
@@ -74,15 +81,19 @@ export function CodingPlanPanel({
   // see the next comment.
   const latestPersistedPlan = planHistory[0] ?? null;
 
-  // A refined plan (just returned by POST /plans/refine) takes priority; otherwise prefer a
-  // plan derived live from this conversation's messages. That message scan only sees whatever
-  // page of (paginated, 40-per-page) history is currently loaded though - a plan announced early
-  // in a long run falls out of that window as later messages accumulate, which used to blank the
-  // whole tab mid-run even though the agent was still actively working from that exact plan.
-  // latestPersistedPlan doesn't have that problem (it's a direct DB lookup by conversationId), so
-  // it's the fallback once the live-derived one disappears - overridePlan (handed over from a
-  // different conversation, e.g. chat->coding handoff) is the last resort.
-  const plan = refinedPlan ?? derivedPlan ?? latestPersistedPlan ?? overridePlan ?? null;
+  // A refined plan (just returned by POST /plans/refine) always takes priority - it's the most
+  // recently reviewed version and hasn't necessarily round-tripped through the DB yet.
+  //
+  // Between derivedPlan and latestPersistedPlan, prefer whichever plan is actually newer (higher
+  // id), not just whichever happens to be non-null. syncPlanFromTodos writes every checklist
+  // change back to the plans row, so latestPersistedPlan is reliably at least as fresh as the
+  // message window - but derivedPlan used to win unconditionally, which meant a STALE plan
+  // announcement still sitting in the (paginated, 40-per-page) loaded window could override a
+  // newer plan that already exists in the DB, making the tab look like it "forgot" the current
+  // plan/progress. Comparing by id fixes that case while still letting a brand-new plan that
+  // hasn't reached the DB yet (derivedPlan.id highest) win immediately - overridePlan (handed
+  // over from a different conversation, e.g. chat->coding handoff) is the last resort.
+  const plan = refinedPlan ?? pickNewerPlan(derivedPlan, latestPersistedPlan) ?? overridePlan ?? null;
 
   useEffect(() => {
     if (!conversationId) return;
@@ -438,7 +449,14 @@ export function CodingPlanPanel({
           type="button"
           className="btn-primary flex-1 py-1.5 text-xs"
           onClick={() => void execute()}
-          disabled={executing || isLoading}
+          // POST /plans/:id/execute answers immediately and runs the agent in a background
+          // IIFE server-side (see apps/server/src/routes/plans.ts), so `executing` here is only
+          // true for the brief HTTP round-trip - not for the run's actual duration. Without also
+          // checking latestRun's live (socket-pushed) status, the button re-enabled itself almost
+          // immediately while the plan kept executing, letting a second click start a duplicate
+          // run. latestRun lives in `messages` (parent-owned), so unlike `executing` it also
+          // survives this panel unmounting on a tab switch mid-run.
+          disabled={executing || isLoading || latestRun?.["status"] === "queued" || latestRun?.["status"] === "running"}
         >
           <Play className="mr-1 inline h-3.5 w-3.5" />
           {doneCount > 0 ? "Offene Schritte ausführen" : t("codingPage.executePlan")}

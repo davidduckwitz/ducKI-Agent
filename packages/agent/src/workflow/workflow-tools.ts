@@ -659,7 +659,11 @@ export function createWorkflowTools(db: DatabaseService, connectorRegistry?: Con
 
   const taskTool: ToolExecutor = {
     name: "task",
-    description: "Create, list, inspect, update, and complete tasks",
+    description:
+      "Create, list, inspect, update, and complete tasks. Only for tasks explicitly created " +
+      "with action 'create' (or 'split'). NOT for the numbered step checklist shown in the " +
+      "prompt (\"## Step checklist\") — that advances automatically as steps are verified; " +
+      "calling task complete/update on a step's number will fail since it isn't a task id.",
     definition: {
       name: "task",
       description: "Task lifecycle operations",

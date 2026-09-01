@@ -22,6 +22,30 @@ const TEXT_EXTENSIONS = new Set([
   ".txt", ".md", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".yml", ".yaml", ".xml", ".csv", ".html", ".css",
 ]);
 
+/** Extensions that are always binary, even though they'd sniff as text (e.g. a
+ *  well-formed SVG). Everything else - including no/unknown extension like ".bak" -
+ *  falls through to content sniffing below, so ad-hoc text files still preview. */
+const ALWAYS_BINARY_EXTENSIONS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg",
+  ".mp4", ".webm", ".mov", ".avi", ".mp3", ".wav", ".ogg",
+  ".pdf", ".zip", ".tar", ".gz", ".7z", ".rar",
+  ".woff", ".woff2", ".ttf", ".otf", ".eot",
+  ".exe", ".dll", ".bin", ".db", ".sqlite",
+]);
+
+/** Sniffs a buffer for text vs. binary the way `file`/git do: a NUL byte anywhere
+ *  in the sample is a reliable binary signal, and near-real text almost never
+ *  contains other control bytes below 0x09. */
+function looksLikeText(buffer: Buffer): boolean {
+  const sample = buffer.subarray(0, 8000);
+  let suspicious = 0;
+  for (const byte of sample) {
+    if (byte === 0) return false;
+    if (byte < 0x09 || (byte > 0x0d && byte < 0x20)) suspicious++;
+  }
+  return sample.length === 0 || suspicious / sample.length < 0.02;
+}
+
 /** /read liefert den kompletten Inhalt im JSON-Body (inkl. Base64 für Binärdateien) - eine
  *  hunderte-MB-Datei würde hier den Speicher sprengen. Für große Dateien gibt es /download. */
 const MAX_INLINE_READ_BYTES = 10 * 1024 * 1024;
@@ -105,7 +129,7 @@ sharedRouter.get("/read", (req, res) => {
       return;
     }
     const buffer = readFileSync(absolutePath);
-    const isText = TEXT_EXTENSIONS.has(ext);
+    const isText = !ALWAYS_BINARY_EXTENSIONS.has(ext) && (TEXT_EXTENSIONS.has(ext) || looksLikeText(buffer));
 
     res.json(
       createApiResponse({
@@ -183,6 +207,28 @@ sharedRouter.post("/write", (req, res) => {
 
     writeFileSync(absolutePath, String(content ?? ""), "utf8");
     res.json(createApiResponse({ written: true, path: sanitizeRelativePath(path) }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+sharedRouter.post("/mkdir", (req, res) => {
+  try {
+    ensureSharedRoot();
+    const { path } = req.body as { path?: string };
+    if (!path) {
+      res.status(400).json(createApiError("path is required"));
+      return;
+    }
+
+    const absolutePath = absoluteFromRelative(path);
+    if (existsSync(absolutePath)) {
+      res.status(400).json(createApiError("Path already exists"));
+      return;
+    }
+
+    mkdirSync(absolutePath, { recursive: true });
+    res.json(createApiResponse({ created: true, path: sanitizeRelativePath(path) }));
   } catch (error) {
     res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
   }
