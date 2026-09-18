@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, CheckCircle2, Circle, HelpCircle, ListChecks, Loader2, Play, Sparkles } from "lucide-react";
-import { api } from "../../lib/api";
+import { api, type SessionChecklistItem } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { parseMarkdownToPlan } from "../../lib/parseMarkdownToPlan";
-import { checklistFromPlanSteps, findLatestChecklist, firstOpenStepIndex, resolveStepNote, resolveStepStatus } from "../../lib/planChecklist";
+import { checklistFromPlanSteps, checklistFromSessionRows, findLatestChecklist, firstOpenStepIndex, resolveStepNote, resolveStepStatus } from "../../lib/planChecklist";
 import { findLatestPhaseProgress, CODING_PHASES, CODING_PHASE_LABEL, type CodingPhase } from "../../lib/planPhase";
 import { useSettings, readFlag, readNumber } from "../../lib/useSettings";
 import type { Plan } from "../chat/PlanExecutionPanel";
@@ -48,6 +48,7 @@ export function CodingPlanPanel({
   const [showRefinement, setShowRefinement] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [planHistory, setPlanHistory] = useState<Plan[]>([]);
+  const [sessionChecklistRows, setSessionChecklistRows] = useState<SessionChecklistItem[]>([]);
   // A plan that came back from POST /plans/refine (see PlanRefinementDialog) - takes priority
   // over a plan derived from messages/handoff since it's the most recently reviewed version.
   const [refinedPlan, setRefinedPlan] = useState<Plan | null>(null);
@@ -122,6 +123,19 @@ export function CodingPlanPanel({
     // after that without a full remount.
   }, [conversationId, refinedPlan?.id, derivedPlan?.id, isLoading]);
 
+  // Backstop for a plan executed via the generic Agent instead of CodingAgent (see
+  // checklistFromSessionRows) - only ever used once the live checklist/decision events AND
+  // plans.steps both have nothing to show, so a single fetch on mount (no polling) is enough;
+  // this tier doesn't need to be second-accurate.
+  useEffect(() => {
+    if (!conversationId) return;
+    let active = true;
+    void api.plans.checklist(conversationId).then((rows) => {
+      if (active) setSessionChecklistRows(rows);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [conversationId]);
+
   useEffect(() => {
     if (derivedPlan?.id && refinedPlan?.parentPlanId !== derivedPlan.id && (derivedPlan.version ?? 0) > (refinedPlan?.version ?? 0)) {
       setRefinedPlan(null);
@@ -155,9 +169,18 @@ export function CodingPlanPanel({
   // rationale as latestPersistedPlan above, just for per-step progress instead of plan identity.
   // Without this a long-running plan would keep showing (plan identity is now stable) but its
   // progress would appear to reset to "nothing done yet" as soon as the live events aged out.
+  //
+  // checklistFromSessionRows sits between the two: it covers a plan executed via the generic
+  // Agent instead of CodingAgent, where plans.steps never gets updated at all (nothing calls
+  // syncPlanFromTodos for that run type) - see its own doc comment in lib/planChecklist. For a
+  // real CodingAgent run this is normally null (no session_checklist rows exist), so the chain
+  // falls through to checklistFromPlanSteps exactly as before - no behavior change there.
   const checklist = useMemo(
-    () => findLatestChecklist(messages, eventScope) ?? checklistFromPlanSteps(latestPersistedPlan?.steps ?? []),
-    [messages, eventScope?.runId, eventScope?.planId, latestPersistedPlan]
+    () =>
+      findLatestChecklist(messages, eventScope) ??
+      checklistFromSessionRows(sessionChecklistRows) ??
+      checklistFromPlanSteps(latestPersistedPlan?.steps ?? []),
+    [messages, eventScope?.runId, eventScope?.planId, sessionChecklistRows, latestPersistedPlan]
   );
 
   // The phase the agent declares it is in (see lib/planPhase). This is the same state the

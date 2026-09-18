@@ -23,7 +23,11 @@ function answerToText(question: ClarifyingQuestion, answer: QuestionAnswer): str
 
 export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefinementDialogProps) {
   const [questions, setQuestions] = useState<ClarifyingQuestion[]>([]);
-  const [loadingQuestions, setLoadingQuestions] = useState(true);
+  // Not fetched automatically on open: a user who already knows what to type into the free-text
+  // box would otherwise always pay for a Planner round-trip whose answer he never looks at. The
+  // "Rückfragen vorschlagen" button below makes that call only when actually wanted.
+  const [questionsRequested, setQuestionsRequested] = useState(false);
+  const [loadingQuestions, setLoadingQuestions] = useState(false);
   const [answers, setAnswers] = useState<Record<string, QuestionAnswer>>({});
   const [improvement, setImprovement] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -31,6 +35,7 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
   const [candidate, setCandidate] = useState<Plan | null>(null);
 
   useEffect(() => {
+    if (!questionsRequested) return;
     let cancelled = false;
     setLoadingQuestions(true);
     api.plans
@@ -49,7 +54,8 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
     return () => {
       cancelled = true;
     };
-  }, [plan.goal, JSON.stringify(plan.steps), plan.version]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questionsRequested, plan.goal, JSON.stringify(plan.steps), plan.version]);
 
   const handleSubmit = async () => {
     const answeredParts = questions
@@ -118,7 +124,18 @@ export function PlanRefinementDialog({ plan, onRefined, onCancel }: PlanRefineme
           </div>
         )}
 
-        {!candidate && loadingQuestions && (
+        {!candidate && !questionsRequested && (
+          <button
+            type="button"
+            onClick={() => setQuestionsRequested(true)}
+            className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Rückfragen vorschlagen lassen
+          </button>
+        )}
+
+        {!candidate && questionsRequested && loadingQuestions && (
           <p className="text-xs text-gray-400">Analysiere den Plan für Rückfragen...</p>
         )}
 

@@ -496,6 +496,17 @@ export class CodingAgent {
    *  still momentarily locked by that lingering handle. */
   private pendingCheckpointDiffs = new Set<Promise<unknown>>();
   /**
+   * Set true by a mutating filesystem call, cleared once its effect has been picked up by a
+   * per-turn diffCheckpoint (see onModelResponse in run()). Without this, every single model
+   * turn - including pure-read EXPLORE/VERIFY turns where nothing on disk changed - spawned
+   * three `git` subprocesses (add -A, diff --numstat, diff --name-status) just to learn the
+   * diff was empty, the same conclusion the previous turn's diff already reached. On Windows
+   * especially, that per-turn git.exe spawn cost is paid on every iteration of a run that can
+   * have dozens of them. Only the per-turn LIVE reconciliation is skipped this way; the
+   * authoritative end-of-attempt diff (see the `attemptDiff` call further down) always runs.
+   */
+  private pendingMutationSinceLastDiff = false;
+  /**
    * True only while Plan-Mode's own investigation sub-run (see run()'s planOnly branch) is in
    * flight - read by the coding-plan-only-explore-lock hook below. Unlike the normal phase lock,
    * this has no bypass-after-N-refusals escape hatch: "Plan Mode changed nothing" is a promise
@@ -1033,6 +1044,11 @@ export class CodingAgent {
           const result = context.result as { success: boolean } | undefined;
           if (!result?.success) return { proceed: true };
           const action = String((context.input as Record<string, unknown> | undefined)?.["action"] ?? "");
+          // Any successful mutation (including delete/move/copy, which never invalidate a
+          // browser session but still change the checkpoint diff) means the next per-turn
+          // diffCheckpoint in onModelResponse is actually worth spawning - see
+          // pendingMutationSinceLastDiff's doc comment.
+          if (MUTATING_FILESYSTEM_ACTIONS.has(action)) this.pendingMutationSinceLastDiff = true;
           if (action !== "write" && action !== "edit" && action !== "append") return { proceed: true };
           this.browserPreflightRevision++;
           this.browserPreflightBlockedRevision = undefined;
@@ -1556,6 +1572,7 @@ export class CodingAgent {
     this.livePhaseEmitted = new Map<string, { rank: number; hasResult: boolean; hasError: boolean }>();
     this.pendingDiagnosticErrors = new Map<string, { count: number; errors: string[] }>();
     this.diagnosticGuardRefusals = 0;
+    this.pendingMutationSinceLastDiff = false;
     this.browserPreflightRevision = 0;
     this.browserPreflightBlockedRevision = undefined;
     this.browserPreflightPassedRevision = undefined;
@@ -1574,52 +1591,46 @@ export class CodingAgent {
     clearIncompletePartSequences(this.sandboxFilter());
 
     const baseMaxAttempts = Math.max(1, opts.maxAttempts ?? this.defaultMaxAttempts);
+    // Every setting run() needs is read in ONE query instead of ~15 sequential getSetting()
+    // round-trips - each of those used to await its own DB call before the next could even
+    // start, adding real wall-clock latency before the first LLM call of every run. getAllSettings
+    // already exists as a single SELECT; a local map turns every lookup below into a synchronous
+    // read against data that's already in memory.
+    const settingsMap = new Map((await this.db.getAllSettings()).map((row) => [row.key, row.value]));
+    const settingEnabled = (key: string, fallback: boolean): boolean => {
+      const value = settingsMap.get(key);
+      if (value === undefined || value === null || value.trim() === "") return fallback;
+      return value.trim().toLowerCase() === "true";
+    };
+    const settingInt = (key: string, fallback: number, min: number, max: number): number => {
+      const value = Number.parseInt(settingsMap.get(key) ?? "", 10);
+      return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+    };
     // How many consecutive attempts may fail verification with the EXACT SAME error before the
     // run gives up as non-converging (see the identicalFailureStreak check below). Settings key:
     // AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES. Default 3 preserves the previous hardcoded behavior.
-    const rawIdenticalVerifyLimit = parseInt((await this.db.getSetting("AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES")) ?? "", 10);
-    const maxIdenticalVerifyFailures = Number.isFinite(rawIdenticalVerifyLimit)
-      ? Math.min(20, Math.max(1, rawIdenticalVerifyLimit))
-      : 3;
+    const maxIdenticalVerifyFailures = settingInt("AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES", 3, 1, 20);
     // Settings key: AGENT_CODING_ALLOW_GIT_COMMIT (Settings > Coding Agent in the UI). Default
     // off: CODING_DIRECTIVE's point 6 already tells the model not to stage/commit on its own -
     // this only overrides that when an operator explicitly wants the model managing its own git
     // history inside the sandbox (on top of the automatic checkpoint system, which always runs
     // regardless of this setting).
-    const allowGitCommit = ((await this.db.getSetting("AGENT_CODING_ALLOW_GIT_COMMIT")) ?? "false").trim().toLowerCase() === "true";
-    const settingEnabled = async (key: string, fallback: boolean): Promise<boolean> => {
-      const value = await this.db.getSetting(key);
-      if (value === undefined || value === null || value.trim() === "") return fallback;
-      return value.trim().toLowerCase() === "true";
-    };
-    const settingInt = async (key: string, fallback: number, min: number, max: number): Promise<number> => {
-      const value = Number.parseInt((await this.db.getSetting(key)) ?? "", 10);
-      return Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
-    };
+    const allowGitCommit = settingEnabled("AGENT_CODING_ALLOW_GIT_COMMIT", false);
     // Optional LLM research before planning is deliberately configurable: repository snapshots
     // are deterministic and free, while an extra planning turn is valuable only for projects
     // where structure alone cannot resolve the target.
-    const prePlanResearchEnabled = await settingEnabled("CODING_AGENT_PREPLAN_RESEARCH", false);
-    this.planOnlyExploreMaxToolCalls = await settingInt(
+    const prePlanResearchEnabled = settingEnabled("CODING_AGENT_PREPLAN_RESEARCH", false);
+    this.planOnlyExploreMaxToolCalls = settingInt(
       "CODING_AGENT_PREPLAN_MAX_TOOL_CALLS", DEFAULT_PLAN_ONLY_EXPLORE_MAX_TOOL_CALLS, 1, 100
     );
-    const staleReadRecoveryEnabled = await settingEnabled("CODING_AGENT_STALE_READ_RECOVERY", true);
-    const staleReadRecoveryRequireSameContent = await settingEnabled("CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT", true);
-    const staleReadRecoveryMax = await settingInt("CODING_AGENT_STALE_READ_MAX_RECOVERIES", 1, 0, 5);
-    const enforceToolAllowlist = await settingEnabled("CODING_AGENT_ENFORCE_TOOL_ALLOWLIST", true);
-    const browserVerifyRepairAttempts = await settingInt("CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS", 1, 0, 3);
-    const browserRuntimeRepairProtocol = await settingEnabled(
-      "CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL",
-      true,
-    );
-    this.browserIgnoreBenignAssetErrors = await settingEnabled(
-      "CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS",
-      true,
-    );
-    const browserRequireAssetEvidence = await settingEnabled(
-      "CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE",
-      true,
-    );
+    const staleReadRecoveryEnabled = settingEnabled("CODING_AGENT_STALE_READ_RECOVERY", true);
+    const staleReadRecoveryRequireSameContent = settingEnabled("CODING_AGENT_STALE_READ_REQUIRE_SAME_CONTENT", true);
+    const staleReadRecoveryMax = settingInt("CODING_AGENT_STALE_READ_MAX_RECOVERIES", 1, 0, 5);
+    const enforceToolAllowlist = settingEnabled("CODING_AGENT_ENFORCE_TOOL_ALLOWLIST", true);
+    const browserVerifyRepairAttempts = settingInt("CODING_AGENT_BROWSER_VERIFY_REPAIR_ATTEMPTS", 1, 0, 3);
+    const browserRuntimeRepairProtocol = settingEnabled("CODING_AGENT_BROWSER_RUNTIME_REPAIR_PROTOCOL", true);
+    this.browserIgnoreBenignAssetErrors = settingEnabled("CODING_AGENT_BROWSER_IGNORE_BENIGN_ASSET_ERRORS", true);
+    const browserRequireAssetEvidence = settingEnabled("CODING_AGENT_BROWSER_REQUIRE_ASSET_EVIDENCE", true);
     // A browser exception is actionable runtime evidence, not merely a failed command. Reserve
     // this small, configurable budget only after browser verification becomes active; regular
     // shell-verified work still respects the caller's exact maxAttempts setting.
@@ -1773,12 +1784,8 @@ export class CodingAgent {
     };
 
     const detectedSkill = this.autoSelectCodingSkill(goal);
-    const verificationEnabled = ((await this.db.getSetting("CODING_AGENT_ENABLE_VERIFY")) ?? "true")
-      .trim()
-      .toLowerCase() === "true";
-    this.browserPreflightEnabled = verificationEnabled && ((await this.db.getSetting("CODING_AGENT_BROWSER_PREFLIGHT")) ?? "true")
-      .trim()
-      .toLowerCase() === "true";
+    const verificationEnabled = settingEnabled("CODING_AGENT_ENABLE_VERIFY", true);
+    this.browserPreflightEnabled = verificationEnabled && settingEnabled("CODING_AGENT_BROWSER_PREFLIGHT", true);
     let verifyCommand = opts.verifyCommand;
     // Set together with verifyCommand the first time the browser-check fallback fires (see the
     // attempt loop below) and never reset per-attempt - verifyCommand itself persists across
@@ -2105,7 +2112,11 @@ export class CodingAgent {
             // live call only ever needs its unambiguous "exactly one in_progress item" path - see
             // that method's doc comment; the full per-step-attributed disambiguation still runs
             // once more at end-of-attempt, where stepIdsWithConfirmedWrite is actually populated).
-            if (this.sandboxRoot && checkpoint) {
+            if (this.sandboxRoot && checkpoint && this.pendingMutationSinceLastDiff) {
+              // Nothing mutated since the last diff (a pure EXPLORE/read/status turn) would only
+              // re-confirm the same empty diff at the cost of 3 git.exe spawns - skip it (see
+              // pendingMutationSinceLastDiff's doc comment).
+              this.pendingMutationSinceLastDiff = false;
               // Tracked in pendingCheckpointDiffs (not just void-ed) so finalize() can await any
               // still-in-flight git subprocess before run() resolves - see that field's doc comment.
               const pending: Promise<unknown> = diffCheckpoint(this.sandboxRoot, checkpoint.sha)
@@ -3287,7 +3298,19 @@ export class CodingAgent {
    * fact). Repeating the instruction verbatim on every attempt is cheaper than relying on stale
    * context, and follows the same recency principle as checklistHint/runJournalHint in agent.ts.
    */
-  private checklistMaintenanceBlock(): string[] {
+  private checklistMaintenanceBlock(compact = false): string[] {
+    // Follow-up attempts already saw the full rule once in this same conversation (attempt 1's
+    // buildInitialPrompt call) - the recency concern from the doc comment above is about the
+    // MODEL FORGETTING TO UPDATE THE CHECKLIST AT ALL, not forgetting the exact wording, so a
+    // short reminder carries the same discipline at a fraction of the tokens on every attempt
+    // after the first.
+    if (compact) {
+      return [
+        "Keep updating the todo checklist AS YOU GO (in_progress before writing, done the moment that",
+        "step's own change is written and correct) - do not batch it at the end, and do not credit a",
+        "later step's work to whichever step is still marked in_progress.",
+      ];
+    }
     return [
       "Track your progress with the todo tool: it already contains the plan below as pending steps.",
       "That checklist is what the user watches live while you work, so update it AS YOU GO, not in a",
@@ -3306,8 +3329,12 @@ export class CodingAgent {
     ];
   }
 
-  /** Shared with buildFollowUpPrompt (see there for why this must not be initial-attempt-only). */
-  private pathHandlingBlock(): string[] {
+  /** Shared with buildFollowUpPrompt (see there for why this must not be initial-attempt-only).
+   *  `compact` shrinks the BROWSER PREVIEW section to a one-line pointer back at attempt 1's full
+   *  instructions - the path/status-file rules stay full-length since violating those silently
+   *  corrupts file locations, while the browser section is long, self-contained usage guidance the
+   *  model only needs once per run to have "seen" it. */
+  private pathHandlingBlock(compact = false): string[] {
     if (!this.sandboxRoot) return [];
     const lines = [
       `Project root: ${this.sandboxRoot}`,
@@ -3332,7 +3359,10 @@ export class CodingAgent {
       "  one out of habit.",
       "",
     ];
-    if (this.previewBaseUrl) {
+    if (this.previewBaseUrl && compact) {
+      const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot)}/serve/index.html`;
+      lines.push(`BROWSER PREVIEW / TESTING: unchanged from attempt 1 - preview URL: ${previewUrl} (session/launch/favicon rules stated there still apply).`, "");
+    } else if (this.previewBaseUrl) {
       const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot)}/serve/index.html`;
       lines.push(
         "BROWSER PREVIEW / TESTING:",
@@ -3510,7 +3540,10 @@ export class CodingAgent {
         ? "Reminder: git commits are explicitly enabled for this run (AGENT_CODING_ALLOW_GIT_COMMIT) - you may still stage/commit your own changes if useful."
         : "",
       "BEFORE YOU ACT, call the status tool. It tells you in one call what normally takes several reads: which steps are already done (from the checklist), what files you actually changed (from the checkpoint diff - not your memory), and whether any diagnostics are still failing. Your conversation context may have been trimmed and earlier results may no longer be visible, so do NOT rely on what you remember - ask the status tool for ground truth.",
-      this.pathHandlingBlock().join("\n"),
+      // Full browser instructions only when THIS follow-up is itself about a browser runtime
+      // failure - the model is actively debugging the preview right now, so the launch/session/
+      // favicon rules are directly relevant. Every other follow-up gets the compact pointer.
+      this.pathHandlingBlock(reason !== "browser_verification_failed").join("\n"),
       `Original goal: ${goal}`,
       (reason === "browser_verification_failed" ? [
         "BROWSER-ERROR REPAIR PROTOCOL (mandatory):",
@@ -3532,7 +3565,7 @@ export class CodingAgent {
         ]),
       ].join("\n") : ""),
       checklist
-        ? `Your checklist so far (keep updating it, do not start it over):\n${checklist}\n\n${this.checklistMaintenanceBlock().join("\n")}`
+        ? `Your checklist so far (keep updating it, do not start it over):\n${checklist}\n\n${this.checklistMaintenanceBlock(true).join("\n")}`
         : "",
       (reason === "verification_failed" || reason === "browser_verification_failed") ? "Previous attempt summary and verification output:" : "Continuation context:",
       previousSummaryWithVerification,

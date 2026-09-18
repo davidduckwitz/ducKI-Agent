@@ -295,6 +295,27 @@ export class OpenAIProvider implements LLMProvider {
     return /jinja|chat template|predict request returned 500/i.test(message);
   }
 
+  /**
+   * llama.cpp-family backends (llama-server, LM Studio, kobold.cpp, ...) validate a model's
+   * native tool-call arguments as JSON server-side via nlohmann::json and return a 500 whose
+   * message is that library's own parse-error text (e.g. "[json.exception.parse_error.101] ...
+   * invalid string: missing closing quote") when that JSON is malformed - in practice almost
+   * always because the argument is a very large string (a whole file's `content`) that either
+   * got cut off mid-string by the output token budget, or overwhelmed grammar-constrained
+   * decoding's escaping for a long, quote-and-backslash-heavy payload.
+   *
+   * This is a different failure than rejectsToolsParam above (native tool-calling itself works
+   * fine here for smaller payloads - only THIS call's huge argument broke it), but the fix is
+   * the same: fall back to the text `[TOOL:...]` protocol, which already has its own recovery
+   * for a response cut mid-payload (isLikelyTruncatedByLength, the parted-write self-heal in
+   * CodingAgent) instead of forcing the whole run to fail on one oversized write.
+   */
+  private isMalformedToolCallArgumentsError(error: unknown): boolean {
+    if (this.getStatusCode(error) !== 500) return false;
+    const message = error instanceof Error ? error.message : String(error);
+    return /parse tool call arguments|json\.exception\.parse_error/i.test(message);
+  }
+
   private getStatusCode(error: unknown): number | undefined {
     if (!error || typeof error !== "object") return undefined;
     const maybeError = error as { status?: unknown };
@@ -393,10 +414,20 @@ export class OpenAIProvider implements LLMProvider {
       // An intentional cancellation (Stop button, run timeout) must propagate immediately -
       // retrying or falling back to a differently-shaped request would just delay it.
       if (isAbortError(error)) throw error;
-      // Backend doesn't implement the `tools` param: disable native tools for this
+      // Backend doesn't implement the `tools` param (or choked on this call's own tool-call
+      // arguments - see isMalformedToolCallArgumentsError): disable native tools for this
       // instance and retry once WITHOUT them so the run continues on the text protocol.
       if (useNativeTools && !this.nativeToolsUnsupported && this.rejectsToolsParam(error)) {
         this.nativeToolsUnsupported = true;
+        completion = await this.withRateLimitRetry(() =>
+          this.client.chat.completions.create(buildRequest(false), { signal: merged.signal })
+        );
+      } else if (useNativeTools && !this.nativeToolsUnsupported && this.isMalformedToolCallArgumentsError(error)) {
+        this.nativeToolsUnsupported = true;
+        logger.warn("Backend failed to parse its own native tool-call arguments as JSON (likely a huge write payload) - falling back to the text [TOOL:...] protocol for this provider instance", {
+          provider: this.name,
+          error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+        });
         completion = await this.withRateLimitRetry(() =>
           this.client.chat.completions.create(buildRequest(false), { signal: merged.signal })
         );
@@ -486,6 +517,15 @@ export class OpenAIProvider implements LLMProvider {
         // Backend can stream but not with `tools`: disable native tools and reopen the
         // stream without them so the run falls back to the text protocol.
         this.nativeToolsUnsupported = true;
+        stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported, false));
+      } else if (useNativeTools && !this.nativeToolsUnsupported && this.isMalformedToolCallArgumentsError(error)) {
+        // Same fallback as above, for the streaming request path - see
+        // isMalformedToolCallArgumentsError's doc comment.
+        this.nativeToolsUnsupported = true;
+        logger.warn("Backend failed to parse its own native tool-call arguments as JSON (likely a huge write payload) - falling back to the text [TOOL:...] protocol for this provider instance", {
+          provider: this.name,
+          error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+        });
         stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported, false));
       } else {
         throw error;

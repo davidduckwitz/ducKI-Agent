@@ -324,12 +324,7 @@ export class Planner {
       ];
 
       const response = await this.provider.generate(messages, { temperature: 0.4, maxTokens: 800 });
-      const cleaned = response.content
-        .replace(/^```json\s*/, "")
-        .replace(/```\s*$/, "")
-        .replace(/^```\s*/, "")
-        .trim();
-      const parsed = JSON.parse(cleaned);
+      const parsed = this.parseJSONBlock(response.content, "[");
       if (!Array.isArray(parsed)) return [];
 
       return parsed
@@ -354,7 +349,11 @@ export class Planner {
           ...(typeof q["placeholder"] === "string" ? { placeholder: q["placeholder"] } : {}),
         }));
     } catch (error) {
-      this.logger.debug("Clarifying question generation failed, returning none", {
+      // Was logger.debug (invisible at the default "info" level) - elevated to warn because this
+      // silently degrades a visible UI feature (the "Plan verbessern" dialog's question list) to
+      // a plain textarea with zero indication anything went wrong, unlike every other Planner
+      // parse failure in this file which already logs at warn.
+      this.logger.warn("Clarifying question generation failed, returning none", {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];
@@ -401,20 +400,39 @@ export class Planner {
 
   private parsePlanJSON(content: string): Plan | null {
     try {
-      const cleaned = content
-        .replace(/^```json\s*/, "")
-        .replace(/```\s*$/, "")
-        .replace(/^```\s*/, "")
-        .trim();
-
-      const parsed = JSON.parse(cleaned) as Plan;
-      return parsed;
+      return this.parseJSONBlock(content, "{") as Plan;
     } catch (error) {
       this.logger.debug("JSON parse failed", {
         error: error instanceof Error ? error.message : String(error),
         contentPreview: content.substring(0, 200),
       });
       return null;
+    }
+  }
+
+  /**
+   * Strips markdown code fences, then parses. Some models (particularly smaller/local ones)
+   * don't reliably follow a "return ONLY JSON" instruction and wrap the JSON in a leading/
+   * trailing sentence despite it - a bare JSON.parse on the fence-stripped text then throws on
+   * otherwise-valid output, which is exactly what was silently emptying the "Plan verbessern"
+   * clarifying-questions list (suggestClarifyingQuestions swallows this and returns []).
+   * Falls back to slicing between the first opening bracket and its matching close before
+   * giving up, so stray prose around an otherwise well-formed JSON block no longer breaks parsing.
+   */
+  private parseJSONBlock(content: string, opener: "[" | "{"): unknown {
+    const cleaned = content
+      .replace(/^```json\s*/, "")
+      .replace(/```\s*$/, "")
+      .replace(/^```\s*/, "")
+      .trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      const closer = opener === "[" ? "]" : "}";
+      const start = cleaned.indexOf(opener);
+      const end = cleaned.lastIndexOf(closer);
+      if (start === -1 || end === -1 || end <= start) throw new Error("No JSON block found in model response");
+      return JSON.parse(cleaned.slice(start, end + 1));
     }
   }
 

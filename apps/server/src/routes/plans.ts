@@ -17,6 +17,26 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 }
 
 /**
+ * Short-lived cache for buildRepositorySnapshot(), keyed by sandbox root. /plans/refine
+ * deliberately re-scans the sandbox on every call (see its own comment) so a refinement never
+ * reasons about stale structure - but a user iterating on feedback ("Plan verbessern" a second
+ * time seconds later) doesn't need a second full filesystem walk + outline pass for a project
+ * that hasn't been touched since. A short TTL keeps that "always fresh" guarantee for anything
+ * that actually matters (a run finishing and changing files) while collapsing back-to-back
+ * refine clicks into one scan.
+ */
+const REPOSITORY_SNAPSHOT_CACHE_TTL_MS = 8_000;
+const repositorySnapshotCache = new Map<string, { snapshot: Record<string, unknown> | undefined; expiresAt: number }>();
+
+function getCachedRepositorySnapshot(sandboxRoot: string): Record<string, unknown> | undefined {
+  const cached = repositorySnapshotCache.get(sandboxRoot);
+  if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
+  const snapshot = buildRepositorySnapshot(sandboxRoot);
+  repositorySnapshotCache.set(sandboxRoot, { snapshot, expiresAt: Date.now() + REPOSITORY_SNAPSHOT_CACHE_TTL_MS });
+  return snapshot;
+}
+
+/**
  * plans.conversation_id/project_id are real foreign keys (see the CREATE TABLE in
  * packages/database/src/index.ts) - inserting/updating a plan with an id that LOOKS numeric but
  * no longer (or never did) point at an existing row throws a raw "FOREIGN KEY constraint failed"
@@ -136,7 +156,7 @@ plansRouter.post("/refine", async (req, res, next) => {
           if (project) sandboxRoot = resolveExistingCodingProject(project.name, project.folder);
         }
       }
-      if (sandboxRoot) repositoryContext = buildRepositorySnapshot(sandboxRoot);
+      if (sandboxRoot) repositoryContext = getCachedRepositorySnapshot(sandboxRoot);
     } catch {
       // Grounding is a nice-to-have, not a requirement - fall through to the stored snapshot.
     }
@@ -367,22 +387,24 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
 
     // Execution-mode settings: how this specific plan run behaves, distinct from the
     // agent-wide defaults (a plan the user just confirmed executing deserves its own,
-    // possibly stricter/longer, budget).
-    const getBoolSetting = async (key: string, fallback: boolean): Promise<boolean> => {
-      const raw = await db?.getSetting(key);
+    // possibly stricter/longer, budget). One bulk read instead of 5 sequential getSetting()
+    // round-trips before the run can even start.
+    const settingsMap = new Map((await db?.getAllSettings() ?? []).map((row) => [row.key, row.value]));
+    const getBoolSetting = (key: string, fallback: boolean): boolean => {
+      const raw = settingsMap.get(key);
       if (raw === undefined || raw === null || raw.trim().length === 0) return fallback;
       return raw.toLowerCase() !== "false";
     };
-    const getNumberSetting = async (key: string, fallback: number): Promise<number> => {
-      const raw = await db?.getSetting(key);
+    const getNumberSetting = (key: string, fallback: number): number => {
+      const raw = settingsMap.get(key);
       const parsed = raw !== undefined ? Number(raw) : NaN;
       return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
     };
-    const autoCreateProject = await getBoolSetting("EXECUTION_MODE_AUTO_CREATE_PROJECT", true);
-    const maxRetries = Math.max(1, await getNumberSetting("EXECUTION_MODE_MAX_RETRIES", 3));
-    const timeoutMinutes = await getNumberSetting("EXECUTION_MODE_TIMEOUT_MINUTES", 30);
-    const updatePlanFile = await getBoolSetting("EXECUTION_MODE_UPDATE_PLAN_FILE", true);
-    const markdownDir = ((await db?.getSetting("PLAN_MODE_MARKDOWN_PATH"))?.trim()) || "plans";
+    const autoCreateProject = getBoolSetting("EXECUTION_MODE_AUTO_CREATE_PROJECT", true);
+    const maxRetries = Math.max(1, getNumberSetting("EXECUTION_MODE_MAX_RETRIES", 3));
+    const timeoutMinutes = getNumberSetting("EXECUTION_MODE_TIMEOUT_MINUTES", 30);
+    const updatePlanFile = getBoolSetting("EXECUTION_MODE_UPDATE_PLAN_FILE", true);
+    const markdownDir = (settingsMap.get("PLAN_MODE_MARKDOWN_PATH")?.trim()) || "plans";
 
     const body = (req.body ?? {}) as ExecutePlanBody;
     const rawId = Number(req.params.id);
@@ -707,11 +729,19 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
             }
             return;
           } catch (projectError) {
-            console.warn("Could not run coding agent for plan execution, falling back to regular agent:", projectError);
+            // CodingAgent no longer silently degrades into the generic Agent on failure - that
+            // used to re-run the SAME goal through an incompatible system (different prompt
+            // scaffold, a different checklist subsystem writing to session_checklist instead of
+            // plans.steps, no sandbox-scoping guarantee) with no signal to the user that anything
+            // went wrong. Rethrow so the outer catch below reports an honest failed run instead.
+            console.warn("CodingAgent failed during plan execution:", projectError);
+            throw projectError;
           }
         }
 
-        // Fallback to regular agent
+        // Fallback to regular agent - only reached when no coding sandbox could be resolved at
+        // all (a genuine "general", non-coding plan). A CodingAgent failure for a resolved
+        // sandbox is handled above by rethrowing, not by falling through to here.
         const agent = createAgent ? await createAgent() : (req.app.locals["agent"] as Agent);
         if (!agent) {
           throw new Error("Agent not available");

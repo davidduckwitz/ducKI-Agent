@@ -1,4 +1,5 @@
 import type { RenderedChatMessage } from "../components/chat/chatTypes";
+import type { SessionChecklistItem } from "./api";
 
 /** Terminal states: the agent will not come back to such a step. */
 const CLOSED_STATUSES = new Set(["done", "failed", "skipped"]);
@@ -206,6 +207,39 @@ export function checklistFromPlanSteps(
   // PlanStep carries no note field, so this fallback source (used only once the live checklist/
   // todo_items events have aged out of the loaded message window) has nothing to populate here.
   return { statusByIndex, statusById, statusByTitle, noteByIndex: new Map(), noteByTitle: new Map(), doneCount, total: steps.length };
+}
+
+/**
+ * Last-resort fallback sourced from the session_checklist DB table (GET /plans/checklist/:id,
+ * same data the "Erledigt" tab uses), for a plan executed via the generic Agent's ChecklistManager
+ * instead of CodingAgent's TodoList - plans.steps never gets updated for that run type (nothing
+ * calls syncPlanFromTodos), so checklistFromPlanSteps above stays stuck at "pending" forever even
+ * though real per-step progress exists here.
+ *
+ * Title-only matching (no statusByIndex/statusById): session_checklist rows are not guaranteed to
+ * belong to the currently displayed plan - ChecklistManager can fire on any general-Agent turn on
+ * the same conversation (see packages/agent/src/checklist/checklist-manager.ts), so a title match
+ * is the only safe signal. A mismatch is indistinguishable from "no data" (falls through to the
+ * next tier) rather than ever showing a wrong step's status.
+ */
+export function checklistFromSessionRows(rows: SessionChecklistItem[]): ChecklistSnapshot | null {
+  if (rows.length === 0) return null;
+  // Rows aren't linked to a runId shared with plan_runs - group by runId and keep only the most
+  // recently created group so an older run's rows on the same conversation don't leak in.
+  const latestRunId = rows.reduce((latest, row) =>
+    !latest || row.createdAt > latest.createdAt ? row : latest
+  ).runId;
+  const latest = rows.filter((row) => row.runId === latestRunId);
+  const statusByTitle = new Map<string, string>();
+  let doneCount = 0;
+  for (const row of latest) {
+    if (!row.title?.trim()) continue;
+    statusByTitle.set(row.title.trim().toLowerCase(), row.status);
+    if (row.status === "done") doneCount++;
+  }
+  if (statusByTitle.size === 0) return null;
+  // No note column in session_checklist (unlike the todo_items/checklist-event sources above).
+  return { statusByIndex: new Map(), statusById: new Map(), statusByTitle, noteByIndex: new Map(), noteByTitle: new Map(), doneCount, total: latest.length };
 }
 
 export function resolveStepStatus(
