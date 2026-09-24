@@ -1,3 +1,4 @@
+import { claudeReasoningOptions } from "./reasoning.js";
 import Anthropic from "@anthropic-ai/sdk";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent, ToolDefinition, ToolCall } from "@ducki/shared";
 import type { LLMProvider, ProviderOptions } from "./base.js";
@@ -164,7 +165,7 @@ export class ClaudeProvider implements LLMProvider {
       request.tools = toAnthropicTools(merged.tools) as unknown as Anthropic.Tool[];
     }
 
-    return request;
+    return Object.assign(request, claudeReasoningOptions(this.model, merged));
   }
 
   async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {

@@ -88,10 +88,10 @@ describe("CodingAgent continues when there's no verifyCommand and the checklist 
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-coding-explore-edit-transition-"));
     sandboxes.push(sandbox);
     const provider = scriptedProvider([
-      PLAN_JSON,
+      PLAN_JSON.replaceAll("index.html", "main.js"),
       "Step 2: Create main.js with Phaser config and BootScene",
       "[TOOL:filesystem action=write path=main.js]\nconst game = {};\n[/TOOL]",
-      '[TOOL:todo({"action":"write","items":[{"title":"Write index.html","status":"done"},{"title":"Verify it works","status":"done"}]})]',
+      '[TOOL:todo({"action":"write","items":[{"title":"Write main.js","status":"done"},{"title":"Verify it works","status":"done"}]})]',
       "Fertig.",
     ]);
     const codingAgent = new CodingAgent(provider, stubDb(), undefined, { sandboxRoot: sandbox });

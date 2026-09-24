@@ -7,7 +7,7 @@ import {
 function stubDb(settings: Record<string, string> = {}) {
   let nextId = 1;
   const known: Record<string, (...args: any[]) => any> = {
-    getAllSettings: async () => [],
+    getAllSettings: async () => Object.entries(settings).map(([key, value]) => ({ key, value })),
     getDynamicToolByName: async () => undefined,
     getSetting: async (key: string) => settings[key],
     createConversation: async (data: { name: string }) => ({ id: nextId++, name: data.name }),

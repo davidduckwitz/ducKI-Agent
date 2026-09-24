@@ -10,9 +10,15 @@ interface MCPServerConfig {
   name: string;
   url: string;
   enabled: boolean;
+  transport?: "stdio" | "http" | "legacy-http";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
 }
 
 interface MCPServerRuntime extends MCPServerConfig {
+  error?: string;
   connected: boolean;
   reconnectAttempts: number;
   tools: number;
@@ -39,7 +45,7 @@ function validateServerInput(
   const name = server.name.trim();
   const url = server.url.trim();
 
-  if (!id || !name || !url) {
+  if (!id || !name || (!url && !server.command)) {
     return "mcpPage.validationMissing";
   }
 
@@ -51,6 +57,8 @@ function validateServerInput(
   if (idCollision) {
     return "mcpPage.validationDuplicateId";
   }
+
+  if (server.command) return null;
 
   try {
     const parsed = new URL(url);
@@ -68,6 +76,9 @@ export function McpManager() {
   const { t } = useI18n();
   const qc = useQueryClient();
   const [newServer, setNewServer] = useState<MCPServerConfig>({ id: "", name: "", url: "", enabled: true });
+  const [configJson, setConfigJson] = useState(JSON.stringify({ mcpServers: {
+    "godot-mcp": { command: "uvx", args: ["--from", "git+https://github.com/bebabinlarsson-blip/Godot-MCP.git@v5.0.35", "godot-ai"] }
+  } }, null, 2));
   const [callToolName, setCallToolName] = useState("");
   const [callServerId, setCallServerId] = useState("");
   const [callInput, setCallInput] = useState("{}");
@@ -131,6 +142,22 @@ export function McpManager() {
     const byId = new Map(runtime.map((item) => [item.id, item]));
     return configured.map((item) => ({ ...item, ...(byId.get(item.id) ?? {}) }));
   }, [configured, runtime]);
+
+  const importConfig = () => {
+    try {
+      const parsed = JSON.parse(configJson);
+      if (!parsed.mcpServers || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers)) throw new Error("mcpServers muss ein Objekt sein.");
+      const imported = Object.entries(parsed.mcpServers).map(([id, value]) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Ungültiger Server: ${id}`);
+        const config = value as Partial<MCPServerConfig>;
+        return { ...config, id, name: config.name || id, url: config.url || "", enabled: config.enabled !== false,
+          transport: config.transport ?? (config.command ? "stdio" : "http") } as MCPServerConfig;
+      });
+      if (!imported.length) throw new Error("Keine Server im JSON gefunden.");
+      const ids = new Set(imported.map(server => server.id));
+      saveServers.mutate([...configured.filter(server => !ids.has(server.id)), ...imported]);
+    } catch (error) { setServerError(error instanceof Error ? error.message : String(error)); }
+  };
 
   const saveCurrent = () => {
     for (const server of mergedServers) {
@@ -286,6 +313,13 @@ export function McpManager() {
 
       <section className="card space-y-3">
         <h2 className="font-semibold">{t("mcpPage.servers")}</h2>
+        <p className="text-sm text-gray-400">MCP-Konfiguration importieren oder bearbeiten. Lokale Befehle laufen auf dem ducki-node-Server. Für Godot muss dort uvx verfügbar sein.</p>
+        <textarea aria-label="MCP JSON-Konfiguration" className="input w-full font-mono text-xs" rows={10} value={configJson} onChange={e => setConfigJson(e.target.value)} />
+        <div className="flex gap-2">
+          <button className="btn-primary" disabled={saveServers.isPending || !serversQuery.isSuccess} onClick={importConfig}>JSON importieren / aktualisieren</button>
+          <button className="btn-secondary" disabled={!serversQuery.isSuccess} onClick={() => setConfigJson(JSON.stringify({ mcpServers: Object.fromEntries(configured.map(({ id, ...config }) => [id, config])) }, null, 2))}>Konfiguration bearbeiten</button>
+        </div>
+        <p className="text-xs text-gray-400">Gleiche Server-IDs werden aktualisiert. Andere Server bleiben erhalten. Tools stehen Chat und Coding-Agent über das Werkzeug mcp zur Verfügung.</p>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <input className="input" placeholder="id" value={newServer.id} onChange={(e) => setNewServer((s) => ({ ...s, id: e.target.value }))} />
           <input className="input" placeholder={t("mcpPage.name")} value={newServer.name} onChange={(e) => setNewServer((s) => ({ ...s, name: e.target.value }))} />
@@ -309,7 +343,8 @@ export function McpManager() {
             <div key={server.id} className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 flex items-center justify-between gap-2">
               <div>
                 <p className="text-sm font-medium">{server.name} <span className="text-xs text-gray-500">({server.id})</span></p>
-                <p className="text-xs text-gray-400 break-all">{server.url}</p>
+                <p className="text-xs text-gray-400 break-all">{server.command ? [server.command, ...(server.args ?? [])].join(" ") : server.url}</p>
+                {server.error && <p className="text-xs text-red-300">{server.error}</p>}
                 <p className="text-xs text-gray-500">
                   {server.connected ? t("layout.connected") : t("layout.disconnected")} | tools: {server.tools ?? 0} | retries: {server.reconnectAttempts ?? 0}
                 </p>

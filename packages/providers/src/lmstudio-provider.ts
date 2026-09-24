@@ -5,6 +5,8 @@ import { OpenAIProvider } from "./openai-provider.js";
 import type { ProviderOptions } from "./base.js";
 import type { LLMMessage, LLMResponse, GenerateOptions, LLMContent } from "@ducki/shared";
 import { getRootLogger } from "@ducki/logger";
+import { resolveReasoningEffort } from "./reasoning.js";
+import { generateReasoningResponse } from "./responses-reasoning.js";
 
 const logger = getRootLogger().child("LMStudioProvider");
 
@@ -88,7 +90,19 @@ export class LMStudioProvider extends OpenAIProvider {
     logger.debug("Replaced client with custom fetch handler", { omitAuth });
   }
 
-  private getDefaultOptions() {
-    return (this as any).defaultOptions ?? {};
+  override async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
+    const merged = { ...this.defaultOptions, ...options };
+    if (resolveReasoningEffort(merged) === undefined) return super.generate(messages, options);
+    return generateReasoningResponse(this.client, this.model, messages, {
+      ...merged, tools: this.supportsNativeTools() ? merged.tools : undefined,
+    }, false);
+  }
+
+  override async generateStream(messages: LLMMessage[], options?: GenerateOptions, onChunk?: (chunk: string) => void): Promise<LLMResponse> {
+    const merged = { ...this.defaultOptions, ...options };
+    if (resolveReasoningEffort(merged) === undefined) return super.generateStream(messages, options, onChunk);
+    return generateReasoningResponse(this.client, this.model, messages, {
+      ...merged, tools: this.supportsNativeTools() ? merged.tools : undefined,
+    }, true, onChunk);
   }
 }

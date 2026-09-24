@@ -2,6 +2,7 @@ import type { LLMProvider } from "@ducki/providers";
 import type { LLMMessage } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
 import { getRootLogger } from "@ducki/logger";
+import { createHash } from "node:crypto";
 
 export interface ConversationSummary {
   messageRangeStart: number;
@@ -57,7 +58,7 @@ export class ConversationCompressor {
    */
   private truncateMessage(content: string, maxChars: number = 500): string {
     if (content.length <= maxChars) return content;
-    return content.substring(0, maxChars) + "...[truncated]";
+    return content.slice(0, Math.floor(maxChars / 2)) + "...[truncated]..." + content.slice(-Math.floor(maxChars / 2));
   }
 
   /**
@@ -69,7 +70,8 @@ export class ConversationCompressor {
    * doesn't already give.
    */
   async summarizeRange(messages: LLMMessage[], startIndex: number, endIndex: number): Promise<ConversationSummary> {
-    const cacheKey = `${startIndex}_${endIndex}`;
+    const range = messages.slice(startIndex, endIndex + 1);
+    const cacheKey = `${startIndex}_${endIndex}_${createHash("sha256").update(JSON.stringify(range)).digest("hex")}`;
     const cached = this.summaryCache.get(cacheKey);
     if (cached) return cached;
 
@@ -115,6 +117,7 @@ export class ConversationCompressor {
         createdAt: new Date().toISOString(),
       };
 
+      if (this.summaryCache.size >= 64) this.summaryCache.delete(this.summaryCache.keys().next().value!);
       this.summaryCache.set(cacheKey, summary);
       this.logger.debug("Conversation range summarized", {
         start: startIndex,
@@ -159,7 +162,7 @@ export class ConversationCompressor {
     // Summarize in chunks of ~50 messages
     for (let i = 0; i < toCompress.length; i += 50) {
       const end = Math.min(i + 50, toCompress.length);
-      const summary = await this.summarizeRange(messages, i, i + end - 1);
+      const summary = await this.summarizeRange(messages, i, end - 1);
       summaries.push(summary);
     }
 
@@ -178,8 +181,9 @@ export class ConversationCompressor {
    */
   clearCache(startIndex?: number, endIndex?: number): void {
     if (startIndex !== undefined && endIndex !== undefined) {
-      const cacheKey = `${startIndex}_${endIndex}`;
-      this.summaryCache.delete(cacheKey);
+      for (const key of this.summaryCache.keys()) {
+        if (key.startsWith(`${startIndex}_${endIndex}_`)) this.summaryCache.delete(key);
+      }
     } else {
       this.summaryCache.clear();
     }

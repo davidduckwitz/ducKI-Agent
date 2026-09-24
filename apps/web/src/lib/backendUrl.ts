@@ -145,3 +145,15 @@ export function getSocketUrl(config: BackendConfig = readBackendConfig()): strin
 export function getHealthUrl(config: BackendConfig = readBackendConfig()): string {
   return `${getApiBaseUrl(config)}/health`;
 }
+
+/**
+ * Absolute ws(s):// URL for the streaming-TTS audio WebSocket (see
+ * apps/server/src/websocket/audio-stream.ts). Mirrors getSocketUrl()'s origin resolution -
+ * same dev-proxy/desktop/remote cases apply - but this endpoint isn't Socket.IO, so it always
+ * needs a full ws(s):// URL rather than socket.io's "origin or undefined" contract.
+ */
+export function getAudioStreamWsUrl(config: BackendConfig = readBackendConfig()): string {
+  const origin = getSocketUrl(config) ?? (typeof window !== "undefined" ? window.location.origin : "http://localhost:3001");
+  const wsOrigin = origin.replace(/^http/, "ws");
+  return `${wsOrigin}/ws/audio-stream`;
+}

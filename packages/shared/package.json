@@ -5,6 +5,10 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "exports": {
+    "./reasoning": {
+      "types": "./src/reasoning.ts",
+      "import": "./dist/reasoning.js"
+    },
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"

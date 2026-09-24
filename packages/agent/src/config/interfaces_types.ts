@@ -127,6 +127,9 @@ export interface AgentRunAttachment {
 }
 
 export interface AgentRunOptions {
+  reasoningEffort?: import("@ducki/shared").ReasoningEffort;
+  /** Deterministic, caller-owned state that survives lossy history compression. */
+  getWorkingState?: () => string;
   stream?: boolean;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: AgentRunEvent) => void;

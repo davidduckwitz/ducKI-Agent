@@ -1,5 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { CodingAgent } from "../src/coding/coding-agent";
+
+const roots: string[] = [];
+function sandbox(): string {
+  const root = mkdtempSync(join(tmpdir(), "ducki-path-prompt-")); roots.push(root); return root;
+}
+afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 /**
  * Regression test: buildInitialPrompt included a "CRITICAL PATH HANDLING" block warning the
@@ -24,18 +33,20 @@ function buildCodingAgent(sandboxRoot: string): CodingAgent {
 
 describe("CodingAgent path-handling guidance persists across retries", () => {
   it("buildInitialPrompt includes the CRITICAL PATH HANDLING block when sandboxed", () => {
-    const agent = buildCodingAgent("/sandbox/my-plugin");
+    const root = sandbox();
+    const agent = buildCodingAgent(root);
     const plan = { goal: "do the thing", steps: [], estimatedComplexity: "low" as const };
-    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", undefined, plan);
+    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", plan);
     expect(prompt).toContain("CRITICAL PATH HANDLING");
-    expect(prompt).toContain("/sandbox/my-plugin");
+    expect(prompt).toContain(root);
   });
 
   it("buildFollowUpPrompt ALSO includes the CRITICAL PATH HANDLING block when sandboxed", () => {
-    const agent = buildCodingAgent("/sandbox/my-plugin");
+    const root = sandbox();
+    const agent = buildCodingAgent(root);
     const prompt = (agent as any).buildFollowUpPrompt("do the thing", "verify failed: X");
     expect(prompt).toContain("CRITICAL PATH HANDLING");
-    expect(prompt).toContain("/sandbox/my-plugin");
+    expect(prompt).toContain(root);
     expect(prompt).toContain("verify failed: X");
   });
 

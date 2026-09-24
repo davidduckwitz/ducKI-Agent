@@ -228,14 +228,15 @@ export class TokenCounter {
     // Count tokens in content
     if (message.content && typeof message.content === "string") {
       const wordCount = message.content.split(/\s+/).length;
-      tokenCount += Math.ceil(wordCount * config.estimatedTokensPerWord);
+      tokenCount += Math.max(Math.ceil(wordCount * config.estimatedTokensPerWord), Math.ceil(message.content.length / 3.6));
     }
 
     // Count tokens in tool calls/responses
-    if ("toolUse" in message && message.toolUse) {
-      const toolContent = JSON.stringify(message.toolUse);
-      const wordCount = toolContent.split(/\s+/).length;
-      tokenCount += Math.ceil(wordCount * config.estimatedTokensPerWord);
+    if (message.toolCalls?.length) {
+      tokenCount += Math.ceil(JSON.stringify(message.toolCalls).length / 3.6);
+    }
+    if (Array.isArray(message.content)) {
+      for (const part of message.content) tokenCount += part.type === "text" ? Math.ceil(part.text.length / 3.6) : 1000;
     }
 
     return tokenCount;
@@ -259,12 +260,12 @@ export class TokenCounter {
     }
   ): { maxInputTokens: number; reservedTokens: number; availableTokens: number } {
     const config = this.getModelConfig(modelName);
-    const reserveOutput = options?.reserveOutputTokens ?? 4000;
+    const reserveOutput = options?.reserveOutputTokens ?? Math.min(4000, Math.floor(config.maxTokens / 4));
     const systemPrompt = options?.systemPromptTokens ?? 500;
 
     const maxInputTokens = config.maxTokens - reserveOutput;
     const reservedTokens = systemPrompt;
-    const availableTokens = maxInputTokens - reservedTokens;
+    const availableTokens = Math.max(1, maxInputTokens - reservedTokens);
 
     return { maxInputTokens, reservedTokens, availableTokens };
   }

@@ -1,3 +1,4 @@
+import { autoStartChatterbox, chatterboxStatus, controlChatterbox } from "../lib/chatterbox-runtime.js";
 import { Router, type IRouter } from "express";
 import type { Request } from "express";
 import type { Server as SocketIOServer } from "socket.io";
@@ -92,6 +93,25 @@ settingsRouter.post("/model-profile/apply", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+settingsRouter.get("/chatterbox/status", async (req, res, next) => {
+  try { res.json(createApiResponse(await chatterboxStatus(req.app.locals["db"] as DatabaseService))); }
+  catch (error) { next(error); }
+});
+settingsRouter.post("/chatterbox/:action", async (req, res, next) => {
+  const action = req.params["action"];
+  if (!["start", "stop", "load", "unload", "auto-start"].includes(action || "")) {
+    res.status(400).json(createApiError("Unknown Chatterbox action")); return;
+  }
+  const db = req.app.locals["db"] as DatabaseService;
+  // Long model downloads/loads run in the background, with status/error polling in the UI.
+  try {
+    const task = action === "auto-start" ? autoStartChatterbox(db)
+      : controlChatterbox(db, action as "start" | "stop" | "load" | "unload");
+    void task.catch((error) => console.error("Chatterbox action failed", error));
+    res.status(202).json(createApiResponse({ accepted: true }));
+  } catch (error) { next(error); }
+});
+
 settingsRouter.get("/:key", async (req, res, next) => {
   try {
     const value = await (req.app.locals["db"] as DatabaseService).getSetting(req.params["key"] ?? "");
@@ -113,6 +133,9 @@ settingsRouter.put("/:key", async (req, res, next) => {
       }
     }
 
+    if (["DEFAULT_TEXT_TO_SPEECH_PROVIDER", "CHATTERBOX_AUTO_START"].includes(key)) {
+      void autoStartChatterbox(req.app.locals["db"] as DatabaseService).catch(console.error);
+    }
     notifySettingsChanged(req, [key]);
     res.json(createApiResponse({ updated: true, providerReloaded }));
   } catch (e) { next(e); }

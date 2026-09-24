@@ -5,7 +5,9 @@ import react from "@vitejs/plugin-react";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const proxyTarget = process.env["VITE_API_PROXY_TARGET"] ?? "http://localhost:3001";
+// Match dev.js's IPv4 loopback target: localhost can resolve to ::1 while the
+// backend listens on IPv4, causing HTTP failures and WebSocket "socket hang up".
+const proxyTarget = process.env["VITE_API_PROXY_TARGET"] ?? "http://127.0.0.1:3001";
 
 // The built UI calls /api and /socket.io relative to its own origin (see
 // backendUrl.ts). Both the dev server AND the preview server (which serves the
@@ -14,6 +16,7 @@ const proxyTarget = process.env["VITE_API_PROXY_TARGET"] ?? "http://localhost:30
 const proxy = {
   "/api": { target: proxyTarget, changeOrigin: true, ws: true },
   "/socket.io": { target: proxyTarget, changeOrigin: true, ws: true },
+  "/ws": { target: proxyTarget, changeOrigin: true, ws: true },
 };
 
 const port = process.env["VITE_PORT"] ? parseInt(process.env["VITE_PORT"]) : 5173;

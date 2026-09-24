@@ -1,3 +1,4 @@
+import { isReasoningEffort, type ReasoningEffort } from "@ducki/shared";
 import { randomUUID } from "crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -19,6 +20,7 @@ import { deriveConversationTitle } from "../lib/conversation-title.js";
 import { getScreenshotStorageManager } from "../lib/screenshot-storage.js";
 import { browserTool, shellTool, CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { wrapTools } from "../lib/tool-wrapper.js";
+import { createScreenShareSession } from "../lib/screen-share.js";
 
 /**
  * Coding-area chats prepend a "[CODING_CONTEXT]\nproject=<slug>\n…" block to every
@@ -212,6 +214,7 @@ export function setupWebSocket(
   };
 
   io.on("connection", (socket) => {
+    const screenShare = createScreenShareSession(socket);
     logger.debug("Socket opened", { id: socket.id });
 
     /**
@@ -288,6 +291,7 @@ export function setupWebSocket(
       localMessageId?: string;
       provider?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
     }) => {
       let registryRunId: string | undefined;
       const runAgents: Agent[] = [];
@@ -296,6 +300,9 @@ export function setupWebSocket(
       let conversationId: number | undefined = data.conversationId;
       let resolveRun: (() => void) | undefined;
       try {
+        if (data.reasoningEffort !== undefined && !isReasoningEffort(data.reasoningEffort)) {
+          throw new Error("Invalid reasoningEffort: expected off, low, medium, high or xhigh");
+        }
         // Idempotency guard: ignore duplicate emits of the same local message id.
         if (data.localMessageId) {
           cleanupProcessedChatMessageKeys();
@@ -407,6 +414,7 @@ export function setupWebSocket(
         }
 
         const runOptions = {
+          reasoningEffort: data.reasoningEffort,
           stream: true,
           attachments: data.attachments,
           agentMode: requestedAgentMode,
@@ -553,6 +561,8 @@ export function setupWebSocket(
           const runAgent = await createAgent(
             data.provider || data.model ? { provider: data.provider, model: data.model } : undefined
           );
+          const screenTool = screenShare.tool();
+          if (screenTool) runAgent.executor.registerTool(screenTool);
 
           // Coding-area chat: scope the filesystem tool to the project sandbox so
           // relative paths land in shared-workspace/coding/<project>/ instead of the

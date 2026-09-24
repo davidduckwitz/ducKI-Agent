@@ -222,14 +222,20 @@ export function checklistFromPlanSteps(
  * is the only safe signal. A mismatch is indistinguishable from "no data" (falls through to the
  * next tier) rather than ever showing a wrong step's status.
  */
-export function checklistFromSessionRows(rows: SessionChecklistItem[]): ChecklistSnapshot | null {
+export function checklistFromSessionRows(
+  rows: SessionChecklistItem[],
+  planSteps?: Array<{ title: string }>
+): ChecklistSnapshot | null {
   if (rows.length === 0) return null;
   // Rows aren't linked to a runId shared with plan_runs - group by runId and keep only the most
   // recently created group so an older run's rows on the same conversation don't leak in.
   const latestRunId = rows.reduce((latest, row) =>
     !latest || row.createdAt > latest.createdAt ? row : latest
   ).runId;
-  const latest = rows.filter((row) => row.runId === latestRunId);
+  const planTitles = planSteps ? new Set(planSteps.map((step) => step.title.trim().toLowerCase())) : undefined;
+  const latest = rows.filter(
+    (row) => row.runId === latestRunId && (!planTitles || planTitles.has(row.title.trim().toLowerCase()))
+  );
   const statusByTitle = new Map<string, string>();
   let doneCount = 0;
   for (const row of latest) {
@@ -248,7 +254,7 @@ export function resolveStepStatus(
   index: number
 ): string | undefined {
   if (!snapshot) return undefined;
-  return (step.id ? snapshot.statusById.get(step.id) : undefined) ?? snapshot.statusByIndex.get(index) ?? snapshot.statusByTitle.get(step.title.trim().toLowerCase());
+  return (step.id ? snapshot.statusById.get(step.id) : undefined) ?? snapshot.statusByTitle.get(step.title.trim().toLowerCase()) ?? snapshot.statusByIndex.get(index);
 }
 
 /** The agent's own short note for a step (e.g. a checklist-grounding demotion reason), same

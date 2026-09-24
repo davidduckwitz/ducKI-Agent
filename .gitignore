@@ -63,3 +63,8 @@ Cargo.lock
 apps/server/plugins/notes/data/notes.sqlite
 apps/server/plugins/news/data/news.sqlite-wal
 apps/server/plugins/.state.json
+
+# Local Chatterbox Python runtime and verification artifacts
+apps/server/scripts/.venv/
+apps/server/scripts/__pycache__/
+apps/server/scripts/verification/

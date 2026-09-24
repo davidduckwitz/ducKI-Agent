@@ -39,6 +39,7 @@ import type { CodingFileItem } from "./CodingFileTree";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import { parsePersistedEvent } from "../../lib/persistedEventTypes";
 import { findLatestChecklist, resolveStepStatus, resolveStepNote } from "../../lib/planChecklist";
+import { isInternalCodingUserMessage } from "../../lib/codingChatVisibility";
 
 interface PersistedMessage {
   id: number;
@@ -441,9 +442,10 @@ export function CodingWorkspace() {
       };
     });
 
-    // Synthetic follow-up prompts (metadata.internal) already showed a translated status
-    // note as an internal_instruction event above - don't also render the raw prompt.
-    setMessages(mapped.filter((m) => !(m.role === "user" && m.metadata?.internal === true)) as never);
+    // Synthetic follow-up prompts already have a translated status note in Activity. Keep
+    // genuine user prompts visible, but hide both correctly tagged rows and legacy rows where
+    // a persistence bug replaced `internal` with `runtimeContext`.
+    setMessages(mapped.filter((m) => !isInternalCodingUserMessage(m)) as never);
   }, [conversationMessagesQuery.data, setMessages]);
 
   useEffect(() => {
@@ -978,6 +980,7 @@ export function CodingWorkspace() {
         includeFile: options.includeFile,
         provider: chatProvider,
         model: chatModel,
+        reasoningEffort: useAppStore.getState().reasoningEffort,
         planOnly: options.planMode,
         requestId: messageId,
       })

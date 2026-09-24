@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader, CheckCircle, AlertCircle, Zap, X, AlertTriangle } from "lucide-react";
 import { useAppStore } from "../../lib/store";
+import { useUiStore } from "../../lib/uiStore";
 import { ToolEventSummary } from "./ToolEventSummary";
 import { BrowserPreview } from "./BrowserPreview";
 import type { RenderedChatMessage } from "./chatTypes";
@@ -64,14 +65,31 @@ export function ToolEventsDisplay({
       setEvents((prev) => [...prev, eventWithDate].slice(-10)); // Keep last 10 events
       console.debug("[ToolEventsDisplay] Event added to state", { toolName: eventWithDate.toolName, type: eventWithDate.type });
 
-      // Capture browser preview data
-      if (eventWithDate.toolName === "Browser" && eventWithDate.type === "tool-complete" && event.data) {
+      // Capture browser preview data. Case-insensitive: the tool's actual registered name is
+      // lowercase "browser" (packages/tools/src/browser.ts), so the previous exact "Browser"
+      // check never matched anything and this block was dead code.
+      if (eventWithDate.toolName.toLowerCase() === "browser" && eventWithDate.type === "tool-complete" && event.data) {
         setBrowserPreviewData({
           url: (event.data as any).url,
           screenshotStorageUrl: (event.data as any).screenshotUrl,
           screenshotUrl: (event.data as any).screenshotUrl,
           screenshotSize: (event.data as any).screenshotSize,
         });
+      }
+
+      // Auto-open the existing Apps sidebar's live Browser tab the moment the agent starts
+      // using the browser tool, so the user watches it happen instead of having to notice a
+      // completed tool-result card and click "open browser" manually. The sidebar already
+      // streams the shared CDP session live (AppToolSidebar.tsx's BrowserTool) - opening it
+      // just needs to happen earlier, at tool-start rather than tool-complete.
+      if (eventWithDate.toolName.toLowerCase() === "browser" && eventWithDate.type === "tool-start") {
+        const params = (event.data as { params?: Record<string, unknown> } | undefined)?.params;
+        const url = typeof params?.["url"] === "string" ? (params["url"] as string) : undefined;
+        if (url) {
+          useUiStore.getState().openBrowserUrl(url);
+        } else {
+          useUiStore.getState().setAppSidebarTool("browser");
+        }
       }
 
       // Track active tools. The updater MUST stay pure - it runs during React's render phase, so

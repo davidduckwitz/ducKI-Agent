@@ -16,10 +16,13 @@ import { OpenAISpeechToTextProvider } from "./openai-speech-to-text-provider.js"
 import { SileroSpeechToTextProvider } from "./silero-speech-to-text-provider.js";
 import { LocalCommandSpeechToTextProvider } from "./local-command-speech-to-text-provider.js";
 import { NodejsWhisperSpeechToTextProvider } from "./nodejs-whisper-speech-to-text-provider.js";
+import { hasCudaToolkit, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault } from "./nodejs-whisper-defaults.js";
 import { OpenAITextToSpeechProvider } from "./openai-text-to-speech-provider.js";
 import { ElevenLabsTextToSpeechProvider } from "./elevenlabs-text-to-speech-provider.js";
 import { PiperTextToSpeechProvider, type PiperTextToSpeechProviderOptions } from "./piper-text-to-speech-provider.js";
 import { LocalCommandTextToSpeechProvider } from "./local-command-text-to-speech-provider.js";
+import { ChatterboxTextToSpeechProvider } from "./chatterbox-text-to-speech-provider.js";
+import { BreezeTextToSpeechProvider } from "./breeze-text-to-speech-provider.js";
 
 export type ProviderName = "openai" | "openrouter" | "lmstudio" | "ollama" | "claude";
 
@@ -89,6 +92,7 @@ export {
 
 export type { SpeechToTextProvider };
 export { OpenAISpeechToTextProvider, SileroSpeechToTextProvider, LocalCommandSpeechToTextProvider, NodejsWhisperSpeechToTextProvider };
+export { hasCudaToolkit, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault };
 
 export type SpeechToTextProviderFactoryConfig = {
   name: "openai" | "ollama" | "silero" | "local" | "nodejs-whisper";
@@ -136,8 +140,8 @@ export function createSpeechToTextProvider(
     case "nodejs-whisper":
       return new NodejsWhisperSpeechToTextProvider({
         baseUrl: config.baseUrl ?? "",
-        model: config.model ?? process.env["NODEJS_WHISPER_MODEL_NAME"] ?? "base",
-        modelName: config.model ?? process.env["NODEJS_WHISPER_MODEL_NAME"] ?? "base",
+        model: config.model ?? process.env["NODEJS_WHISPER_MODEL_NAME"] ?? resolveNodejsWhisperModelDefault(),
+        modelName: config.model ?? process.env["NODEJS_WHISPER_MODEL_NAME"] ?? resolveNodejsWhisperModelDefault(),
         modelRootPath: config.modelRootPath ?? process.env["NODEJS_WHISPER_MODEL_ROOT_PATH"],
         autoDownloadModel:
           config.autoDownloadModel ??
@@ -148,7 +152,7 @@ export function createSpeechToTextProvider(
           config.withCuda ??
           (process.env["NODEJS_WHISPER_USE_CUDA"]
             ? ["1", "true", "yes", "on"].includes(process.env["NODEJS_WHISPER_USE_CUDA"].trim().toLowerCase())
-            : false),
+            : resolveNodejsWhisperCudaDefault()),
         timeoutMs: config.timeoutMs,
       });
     default:
@@ -171,11 +175,21 @@ export function getDefaultSpeechToTextProvider(): SpeechToTextProvider {
 // ============================================================
 
 export type { TextToSpeechProvider };
-export { OpenAITextToSpeechProvider, ElevenLabsTextToSpeechProvider, PiperTextToSpeechProvider, LocalCommandTextToSpeechProvider };
+export { isStreamingTextToSpeechProvider, type StreamingTextToSpeechProvider } from "./text-to-speech-base.js";
+export {
+  OpenAITextToSpeechProvider,
+  ElevenLabsTextToSpeechProvider,
+  PiperTextToSpeechProvider,
+  LocalCommandTextToSpeechProvider,
+  ChatterboxTextToSpeechProvider,
+  BreezeTextToSpeechProvider,
+};
 export { listElevenLabsVoices, type ElevenLabsVoiceSummary } from "./elevenlabs-text-to-speech-provider.js";
+export { listChatterboxVoices, isChatterboxServerReachable, type ChatterboxVoiceSummary } from "./chatterbox-text-to-speech-provider.js";
+export { listBreezeVoices, type BreezeVoiceSummary } from "./breeze-text-to-speech-provider.js";
 
 export type TextToSpeechProviderFactoryConfig = {
-  name: "openai" | "elevenlabs" | "piper" | "local";
+  name: "openai" | "elevenlabs" | "piper" | "local" | "chatterbox" | "breeze";
   baseUrl?: string;
   apiKey?: string;
   model?: string;
@@ -196,6 +210,12 @@ export type TextToSpeechProviderFactoryConfig = {
   workingDirectory?: string;
   timeoutMs?: number;
   outputExt?: string;
+  // Chatterbox-specific (ignored by other providers)
+  serverUrl?: string;
+  emotionExaggeration?: number;
+  // Breeze-specific (ignored by other providers)
+  wsUrl?: string;
+  sampleRate?: number;
 };
 
 export function createTextToSpeechProvider(config: TextToSpeechProviderFactoryConfig): TextToSpeechProvider {
@@ -241,12 +261,36 @@ export function createTextToSpeechProvider(config: TextToSpeechProviderFactoryCo
         model: config.model,
         voice: config.voice,
       });
+    case "chatterbox":
+      return new ChatterboxTextToSpeechProvider({
+        baseUrl: "",
+        serverUrl: config.serverUrl ?? process.env["CHATTERBOX_SERVER_URL"] ?? "http://127.0.0.1:8890",
+        voice: config.voice,
+        emotionExaggeration: config.emotionExaggeration,
+        timeoutMs: config.timeoutMs,
+      });
+    case "breeze":
+      return new BreezeTextToSpeechProvider({
+        baseUrl: "",
+        apiKey: config.apiKey ?? process.env["BREEZE_API_KEY"],
+        wsUrl: config.wsUrl ?? process.env["BREEZE_WS_URL"],
+        voice: config.voice,
+        sampleRate: config.sampleRate,
+        timeoutMs: config.timeoutMs,
+      });
     default:
       throw new Error(`Unknown text-to-speech provider: ${String(config.name)}`);
   }
 }
 
 export function getDefaultTextToSpeechProvider(): TextToSpeechProvider {
-  const providerName = (process.env["DEFAULT_TEXT_TO_SPEECH_PROVIDER"] ?? "openai") as "openai" | "elevenlabs" | "piper" | "local";
+  const providerName = (process.env["DEFAULT_TEXT_TO_SPEECH_PROVIDER"] ?? "chatterbox") as
+    | "openai"
+    | "elevenlabs"
+    | "piper"
+    | "local"
+    | "chatterbox"
+    | "breeze";
   return createTextToSpeechProvider({ name: providerName });
 }
+export { withReasoningEffort } from "./reasoning.js";

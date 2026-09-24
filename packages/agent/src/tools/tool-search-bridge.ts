@@ -25,6 +25,7 @@ const CORE_TOOL_NAMES = new Set([
   "filesystem",
   "shell",
   "browser",
+  "screen_share",
   "memory",
   "project",
   "task",

@@ -4,11 +4,14 @@
   "type": "module",
   "main": "./dist/index.js",
   "files": [
-    "dist"
+    "dist",
+    "scripts/*.py",
+    "scripts/README.md",
+    "scripts/requirements-chatterbox.txt"
   ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsx watch src/index.ts",
+    "dev": "pnpm --filter @ducki/agent... run build && tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist"

@@ -5,7 +5,7 @@
  *    cloud-control.ts) -- dieselbe Pipeline, die auch der Discord-Gateway-Sprachkanal nutzt.
  */
 import type { DatabaseService } from "@ducki/database";
-import { createSpeechToTextProvider } from "@ducki/providers";
+import { createSpeechToTextProvider, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault } from "@ducki/providers";
 
 function readSetting(settings: Map<string, string>, key: string, defaultValue?: string): string | undefined {
   return settings.get(key) || defaultValue;
@@ -29,10 +29,10 @@ export async function transcribeAudioBuffer(
 
   const provider = createSpeechToTextProvider({
     name: "nodejs-whisper",
-    model: readSetting(settingsMap, "NODEJS_WHISPER_MODEL_NAME", "base"),
+    model: readSetting(settingsMap, "NODEJS_WHISPER_MODEL_NAME") ?? resolveNodejsWhisperModelDefault(),
     modelRootPath: readSetting(settingsMap, "NODEJS_WHISPER_MODEL_ROOT_PATH"),
     autoDownloadModel: parseBoolean(readSetting(settingsMap, "NODEJS_WHISPER_AUTO_DOWNLOAD", "true"), true),
-    withCuda: parseBoolean(readSetting(settingsMap, "NODEJS_WHISPER_USE_CUDA", "false"), false),
+    withCuda: parseBoolean(readSetting(settingsMap, "NODEJS_WHISPER_USE_CUDA"), resolveNodejsWhisperCudaDefault()),
     timeoutMs: Number.parseInt(readSetting(settingsMap, "NODEJS_WHISPER_TIMEOUT_MS", "180000") ?? "180000", 10),
   });
 

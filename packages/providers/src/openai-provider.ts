@@ -1,3 +1,4 @@
+import { openAIReasoningOptions } from "./reasoning.js";
 import OpenAI from "openai";
 import type {
   ChatCompletionMessageParam,
@@ -212,8 +213,8 @@ export class OpenAIProvider implements LLMProvider {
   readonly model: string;
   /** Kept so a connection failure can name the endpoint that was actually unreachable. */
   protected readonly endpoint: string;
-  private client: OpenAI;
-  private defaultOptions: GenerateOptions;
+  protected client: OpenAI;
+  protected defaultOptions: GenerateOptions;
   private readonly maxRetries: number;
   private readonly baseRetryDelayMs: number;
   /** Set once a server has rejected `stream_options`, so the retry without it happens
@@ -401,6 +402,7 @@ export class OpenAIProvider implements LLMProvider {
       max_tokens: merged.maxTokens,
       ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
       ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
+      ...openAIReasoningOptions(this.name, this.model, merged),
       stream: false as const,
       ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
     });
@@ -491,6 +493,7 @@ export class OpenAIProvider implements LLMProvider {
           max_tokens: merged.maxTokens,
           ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
           ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
+          ...openAIReasoningOptions(this.name, this.model, merged),
           stream: true,
           // Without this the OpenAI streaming protocol never sends a usage chunk at all -
           // which is why every streamed response reported 0 tokens.

@@ -10,15 +10,9 @@ import type { Plan } from "../chat/PlanExecutionPanel";
 import type { RenderedChatMessage } from "../chat/chatTypes";
 import { PanelEmpty } from "../ui/panel";
 import { PlanRefinementDialog } from "./PlanRefinementDialog";
+import { mergeCodingPlanSnapshots, normalizeCodingPlanStepStatus } from "../../lib/codingPlan";
 
 const COMPLEXITY_LABEL: Record<number, string> = { 1: "niedrig", 3: "mittel", 5: "hoch" };
-
-/** Newer (higher id) of the two wins; falls back to whichever one is non-null. */
-function pickNewerPlan(a: Plan | null, b: Plan | null): Plan | null {
-  if (!a) return b;
-  if (!b) return a;
-  return (b.id ?? -1) > (a.id ?? -1) ? b : a;
-}
 
 /**
  * Plan view for the coding agent panel.
@@ -94,7 +88,7 @@ export function CodingPlanPanel({
   // plan/progress. Comparing by id fixes that case while still letting a brand-new plan that
   // hasn't reached the DB yet (derivedPlan.id highest) win immediately - overridePlan (handed
   // over from a different conversation, e.g. chat->coding handoff) is the last resort.
-  const plan = refinedPlan ?? pickNewerPlan(derivedPlan, latestPersistedPlan) ?? overridePlan ?? null;
+  const plan = refinedPlan ?? mergeCodingPlanSnapshots(derivedPlan, latestPersistedPlan) ?? overridePlan ?? null;
 
   useEffect(() => {
     if (!conversationId) return;
@@ -175,12 +169,13 @@ export function CodingPlanPanel({
   // syncPlanFromTodos for that run type) - see its own doc comment in lib/planChecklist. For a
   // real CodingAgent run this is normally null (no session_checklist rows exist), so the chain
   // falls through to checklistFromPlanSteps exactly as before - no behavior change there.
+  const steps = plan?.steps ?? [];
   const checklist = useMemo(
     () =>
       findLatestChecklist(messages, eventScope) ??
-      checklistFromSessionRows(sessionChecklistRows) ??
+      checklistFromSessionRows(sessionChecklistRows, steps) ??
       checklistFromPlanSteps(latestPersistedPlan?.steps ?? []),
-    [messages, eventScope?.runId, eventScope?.planId, sessionChecklistRows, latestPersistedPlan]
+    [messages, eventScope?.runId, eventScope?.planId, sessionChecklistRows, latestPersistedPlan, steps]
   );
 
   // The phase the agent declares it is in (see lib/planPhase). This is the same state the
@@ -203,15 +198,14 @@ export function CodingPlanPanel({
     ? (latestIteration.eventData["maxAttempts"] as number)
     : undefined;
 
-  const steps = plan?.steps ?? [];
   const terminalEvidenceStatuses = completionEvidence?.stepStatuses;
   const statusOf = (step: { id?: string; title: string }, index: number) =>
-    terminalEvidenceStatuses?.[index] ?? resolveStepStatus(checklist, step, index);
+    normalizeCodingPlanStepStatus(terminalEvidenceStatuses?.[index] ?? resolveStepStatus(checklist, step, index));
   const noteOf = (step: { title: string }, index: number) =>
     completionEvidence?.stepNotes?.[index] ?? resolveStepNote(checklist, step, index);
   const runningIndex = useMemo(() => firstOpenStepIndex(checklist, steps), [checklist, steps]);
   const doneCount = terminalEvidenceStatuses
-    ? terminalEvidenceStatuses.filter((status) => status === "completed").length
+    ? terminalEvidenceStatuses.filter((status) => normalizeCodingPlanStepStatus(status) === "done").length
     : checklist?.doneCount ?? 0;
 
   const formatBudget = (ms: number): string => {

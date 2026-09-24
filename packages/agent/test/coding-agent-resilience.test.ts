@@ -52,9 +52,12 @@ describe("CodingAgent per-attempt timeout budget", () => {
 
     await codingAgent.run("do the thing", { timeoutMs: 60000 });
 
-    expect(seenOverrides).toHaveLength(1);
-    expect(seenOverrides[0]).toBeGreaterThan(0);
-    expect(seenOverrides[0]).toBeLessThanOrEqual(60000);
+    expect(seenOverrides.length).toBeGreaterThan(0);
+    for (const budget of seenOverrides) {
+      expect(budget).toBeGreaterThan(0);
+      expect(budget).toBeLessThanOrEqual(60000);
+    }
+    for (let i = 1; i < seenOverrides.length; i++) expect(seenOverrides[i]!).toBeLessThanOrEqual(seenOverrides[i - 1]!);
   });
 
   it("omits timeoutMsOverride entirely when no timeoutMs budget was given", async () => {
@@ -69,7 +72,8 @@ describe("CodingAgent per-attempt timeout budget", () => {
 
     await codingAgent.run("do the thing", {});
 
-    expect(seenOverrides).toEqual([undefined]);
+    expect(seenOverrides.length).toBeGreaterThan(0);
+    expect(seenOverrides.every(value => value === undefined)).toBe(true);
   });
 });
 

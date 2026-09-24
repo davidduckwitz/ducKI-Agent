@@ -1,3 +1,5 @@
+import { getApiBaseUrl } from "./lib/backendUrl";
+import { useVoiceSettings } from "./hooks/useVoiceSettings";
 import { Suspense, lazy, useEffect, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useSettings, readFlag } from "./lib/useSettings";
@@ -103,6 +105,11 @@ const CodingWorkspace = lazy(async () => {
   return { default: module.CodingWorkspace };
 });
 
+const AudioWorkspace = lazy(async () => {
+  const module = await import("./components/audio/AudioWorkspace");
+  return { default: module.AudioWorkspace };
+});
+
 const CryptoPaymentPage = lazy(async () => {
   const module = await import("./pages/crypto/PaymentPage");
   return { default: module.CryptoPaymentPage };
@@ -129,7 +136,29 @@ function CodingGate() {
   return <LazyRoute><CodingWorkspace /></LazyRoute>;
 }
 
+function AudioGate() {
+  const { t } = useI18n();
+  const settingsQuery = useSettings();
+
+  if (settingsQuery.isLoading || !settingsQuery.data) {
+    return <div className="p-6 text-sm text-muted-foreground">{t("app.loadingPage")}</div>;
+  }
+
+  if (!readFlag(settingsQuery.data, "AUDIO_ENABLED")) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <LazyRoute><AudioWorkspace /></LazyRoute>;
+}
+
 function AppContent() {
+  const enableTTS = useVoiceSettings((state) => state.enableTTS);
+  const ttsProvider = useVoiceSettings((state) => state.ttsProvider);
+  useEffect(() => {
+    if (enableTTS && ttsProvider === "chatterbox") {
+      void fetch(`${getApiBaseUrl()}/settings/chatterbox/auto-start`, { method: "POST" }).catch(console.error);
+    }
+  }, [enableTTS, ttsProvider]);
   const { t } = useI18n();
   const { toolCalls, removeToolCall } = useAppStore();
 
@@ -154,6 +183,7 @@ function AppContent() {
           <Route path="bot-chats" element={<LazyRoute><BotChatList /></LazyRoute>} />
           <Route path="bot-chats/:id" element={<LazyRoute><BotChatRoom /></LazyRoute>} />
           <Route path="coding" element={<CodingGate />} />
+          <Route path="audio" element={<AudioGate />} />
           <Route path="projects" element={<ProjectManager />} />
           <Route path="tasks" element={<TaskManager />} />
           <Route path="cronjobs" element={<LazyRoute><CronjobManager /></LazyRoute>} />

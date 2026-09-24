@@ -1,3 +1,4 @@
+import { isReasoningEffort, type ReasoningEffort } from "@ducki/shared";
 import { Router, type IRouter } from "express";
 import type { Agent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
@@ -14,7 +15,7 @@ import { tmpdir } from "os";
 import express from "express";
 import { transcribeAudioBuffer } from "../lib/audio-transcription.js";
 import { synthesizeSpeech } from "../lib/audio-synthesis.js";
-import { listElevenLabsVoices } from "@ducki/providers";
+import { listElevenLabsVoices, listBreezeVoices, listChatterboxVoices, isChatterboxServerReachable } from "@ducki/providers";
 
 export const chatRouter: IRouter = Router();
 
@@ -64,7 +65,13 @@ chatRouter.post("/speak", async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const body = req.body as { text?: unknown; voice?: unknown; emotionStyle?: unknown };
+    const body = req.body as {
+      text?: unknown;
+      voice?: unknown;
+      emotionStyle?: unknown;
+      emotionInstructions?: unknown;
+      language?: unknown;
+    };
     const text = typeof body?.text === "string" ? body.text.trim() : "";
 
     if (!text) {
@@ -76,6 +83,8 @@ chatRouter.post("/speak", async (req, res) => {
     const { audio, mimeType } = await synthesizeSpeech(db, text, {
       voice: typeof body?.voice === "string" ? body.voice : undefined,
       emotionStyle: typeof body?.emotionStyle === "string" ? body.emotionStyle : undefined,
+      emotionInstructions: typeof body?.emotionInstructions === "string" ? body.emotionInstructions : undefined,
+      language: typeof body?.language === "string" ? body.language : undefined,
     });
 
     const elapsed = Date.now() - startTime;
@@ -92,26 +101,67 @@ chatRouter.post("/speak", async (req, res) => {
 chatRouter.get("/tts-voices", async (req, res) => {
   try {
     const provider = String(req.query["provider"] ?? "");
-    if (provider !== "elevenlabs") {
-      // OpenAI's voice set is a small fixed list - nothing worth a network round-trip for.
-      res.json(createApiResponse({ voices: [] }));
-      return;
-    }
-
+    const query = typeof req.query["q"] === "string" ? req.query["q"] : undefined;
     const db = req.app.locals["db"] as DatabaseService;
     const allSettings = await db.getAllSettings();
-    const apiKey = allSettings.find((s) => s.key === "ELEVENLABS_API_KEY")?.value;
-    if (!apiKey) {
-      res.json(createApiResponse({ voices: [] }));
+    const settingValue = (key: string) => allSettings.find((s) => s.key === key)?.value;
+
+    if (provider === "elevenlabs") {
+      const apiKey = settingValue("ELEVENLABS_API_KEY");
+      if (!apiKey) {
+        res.json(createApiResponse({ voices: [] }));
+        return;
+      }
+      const voices = await listElevenLabsVoices(apiKey);
+      res.json(createApiResponse({ voices }));
       return;
     }
 
-    const voices = await listElevenLabsVoices(apiKey);
-    res.json(createApiResponse({ voices }));
+    if (provider === "breeze") {
+      const apiKey = settingValue("BREEZE_API_KEY");
+      if (!apiKey) {
+        res.json(createApiResponse({ voices: [] }));
+        return;
+      }
+      const voices = await listBreezeVoices(apiKey, query);
+      res.json(createApiResponse({ voices }));
+      return;
+    }
+
+    if (provider === "chatterbox") {
+      const serverUrl = settingValue("CHATTERBOX_SERVER_URL") || "http://127.0.0.1:8890";
+      const chatterboxVoices = await listChatterboxVoices(serverUrl);
+      // Normalize {id, name} to the {voiceId, name} shape every other provider uses, so the
+      // client's voice picker doesn't need a provider-specific field mapping.
+      const voices = chatterboxVoices.map((v) => ({ voiceId: v.id, name: v.name }));
+      res.json(createApiResponse({ voices }));
+      return;
+    }
+
+    // OpenAI's voice set is a small fixed list - nothing worth a network round-trip for.
+    res.json(createApiResponse({ voices: [] }));
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     logger.error("TTS voice listing failed", { error: errorMsg });
     res.status(500).json(createApiError(`Stimmen-Abruf fehlgeschlagen: ${errorMsg}`));
+  }
+});
+
+chatRouter.get("/tts-health", async (req, res) => {
+  try {
+    const provider = String(req.query["provider"] ?? "");
+    if (provider !== "chatterbox") {
+      res.json(createApiResponse({ reachable: true }));
+      return;
+    }
+    const db = req.app.locals["db"] as DatabaseService;
+    const allSettings = await db.getAllSettings();
+    const serverUrl = allSettings.find((s) => s.key === "CHATTERBOX_SERVER_URL")?.value || "http://127.0.0.1:8890";
+    const reachable = await isChatterboxServerReachable(serverUrl);
+    res.json(createApiResponse({ reachable, serverUrl }));
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    res.status(500).json(createApiError(`Health-Check fehlgeschlagen: ${errorMsg}`));
   }
 });
 
@@ -299,13 +349,18 @@ chatRouter.get("/search", async (req, res, next) => {
 chatRouter.post("/", async (req, res, next) => {
   let runId: string | undefined;
   try {
-    const { message, conversationId, stream, provider, model } = req.body as {
+    const { message, conversationId, stream, provider, model, reasoningEffort } = req.body as {
       message: string;
       conversationId?: number;
       stream?: boolean;
       provider?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
     };
+    if (reasoningEffort !== undefined && !isReasoningEffort(reasoningEffort)) {
+      res.status(400).json(createApiError("Invalid reasoningEffort: expected off, low, medium, high or xhigh"));
+      return;
+    }
     const createAgent = req.app.locals["createAgent"] as ((override?: { provider?: string; model?: string }) => Promise<Agent>) | undefined;
     const requestedProvider = typeof provider === "string" && provider.trim() ? provider.trim() : undefined;
     const requestedModel = typeof model === "string" && model.trim() ? model.trim() : undefined;
@@ -360,7 +415,8 @@ chatRouter.post("/", async (req, res, next) => {
         // startConversation() again, which previously created a second, disconnected
         // conversation row that only the very first message of every new chat ever wrote to.
         await runAgent.loadConversation(activeConversationId);
-      }
+      },
+      { reasoningEffort }
     );
     res.json(createApiResponse(result.result));
 

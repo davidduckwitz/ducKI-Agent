@@ -1,3 +1,4 @@
+import { autoStartChatterbox, stopChatterbox } from "./lib/chatterbox-runtime.js";
 import "dotenv/config";
 import "./bootstrap-workspace.js";
 import express from "express";
@@ -23,7 +24,7 @@ import {
 } from "@ducki/agent";
 import { getDatabase, type DatabaseService, getPluginSettings, setPluginSetting } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
-import { MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
+import { MCPRegistry, normalizeMcpServers, type MCPServerConfig } from "@ducki/mcp";
 import type { ToolExecutor } from "@ducki/shared";
 import { createProvider, type ProviderName } from "@ducki/providers";
 import { allTools, browserActivityEvents, browserFrameEvents, stopAllBackgroundProcesses } from "@ducki/tools";
@@ -102,6 +103,7 @@ import { createCryptoPaymentMcpTool } from "./crypto/mcp-crypto-server.js";
 import { createTasksMcpTool } from "./tasks/mcp-tasks-server.js";
 import { createWorkflowMcpTool } from "./workflow/mcp-workflow-server.js";
 import { createCronjobsMcpTool } from "./cronjobs/mcp-cronjobs-server.js";
+import { setupAudioStreamServer } from "./websocket/audio-stream.js";
 import {
 	setupWebSocket,
 	broadcastServerShutdown,
@@ -250,20 +252,7 @@ const MCP_SERVERS_SETTING = "MCP_SERVERS";
 function parseMcpServerConfigs(raw: string | undefined): MCPServerConfig[] {
 	if (!raw) return [];
 	try {
-		const parsed = JSON.parse(raw) as unknown;
-		if (!Array.isArray(parsed)) return [];
-		return parsed
-			.filter((item) => item && typeof item === "object")
-			.map((item, index) => {
-				const entry = item as Record<string, unknown>;
-				return {
-					id: String(entry["id"] ?? `mcp_${index + 1}`).trim(),
-					name: String(entry["name"] ?? `MCP ${index + 1}`).trim(),
-					url: String(entry["url"] ?? "").trim(),
-					enabled: entry["enabled"] !== false,
-				};
-			})
-			.filter((entry) => entry.id.length > 0 && entry.name.length > 0 && entry.url.length > 0);
+		return normalizeMcpServers(JSON.parse(raw));
 	} catch {
 		return [];
 	}
@@ -582,7 +571,7 @@ async function bootstrap(): Promise<void> {
 		return createCodingAgent(options?.provider ?? providerRef.current, db, options?.eventEmitter, {
 			sandboxRoot: resolvedSandboxRoot,
 			maxIterations: options?.maxIterations,
-			extraTools: [codingDelegationTool],
+			extraTools: [codingDelegationTool, createMcpTool(mcpRegistry)],
 			explorerProfileResolver: async () => botServiceRef.current?.resolveExplorerProfile(),
 			previewBaseUrl,
 			...(options?.exploreTimeoutMs ? { exploreTimeoutMs: options.exploreTimeoutMs } : {}),
@@ -736,6 +725,7 @@ async function bootstrap(): Promise<void> {
 	cloudVoiceChatService.start();
 
 	app.locals["db"] = db;
+	void autoStartChatterbox(db).catch((error) => console.error("Chatterbox autostart failed", error));
 	app.locals["logger"] = logger;
 	app.locals["provider"] = providerRef.current;
 	app.locals["workflowEngine"] = workflowEngineRef.current;
@@ -782,6 +772,9 @@ async function bootstrap(): Promise<void> {
 		return { discord: statuses["discord"] ?? { enabled: false, configured: false, active: false, updatedAt: new Date().toISOString() }, connectors: statuses };
 	});
 	app.locals["io"] = io;
+
+	// Separate from Socket.io on purpose - see audio-stream.ts's module docstring.
+	setupAudioStreamServer(httpServer, db);
 
 	// Live browser preview: the browser tool's CDP screencast frames arrive here as plain
 	// events (packages/tools has no socket/io dependency of its own) - relay each one to
@@ -882,6 +875,7 @@ async function bootstrap(): Promise<void> {
 		// children of this process but do not die with it - without this they keep running and
 		// keep holding their port after a restart.
 		stopAllBackgroundProcesses();
+		stopChatterbox();
 		void mcpRegistry.shutdown();
 		io.close();
 		httpServer.close(() => {

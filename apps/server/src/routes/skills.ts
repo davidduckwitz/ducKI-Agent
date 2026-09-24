@@ -8,8 +8,48 @@ import { installSkillFromSource } from "../lib/skill-install.js";
 import { runSkillCommand, SkillRunnerError } from "../lib/skill-runner.js";
 import { SkillBuilderSpecSchema, createValidatedSkill, previewSkill } from "../lib/skill-builder.js";
 import { skillsRoot as resolveConfiguredSkillsRoot } from "@ducki/shared";
+import { sharedWorkspaceRoot } from "@ducki/shared";
+import { SkillLearner } from "@ducki/agent";
+import type { LLMProvider } from "@ducki/providers";
+import type { DatabaseService } from "@ducki/database";
+import { getRootLogger } from "@ducki/logger";
 
 export const skillsRouter: IRouter = Router();
+
+const learnerFor = (locals: Record<string, any>): SkillLearner => {
+  if (!locals["provider"] || !locals["db"]) throw new Error("Learning provider is unavailable");
+  return new SkillLearner(locals["provider"] as LLMProvider, locals["db"] as DatabaseService,
+    getRootLogger().child("SkillLearning"), { sourceRoot: sharedWorkspaceRoot(), allowConversation: true });
+};
+
+skillsRouter.get("/learn/candidates", async (req, res, next) => {
+  try { res.json(createApiResponse(await learnerFor(req.app.locals).listCandidates())); }
+  catch (error) { next(error); }
+});
+skillsRouter.post("/learn", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    if ((await db.getSetting("SKILL_CREATION_ENABLED"))?.trim().toLowerCase() !== "true") {
+      res.status(403).json(createApiError("Skill creation is disabled")); return;
+    }
+    if (typeof req.body?.source !== "string" || !req.body.source.trim()) {
+      res.status(400).json(createApiError("source is required")); return;
+    }
+    const result = await learnerFor(req.app.locals).learnFromSource(req.body.source,
+      typeof req.body.context === "string" ? req.body.context : undefined);
+    res.status(result.success ? 201 : 400).json(createApiResponse(result));
+  } catch (error) { next(error); }
+});
+skillsRouter.post("/learn/:slug/approve", async (req, res, next) => {
+  try {
+    const db = req.app.locals["db"] as DatabaseService;
+    if ((await db.getSetting("SKILL_CREATION_ENABLED"))?.trim().toLowerCase() !== "true") {
+      res.status(403).json(createApiError("Skill creation is disabled")); return;
+    }
+    await learnerFor(req.app.locals).approve(String(req.params["slug"]));
+    res.json(createApiResponse({ approved: true }));
+  } catch (error) { next(error); }
+});
 
 type SkillSource = "builtin" | "plugin";
 

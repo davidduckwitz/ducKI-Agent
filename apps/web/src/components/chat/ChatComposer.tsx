@@ -3,10 +3,10 @@ import { ArrowUp, Image as ImageIcon, Loader2, Paperclip, Sparkles, Square, Wren
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
-import { startVoiceActivityWatcher, type VoiceActivityWatcherHandle } from "../../lib/voiceActivityDetection";
-import { onAgentTurnEnded } from "../../lib/voiceConversationBus";
+import { useVoiceCapture } from "../../hooks/useVoiceCapture";
 import { isPlaybackActive, subscribePlaybackActivity, stopAllPlayback } from "../../lib/voicePlaybackRegistry";
 import { ToolSkillSelector, type SelectorMode } from "./ToolSkillSelector";
+import { ReasoningSelector } from "./ReasoningSelector";
 import { ProviderModelSelector } from "./ProviderModelSelector";
 
 const MAX_TEXTAREA_HEIGHT = 220;
@@ -54,27 +54,22 @@ export function ChatComposer({
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<any>(null);
   const [selector, setSelector] = useState<{ mode: SelectorMode; query: string } | null>(null);
   const [focused, setFocused] = useState(false);
   const [showLLMSelector, setShowLLMSelector] = useState(false);
-  const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [voiceRetryAvailable, setVoiceRetryAvailable] = useState(false);
-  const [isListening, setIsListening] = useState(false);
   const shouldSendAfterTranscribeRef = useRef(false);
-  const vadHandleRef = useRef<VoiceActivityWatcherHandle | null>(null);
+  const { enableTTS, autoPlayTTS, setAutoPlayTTS } = useVoiceSettings();
   const {
-    sttMaxRecordingMs,
-    voiceRetryPromptEnabled,
-    sttMode,
-    sttSilenceThreshold,
-    sttSilenceTimeoutMs,
-    sttMinSpeechMs,
-    continuousConversationMode,
-    enableTTS,
-    autoPlayTTS,
-    setAutoPlayTTS,
-  } = useVoiceSettings();
+    isListening, voiceError, voiceRetryAvailable, toggle: handleVoiceToggle,
+    clearError,
+  } = useVoiceCapture({
+    onStop,
+    onText: (text) => {
+      shouldSendAfterTranscribeRef.current = true;
+      setValue((current) => current + (current.trim() ? " " : "") + text);
+    },
+    onEnd: () => { shouldSendAfterTranscribeRef.current = false; },
+  });
 
   // Direct display-level control for TTS auto-play: a long auto-spoken message needs a way to
   // cut it off immediately without digging into Settings - see voicePlaybackRegistry.ts.
@@ -94,35 +89,6 @@ export function ChatComposer({
       setAutoPlayTTS(!autoPlayTTS);
     }
   };
-
-  // Hands-free loop: once the agent finishes speaking its reply, reopen the mic automatically
-  // so the user never has to click again. Refs (not state) because the bus subscription is set
-  // up once and must always act on the latest values, not the ones from the render it mounted in.
-  const continuousConversationModeRef = useRef(continuousConversationMode);
-  continuousConversationModeRef.current = continuousConversationMode;
-  const sttModeRef = useRef(sttMode);
-  sttModeRef.current = sttMode;
-  const isListeningRef = useRef(isListening);
-  isListeningRef.current = isListening;
-  const isLoadingRef = useRef(isLoading);
-  isLoadingRef.current = isLoading;
-  const uploadingRef = useRef(uploading);
-  uploadingRef.current = uploading;
-  const handleVoiceToggleRef = useRef<() => Promise<void>>(async () => {});
-
-  useEffect(() => {
-    return onAgentTurnEnded(() => {
-      if (
-        continuousConversationModeRef.current &&
-        sttModeRef.current === "vad-auto" &&
-        !isListeningRef.current &&
-        !isLoadingRef.current &&
-        !uploadingRef.current
-      ) {
-        void handleVoiceToggleRef.current();
-      }
-    });
-  }, []);
 
   useEffect(() => {
     if (!draftRequest) return;
@@ -145,174 +111,13 @@ export function ChatComposer({
 
   // Separate effect for auto-send to avoid double-sends
   useEffect(() => {
-    if (shouldSendAfterTranscribeRef.current && value.trim().length > 0 && !isLoading) {
+    if (shouldSendAfterTranscribeRef.current && value.trim().length > 0 && !isLoading && !uploading) {
       shouldSendAfterTranscribeRef.current = false;
       void submit();
     }
-  }, [value, isLoading]);
+  }, [value, isLoading, uploading]);
 
   const focusInput = () => textareaRef.current?.focus();
-
-  const handleVoiceToggle = async () => {
-    if (isListening) {
-      vadHandleRef.current?.stop();
-      vadHandleRef.current = null;
-      if (recognitionRef.current) {
-        const recorder = recognitionRef.current as MediaRecorder;
-        if (recorder.state !== "inactive") {
-          recorder.stop();
-        }
-      }
-      setIsListening(false);
-      return;
-    }
-
-    try {
-      setVoiceError(null);
-      setVoiceRetryAvailable(false);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // Find supported MIME types
-      let mimeType = "audio/webm";
-      const supportedTypes = [
-        "audio/webm",
-        "audio/webm;codecs=opus",
-        "audio/mp4",
-        "audio/wav",
-        "audio/ogg",
-      ];
-      for (const type of supportedTypes) {
-        if (MediaRecorder.isTypeSupported(type)) {
-          mimeType = type;
-          console.log("Using MIME type:", mimeType);
-          break;
-        }
-      }
-
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      const chunks: Blob[] = [];
-      let hasData = false;
-
-      mediaRecorder.ondataavailable = (e) => {
-        console.log("Data available:", e.data.size, "bytes");
-        if (e.data.size > 0) {
-          hasData = true;
-          chunks.push(e.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
-        vadHandleRef.current?.stop();
-        vadHandleRef.current = null;
-
-        try {
-          setIsListening(false);
-          console.log("Recording stopped. Total chunks:", chunks.length, "Has data:", hasData);
-
-          if (!hasData || chunks.length === 0) {
-            setVoiceError("Keine Sprache erkannt - bitte versuchen Sie es erneut");
-            setVoiceRetryAvailable(voiceRetryPromptEnabled);
-            return;
-          }
-
-          const audioBlob = new Blob(chunks, { type: mimeType });
-          console.log("Audio blob size:", audioBlob.size);
-
-          if (audioBlob.size < 100) {
-            setVoiceError("Zu kurze Aufnahme - bitte versuchen Sie es erneut");
-            setVoiceRetryAvailable(voiceRetryPromptEnabled);
-            return;
-          }
-
-          setVoiceError("Transkribiere...");
-          const arrayBuffer = await audioBlob.arrayBuffer();
-          console.log("Sending to server, buffer size:", arrayBuffer.byteLength);
-
-          // Convert to base64 for reliable transmission
-          const base64Audio = btoa(
-            String.fromCharCode.apply(null, Array.from(new Uint8Array(arrayBuffer)))
-          );
-          console.log("Base64 encoded size:", base64Audio.length);
-
-          const response = await fetch("/api/chat/transcribe", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ audio: base64Audio, mimeType }),
-          });
-
-          if (!response.ok) {
-            const error = await response.json();
-            setVoiceError(error.error || "Transkription fehlgeschlagen");
-            return;
-          }
-
-          const result = await response.json();
-          const text = result.data?.text?.trim();
-          if (text) {
-            const newMessage = value + (value.trim() ? " " : "") + text;
-            setValue(newMessage);
-            setVoiceError(null);
-            // Set flag to auto-send when value updates
-            shouldSendAfterTranscribeRef.current = true;
-          } else {
-            setVoiceError("Keine Sprache erkannt");
-            setVoiceRetryAvailable(voiceRetryPromptEnabled);
-          }
-        } catch (err) {
-          console.error("Transcription error:", err);
-          setVoiceError("Transkription fehlgeschlagen");
-          setVoiceRetryAvailable(voiceRetryPromptEnabled);
-        }
-      };
-
-      mediaRecorder.onerror = (e) => {
-        stream.getTracks().forEach((track) => track.stop());
-        console.error("MediaRecorder error:", e.error);
-        setVoiceError(`Aufnahmefehler: ${e.error}`);
-        setIsListening(false);
-      };
-
-      recognitionRef.current = mediaRecorder;
-      setIsListening(true);
-      console.log("Starting recording with MIME type:", mimeType);
-      mediaRecorder.start();
-
-      // sttMaxRecordingMs is always the hard safety-net cap, even in "automatic" mode - the VAD
-      // watcher below is what makes automatic mode actually stop early, on silence.
-      setTimeout(() => {
-        if (recognitionRef.current === mediaRecorder && mediaRecorder.state === "recording") {
-          mediaRecorder.stop();
-        }
-      }, sttMaxRecordingMs);
-
-      if (sttMode === "vad-auto") {
-        vadHandleRef.current = startVoiceActivityWatcher(stream, {
-          silenceThreshold: sttSilenceThreshold,
-          silenceTimeoutMs: sttSilenceTimeoutMs,
-          minSpeechMs: sttMinSpeechMs,
-          onSilenceStop: () => {
-            if (recognitionRef.current === mediaRecorder && mediaRecorder.state === "recording") {
-              mediaRecorder.stop();
-            }
-          },
-        });
-      }
-    } catch (err) {
-      if (err instanceof Error) {
-        if (err.name === "NotAllowedError") {
-          setVoiceError("Mikrofon-Berechtigung erforderlich. Bitte Zugriff erlauben.");
-        } else if (err.name === "NotFoundError") {
-          setVoiceError("Kein Mikrofon verfügbar");
-        } else {
-          setVoiceError(err.message);
-        }
-      } else {
-        setVoiceError("Fehler beim Starten der Sprachaufnahme");
-      }
-      setIsListening(false);
-    }
-  };
 
   const handleChange = (next: string) => {
     setValue(next);
@@ -393,8 +198,7 @@ export function ChatComposer({
             {voiceRetryAvailable && (
               <button
                 onClick={() => {
-                  setVoiceError(null);
-                  setVoiceRetryAvailable(false);
+                  clearError();
                   void handleVoiceToggle();
                 }}
                 className="rounded px-2 py-0.5 font-medium text-destructive hover:bg-destructive/10 transition-colors"
@@ -404,8 +208,7 @@ export function ChatComposer({
             )}
             <button
               onClick={() => {
-                setVoiceError(null);
-                setVoiceRetryAvailable(false);
+                clearError();
               }}
               className="text-destructive/70 hover:text-destructive transition-colors"
             >
@@ -476,7 +279,7 @@ export function ChatComposer({
           className="max-h-[220px] w-full resize-none bg-transparent px-4 pb-1 pt-3.5 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
         />
 
-        <div className="flex items-center gap-1 px-2 pb-2 pt-1">
+        <div className="flex flex-wrap items-center gap-1 px-2 pb-2 pt-1">
           <input
             ref={fileInputRef}
             type="file"
@@ -499,7 +302,7 @@ export function ChatComposer({
             label="Spracheingabe"
             title={isListening ? "Aufnahme läuft..." : "Spracheingabe starten"}
             active={isListening}
-            onClick={() => !isLoading && !uploading && handleVoiceToggle()}
+            onClick={() => void handleVoiceToggle()}
           />
           {enableTTS && (
             <ComposerButton
@@ -562,6 +365,8 @@ export function ChatComposer({
             active={showLLMSelector}
             onClick={() => setShowLLMSelector(!showLLMSelector)}
           />
+
+          <ReasoningSelector />
 
           <div className="ml-auto flex items-center gap-2 pr-1">
             {totalTokens > 0 && (

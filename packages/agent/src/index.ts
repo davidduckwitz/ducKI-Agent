@@ -226,3 +226,6 @@ export { analyzeVideo, transcribeExtractedAudio, type VideoAnalysis, type VideoF
 export { BitcoinPuzzleService } from "./crypto/bitcoin-puzzle-service.js";
 export type { SolverState, SolverConfig, PuzzleMetadata } from "./crypto/bitcoin-puzzle-service.js";
 export type { AttemptRecord } from "./crypto/bitcoin-puzzle-solver.js";
+export { SkillLearner, createSkillLearnTool } from "./skills/skill-learner.js";
+export { ProjectLearning, codingProjectId } from "./coding/project-learning.js";
+export { evaluateCodingAgent, CODING_EVALUATION_CASES } from "./performance/coding-evaluation.js";

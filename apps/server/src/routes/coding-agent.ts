@@ -1,3 +1,4 @@
+import { isReasoningEffort, type ReasoningEffort } from "@ducki/shared";
 import { Router, type IRouter } from "express";
 import type { CodingAgent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
@@ -98,6 +99,7 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       /** From the coding chat's LLM selector - unset means "use the system default provider". */
       provider?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
       /** "Plan Mode" from the coding chat composer: create/refresh the plan and report it, never
        *  enter the EXPLORE/EDIT/VERIFY loop - see CodingRunOptions.planOnly. */
       planOnly?: boolean;
@@ -106,8 +108,21 @@ codingAgentRouter.post("/run", async (req, res, next) => {
        *  assistant messages carry it, letting the UI merge its optimistic bubble with the
        *  persisted one instead of showing both. */
       requestId?: string;
+      projectLearning?: boolean;
+      projectCorrection?: { trigger: string; observation: string; action: string; conditions: string };
     };
+    if (body.reasoningEffort !== undefined && !isReasoningEffort(body.reasoningEffort)) {
+      res.status(400).json(createApiError("Invalid reasoningEffort: expected off, low, medium, high or xhigh"));
+      return;
+    }
     const goal = String(body.goal ?? "").trim();
+    if (body.projectCorrection && !["trigger", "observation", "action", "conditions"].every(key => {
+      const value = (body.projectCorrection as unknown as Record<string, unknown>)[key];
+      const limit = key === "trigger" ? 400 : key === "conditions" ? 600 : 1200;
+      return typeof value === "string" && value.trim().length > 0 && value.length <= limit;
+    })) {
+      res.status(400).json(createApiError("Invalid project correction")); return;
+    }
     if (!goal) {
       res.status(400).json(createApiError("goal is required"));
       return;
@@ -236,6 +251,9 @@ codingAgentRouter.post("/run", async (req, res, next) => {
     let agentRegistryRunId: string | undefined;
     try {
       const result = await codingAgent.run(goal, {
+        reasoningEffort: body.reasoningEffort,
+        ...(typeof body.projectLearning === "boolean" ? { projectLearning: body.projectLearning } : {}),
+        ...(body.projectCorrection ? { projectCorrection: body.projectCorrection } : {}),
         verifyCommand: body.verifyCommand,
         maxAttempts,
         ...(reuseConversationId !== undefined ? { conversationId: reuseConversationId } : {}),

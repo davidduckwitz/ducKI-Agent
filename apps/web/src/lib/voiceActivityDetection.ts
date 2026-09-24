@@ -17,6 +17,7 @@ export interface VoiceActivityWatcherOptions {
    *  guards against a single click/cough immediately ending the recording. */
   minSpeechMs: number;
   onSilenceStop: () => void;
+  onSpeechStart?: () => void;
 }
 
 export interface VoiceActivityWatcherHandle {
@@ -40,7 +41,10 @@ export function startVoiceActivityWatcher(
   source.connect(analyser);
   const data = new Uint8Array(analyser.fftSize);
 
-  let speechStartedAt: number | null = null;
+  let speechMs = 0;
+  let previousAt = Date.now();
+  let notified = false;
+  void audioContext.resume().catch(() => {});
   let lastLoudAt = Date.now();
   let rafId = 0;
   let stopped = false;
@@ -67,12 +71,20 @@ export function startVoiceActivityWatcher(
     const rms = Math.sqrt(sumSquares / data.length);
 
     const now = Date.now();
+    const elapsed = Math.min(now - previousAt, 100);
+    previousAt = now;
     if (rms > options.silenceThreshold) {
       lastLoudAt = now;
-      if (speechStartedAt === null) speechStartedAt = now;
+      speechMs += elapsed;
+    } else if (!notified && now - lastLoudAt > 150) {
+      speechMs = 0;
     }
 
-    const spokeLongEnough = speechStartedAt !== null && lastLoudAt - speechStartedAt >= options.minSpeechMs;
+    const spokeLongEnough = speechMs >= options.minSpeechMs;
+    if (spokeLongEnough && !notified) {
+      notified = true;
+      options.onSpeechStart?.();
+    }
     const silentFor = now - lastLoudAt;
 
     if (spokeLongEnough && silentFor >= options.silenceTimeoutMs) {

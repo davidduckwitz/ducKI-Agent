@@ -24,10 +24,12 @@
     "@ducki/shared": "workspace:*",
     "nodejs-whisper": "^0.3.0",
     "openai": "^4.52.0",
+    "ws": "^8.21.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.5.0"
   }
 }

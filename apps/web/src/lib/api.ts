@@ -719,6 +719,7 @@ export const api = {
          *  convention as the regular chat's LLM selector (chatProvider/chatModel). */
         provider?: string;
         model?: string;
+        reasoningEffort?: import("@ducki/shared").ReasoningEffort;
         /** "Plan Mode" toggle in the composer: create/refresh the plan and report it, never
          *  execute (no file/shell tool call happens) - see CodingRunOptions.planOnly. */
         planOnly?: boolean;
@@ -746,6 +747,7 @@ export const api = {
           timeoutMs: options?.timeoutMs,
           provider: options?.provider,
           model: options?.model,
+          reasoningEffort: options?.reasoningEffort,
           planOnly: options?.planOnly,
           requestId: options?.requestId,
         }),

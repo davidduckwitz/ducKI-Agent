@@ -4,7 +4,7 @@
  * Mirrors audio-transcription.ts's settings-driven provider construction.
  */
 import type { DatabaseService } from "@ducki/database";
-import { createTextToSpeechProvider, type TextToSpeechProviderFactoryConfig } from "@ducki/providers";
+import { createTextToSpeechProvider, type TextToSpeechProviderFactoryConfig, type TextToSpeechProvider } from "@ducki/providers";
 
 function readSetting(settings: Map<string, string>, key: string, defaultValue?: string): string | undefined {
   return settings.get(key) || defaultValue;
@@ -13,6 +13,8 @@ function readSetting(settings: Map<string, string>, key: string, defaultValue?: 
 export interface SynthesizeSpeechOptions {
   voice?: string;
   emotionStyle?: string;
+  emotionInstructions?: string;
+  language?: string;
 }
 
 export interface SynthesizeSpeechResult {
@@ -20,22 +22,45 @@ export interface SynthesizeSpeechResult {
   mimeType: string;
 }
 
-export async function synthesizeSpeech(
+/**
+ * Builds the configured TTS provider from settings without calling synthesize() - shared by the
+ * batch /api/chat/speak route (synthesizeSpeech below) and the streaming audio WebSocket
+ * endpoint (websocket/audio-stream.ts), which needs the raw provider to check for
+ * StreamingTextToSpeechProvider support and call synthesizeStream() itself.
+ */
+export async function resolveTextToSpeechProvider(
   db: DatabaseService,
-  text: string,
   opts: SynthesizeSpeechOptions = {}
-): Promise<SynthesizeSpeechResult> {
+): Promise<TextToSpeechProvider> {
   const allSettings = await db.getAllSettings();
   const settingsMap = new Map(allSettings.map((s) => [s.key, s.value]));
 
-  const providerName = (readSetting(settingsMap, "DEFAULT_TEXT_TO_SPEECH_PROVIDER", "openai") ?? "openai") as
+  const providerName = (readSetting(settingsMap, "DEFAULT_TEXT_TO_SPEECH_PROVIDER", "chatterbox") ?? "chatterbox") as
     | "openai"
     | "elevenlabs"
     | "piper"
-    | "local";
+    | "local"
+    | "chatterbox"
+    | "breeze";
 
   let config: TextToSpeechProviderFactoryConfig;
   switch (providerName) {
+    case "chatterbox":
+      config = {
+        name: "chatterbox",
+        serverUrl: readSetting(settingsMap, "CHATTERBOX_SERVER_URL", "http://127.0.0.1:8890"),
+        voice: opts.voice || readSetting(settingsMap, "CHATTERBOX_DEFAULT_VOICE"),
+        emotionExaggeration: Number.parseFloat(readSetting(settingsMap, "CHATTERBOX_EMOTION_EXAGGERATION", "0.5") ?? "0.5"),
+      };
+      break;
+    case "breeze":
+      config = {
+        name: "breeze",
+        apiKey: readSetting(settingsMap, "BREEZE_API_KEY"),
+        wsUrl: readSetting(settingsMap, "BREEZE_WS_URL"),
+        voice: opts.voice || readSetting(settingsMap, "BREEZE_DEFAULT_VOICE_ID"),
+      };
+      break;
     case "elevenlabs":
       config = {
         name: "elevenlabs",
@@ -91,6 +116,19 @@ export async function synthesizeSpeech(
       };
   }
 
-  const provider = createTextToSpeechProvider(config);
-  return provider.synthesize(text, { voice: opts.voice, emotionStyle: opts.emotionStyle });
+  return createTextToSpeechProvider(config);
+}
+
+export async function synthesizeSpeech(
+  db: DatabaseService,
+  text: string,
+  opts: SynthesizeSpeechOptions = {}
+): Promise<SynthesizeSpeechResult> {
+  const provider = await resolveTextToSpeechProvider(db, opts);
+  return provider.synthesize(text, {
+    voice: opts.voice,
+    emotionStyle: opts.emotionStyle,
+    emotionInstructions: opts.emotionInstructions,
+    language: opts.language,
+  });
 }

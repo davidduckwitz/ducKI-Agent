@@ -5,6 +5,7 @@ import { useUiStore, type CodingAgentTab } from "../../lib/uiStore";
 import { useAppStore } from "../../lib/store";
 import { useServerQuery } from "../../lib/useServerQuery";
 import { api } from "../../lib/api";
+import { ReasoningSelector } from "../chat/ReasoningSelector";
 import { ProviderModelSelector } from "../chat/ProviderModelSelector";
 import { DuckyMascot } from "../chat/DuckyMascot";
 import { EventRow, MessageRow, StreamingRow } from "../chat/ChatMessageRow";
@@ -20,6 +21,7 @@ import { CodingDonePanel } from "./CodingDonePanel";
 import { CodingChangesPanel } from "./CodingChangesPanel";
 import { CodingTodoStrip, type CodingTodoItem } from "./CodingTodoStrip";
 import { CodingAttemptTimeline } from "./CodingAttemptTimeline";
+import { isVisibleCodingChatMessage } from "../../lib/codingChatVisibility";
 
 /**
  * Strip raw tool-call markers from an assistant message for the coding CHAT tab.
@@ -183,13 +185,9 @@ export function CodingAgentPanel({
   const conversation = useMemo(() => {
     const out: Array<{ msg: RenderedChatMessage; changedFiles: string[] }> = [];
     for (const original of messages) {
-      if (original.role === "event" || original.role === "tool") continue;
+      if (!isVisibleCodingChatMessage(original)) continue;
       if (original.role === "user") {
         out.push({ msg: { ...original, content: stripCodingScaffold(original.content) }, changedFiles: [] });
-        continue;
-      }
-      if (original.role !== "assistant") {
-        out.push({ msg: original, changedFiles: [] });
         continue;
       }
       if (looksLikeToolResultJson(original.content)) continue;
@@ -602,6 +600,8 @@ export function CodingAgentPanel({
             <Zap className="h-3 w-3 shrink-0" />
             <span className="truncate">{chatProvider || chatModel ? `${chatProvider ?? "-"} / ${chatModel ?? "-"}` : t("codingPage.llmSystemDefault")}</span>
           </button>
+
+          <ReasoningSelector />
 
           {totalTokens > 0 && (
             <span

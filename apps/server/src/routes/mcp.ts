@@ -1,31 +1,17 @@
 import { Router, type IRouter } from "express";
 import type { DatabaseService } from "@ducki/database";
-import type { MCPRegistry, MCPServerConfig } from "@ducki/mcp";
+import { normalizeMcpServers, type MCPRegistry, type MCPServerConfig } from "@ducki/mcp";
 import { createApiError, createApiResponse } from "@ducki/shared";
 
 export const mcpRouter: IRouter = Router();
 
 const MCP_SERVERS_SETTING = "MCP_SERVERS";
 
-function normalizeServers(value: unknown): MCPServerConfig[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item) => item && typeof item === "object")
-    .map((item) => item as Record<string, unknown>)
-    .map((item, index) => ({
-      id: String(item["id"] ?? `mcp_${index + 1}`).trim(),
-      name: String(item["name"] ?? `MCP ${index + 1}`).trim(),
-      url: String(item["url"] ?? "").trim(),
-      enabled: item["enabled"] !== false,
-    }))
-    .filter((item) => item.id.length > 0 && item.name.length > 0 && item.url.length > 0);
-}
-
 async function loadConfiguredServers(db: DatabaseService): Promise<MCPServerConfig[]> {
   const raw = await db.getSetting(MCP_SERVERS_SETTING);
   if (!raw) return [];
   try {
-    return normalizeServers(JSON.parse(raw));
+    return normalizeMcpServers(JSON.parse(raw));
   } catch {
     return [];
   }
@@ -51,7 +37,9 @@ mcpRouter.put("/servers", async (req, res, next) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
     const registry = req.app.locals["mcpRegistry"] as MCPRegistry;
-    const servers = normalizeServers((req.body as { servers?: unknown[] })?.servers ?? []);
+    let servers: MCPServerConfig[];
+    try { servers = normalizeMcpServers(req.body?.servers ?? req.body); }
+    catch (error) { res.status(400).json(createApiError(String(error))); return; }
     await saveConfiguredServers(db, servers);
     await registry.syncServers(servers);
     res.json(createApiResponse({ saved: true, servers: registry.getServerStatus() }));

@@ -1,6 +1,8 @@
+import { ChatterboxControls } from "./ChatterboxControls";
 import { useEffect, useState } from "react";
 import { Volume2, Mic, MessageCircle } from "lucide-react";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
+import { providerSupportsRealtimeStreaming, providerSupportsEmotionInstructions } from "../../lib/ttsProviderCapabilities";
 
 interface VoiceOption {
   voiceId: string;
@@ -43,6 +45,8 @@ export function VoiceSettings() {
     setTTSStreamingMode,
     ttsEmotionStyle,
     setTTSEmotionStyle,
+    ttsEmotionInstructions,
+    setTTSEmotionInstructions,
     ttsStripMarkdown,
     setTTSStripMarkdown,
     autoPlayTTS,
@@ -58,29 +62,40 @@ export function VoiceSettings() {
     setVoiceRetryPromptEnabled,
   } = useVoiceSettings();
 
-  const providerSupportsStyle = ttsProvider === "elevenlabs";
-  const providerSupportsVoicePicker = ttsProvider === "openai" || ttsProvider === "elevenlabs";
-  const providerIsLocal = ttsProvider === "piper" || ttsProvider === "local";
+  const providerSupportsStyle = ttsProvider === "elevenlabs" || ttsProvider === "chatterbox";
+  const providerSupportsVoicePicker =
+    ttsProvider === "openai" || ttsProvider === "elevenlabs" || ttsProvider === "chatterbox" || ttsProvider === "breeze";
+  const providerIsLocal = ttsProvider === "piper" || ttsProvider === "local" || ttsProvider === "chatterbox";
+  const providerHasSearchableVoices = ttsProvider === "breeze";
 
   const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>([]);
+  const [voiceSearch, setVoiceSearch] = useState("");
+
+
   useEffect(() => {
-    if (ttsProvider !== "elevenlabs") {
+    if (ttsProvider !== "elevenlabs" && ttsProvider !== "chatterbox" && ttsProvider !== "breeze") {
       setAvailableVoices([]);
       return;
     }
     let cancelled = false;
-    fetch(`/api/chat/tts-voices?provider=${ttsProvider}`)
-      .then((res) => res.json())
-      .then((body: { data?: { voices?: VoiceOption[] } }) => {
-        if (!cancelled) setAvailableVoices(body.data?.voices ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setAvailableVoices([]);
-      });
+    const params = new URLSearchParams({ provider: ttsProvider });
+    if (ttsProvider === "breeze" && voiceSearch.trim()) params.set("q", voiceSearch.trim());
+    const handle = setTimeout(() => {
+      fetch(`/api/chat/tts-voices?${params.toString()}`)
+        .then((res) => res.json())
+        .then((body: { data?: { voices?: VoiceOption[] } }) => {
+          if (!cancelled) setAvailableVoices(body.data?.voices ?? []);
+        })
+        .catch(() => {
+          if (!cancelled) setAvailableVoices([]);
+        });
+    }, ttsProvider === "breeze" ? 300 : 0);
     return () => {
       cancelled = true;
+      clearTimeout(handle);
     };
-  }, [ttsProvider]);
+  }, [ttsProvider, voiceSearch]);
+
 
   return (
     <div className="space-y-6">
@@ -156,6 +171,40 @@ export function VoiceSettings() {
 
               {sttMode === "vad-auto" && (
                 <div className="space-y-4 rounded bg-accent/10 p-3">
+                  <div className="space-y-1.5">
+                    <label className="block text-sm font-medium">Reaktions-Preset</label>
+                    <div className="flex gap-1.5">
+                      {(
+                        [
+                          { key: "fast", label: "Schnell", timeout: 500, threshold: 0.02, minSpeech: 250 },
+                          { key: "balanced", label: "Ausgewogen", timeout: 750, threshold: 0.02, minSpeech: 300 },
+                          { key: "relaxed", label: "Entspannt", timeout: 1500, threshold: 0.015, minSpeech: 400 },
+                        ] as const
+                      ).map((preset) => (
+                        <button
+                          key={preset.key}
+                          type="button"
+                          onClick={() => {
+                            setSTTSilenceTimeoutMs(preset.timeout);
+                            setSTTSilenceThreshold(preset.threshold);
+                            setSTTMinSpeechMs(preset.minSpeech);
+                          }}
+                          className={`flex-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${
+                            sttSilenceTimeoutMs === preset.timeout
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-border text-muted-foreground hover:border-foreground/50 hover:text-foreground"
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Setzt Stille-Timeout, Empfindlichkeit und Mindest-Sprechdauer zusammen. Die Regler darunter
+                      erlauben Feinjustierung.
+                    </p>
+                  </div>
+
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-sm font-medium">Stille-Timeout</label>
@@ -247,9 +296,23 @@ export function VoiceSettings() {
                 <label className="block text-sm font-medium">TTS-Provider</label>
                 <select
                   value={ttsProvider}
-                  onChange={(e) => setTTSProvider(e.target.value as "web-speech-api" | "openai" | "elevenlabs" | "piper" | "local" | "silero")}
+                  onChange={(e) =>
+                    setTTSProvider(
+                      e.target.value as
+                        | "web-speech-api"
+                        | "openai"
+                        | "elevenlabs"
+                        | "piper"
+                        | "local"
+                        | "silero"
+                        | "chatterbox"
+                        | "breeze"
+                    )
+                  }
                   className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
                 >
+                  <option value="chatterbox">Chatterbox Multilingual V3 (lokal, Emotion-Regler)</option>
+                  <option value="breeze">Breeze TTS (Cloud, Streaming, freie Emotion-Steuerung)</option>
                   <option value="web-speech-api">Web Speech API (Browser-native, inkl. Windows Neural Voices)</option>
                   <option value="openai">OpenAI TTS (Cloud)</option>
                   <option value="elevenlabs">ElevenLabs TTS (Cloud, Emotion/Style)</option>
@@ -259,6 +322,18 @@ export function VoiceSettings() {
                     Silero TTS (Server) - Kommt bald
                   </option>
                 </select>
+                {ttsProvider === "chatterbox" && <ChatterboxControls />}
+                {ttsProvider === "breeze" && (
+                  <p className="text-xs text-muted-foreground">
+                    Breeze-API-Key wird unter Settings → Speech hinterlegt. Cloud-Dienst ohne Selbst-Hosting-Option.
+                  </p>
+                )}
+                {providerSupportsRealtimeStreaming(ttsProvider) && (
+                  <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                    Streaming-fähig: Antworten werden in kleinen Textabschnitten statt satzweise gesprochen -
+                    spürbar weniger Pausen.
+                  </p>
+                )}
                 {providerSupportsVoicePicker && (
                   <p className="text-xs text-muted-foreground">
                     Server-Zugangsdaten (API-Key, Modell, Stimme) werden unter Settings → Speech konfiguriert.
@@ -288,7 +363,46 @@ export function VoiceSettings() {
                 </select>
               </div>
 
-              {providerSupportsVoicePicker && (
+              {providerHasSearchableVoices && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Stimmen durchsuchen</label>
+                  <input
+                    type="text"
+                    value={voiceSearch}
+                    onChange={(e) => setVoiceSearch(e.target.value)}
+                    placeholder="z. B. deutsch, männlich, ruhig..."
+                    className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Über 15.000 Stimmen in der Breeze Voice Galaxy - Suchbegriff eingeben statt einer vollständigen Liste.
+                  </p>
+                </div>
+              )}
+
+              {providerSupportsVoicePicker && ttsProvider === "chatterbox" && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Stimme</label>
+                  <select
+                    value={ttsVoice || "default"}
+                    onChange={(e) => setTTSVoice(e.target.value === "default" ? "" : e.target.value)}
+                    className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {availableVoices.length === 0 && <option value="default">Chatterbox Standard</option>}
+                    {availableVoices.map((v) => (
+                      <option key={v.voiceId} value={v.voiceId}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Chatterbox klont Stimmen aus einer Referenzaufnahme statt vorgefertigter Presets zu nutzen - eigene
+                    .wav-Datei unter <code className="rounded bg-muted px-1">apps/server/scripts/voices/</code> ablegen,
+                    dann erscheint sie hier (siehe apps/server/scripts/README.md).
+                  </p>
+                </div>
+              )}
+
+              {providerSupportsVoicePicker && ttsProvider !== "chatterbox" && (
                 <div className="space-y-2">
                   <label className="block text-sm font-medium">Stimme (Voice-ID)</label>
                   <input
@@ -296,7 +410,7 @@ export function VoiceSettings() {
                     list="tts-voice-options"
                     value={ttsVoice}
                     onChange={(e) => setTTSVoice(e.target.value)}
-                    placeholder={ttsProvider === "openai" ? "z. B. alloy, nova, shimmer" : "ElevenLabs Voice-ID"}
+                    placeholder={ttsProvider === "openai" ? "z. B. alloy, nova, shimmer" : "Voice-ID"}
                     className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                   {availableVoices.length > 0 && (
@@ -308,11 +422,11 @@ export function VoiceSettings() {
                       ))}
                     </datalist>
                   )}
-                  {ttsProvider === "elevenlabs" && (
+                  {(ttsProvider === "elevenlabs" || ttsProvider === "breeze") && (
                     <p className="text-xs text-muted-foreground">
                       {availableVoices.length > 0
-                        ? `${availableVoices.length} Stimme(n) aus dem ElevenLabs-Konto verfügbar (Vorschläge im Feld).`
-                        : "Kein API-Key hinterlegt oder keine Stimmen gefunden - Voice-ID manuell eintragen."}
+                        ? `${availableVoices.length} Stimme(n) verfügbar (Vorschläge im Feld).`
+                        : "Keine Stimmen gefunden - Voice-ID manuell eintragen oder Zugangsdaten/Server prüfen."}
                     </p>
                   )}
                 </div>
@@ -332,6 +446,24 @@ export function VoiceSettings() {
                     <option value="empathetic">Einfühlsam</option>
                     <option value="excited">Begeistert</option>
                   </select>
+                </div>
+              )}
+
+              {providerSupportsEmotionInstructions(ttsProvider) && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Emotion / Sprechstil (Freitext)</label>
+                  <input
+                    type="text"
+                    value={ttsEmotionInstructions}
+                    onChange={(e) => setTTSEmotionInstructions(e.target.value)}
+                    placeholder="z. B. warm, leicht spielerisch, entspanntes Tempo"
+                    className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Freitext-Beschreibung des Sprechstils - überschreibt das Preset oben, wenn ausgefüllt. Leer lassen,
+                    um stattdessen das Preset zu nutzen.
+                    {ttsProvider === "openai" && " Wird bei OpenAI nur mit Modell \"gpt-4o-mini-tts\" berücksichtigt (Settings → Speech)."}
+                  </p>
                 </div>
               )}
 

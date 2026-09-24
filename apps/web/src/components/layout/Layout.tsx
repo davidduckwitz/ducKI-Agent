@@ -15,6 +15,7 @@ import {
   Wallet,
   Bot,
   Users,
+  AudioLines,
 } from "lucide-react";
 import { useAppStore } from "../../lib/store";
 import { useI18n } from "../../lib/i18n";
@@ -79,6 +80,7 @@ export function Layout() {
 
   const settingsQuery = useSettings();
   const codingEnabled = readFlag(settingsQuery.data, "CODING_ENABLED");
+  const audioEnabled = readFlag(settingsQuery.data, "AUDIO_ENABLED");
   const pluginsQuery = usePlugins();
 
   useEffect(() => {
@@ -102,6 +104,7 @@ export function Layout() {
         { to: "/bots", icon: Bot, label: t("nav.bots") },
         { to: "/bot-chats", icon: Users, label: t("nav.botChats") },
         ...(codingEnabled ? [{ to: "/coding", icon: Code2, label: "Agent Control" }] : []),
+        ...(audioEnabled ? [{ to: "/audio", icon: AudioLines, label: "Audio" }] : []),
       ],
     },
     {
@@ -160,6 +163,7 @@ export function Layout() {
       <Sidebar
         navGroups={navGroups}
         codingEnabled={codingEnabled}
+        audioEnabled={audioEnabled}
         runningCount={runningCount}
         runningTools={runningTools}
         gatewayActive={gatewayActive}

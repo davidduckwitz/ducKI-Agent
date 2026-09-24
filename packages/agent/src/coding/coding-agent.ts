@@ -1,4 +1,5 @@
 import type { LLMProvider } from "@ducki/providers";
+import { withReasoningEffort } from "@ducki/providers";
 import type { DatabaseService } from "@ducki/database";
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import type { Logger } from "@ducki/logger";
@@ -14,6 +15,7 @@ import {
 } from "@ducki/tools";
 import { existsSync, readFileSync, readdirSync, appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute, basename } from "node:path";
+import { createHash } from "node:crypto";
 import { Agent, TOOL_CALL_FORMAT_BLOCK } from "../agent.js";
 import type { AgentEventEmitter, AgentRunOptions, AgentRunResult, AgentRunEventType, RunJournalEntry } from "../config/interfaces_types.js";
 import { AGENT_HOOK_NAMES, type AgentHook } from "../hooks/index.js";
@@ -30,6 +32,18 @@ import { createStatusTool, type StatusProvider } from "./status-tool.js";
 import { buildRepositorySnapshot as buildSandboxSnapshot } from "./repo-snapshot.js";
 import { Planner, type Plan, type PlanStep } from "../planner/planner.js";
 import { formatPlanAsMarkdown, toPlanEventPayload } from "../planner/plan-tool.js";
+import { CodingRunState, type VerifyFailureUpdate } from "./coding-run-state.js";
+import type { CheckpointDiff } from "./checkpoints.js";
+import { ProjectLearning, codingProjectId } from "./project-learning.js";
+import { SkillLearner, createSkillLearnTool } from "../skills/skill-learner.js";
+
+export interface CodingAttemptContext {
+  goal: string;
+  attempt: number;
+  state: CodingRunState;
+  verifyCommand?: string;
+  diff?: CheckpointDiff;
+}
 
 const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
 
@@ -37,7 +51,7 @@ Discipline:
 1. Plan the concrete files and steps before making any change.
 2. Never edit a file you have not first read via the filesystem tool's "read" action.
 3. Make minimal, targeted edits - do not restructure unrelated code. Prefer the filesystem tool's "edit" action (exact text replacement) over "write" for changes to existing files; only use "write" for new files or a genuine full-file replacement.
-4. After every change, verify it: re-read the file or run a build/test command via the shell tool.
+4. After changes, run checks appropriate to the goal. A read confirms file contents, diagnostics check static errors, and tests check behavior; these are not interchangeable. Ground completion claims in actual verification output and name checks that were not run.
 5. If a verification command fails, diagnose the ACTUAL error output before retrying - do not guess or repeat the same fix blindly.
 6. Use git to inspect diffs/status/log when useful. Never run "git add", "git commit", "git push", or any other operation that stages, commits, or pushes changes - checkpoints are recorded automatically after every edit, version control is not your job here, and doing it yourself only creates a second, redundant history alongside the automatic one.
 7. Report concisely what changed and what you verified.
@@ -52,8 +66,9 @@ Discipline:
   Only use offset/limit when a file is genuinely large and grep told you which region matters.
 - FOR A BIG FILE, OUTLINE IT FIRST. filesystem action:"outline" lists its functions, classes and
   types with line numbers for a fraction of a full read - then read just the region you need.
-- NEVER RE-READ A FILE YOU ALREADY READ unless you changed it since. Its content is still in this
-  conversation. Re-reading costs the same tokens twice and tells you nothing new.
+- Reuse prior reads only while their relevant contents remain in context and current. Re-read
+  after context compaction, external changes, a failed edit, or uncertainty about freshness.
+  Before editing, know the current file contents; avoid redundant reads of unchanged visible code.
 - Search results and reads skip node_modules, .git and build output by default. That is correct -
   do not set includeIgnored to work around a missing result; refine your pattern instead.
 
@@ -188,6 +203,11 @@ export interface CodingAgentOptions {
 }
 
 export interface CodingRunOptions {
+  reasoningEffort?: import("@ducki/shared").ReasoningEffort;
+  /** Per-run override for paired memory-on/off evaluations without changing global settings. */
+  projectLearning?: boolean;
+  /** Explicit user correction, supplied by the caller; saved as a reviewable candidate. */
+  projectCorrection?: { trigger: string; observation: string; action: string; conditions: string };
   /**
    * Run inside an EXISTING conversation instead of opening a new one.
    *
@@ -460,6 +480,8 @@ export class CodingAgent {
   private readBeforeEditRefusals = new Map<string, number>();
   private readonly todos: TodoList;
   private readonly logger: Logger;
+  private readonly learningProvider: LLMProvider;
+  private learningAbortController = new AbortController();
   private readonly planner: Planner;
   /**
    * The phase the model last declared via its ">> PHASE: X" marker (see buildInitialPrompt),
@@ -628,6 +650,7 @@ export class CodingAgent {
     options: CodingAgentOptions = {}
   ) {
     this.defaultMaxAttempts = Math.max(1, options.maxAttempts ?? 4);
+    this.learningProvider = options.explorerProvider ?? provider;
     this.sandboxRoot = options.sandboxRoot;
     this.previewBaseUrl = options.previewBaseUrl;
     this.eventEmitter = eventEmitter;
@@ -1150,7 +1173,14 @@ export class CodingAgent {
         })),
     });
 
-    for (const tool of [fsTool, shTool, dxTool, gitTool, skillsTool, createTodoTool(this.todos), exploreTool, statusTool, ...(options.extraTools ?? [])]) {
+    const learnTool = createSkillLearnTool(new SkillLearner(this.learningProvider, db, this.logger, { sourceRoot: options.sandboxRoot }));
+    const guardedLearnTool: ToolExecutor = { ...learnTool, execute: async input => {
+      if ((await db.getSetting("SKILL_CREATION_ENABLED"))?.trim().toLowerCase() !== "true") {
+        return { success: false, data: null, error: "Skill creation is disabled" };
+      }
+      return learnTool.execute(input);
+    } };
+    for (const tool of [fsTool, shTool, dxTool, gitTool, skillsTool, guardedLearnTool, createTodoTool(this.todos), exploreTool, statusTool, ...(options.extraTools ?? [])]) {
       this.agent.executor.registerTool(tool);
     }
   }
@@ -1550,6 +1580,7 @@ export class CodingAgent {
   /** Stops the current attempt's underlying Agent (aborts the in-flight LLM call and prevents
    *  further attempts) - delegates to Agent.stop(), which already does the right thing. */
   stop(): void {
+    this.learningAbortController.abort();
     this.agent.stop();
   }
 
@@ -1560,7 +1591,16 @@ export class CodingAgent {
     return this.agent.run(prompt, options);
   }
 
+  protected async onAttemptFinished(_context: CodingAttemptContext): Promise<void> {}
+  protected async onVerificationFailed(_context: CodingAttemptContext, _failure: VerifyFailureUpdate): Promise<void> {}
+  protected beforeRetry(_context: CodingAttemptContext): string { return ""; }
+
   async run(goal: string, opts: CodingRunOptions = {}): Promise<CodingRunResult> {
+    return withReasoningEffort(opts.reasoningEffort, () => this.runWithReasoning(goal, opts));
+  }
+
+  private async runWithReasoning(goal: string, opts: CodingRunOptions): Promise<CodingRunResult> {
+    this.learningAbortController = new AbortController();
     // Per-run state. Without this reset a second run() on the same instance inherits the first
     // run's read-set, so the read-before-edit rule silently stops applying to files the agent
     // touched in an earlier, unrelated goal.
@@ -1610,6 +1650,23 @@ export class CodingAgent {
     // run gives up as non-converging (see the identicalFailureStreak check below). Settings key:
     // AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES. Default 3 preserves the previous hardcoded behavior.
     const maxIdenticalVerifyFailures = settingInt("AGENT_CODING_MAX_IDENTICAL_VERIFY_FAILURES", 3, 1, 20);
+    const runState = new CodingRunState(maxIdenticalVerifyFailures, normalizeVerifyErrorForComparison);
+    const learningEnabled = opts.projectLearning ?? settingEnabled("CODING_AGENT_PROJECT_LEARNING", true);
+    const projectLearning = this.sandboxRoot && learningEnabled
+      ? new ProjectLearning(this.db, codingProjectId(this.sandboxRoot)) : undefined;
+    let projectContext = "";
+    try {
+      if (projectLearning && opts.projectCorrection) await projectLearning.remember({
+        ...opts.projectCorrection, version: 1, projectId: projectLearning.projectId,
+        verification: "Explicit user correction; not independently verified",
+        evidence: [goal.slice(0, 1000)], source: "user-correction", createdAt: new Date().toISOString(),
+      }, opts.conversationId);
+      projectContext = await projectLearning?.recall(goal) ?? "";
+    }
+    catch (error) { this.logger.warn("Project memory unavailable", { error: String(error) }); }
+    const codingRunStartedAt = Date.now();
+    const verificationEvidence: string[] = [];
+    const executionMetrics = { inputTokens: 0, outputTokens: 0, calls: 0, estimated: false };
     // Settings key: AGENT_CODING_ALLOW_GIT_COMMIT (Settings > Coding Agent in the UI). Default
     // off: CODING_DIRECTIVE's point 6 already tells the model not to stage/commit on its own -
     // this only overrides that when an operator explicitly wants the model managing its own git
@@ -1729,7 +1786,7 @@ export class CodingAgent {
     // attempt writes exactly the missing parts (see healIncompleteSequences); the warning is
     // the fallback when healing does not finish the job. Every return path below goes through
     // this wrapper.
-    const finalize = async (result: CodingRunResult): Promise<CodingRunResult> => {
+    const finalizeCore = async (result: CodingRunResult): Promise<CodingRunResult> => {
       // See pendingCheckpointDiffs' doc comment: wait out any git subprocess still spawned from
       // the last model turn's fire-and-forget diff before this run is allowed to resolve, so a
       // caller acting on the resolved result (e.g. renaming sandboxRoot away) never races it.
@@ -1753,6 +1810,8 @@ export class CodingAgent {
         });
         return enforceCompletionContract({
           ...result,
+          // Healing changed files after the last verification; that proof is now stale.
+          verified: false,
           summary:
             `${result.summary}\n\n[Self-Healing: die fehlenden Datei-Teile wurden automatisch ` +
             `nachgeschrieben.${healDetail ? ` ${healDetail}` : ""}]`,
@@ -1781,6 +1840,28 @@ export class CodingAgent {
         success: false,
         summary: `${result.summary}\n\nWARNUNG: ${warning}`,
       });
+    };
+
+    const finalize = async (candidate: CodingRunResult): Promise<CodingRunResult> => {
+      const result = await finalizeCore(candidate);
+      let learned = false;
+      if (projectLearning && result.success && result.verified && result.verifyCommand && !opts.planOnly) {
+        learned = await projectLearning.learnVerifiedRun(this.learningProvider, {
+          goal, summary: result.summary, verifyCommand: result.verifyCommand,
+          success: result.success, verified: result.verified,
+          changedFiles: result.completionEvidence?.changedFiles ?? [], conversationId: result.conversationId,
+          evidence: [...verificationEvidence, ...[...changedFiles].slice(0, 12).map(file => `Checkpoint change: ${file}`)],
+          signal: this.learningAbortController.signal,
+        });
+      }
+      this.emit("decision", "Coding-Lauf ausgewertet", { codingEvaluation: {
+        success: result.success, verified: result.verified, attempts: result.attempts,
+        durationMs: Date.now() - codingRunStartedAt, projectLearningEnabled: learningEnabled,
+        lessonCandidateStored: learned, changedFileCount: changedFiles.size,
+        openChecklistCount: result.completionEvidence?.openChecklistItems.length ?? 0,
+        llm: executionMetrics,
+      } });
+      return result;
     };
 
     const detectedSkill = this.autoSelectCodingSkill(goal);
@@ -1991,8 +2072,6 @@ export class CodingAgent {
     // verify outcome (exact same error text as the previous attempt). A weak model can burn its
     // whole maxAttempts budget re-applying a fix that provably doesn't work instead of noticing
     // and changing approach - this surfaces that signal explicitly instead of retrying blind.
-    let previousVerifyError: string | undefined;
-    let identicalFailureStreak = 0;
     // Whether ANY attempt in this run has produced a real file change yet. The checklist
     // grounding check below must only fire while this is still false - a VERIFY or REPORT step
     // legitimately marks itself "done" without touching a single file (there is nothing to edit
@@ -2043,7 +2122,7 @@ export class CodingAgent {
 
       try {
 
-      const prompt =
+      let prompt =
         attempt === 1
           ? this.buildInitialPrompt(goal, verifyCommand, plan, isResuming, mutationExpected, allowGitCommit)
           : this.buildFollowUpPrompt(
@@ -2055,6 +2134,10 @@ export class CodingAgent {
               browserRuntimeRepairProtocol,
               browserRequireAssetEvidence,
             );
+      const attemptContext: CodingAttemptContext = { goal, attempt, state: runState, verifyCommand };
+      const retryHint = attempt > 1 ? this.beforeRetry(attemptContext) : "";
+      if (retryHint) prompt += `\n\n${retryHint}`;
+      if (projectContext) prompt += `\n\n${projectContext}`;
       // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
       // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
       // (possibly still "explore" if it timed out early) would permanently lock every retry
@@ -2080,6 +2163,21 @@ export class CodingAgent {
       let runResult: AgentRunResult;
       try {
         runResult = await this.agent.run(prompt, {
+          onEvent: event => {
+            const usage = event.data?.llmTokens as { input?: number; output?: number; estimated?: boolean } | undefined;
+            if (usage) {
+              executionMetrics.calls++;
+              executionMetrics.inputTokens += usage.input ?? 0;
+              executionMetrics.outputTokens += usage.output ?? 0;
+              executionMetrics.estimated ||= usage.estimated === true;
+            }
+          },
+          getWorkingState: () => JSON.stringify({
+            goal, attempt, phase: this.currentPhase, checklist: this.todos.snapshot(),
+            changedFiles: [...changedFiles], diagnostics: [...this.pendingDiagnosticErrors.entries()],
+            verification: runState.failureSnapshot(), rejectedApproaches: runState.ruledOut,
+            nextStep: this.todos.currentStepId(), journal: journal.slice(-8),
+          }),
           initialRunJournal: journal,
           getCurrentStepId: () => this.todos.currentStepId(),
           ...(staleReadRecoveryEnabled ? {
@@ -2191,6 +2289,8 @@ export class CodingAgent {
         }
       }
       lastSummary = runResult.response;
+      runState.lastSummary = lastSummary;
+      runState.journal = journal;
 
       // Extract and emit phase events from response
       this.extractAndEmitPhaseEvents(lastSummary, attempt);
@@ -2268,6 +2368,8 @@ export class CodingAgent {
       const stepIdsWithConfirmedWrite = new Set<string>();
       if (this.sandboxRoot && checkpoint) {
         const attemptDiff = await diffCheckpoint(this.sandboxRoot, checkpoint.sha);
+        attemptContext.diff = attemptDiff;
+        runState.markFileChanges(attemptDiff?.files.length ?? 0);
         const changedFileCount = attemptDiff?.files.length ?? 0;
         attemptChangedFileCount = changedFileCount;
         if (changedFileCount > 0) {
@@ -2400,6 +2502,8 @@ export class CodingAgent {
       // it if onModelResponse never fired for the response that carried the marker.
       this.reconcileReadOnlyPhaseCompletion(lastSummary);
 
+      runState.lastSummary = lastSummary;
+      await this.onAttemptFinished(attemptContext);
       if (!verificationEnabled) {
         this.emit("decision", "Verifikation deaktiviert - Ergebnis bleibt ungeprueft.", { attempt });
         return finalize({ success: true, verified: false, summary: lastSummary, attempts: attempt, conversationId });
@@ -2449,7 +2553,24 @@ export class CodingAgent {
         const hasExplicitContinuation = announcedWorkStep !== undefined && (
           attemptChangedFileCount > 0 || !retriedUngroundedAnnouncements.has(announcedWorkStep)
         );
-        if ((hasGroundedOpenWork || hasExplicitContinuation) && attempt < maxAttempts) {
+        // A run that requires mutation but hasn't reached EDIT yet (still on EXPLORE/PLAN, or
+        // never even started a phase) has, BY DEFINITION, no file change and no "Step N:"
+        // narration to show - those only exist once construction begins. Without this, a model
+        // that correctly finishes EXPLORE using the phase-marker vocabulary ("<< EXPLORE
+        // COMPLETE") but stops short of also opening EDIT in the same turn gets its entire run
+        // finalized right here (then rejected downstream as "mutation_missing") after doing
+        // nothing but look around - the same "model just stopped after phase text, no tool call"
+        // gap the comment above already describes for EDIT, just one phase earlier. Distinct
+        // from hasGroundedOpenWork on purpose: that one requires evidence of ALREADY-STARTED
+        // work, while this covers work that has legitimately not started yet. Bounded by
+        // attempt < maxAttempts like the other paths, so a model that never reaches EDIT at all
+        // still exhausts the normal attempt budget rather than looping forever.
+        const phaseSoFar: string = this.currentPhase;
+        const stillBeforeFirstEdit =
+          mutationExpected &&
+          !anyFileChangedThisRun &&
+          !["edit", "verify", "report"].includes(phaseSoFar);
+        if ((hasGroundedOpenWork || hasExplicitContinuation || (stillBeforeFirstEdit && openItems.length > 0)) && attempt < maxAttempts) {
           if (hasExplicitContinuation && announcedWorkStep !== undefined && attemptChangedFileCount === 0) {
             retriedUngroundedAnnouncements.add(announcedWorkStep);
           }
@@ -2459,7 +2580,9 @@ export class CodingAgent {
               ? `Keine Verifikation moeglich, aber Schritt ${announcedWorkStep} wurde als naechste Arbeit angekuendigt - fordere Fortsetzung an.`
               : groundingDemotedThisAttempt
                 ? `Keine Verifikation moeglich, und die eben zurueckgestufte Checkliste zeigt noch ${openItems.length} offene(n) Schritt(e) - fordere Fortsetzung an.`
-                : `Keine Verifikation moeglich, aber ${openItems.length} Checklisten-Schritt(e) noch offen - fordere Fortsetzung an.`,
+                : stillBeforeFirstEdit
+                  ? `Keine Verifikation moeglich - Phase "${this.currentPhase}" ist abgeschlossen, aber EDIT wurde noch nicht begonnen - fordere Fortsetzung an.`
+                  : `Keine Verifikation moeglich, aber ${openItems.length} Checklisten-Schritt(e) noch offen - fordere Fortsetzung an.`,
             { attempt, announcedWorkStep, openItems: openItems.map((item) => item.title) }
           );
           lastSummary =
@@ -2487,6 +2610,11 @@ export class CodingAgent {
             ...(this.sandboxRoot ? { cwd: this.sandboxRoot } : {}),
           });
       if (verifyResult.success) {
+        verificationEvidence.splice(0, verificationEvidence.length,
+          `Verification passed: ${verifyCommand}`,
+          `Verification output sha256: ${createHash("sha256").update(JSON.stringify(verifyResult)).digest("hex")}`,
+          ...(attemptContext.diff ? [`Checkpoint baseline: ${attemptContext.diff.sha}`,
+            `Verified patch sha256: ${createHash("sha256").update(attemptContext.diff.patch).digest("hex")}`] : []));
         this.reconcileFinalStepAfterVerification(lastSummary);
 
         // The verify command only proves the working tree doesn't currently fail its
@@ -2544,14 +2672,14 @@ export class CodingAgent {
       // every subsequent line number without changing the error itself, which used to reset
       // identicalFailureStreak to 0 on every attempt and let the run burn its whole budget on a
       // failure this check exists specifically to catch early.
-      const isIdenticalToPreviousFailure =
-        previousVerifyError !== undefined &&
-        normalizeVerifyErrorForComparison(verifyError) === normalizeVerifyErrorForComparison(previousVerifyError);
-      identicalFailureStreak = isIdenticalToPreviousFailure ? identicalFailureStreak + 1 : 0;
-      previousVerifyError = verifyError;
+      const failure = runState.recordVerifyFailure(verifyError);
+      const isIdenticalToPreviousFailure = failure.identicalToPrevious;
+      if (attempt < maxAttempts && failure.shouldReflect) {
+        await this.onVerificationFailed(attemptContext, failure);
+      }
 
       if (
-        identicalFailureStreak >= maxIdenticalVerifyFailures - 1 &&
+        failure.shouldStopForNonConvergence &&
         // Browser errors need the targeted source-level repair attempt below. They still stop
         // at the (small) extended budget, but must not be cut off by the generic repeated-error
         // guard before that repair has a chance to run.

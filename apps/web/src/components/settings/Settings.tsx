@@ -1,12 +1,13 @@
+import { ChatterboxControls } from "./ChatterboxControls";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, Wallet, Server, CloudUpload, Bot, Wrench, BookOpen, Puzzle, PlugZap, ScrollText, Send, Search, X, type LucideIcon } from "lucide-react";
+import { Settings as SettingsIcon, Save, Sparkles, Monitor, Sun, Moon, Check, Trash2, Palette, Cpu, Sliders, Lock, Database, Wallet, Server, CloudUpload, Bot, Wrench, BookOpen, Puzzle, PlugZap, ScrollText, Send, Search, X, RotateCcw, type LucideIcon } from "lucide-react";
 import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useTheme } from "../theme/ThemeProvider";
-import { ACCENT_COLORS, THEME_MODES, type AccentColor, type ThemeMode } from "../../lib/theme";
+import { ACCENT_COLORS, THEME_FONTS, THEME_FONT_STACKS, THEME_MODES, type AccentColor, type ThemeFont, type ThemeMode } from "../../lib/theme";
 import { cn } from "../../lib/utils";
 import { ChatCleanupSettings } from "./ChatCleanupSettings";
 import { ProviderConfigSettings } from "./ProviderConfigSettings";
@@ -374,13 +375,64 @@ const PREDEFINED_FIELDS: SettingField[] = [
     description: "Server-seitiger Text-to-Speech Provider, der genutzt wird wenn der Voice-Tab nicht auf 'Web Speech API' steht.",
     type: "select",
     section: "Speech",
-    defaultValue: "openai",
+    defaultValue: "chatterbox",
     options: [
+      { label: "Chatterbox Multilingual V3 (lokal, Emotion-Regler)", value: "chatterbox" },
+      { label: "Breeze (Cloud, Streaming, freie Emotion-Steuerung)", value: "breeze" },
       { label: "OpenAI TTS (Cloud)", value: "openai" },
       { label: "ElevenLabs (Cloud)", value: "elevenlabs" },
       { label: "Piper (lokal, self-hosted)", value: "piper" },
       { label: "Eigenes lokales Kommando (self-hosted)", value: "local" },
     ],
+  },
+  {
+    key: "CHATTERBOX_SERVER_URL",
+    label: "Chatterbox Server-URL",
+    description: "Adresse des lokalen Chatterbox-Inferenz-Servers (apps/server/scripts/chatterbox_server.py).",
+    type: "text",
+    section: "Speech",
+    defaultValue: "http://127.0.0.1:8890",
+  },
+  {
+    key: "CHATTERBOX_DEFAULT_VOICE",
+    label: "Chatterbox Standard-Stimme",
+    description:
+      "Dateiname (ohne .wav) einer Referenzaufnahme unter apps/server/scripts/voices/, z.B. 'emma' fuer voices/emma.wav. Leer = eingebaute Standardstimme. Ueberschreibbar im Voice-Tab (dort als Dropdown).",
+    type: "text",
+    section: "Speech",
+    defaultValue: "",
+  },
+  {
+    key: "CHATTERBOX_EMOTION_EXAGGERATION",
+    label: "Chatterbox Emotion-Exaggeration (0-1)",
+    description: "Staerke des Emotion-Reglers, sofern kein Preset im Voice-Tab gewaehlt ist. Hoeher = ausdrucksstaerker.",
+    type: "number",
+    section: "Speech",
+    defaultValue: "0.5",
+  },
+  {
+    key: "BREEZE_API_KEY",
+    label: "Breeze API Key",
+    description: "Schluessel fuer die Breeze TTS 2 API (https://breezeblue.ai/breeze-tts-2).",
+    type: "password",
+    section: "Speech",
+    defaultValue: "",
+  },
+  {
+    key: "BREEZE_DEFAULT_VOICE_ID",
+    label: "Breeze Standard-Stimme",
+    description: "Standard-Stimme (Voice-ID aus der Voice Galaxy) fuer Breeze. Ueberschreibbar im Voice-Tab.",
+    type: "text",
+    section: "Speech",
+    defaultValue: "",
+  },
+  {
+    key: "BREEZE_WS_URL",
+    label: "Breeze WebSocket-URL",
+    description: "Streaming-Endpunkt der Breeze-API. Nur aendern, wenn Breeze eine abweichende URL vorgibt.",
+    type: "text",
+    section: "Speech",
+    defaultValue: "wss://api.breezeblue.ai/v1/tts/stream",
   },
   {
     key: "OPENAI_TTS_MODEL",
@@ -392,6 +444,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
     options: [
       { label: "tts-1 (schnell)", value: "tts-1" },
       { label: "tts-1-hd (hohe Qualitaet)", value: "tts-1-hd" },
+      { label: "gpt-4o-mini-tts (unterstuetzt Emotion/Sprechstil-Anweisungen)", value: "gpt-4o-mini-tts" },
     ],
   },
   {
@@ -1098,6 +1151,19 @@ const PREDEFINED_FIELDS: SettingField[] = [
     defaultValue: "2",
   },
   {
+    key: "AUDIO_ENABLED",
+    label: "Audio Tab Enabled",
+    description:
+      "Aktiviert den Audio-Tab (Sprach-Workspace mit Visualisierung, Live-Transkript und sprachgesteuerter Browser-Automation).",
+    type: "select",
+    section: "Agent",
+    defaultValue: "false",
+    options: [
+      { label: "Deaktiviert", value: "false" },
+      { label: "Aktiviert", value: "true" },
+    ],
+  },
+  {
     key: "CODING_ENABLED",
     label: "Coding Area Enabled",
     description: "Aktiviert den Coding-Bereich (Menuepunkt + Coding-Workspace mit Chat und Editor).",
@@ -1627,7 +1693,12 @@ const ACCENT_SWATCH_CLASS: Record<AccentColor, string> = {
 
 function ThemeSettingsTab() {
   const { t } = useI18n();
-  const { mode, setMode, accent, setAccent } = useTheme();
+  const {
+    mode, setMode, accent, setAccent,
+    lightBackground, setLightBackground, darkBackground, setDarkBackground,
+    lightCard, setLightCard, darkCard, setDarkCard,
+    font, setFont, fontSize, setFontSize, radius, setRadius, resetCustomization,
+  } = useTheme();
 
   return (
     <div className="space-y-6">
@@ -1678,6 +1749,97 @@ function ThemeSettingsTab() {
             );
           })}
         </div>
+      </div>
+
+      <div className="border-t border-border pt-6">
+        <h3 className="text-sm font-semibold mb-1">{t("themeSettings.backgroundTitle")}</h3>
+        <p className="text-xs text-muted-foreground mb-3">{t("themeSettings.backgroundDescription")}</p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {([
+            ["pageLight", lightBackground, setLightBackground],
+            ["pageDark", darkBackground, setDarkBackground],
+            ["cardLight", lightCard, setLightCard],
+            ["cardDark", darkCard, setDarkCard],
+          ] as const).map(([label, value, onChange]) => (
+            <label key={label} className="flex items-center gap-3 rounded-xl border border-border bg-card p-3">
+              <input
+                type="color"
+                value={value}
+                onChange={(event) => onChange(event.target.value)}
+                className="h-11 w-11 shrink-0 cursor-pointer rounded-lg border border-border bg-transparent p-1"
+                aria-label={t(`themeSettings.background.${label}`)}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{t(`themeSettings.background.${label}`)}</span>
+                <span className="block font-mono text-xs uppercase text-muted-foreground">{value}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-border pt-6">
+        <h3 className="text-sm font-semibold mb-1">{t("themeSettings.fontTitle")}</h3>
+        <p className="text-xs text-muted-foreground mb-3">{t("themeSettings.fontDescription")}</p>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {THEME_FONTS.map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setFont(value as ThemeFont)}
+              style={{ fontFamily: THEME_FONT_STACKS[value] }}
+              className={cn(
+                "rounded-xl border px-3 py-3 text-left transition-colors",
+                font === value ? "border-primary bg-primary/10 ring-1 ring-primary" : "border-border bg-card hover:bg-accent"
+              )}
+            >
+              <span className="block text-sm font-semibold">{t(`themeSettings.font.${value}`)}</span>
+              <span className="mt-1 block text-xs text-muted-foreground">Aa Bb 123</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-border pt-6">
+        <h3 className="text-sm font-semibold mb-1">{t("themeSettings.layoutTitle")}</h3>
+        <p className="text-xs text-muted-foreground mb-4">{t("themeSettings.layoutDescription")}</p>
+        <div className="grid gap-5 sm:grid-cols-2">
+          <label>
+            <span className="mb-2 flex items-center justify-between text-sm font-medium">
+              {t("themeSettings.fontSize")}<span className="text-xs text-muted-foreground">{fontSize}px</span>
+            </span>
+            <input
+              type="range"
+              min="14"
+              max="19"
+              step="1"
+              value={fontSize}
+              onChange={(event) => setFontSize(Number(event.target.value))}
+              className="w-full accent-primary"
+            />
+          </label>
+          <label>
+            <span className="mb-2 flex items-center justify-between text-sm font-medium">
+              {t("themeSettings.radius")}<span className="text-xs text-muted-foreground">{radius}px</span>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="20"
+              step="2"
+              value={radius}
+              onChange={(event) => setRadius(Number(event.target.value))}
+              className="w-full accent-primary"
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="flex justify-end border-t border-border pt-4">
+        <button type="button" onClick={resetCustomization} className="btn-secondary flex items-center gap-2 text-sm">
+          <RotateCcw className="h-4 w-4" />
+          {t("themeSettings.reset")}
+        </button>
       </div>
     </div>
   );
@@ -2072,6 +2234,7 @@ export function Settings() {
 
       {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Overview" && activeTab !== "Pets" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Cloud-Backup" && activeTab !== "Voice" && activeTab !== "Agent" && activeTab !== "Bots" && (
         <div className="space-y-4">
+          {activeTab === "Speech" && <ChatterboxControls />}
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);
             const fields = PREDEFINED_FIELDS.filter((f) => f.section === activeTab && groupKeys.has(f.key));

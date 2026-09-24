@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { randomUUID } from "crypto";
 import type { Logger } from "@ducki/logger";
 
@@ -30,7 +30,7 @@ export class ToolStagingManager {
     stagingDir: string = "./storage/tool-staging",
     ttlMs: number = 30 * 60 * 1000, // 30 minutes default
   ) {
-    this.stagingDir = stagingDir;
+    this.stagingDir = resolve(stagingDir);
     this.ttlMs = ttlMs;
   }
 
@@ -39,9 +39,17 @@ export class ToolStagingManager {
     await fs.mkdir(this.stagingDir, { recursive: true });
 
     // Start cleanup interval (every 5 minutes)
-    this.cleanupInterval = setInterval(() => {
-      void this.cleanup();
-    }, 5 * 60 * 1000);
+    if (!this.cleanupInterval) {
+      this.cleanupInterval = setInterval(() => {
+        void this.cleanup().catch((error: unknown) => {
+          this.logger.warn("Tool staging cleanup failed", {
+            stagingDir: this.stagingDir,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }, 5 * 60 * 1000);
+      this.cleanupInterval.unref();
+    }
 
     this.logger.info("Tool staging manager started", {
       stagingDir: this.stagingDir,
@@ -87,6 +95,7 @@ export class ToolStagingManager {
     ].join("\n");
 
     // Write to file
+    await fs.mkdir(this.stagingDir, { recursive: true });
     await fs.writeFile(filePath, fullContent, "utf-8");
 
     this.logger.debug("Tool response staged", {
@@ -158,7 +167,13 @@ export class ToolStagingManager {
    * Cleanup expired staged responses
    */
   private async cleanup(): Promise<void> {
-    const files = await fs.readdir(this.stagingDir);
+    let files: string[];
+    try {
+      files = await fs.readdir(this.stagingDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
     const now = new Date();
     let cleaned = 0;
 
@@ -166,12 +181,20 @@ export class ToolStagingManager {
       if (!file.endsWith(".md")) continue;
 
       const filePath = join(this.stagingDir, file);
-      const stat = await fs.stat(filePath);
-      const age = now.getTime() - stat.mtime.getTime();
-
-      if (age > this.ttlMs) {
-        await fs.unlink(filePath);
-        cleaned++;
+      try {
+        const stat = await fs.stat(filePath);
+        const age = now.getTime() - stat.mtime.getTime();
+        if (stat.isFile() && age > this.ttlMs) {
+          await fs.unlink(filePath);
+          cleaned++;
+        }
+      } catch (error) {
+        // A user/tool can delete an entry between readdir, stat and unlink.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          this.logger.warn("Could not clean staged tool response", {
+            filePath, error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     }
 

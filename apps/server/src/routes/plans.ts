@@ -9,6 +9,7 @@ import { parseMarkdownToPlan } from "@ducki/planer";
 import { CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { getRootLogger } from "@ducki/logger";
 import { notifyCodingRunFinished } from "../lib/coding-notify.js";
+import { restorePlanStepContracts, type ExecutablePlanStepInput } from "../lib/plan-step-contracts.js";
 
 export const plansRouter: IRouter = Router();
 
@@ -320,7 +321,7 @@ plansRouter.delete("/:id", async (req, res, next) => {
 
 interface ExecutePlanBody {
   goal?: string;
-  steps?: Array<Partial<PlanStep> & { tools?: string[] }>;
+  steps?: ExecutablePlanStepInput[];
   markdown?: string;
   conversationId?: number;
   projectId?: number;
@@ -409,22 +410,26 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     const body = (req.body ?? {}) as ExecutePlanBody;
     const rawId = Number(req.params.id);
     let planId = Number.isFinite(rawId) && rawId > 0 ? rawId : null;
+    const persistedPlanRow = planId && db ? await db.getPlan(planId) : undefined;
+    const persistedSteps = persistedPlanRow ? parseJson<PlanStep[]>(persistedPlanRow.steps, []) : [];
 
     const goal = String(body.goal ?? "").trim();
-    const steps = (Array.isArray(body.steps) ? body.steps : [])
+    const steps = restorePlanStepContracts(Array.isArray(body.steps) ? body.steps : [], persistedSteps)
       .map((step, index) => ({
         id: typeof step?.id === "string" && step.id ? step.id : `step_${index + 1}`,
         title: String(step?.title ?? "").trim(),
         description: String(step?.description ?? "").trim(),
         toolsNeeded: Array.isArray(step?.toolsNeeded) ? step.toolsNeeded.map(String) : Array.isArray(step?.tools) ? step.tools.map(String) : [],
         dependsOn: Array.isArray(step?.dependsOn) ? step.dependsOn.map(String) : [],
-        canParallelizeWith: Array.isArray(step?.canParallelizeWith) ? step.canParallelizeWith.map(String) : [],
+        canParallelizeWith: Array.isArray(step?.canParallelizeWith)
+          ? step.canParallelizeWith.map(String)
+          : Array.isArray(step?.parallelizable) ? step.parallelizable.map(String) : [],
         expectedFiles: Array.isArray(step?.expectedFiles) ? step.expectedFiles.map(String) : [],
         acceptanceCriteria: Array.isArray(step?.acceptanceCriteria) ? step.acceptanceCriteria.map(String) : [],
         verificationCommands: Array.isArray(step?.verificationCommands) ? step.verificationCommands.map(String) : [],
         priority: step?.priority ?? "medium",
         riskLevel: step?.riskLevel,
-        estimatedDuration: step?.estimatedDuration,
+        estimatedDuration: step?.estimatedDuration ?? step?.duration,
         status: step?.status === "completed" || step?.status === "failed" || step?.status === "running" ? step.status : "pending",
         result: typeof step?.result === "string" ? step.result : undefined,
       }))
@@ -543,7 +548,7 @@ plansRouter.post("/:id/execute", async (req, res, next) => {
     const conversationId = body.conversationId;
     let planVersion = 1;
     if (db) {
-      const current = planId ? await db.getPlan(planId) : undefined;
+      const current = persistedPlanRow;
       if (current) {
         planVersion = current.version;
         await db.updatePlan(current.id, { status: "active", conversationId, projectId: codingProjectDbId ?? current.projectId });

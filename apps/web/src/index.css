@@ -86,6 +86,7 @@
 
   body {
     @apply antialiased bg-background text-foreground;
+    font-family: var(--font-interface, system-ui, sans-serif);
   }
 
   /* Template-style scrollbars for supporting browsers */

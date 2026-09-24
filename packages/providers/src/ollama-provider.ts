@@ -1,3 +1,4 @@
+import { openAIReasoningOptions } from "./reasoning.js";
 // Ollama uses OpenAI-compatible API endpoint but with different image handling
 // Ollama expects: { role, content, images: [base64_raw] } not { role, content: [{type: "image_url", ...}] }
 import { OpenAIProvider, toOpenAITools, fromOpenAIToolCalls } from "./openai-provider.js";
@@ -129,6 +130,7 @@ export class OllamaProvider extends OpenAIProvider {
         max_tokens: merged.maxTokens,
         ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
         ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
+        ...openAIReasoningOptions(this.name, this.model, merged),
         stream: false,
         ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
       });
@@ -233,6 +235,7 @@ export class OllamaProvider extends OpenAIProvider {
       max_tokens: merged.maxTokens,
       ...(merged.frequencyPenalty !== undefined ? { frequency_penalty: merged.frequencyPenalty } : {}),
       ...(merged.presencePenalty !== undefined ? { presence_penalty: merged.presencePenalty } : {}),
+      ...openAIReasoningOptions(this.name, this.model, merged),
       stream: true,
       ...(withTools && merged.tools ? { tools: toOpenAITools(merged.tools), tool_choice: "auto" as const } : {}),
     });

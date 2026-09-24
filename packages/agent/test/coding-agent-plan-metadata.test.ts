@@ -22,7 +22,7 @@ function buildCodingAgent(): CodingAgent {
 }
 
 describe("CodingAgent plan step metadata reaches the prompt", () => {
-  it("includes dependsOn, riskLevel and toolsNeeded when present", () => {
+  it("includes dependencies, risk, tools and verification contracts when present", () => {
     const agent = buildCodingAgent();
     const plan: Plan = {
       goal: "do the thing",
@@ -37,12 +37,18 @@ describe("CodingAgent plan step metadata reaches the prompt", () => {
           dependsOn: ["1"],
           riskLevel: "high",
           toolsNeeded: ["filesystem", "shell"],
+          expectedFiles: ["src/schema.ts"],
+          acceptanceCriteria: ["Migration remains backwards compatible"],
+          verificationCommands: ["npm test -- schema"],
         },
       ],
     };
-    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", undefined, plan);
+    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", plan);
 
-    expect(prompt).toContain("2. Update schema - add the column [depends on: 1 · risk: high · tools: filesystem, shell]");
+    expect(prompt).toContain("2. Update schema - add the column [depends on: 1 · risk: high · tools: filesystem, shell");
+    expect(prompt).toContain("files: src/schema.ts");
+    expect(prompt).toContain("done when: Migration remains backwards compatible");
+    expect(prompt).toContain("verify: npm test -- schema");
   });
 
   it("omits the metadata bracket entirely for a plain step", () => {
@@ -52,7 +58,7 @@ describe("CodingAgent plan step metadata reaches the prompt", () => {
       estimatedComplexity: "low",
       steps: [{ id: "1", title: "Read config", status: "pending" }],
     };
-    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", undefined, plan);
+    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", plan);
 
     expect(prompt).toContain("1. Read config");
     expect(prompt).not.toContain("[depends on");
@@ -66,7 +72,7 @@ describe("CodingAgent plan step metadata reaches the prompt", () => {
       estimatedComplexity: "low",
       steps: [{ id: "1", title: "Read config", status: "pending", riskLevel: "low" }],
     };
-    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", undefined, plan);
+    const prompt = (agent as any).buildInitialPrompt("do the thing", "npm test", plan);
 
     expect(prompt).not.toContain("risk: low");
   });

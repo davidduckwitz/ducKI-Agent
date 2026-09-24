@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type TTSProvider = "web-speech-api" | "openai" | "elevenlabs" | "piper" | "local" | "silero";
+export type TTSProvider = "web-speech-api" | "openai" | "elevenlabs" | "piper" | "local" | "silero" | "chatterbox" | "breeze";
 export type STTMode = "push-to-talk" | "vad-auto";
 export type TTSEmotionStyle = "neutral" | "cheerful" | "calm" | "empathetic" | "excited";
 export type AgentVoiceReplyStyle = "adapt" | "unchanged";
@@ -26,6 +26,8 @@ export interface VoiceSettings {
   ttsVoice: string; // provider-specific voice id
   ttsStreamingMode: boolean; // speak sentence-by-sentence while agent is still streaming
   ttsEmotionStyle: TTSEmotionStyle;
+  /** Free-text emotion/delivery override (Chatterbox/Breeze); takes precedence over ttsEmotionStyle when set. */
+  ttsEmotionInstructions: string;
   ttsStripMarkdown: boolean;
 
   // Conversation
@@ -43,12 +45,12 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   sttLanguage: "de-DE",
   sttMode: "push-to-talk",
   sttMaxRecordingMs: 30000,
-  sttSilenceTimeoutMs: 1200,
+  sttSilenceTimeoutMs: 750,
   sttSilenceThreshold: 0.02,
   sttMinSpeechMs: 300,
 
   enableTTS: true,
-  ttsProvider: "web-speech-api",
+  ttsProvider: "chatterbox",
   ttsLanguage: "de-DE",
   ttsSpeed: 1.0,
   ttsPitch: 1.0,
@@ -56,6 +58,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   ttsVoice: "",
   ttsStreamingMode: true,
   ttsEmotionStyle: "neutral",
+  ttsEmotionInstructions: "",
   ttsStripMarkdown: true,
 
   continuousConversationMode: false,
@@ -84,6 +87,7 @@ interface VoiceSettingsStore extends VoiceSettings {
   setTTSVoice: (voice: string) => void;
   setTTSStreamingMode: (enabled: boolean) => void;
   setTTSEmotionStyle: (style: TTSEmotionStyle) => void;
+  setTTSEmotionInstructions: (instructions: string) => void;
   setTTSStripMarkdown: (enabled: boolean) => void;
 
   setContinuousConversationMode: (enabled: boolean) => void;
@@ -118,6 +122,7 @@ export const useVoiceSettings = create<VoiceSettingsStore>()(
       setTTSVoice: (voice) => set({ ttsVoice: voice }),
       setTTSStreamingMode: (enabled) => set({ ttsStreamingMode: enabled }),
       setTTSEmotionStyle: (style) => set({ ttsEmotionStyle: style }),
+      setTTSEmotionInstructions: (instructions) => set({ ttsEmotionInstructions: instructions }),
       setTTSStripMarkdown: (enabled) => set({ ttsStripMarkdown: enabled }),
 
       setContinuousConversationMode: (enabled) => set({ continuousConversationMode: enabled }),

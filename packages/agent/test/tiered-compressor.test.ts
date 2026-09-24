@@ -125,9 +125,11 @@ describe("TieredContextCompressor", () => {
 
       expect(result.decision.tier).toBe(3);
       expect(result.decision.reason).toContain("Tier 3");
-      expect(result.decision.reason).toContain("Emergency drop");
-      // Should keep only emergencyKeepCount messages
-      expect(result.messages.length).toBeLessThanOrEqual(15); // system + 10 keep
+      // User constraints survive even when they are outside the recent window.
+      for (const message of messages.filter(m => m.role === "user")) {
+        expect(result.messages).toContainEqual(message);
+      }
+      expect(result.messages.length).toBeLessThan(messages.length);
     });
 
     it("preserves system messages across all tiers", async () => {
@@ -166,9 +168,9 @@ describe("TieredContextCompressor", () => {
       const result = await compressor.compress(messages);
 
       expect(result.decision.tier).toBe(3);
-      // Should keep only 5 non-system messages + system messages
-      const nonSystem = result.messages.filter((m) => m.role !== "system");
-      expect(nonSystem.length).toBeLessThanOrEqual(5);
+      expect(result.messages.slice(-5)).toEqual(messages.slice(-5));
+      expect(result.messages.filter(m => m.role === "user").length)
+        .toBeGreaterThanOrEqual(messages.filter(m => m.role === "user").length);
     });
   });
 

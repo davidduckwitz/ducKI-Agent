@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { checklistFromPlanSteps, findLatestChecklist, firstOpenStepIndex, resolveStepStatus } from "./planChecklist";
+import {
+  checklistFromPlanSteps,
+  checklistFromSessionRows,
+  findLatestChecklist,
+  firstOpenStepIndex,
+  resolveStepStatus,
+} from "./planChecklist";
+import type { SessionChecklistItem } from "./api";
 import type { RenderedChatMessage } from "../components/chat/chatTypes";
 
 let nextId = 0;
@@ -152,6 +159,20 @@ describe("findLatestChecklist - CodingAgent TodoList fallback", () => {
     expect(resolveStepStatus(snapshot, { title: "  schritt 3  " }, 99)).toBe("done");
   });
 
+  it("prefers the stable title over a stale positional todo id after reordering", () => {
+    const snapshot = findLatestChecklist([
+      event("decision", {
+        todo_items: [
+          { id: 1, title: "Schritt 2", status: "done" },
+          { id: 2, title: "Schritt 1", status: "pending" },
+        ],
+      }),
+    ]);
+
+    expect(resolveStepStatus(snapshot, { title: "Schritt 2" }, 1)).toBe("done");
+    expect(resolveStepStatus(snapshot, { title: "Schritt 1" }, 0)).toBe("pending");
+  });
+
   it("still returns null when neither a checklist nor a todo_items event exists", () => {
     const messages = [event("plan", { goal: "g" }), event("tool_call"), event("tool_result")];
     expect(findLatestChecklist(messages)).toBeNull();
@@ -277,5 +298,47 @@ describe("checklistFromPlanSteps", () => {
   it("defaults a step with no status to pending", () => {
     const snapshot = checklistFromPlanSteps([{ title: "Schritt 1" }]);
     expect(snapshot!.statusByIndex.get(0)).toBe("pending");
+  });
+});
+
+describe("checklistFromSessionRows", () => {
+  const row = (overrides: Partial<SessionChecklistItem>): SessionChecklistItem => ({
+    id: 1,
+    conversationId: 12,
+    runId: "run-current",
+    stepIndex: 0,
+    title: "Schritt 1",
+    description: null,
+    acceptanceCriteria: null,
+    constraintKind: null,
+    status: "done",
+    confidence: null,
+    verifyState: null,
+    attempts: 1,
+    createdAt: "2026-09-24T10:00:00.000Z",
+    updatedAt: "2026-09-24T10:00:00.000Z",
+    ...overrides,
+  });
+
+  it("ignores the newest unrelated run instead of applying it to the visible plan", () => {
+    const snapshot = checklistFromSessionRows(
+      [
+        row({ runId: "run-plan", title: "Schritt 1", createdAt: "2026-09-24T09:00:00.000Z" }),
+        row({ id: 2, runId: "run-other", title: "Unrelated task", createdAt: "2026-09-24T11:00:00.000Z" }),
+      ],
+      [{ title: "Schritt 1" }]
+    );
+
+    expect(snapshot).toBeNull();
+  });
+
+  it("uses matching rows from the newest run", () => {
+    const snapshot = checklistFromSessionRows(
+      [row({ title: "Schritt 1" }), row({ id: 2, stepIndex: 1, title: "Schritt 2", status: "in_progress" })],
+      [{ title: "Schritt 1" }, { title: "Schritt 2" }]
+    );
+
+    expect(snapshot?.statusByTitle.get("schritt 1")).toBe("done");
+    expect(snapshot?.statusByTitle.get("schritt 2")).toBe("in_progress");
   });
 });

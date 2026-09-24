@@ -121,3 +121,50 @@ export function stripTrailingJsonArgTail(raw: unknown): unknown {
   // Never let the heuristic consume the whole content.
   return stripped.trim().length === 0 ? raw : stripped;
 }
+
+/**
+ * A leaked tool-call ATTEMPT opens with a call-shaped wrapper around dict/JSON-like
+ * key-value pairs naming a tool-call argument this app's own tools use (`action`, `path`,
+ * `tool`, `name`, `command`) - e.g. `({'action': 'write', 'path': '...', 'content': '...'})`.
+ * Python-dict-style single-quoted keys are tolerated alongside JSON's double quotes, since the
+ * observed leaks came from models imitating a Python/Hermes-ish tool-call convention rather
+ * than this app's own `[TOOL:name({"key": "value"})]` format.
+ *
+ * Deliberately narrow: requires a wrapper character immediately followed by an object literal
+ * whose FIRST key is one of that fixed list - not "any text that happens to start with a
+ * parenthesis or brace" - so genuine prose (including prose that discusses tool-call syntax)
+ * does not trip it.
+ */
+const LEAKED_TOOLCALL_OPEN_RE = /^[[(]?\s*\{\s*['"](action|tool|tool_name|toolName|name|command|path)['"]\s*:\s*['"]/;
+
+/**
+ * A leaked tool-call attempt's trailing junk: a stray closing wrapper optionally followed by a
+ * mangled stop-token-ish marker such as `< toolcall_end` (note: real stop tokens are usually
+ * `<tool_call_end>`/`</tool_call>` with no inner space and a closing `>` - this leak's own
+ * marker was missing both, which is exactly the kind of one-off mangling that makes it
+ * unrecognisable as any single known convention; matched loosely here since only the LEADING
+ * shape above needs to be confident, this is just corroborating evidence).
+ */
+const LEAKED_TOOLCALL_TRAILING_RE = /[)\]}]\s*<\s*\/?\s*[a-z_]*tool[_\s]?call[_\s]?(end|stop)?\s*>?\s*$/i;
+
+/**
+ * Whether a full response/message text looks like a leaked, malformed tool-call attempt rather
+ * than genuine prose - the shape observed leaking straight into a visible chat reply (see the
+ * write-tool-shaped example above). Two independent signals, either one sufficient given how
+ * narrow LEAKED_TOOLCALL_OPEN_RE already is on its own:
+ *   - the text opens exactly like a serialized tool call (LEAKED_TOOLCALL_OPEN_RE), or
+ *   - the text ends with the kind of stray closer + mangled stop-marker a spilled call leaves
+ *     behind (LEAKED_TOOLCALL_TRAILING_RE) AND still opens with a wrapper character, ruling out
+ *     prose that merely happens to end with "...)".
+ *
+ * Kept intentionally conservative (mirrors looksLikeLeakedTerminator's discriminator above): a
+ * false positive here would hide a legitimate reply, which is worse than leaving a rare leak
+ * visible.
+ */
+export function looksLikeLeakedToolCallAttempt(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (LEAKED_TOOLCALL_OPEN_RE.test(trimmed)) return true;
+  if (/^[[({]/.test(trimmed) && LEAKED_TOOLCALL_TRAILING_RE.test(trimmed)) return true;
+  return false;
+}

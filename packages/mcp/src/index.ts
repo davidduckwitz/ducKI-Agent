@@ -6,3 +6,5 @@ export type { MCPServerConfig, MCPServerStatus } from "./registry.js";
 
 export { MCPServer } from "./server.js";
 export type { MCPServerSnapshot, MCPToolHandler } from "./server.js";
+
+export { normalizeMcpServers } from "./config.js";

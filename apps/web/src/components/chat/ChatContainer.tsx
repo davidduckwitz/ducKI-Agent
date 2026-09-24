@@ -5,6 +5,7 @@ import { useUiStore } from "../../lib/uiStore";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
+import { getScreenShareContext } from "../../lib/screenShareContext";
 import { useI18n } from "../../lib/i18n";
 import { DynamicCharacter } from "./characters/DynamicCharacter";
 import { ToolResponseDock } from "./ToolResponseCard";
@@ -68,7 +69,7 @@ function parseMessageMetadata(raw?: string | null): Record<string, unknown> | un
   }
 }
 
-export function ChatContainer() {
+export function ChatContainer({ hideTranscript = false }: { hideTranscript?: boolean } = {}) {
   const { t } = useI18n();
   const qc = useQueryClient();
   const messages = useAppStore((state) => state.messages);
@@ -792,7 +793,7 @@ export function ChatContainer() {
       : finalInput;
 
     void sendMessage(
-      contentToSend,
+      contentToSend + (hideTranscript ? getScreenShareContext() : ""),
       attachments.length > 0 ? attachments : undefined,
       planMode ? "plan" : undefined,
       pluginContext ? finalInput : undefined,
@@ -883,6 +884,7 @@ export function ChatContainer() {
 
   return (
     <div className="flex h-full min-h-0 flex-col lg:flex-row">
+      {!hideTranscript && (
       <aside
         ref={conversationsViewportRef}
         onScroll={handleConversationsScroll}
@@ -942,8 +944,10 @@ export function ChatContainer() {
           <div className="px-2 py-2 text-xs text-muted-foreground">{t("chat.loadingMoreConversations")}</div>
         )}
       </aside>
+      )}
 
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        {!hideTranscript && (
         <ChatHeader
           title={conversations.find((c) => c.id === conversationId)?.name}
           conversationId={conversationId}
@@ -959,10 +963,11 @@ export function ChatContainer() {
           isLoading={isLoading}
           connected={connected}
         />
+        )}
 
-        <ProjectSkillsBanner />
+        {!hideTranscript && <ProjectSkillsBanner />}
 
-        {showSettings && (
+        {!hideTranscript && showSettings && (
           <div className="shrink-0 border-b border-border bg-card/50 px-4 py-3">
             <div className={`mx-auto w-full ${contentWidth} space-y-4`}>
               <div className="flex items-center justify-between">
@@ -1001,8 +1006,11 @@ export function ChatContainer() {
           </div>
         )}
 
-        {/* Messages - oldest at top, newest at bottom */}
-        <div className="relative min-h-0 flex-1">
+        {/* Messages - oldest at top, newest at bottom. Hidden (not unmounted!) when
+            hideTranscript is set - StreamingRow/MessageRow inside are what actually trigger TTS
+            playback (useStreamingSpeech / autoplay), so unmounting this block would silently
+            stop the Audio tab's spoken output along with the visual transcript. */}
+        <div className={`relative min-h-0 ${hideTranscript ? "hidden" : "flex-1"}`}>
           <div
             ref={messagesViewportRef}
             onScroll={handleMessagesScroll}

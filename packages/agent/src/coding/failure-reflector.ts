@@ -24,6 +24,8 @@ export interface CodingFailureEditDiff {
 }
 
 export interface CodingFailureReflectionInput {
+  /** Actual checkpoint diff includes shell edits, deletions, and edit_lines. */
+  checkpointPatch?: string;
   goal: string;
   verifyCommand: string;
   verifyError: string;
@@ -114,6 +116,7 @@ export class CodingFailureReflector {
           clamp(input.verifyError, MAX_ERROR_CHARS),
           "Previous attempt summary:",
           clamp(input.previousSummary, MAX_SUMMARY_CHARS),
+          input.checkpointPatch ? `Actual checkpoint diff:\n${clamp(input.checkpointPatch, 8000)}` : "Checkpoint diff unavailable.",
           recentEdits.length > 0
             ? `Edits made in the failing attempt:\n${recentEdits.join("\n\n")}`
             : "Edits made in the failing attempt: (none captured)",

@@ -3,7 +3,15 @@ import { getRootLogger } from "@ducki/logger";
 import type { ToolDefinition, ToolResult } from "@ducki/shared";
 import { MCPClient, type MCPClientOptions, type MCPTool } from "./client.js";
 
+import { normalizeMcpServers } from "./config.js";
+import { MCPSdkClient } from "./sdk-client.js";
+
 export interface MCPServerConfig {
+  transport?: "stdio" | "http" | "legacy-http";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
   id: string;
   name: string;
   url: string;
@@ -11,13 +19,14 @@ export interface MCPServerConfig {
 }
 
 export interface MCPServerStatus extends MCPServerConfig {
+  error?: string;
   connected: boolean;
   reconnectAttempts: number;
   tools: number;
 }
 
 export class MCPRegistry {
-  private clients = new Map<string, MCPClient>();
+  private clients = new Map<string, MCPClient | MCPSdkClient>();
   private configs = new Map<string, MCPServerConfig>();
   private logger: Logger;
 
@@ -26,16 +35,7 @@ export class MCPRegistry {
   }
 
   async registerServer(config: MCPServerConfig): Promise<void> {
-    const normalized: MCPServerConfig = {
-      id: String(config.id).trim(),
-      name: String(config.name).trim(),
-      url: String(config.url).trim(),
-      enabled: Boolean(config.enabled),
-    };
-
-    if (!normalized.id || !normalized.name || !normalized.url) {
-      throw new Error("MCP server config requires id, name, and url");
-    }
+    const normalized = normalizeMcpServers([config])[0]!;
 
     this.configs.set(normalized.id, normalized);
 
@@ -46,13 +46,16 @@ export class MCPRegistry {
       return;
     }
 
-    const client = new MCPClient(normalized.id, normalized.url, this.clientOptions);
+    const client = (normalized.transport === "stdio" || normalized.transport === "http")
+      ? new MCPSdkClient(normalized)
+      : new MCPClient(normalized.id, normalized.url, this.clientOptions);
     await client.connect();
     this.clients.set(normalized.id, client);
     this.logger.info("MCP server registered", { id: normalized.id, name: normalized.name, url: normalized.url });
   }
 
   async syncServers(configs: MCPServerConfig[]): Promise<void> {
+    configs = normalizeMcpServers(configs);
     const nextIds = new Set(configs.map((cfg) => String(cfg.id).trim()));
 
     for (const existingId of Array.from(this.configs.keys())) {
@@ -81,6 +84,7 @@ export class MCPRegistry {
         const client = this.clients.get(config.id);
         return {
           ...config,
+          error: client instanceof MCPSdkClient ? client.getLastError() : undefined,
           connected: client?.isConnected() ?? false,
           reconnectAttempts: client?.getReconnectAttempts() ?? 0,
           tools: client?.listTools().length ?? 0,

@@ -130,6 +130,16 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       ],
     },
     {
+      name: "Sprachausgabe (TTS) - Chatterbox Multilingual V3 (lokal)",
+      icon: Volume2,
+      keys: ["CHATTERBOX_SERVER_URL", "CHATTERBOX_DEFAULT_VOICE", "CHATTERBOX_EMOTION_EXAGGERATION"],
+    },
+    {
+      name: "Sprachausgabe (TTS) - Breeze (Cloud, Streaming)",
+      icon: Volume2,
+      keys: ["BREEZE_API_KEY", "BREEZE_DEFAULT_VOICE_ID", "BREEZE_WS_URL"],
+    },
+    {
       name: "Sprachausgabe (TTS) - Cloud",
       icon: Volume2,
       keys: [
@@ -203,6 +213,7 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "AGENT_MAX_TOOL_FAILURES",
         "AGENT_MAX_REPEATED_TOOL_CALL",
         "AGENT_STALE_READ_STREAK",
+        "AUDIO_ENABLED",
         "CODING_ENABLED",
         "PLUGIN_CREATION_ENABLED",
       ],

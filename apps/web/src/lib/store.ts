@@ -1,3 +1,4 @@
+import { isReasoningEffort, type ReasoningEffort } from "@ducki/shared/reasoning";
 import { create } from "zustand";
 import { io, type Socket } from "socket.io-client";
 import { translations, type Language, type TranslationTree } from "./translations";
@@ -9,6 +10,13 @@ import { useLiveBrowserStore } from "./liveBrowserStore";
 import { useBrowserActivityStore, type BrowserActivity } from "./browserActivityStore";
 
 const LANGUAGE_STORAGE_KEY = "ducki.language";
+function loadReasoningEffort(): ReasoningEffort | undefined {
+  try {
+    const value = localStorage.getItem("ducki.reasoningEffort");
+    return isReasoningEffort(value) ? value : undefined;
+  } catch { return undefined; }
+}
+
 const CLIENT_ID_KEY = "ducki.clientId";
 
 /** Payload of the server's handshake reply. */
@@ -195,6 +203,8 @@ interface AppState {
   globalRunningAgents: number;
   chatProvider?: string;
   chatModel?: string;
+  reasoningEffort?: ReasoningEffort;
+  setReasoningEffort: (effort: ReasoningEffort | undefined) => void;
   availableModels: string[];
   loadingModels: boolean;
 
@@ -293,6 +303,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   animationStyle: "matrix",
   chatProvider: undefined,
   chatModel: undefined,
+  reasoningEffort: loadReasoningEffort(),
+  setReasoningEffort: (effort) => {
+    try {
+      if (effort === undefined) localStorage.removeItem("ducki.reasoningEffort");
+      else localStorage.setItem("ducki.reasoningEffort", effort);
+    } catch { /* Storage may be disabled; keep the selection for this session. */ }
+    set({ reasoningEffort: effort });
+  },
   availableModels: [],
   loadingModels: false,
   browserPreview: {
@@ -841,7 +859,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   sendMessage: async (content: string, attachments?: ChatAttachment[], agentMode?: AgentMode, displayContent?: string, provider?: string, model?: string, visionOnly?: boolean) => {
-    const { socket, conversationId, sessionChatId, isLoading } = get();
+    const { socket, conversationId, sessionChatId, isLoading, reasoningEffort } = get();
     if (!socket || !content.trim() || isLoading) return;
 
     const messageId = crypto.randomUUID();
@@ -905,6 +923,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         attachments,
         agentMode,
         visionOnly,
+        reasoningEffort,
         provider,
         model,
         localMessageId: messageId,

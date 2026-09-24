@@ -43,19 +43,10 @@ export interface PlanEventPayload {
   totalEstimatedTokens?: number;
   totalEstimatedCostUsd?: number;
   downgradeSuggestion?: string;
-  steps: Array<{
-    id: string;
-    title: string;
-    description: string;
-    tools?: string[];
-    priority?: string;
-    duration?: number;
-    riskLevel?: "low" | "medium" | "high";
-    estimatedTokens?: number;
-    estimatedCostUsd?: number;
-    parallelizable?: string[];
-    subtasks?: Array<{ id: string; title: string; description: string; tools?: string[] }>;
-  }>;
+  /** Full-fidelity executable steps. Do not rename or omit PlanStep fields here: this event is
+   *  handed from Chat/Plan Mode to CodingAgent and is therefore an execution boundary, not only
+   *  a presentation DTO. */
+  steps: Plan["steps"];
   validationIssues?: string[];
   markdown: string;
 }
@@ -74,25 +65,11 @@ export function toPlanEventPayload(plan: Plan, markdown: string): PlanEventPaylo
     ...(typeof plan.totalEstimatedTokens === "number" ? { totalEstimatedTokens: plan.totalEstimatedTokens } : {}),
     ...(typeof plan.totalEstimatedCostUsd === "number" ? { totalEstimatedCostUsd: plan.totalEstimatedCostUsd } : {}),
     ...(plan.downgradeSuggestion ? { downgradeSuggestion: plan.downgradeSuggestion } : {}),
+    // Clone the full step objects so execution contracts survive event persistence, chat ->
+    // coding handoff, refinement, and the eventual POST /plans/:id/execute round-trip.
     steps: plan.steps.map((step) => ({
-      id: step.id,
-      title: step.title,
-      description: step.description,
-      ...(step.toolsNeeded?.length ? { tools: step.toolsNeeded } : {}),
-      priority: step.priority,
-      duration: step.estimatedDuration,
-      ...(step.riskLevel ? { riskLevel: step.riskLevel } : {}),
-      ...(typeof step.estimatedTokens === "number" ? { estimatedTokens: step.estimatedTokens } : {}),
-      ...(typeof step.estimatedCostUsd === "number" ? { estimatedCostUsd: step.estimatedCostUsd } : {}),
-      ...(step.canParallelizeWith?.length ? { parallelizable: step.canParallelizeWith } : {}),
-      ...(step.subtasks?.length ? {
-        subtasks: step.subtasks.map((sub) => ({
-          id: sub.id,
-          title: sub.title,
-          description: sub.description,
-          ...(sub.toolsNeeded?.length ? { tools: sub.toolsNeeded } : {}),
-        })),
-      } : {}),
+      ...step,
+      ...(step.subtasks ? { subtasks: step.subtasks.map((subtask) => ({ ...subtask })) } : {}),
     })),
     validationIssues: plan.validationResult?.issues,
     markdown,

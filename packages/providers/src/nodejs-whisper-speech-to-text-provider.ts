@@ -1,11 +1,11 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { nodewhisper } from "nodejs-whisper";
+import { dirname, join, resolve } from "node:path";
+import { runWhisperProcess } from "./whisper-process.js";
 import { BaseSpeechToTextProvider, type SpeechToTextProviderOptions } from "./speech-to-text-base.js";
+import { hasCudaToolkit, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault } from "./nodejs-whisper-defaults.js";
 
 interface NodejsWhisperSpeechToTextProviderOptions extends SpeechToTextProviderOptions {
   modelName?: string;
@@ -21,24 +21,6 @@ function parseBoolean(input: string | undefined, fallback = false): boolean {
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
-}
-
-/**
- * True if an actual CUDA Toolkit (nvcc) is installed. `withCuda: true` without this present
- * doesn't fail cleanly - nodejs-whisper only discovers it's missing deep inside a CMake
- * configure step, surfacing a wall of raw CMake/CUDA-CMakeLists output instead of a usable
- * error (see the incident this guards against: NODEJS_WHISPER_USE_CUDA got set to true on a
- * machine without CUDA, and every transcription failed with that CMake dump until someone
- * traced it back to this setting).
- */
-function hasCudaToolkit(): boolean {
-  if (process.env["CUDA_PATH"]) return true;
-  try {
-    execFileSync("nvcc", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function ensureWindowsCmakeInPath(): void {
@@ -126,7 +108,7 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
       this.whisperOptions.modelName ??
       process.env["NODEJS_WHISPER_MODEL_NAME"]?.trim() ??
       this.options.model?.trim() ??
-      "base";
+      resolveNodejsWhisperModelDefault();
     const modelRootPath =
       this.whisperOptions.modelRootPath ??
       process.env["NODEJS_WHISPER_MODEL_ROOT_PATH"]?.trim() ??
@@ -136,7 +118,7 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
       parseBoolean(process.env["NODEJS_WHISPER_AUTO_DOWNLOAD"], true);
     const withCuda =
       this.whisperOptions.withCuda ??
-      parseBoolean(process.env["NODEJS_WHISPER_USE_CUDA"], false);
+      parseBoolean(process.env["NODEJS_WHISPER_USE_CUDA"], resolveNodejsWhisperCudaDefault());
     if (withCuda && !hasCudaToolkit()) {
       throw new Error(
         "nodejs-whisper CUDA ist aktiviert, aber kein CUDA Toolkit gefunden (nvcc nicht im PATH, CUDA_PATH nicht gesetzt). " +
@@ -151,26 +133,18 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
     const tempDir = await mkdtemp(join(tmpdir(), "ducki-nodejs-whisper-"));
     const inputExt = (process.env["NODEJS_WHISPER_INPUT_EXT"] ?? process.env["LOCAL_STT_INPUT_EXT"] ?? "ogg").trim().replace(/^\.+/, "") || "ogg";
     const inputPath = join(tempDir, `input.${inputExt}`);
-    await writeFile(inputPath, audioBuffer);
-
     try {
-      const runPromise = nodewhisper(inputPath, {
+      await writeFile(inputPath, audioBuffer);
+      const transcript = await runWhisperProcess(createRequire(import.meta.url).resolve("nodejs-whisper"), inputPath, {
         modelName,
-        modelRootPath,
+        modelRootPath: modelRootPath ? resolve(modelRootPath) : undefined,
         autoDownloadModelName: autoDownloadModel ? modelName : undefined,
         withCuda,
         removeWavFileAfterTranscription: true,
         whisperOptions: {
           language,
         },
-      }) as Promise<string>;
-
-      const transcript = await Promise.race<string>([
-        runPromise,
-        new Promise<string>((_, reject) => {
-          setTimeout(() => reject(new Error(`nodejs-whisper timed out after ${timeoutMs}ms`)), timeoutMs);
-        }),
-      ]);
+      }, timeoutMs);
 
       const cleaned = transcript.trim();
       if (!cleaned) {

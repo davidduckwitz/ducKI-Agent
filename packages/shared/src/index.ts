@@ -115,7 +115,11 @@ export function isLikelyTruncatedByLength(
   return outputTokens >= maxOutputTokens * thresholdRatio;
 }
 
+export { REASONING_EFFORTS, isReasoningEffort, type ReasoningEffort } from "./reasoning.js";
+import type { ReasoningEffort } from "./reasoning.js";
+
 export interface GenerateOptions {
+  reasoningEffort?: ReasoningEffort;
   temperature?: number;
   topP?: number;
   maxTokens?: number;
@@ -323,6 +327,18 @@ export interface TextToSpeechSynthesizeOptions {
   voice?: string;
   /** Only honored by providers that support expressive style (e.g. ElevenLabs). */
   emotionStyle?: string;
+  /**
+   * Free-text emotion/delivery direction (e.g. "warm, upbeat, slightly playful"). Only honored
+   * by providers that support natural-language style steering (e.g. Chatterbox, Breeze); takes
+   * precedence over `emotionStyle` when both are set.
+   */
+  emotionInstructions?: string;
+  /**
+   * BCP-47-ish language hint (e.g. "de", "de-DE", "en-US"). Only honored by providers with
+   * explicit multilingual support (e.g. Chatterbox's multilingual model) - others ignore it and
+   * rely on the model's own language detection or a single fixed language.
+   */
+  language?: string;
 }
 
 export interface TextToSpeechProvider {

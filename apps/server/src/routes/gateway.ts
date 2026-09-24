@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import type { Agent } from "@ducki/agent";
 import type { DatabaseService } from "@ducki/database";
-import { createSpeechToTextProvider } from "@ducki/providers";
+import { createSpeechToTextProvider, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault } from "@ducki/providers";
 import { createApiError, createApiResponse } from "@ducki/shared";
 import { runAgentWithRepairRetry } from "../lib/agent-retry.js";
 import { createPublicKey, verify } from "node:crypto";
@@ -430,15 +430,15 @@ function resolveDiscordVoiceProvider(settings: Map<string, string>) {
   if (name === "nodejs-whisper") {
     return createSpeechToTextProvider({
       name,
-      model: model ?? readRuntimeSetting(settings, "NODEJS_WHISPER_MODEL_NAME", "NODEJS_WHISPER_MODEL_NAME", "base"),
+      model: model ?? readRuntimeSetting(settings, "NODEJS_WHISPER_MODEL_NAME", "NODEJS_WHISPER_MODEL_NAME") ?? resolveNodejsWhisperModelDefault(),
       modelRootPath: readRuntimeSetting(settings, "NODEJS_WHISPER_MODEL_ROOT_PATH", "NODEJS_WHISPER_MODEL_ROOT_PATH"),
       autoDownloadModel: parseBoolean(
         readRuntimeSetting(settings, "NODEJS_WHISPER_AUTO_DOWNLOAD", "NODEJS_WHISPER_AUTO_DOWNLOAD", "true"),
         true
       ),
       withCuda: parseBoolean(
-        readRuntimeSetting(settings, "NODEJS_WHISPER_USE_CUDA", "NODEJS_WHISPER_USE_CUDA", "false"),
-        false
+        readRuntimeSetting(settings, "NODEJS_WHISPER_USE_CUDA", "NODEJS_WHISPER_USE_CUDA"),
+        resolveNodejsWhisperCudaDefault()
       ),
       timeoutMs: Number.parseInt(
         readRuntimeSetting(settings, "NODEJS_WHISPER_TIMEOUT_MS", "NODEJS_WHISPER_TIMEOUT_MS", "180000") ?? "180000",

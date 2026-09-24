@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
-import { createSpeechToTextProvider } from "@ducki/providers";
+import { createSpeechToTextProvider, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault } from "@ducki/providers";
 
 const ffmpegPath = ffmpegPathModule as unknown as string | null;
 const ffprobePath = (ffprobeStatic as { path?: string } | null)?.path;
@@ -70,10 +70,10 @@ export async function transcribeExtractedAudio(db: DatabaseService, audioBuffer:
 
   const provider = createSpeechToTextProvider({
     name: "nodejs-whisper",
-    model: read("NODEJS_WHISPER_MODEL_NAME", "base"),
+    model: read("NODEJS_WHISPER_MODEL_NAME") ?? resolveNodejsWhisperModelDefault(),
     modelRootPath: read("NODEJS_WHISPER_MODEL_ROOT_PATH"),
     autoDownloadModel: readBool("NODEJS_WHISPER_AUTO_DOWNLOAD", true),
-    withCuda: readBool("NODEJS_WHISPER_USE_CUDA", false),
+    withCuda: readBool("NODEJS_WHISPER_USE_CUDA", resolveNodejsWhisperCudaDefault()),
     timeoutMs: Number.parseInt(read("NODEJS_WHISPER_TIMEOUT_MS", "180000") ?? "180000", 10),
   });
 

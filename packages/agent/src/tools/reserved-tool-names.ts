@@ -17,6 +17,7 @@ export const RESERVED_TOOL_NAMES = new Set([
   "git",
   "shell",
   "skill_manage",
+  "skill_learn",
   "mcp",
   "workflow",
   "cronjob",

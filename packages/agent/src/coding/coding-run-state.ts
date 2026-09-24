@@ -37,6 +37,8 @@ export interface VerifyFailureUpdate extends CodingFailureSnapshot {
  * instance is created for every CodingAgent.run(), so no state can bleed into a later user goal.
  */
 export class CodingRunState {
+  pendingReflection?: CodingFailureReflection;
+  readonly ruledOut: string[] = [];
   journal: RunJournalEntry[] = [];
   lastSummary = "";
   anyFileChanged = false;
@@ -54,16 +56,17 @@ export class CodingRunState {
    *   so this state's `shouldStopForNonConvergence` reports the same threshold the run will
    *   actually stop at. Default 3 matches the historical hardcoded behavior.
    */
-  constructor(private readonly maxIdenticalVerifyFailures: number = 3) {}
+  constructor(private readonly maxIdenticalVerifyFailures: number = 3,
+    private readonly normalizeError: (error: string) => string = error => error.trim()) {}
 
   markFileChanges(changedFileCount: number): void {
     if (changedFileCount > 0) this.anyFileChanged = true;
   }
 
   recordVerifyFailure(error: string): VerifyFailureUpdate {
-    const normalizedError = error.trim();
+    const normalizedError = this.normalizeError(error);
     const identicalToPrevious =
-      this.previousVerifyError !== undefined && normalizedError === this.previousVerifyError.trim();
+      this.previousVerifyError !== undefined && normalizedError === this.normalizeError(this.previousVerifyError);
 
     this.verifyFailures++;
     this.identicalFailureStreak = identicalToPrevious ? this.identicalFailureStreak + 1 : 0;
@@ -87,7 +90,11 @@ export class CodingRunState {
   }
 
   markReflectionAttempted(reflection?: CodingFailureReflection): void {
-    if (reflection) this.reflection = reflection;
+    if (reflection) {
+      this.reflection = reflection;
+      this.pendingReflection = reflection;
+      for (const hint of reflection.avoid) if (!this.ruledOut.includes(hint)) this.ruledOut.push(hint);
+    }
   }
 
   failureSnapshot(): CodingFailureSnapshot {

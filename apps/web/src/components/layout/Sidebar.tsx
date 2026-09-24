@@ -1,5 +1,5 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { ChevronDown, Code2, FilePlus2, FolderPlus, LayoutGrid, MessageSquarePlus, Plus, X } from "lucide-react";
+import { AudioLines, ChevronDown, Code2, FilePlus2, FolderPlus, LayoutGrid, MessageSquarePlus, Plus, X } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useUiStore, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "../../lib/uiStore";
@@ -14,17 +14,33 @@ import { MoreNavSection, type NavGroup } from "./MoreNavSection";
 import { PluginWidgets } from "../plugins/PluginWidgets";
 import { LiveAgentsFooter } from "./LiveAgentsFooter";
 
-function ModeSwitcher({ active, onSelect }: { active: "standard" | "coding"; onSelect: (mode: "standard" | "coding") => void }) {
+type AppMode = "standard" | "coding" | "audio";
+
+function ModeSwitcher({
+  active,
+  onSelect,
+  codingEnabled,
+  audioEnabled,
+}: {
+  active: AppMode;
+  onSelect: (mode: AppMode) => void;
+  codingEnabled: boolean;
+  audioEnabled: boolean;
+}) {
   const { t } = useI18n();
 
+  const modes = [
+    { key: "standard" as const, icon: LayoutGrid, label: t("layout.sidebarModeStandard") },
+    ...(codingEnabled ? [{ key: "coding" as const, icon: Code2, label: t("layout.sidebarModeCoding") }] : []),
+    ...(audioEnabled ? [{ key: "audio" as const, icon: AudioLines, label: t("layout.sidebarModeAudio") }] : []),
+  ];
+
   return (
-    <div className="grid grid-cols-2 gap-1 rounded-lg border border-border bg-background/60 p-1">
-      {(
-        [
-          { key: "standard" as const, icon: LayoutGrid, label: t("layout.sidebarModeStandard") },
-          { key: "coding" as const, icon: Code2, label: t("layout.sidebarModeCoding") },
-        ]
-      ).map(({ key, icon: Icon, label }) => (
+    <div
+      className="grid gap-1 rounded-lg border border-border bg-background/60 p-1"
+      style={{ gridTemplateColumns: `repeat(${modes.length}, minmax(0, 1fr))` }}
+    >
+      {modes.map(({ key, icon: Icon, label }) => (
         <button
           key={key}
           type="button"
@@ -46,6 +62,7 @@ function ModeSwitcher({ active, onSelect }: { active: "standard" | "coding"; onS
 export function Sidebar({
   navGroups,
   codingEnabled,
+  audioEnabled,
   runningCount,
   runningTools,
   gatewayActive,
@@ -55,6 +72,7 @@ export function Sidebar({
 }: {
   navGroups: NavGroup[];
   codingEnabled: boolean;
+  audioEnabled: boolean;
   runningCount: number;
   runningTools: Set<string>;
   gatewayActive: boolean;
@@ -66,6 +84,7 @@ export function Sidebar({
   const navigate = useNavigate();
   const location = useLocation();
   const isCodingRoute = location.pathname.startsWith("/coding");
+  const isAudioRoute = location.pathname.startsWith("/audio");
   const { setConversationId } = useAppStore();
   const { sidebarCollapsed, toggleSidebar, sidebarWidth, setSidebarWidth, mobileNavOpen, setMobileNavOpen } =
     useUiStore();
@@ -127,10 +146,12 @@ export function Sidebar({
 
           <div className="space-y-2 p-2">
             <PluginWidgets placement="sidebar-before-mode" />
-            {codingEnabled && (
+            {(codingEnabled || audioEnabled) && (
               <ModeSwitcher
-                active={isCodingRoute ? "coding" : "standard"}
-                onSelect={(mode) => navigate(mode === "coding" ? "/coding" : "/dashboard")}
+                active={isCodingRoute ? "coding" : isAudioRoute ? "audio" : "standard"}
+                onSelect={(mode) => navigate(mode === "coding" ? "/coding" : mode === "audio" ? "/audio" : "/dashboard")}
+                codingEnabled={codingEnabled}
+                audioEnabled={audioEnabled}
               />
             )}
             <PluginWidgets placement="sidebar-after-mode" />
@@ -224,10 +245,12 @@ export function Sidebar({
 
       <div className="space-y-2 p-2">
         <PluginWidgets placement="sidebar-before-mode" />
-        {codingEnabled && (
+        {(codingEnabled || audioEnabled) && (
           <ModeSwitcher
-            active={isCodingRoute ? "coding" : "standard"}
-            onSelect={(mode) => navigate(mode === "coding" ? "/coding" : "/dashboard")}
+            active={isCodingRoute ? "coding" : isAudioRoute ? "audio" : "standard"}
+            onSelect={(mode) => navigate(mode === "coding" ? "/coding" : mode === "audio" ? "/audio" : "/dashboard")}
+            codingEnabled={codingEnabled}
+            audioEnabled={audioEnabled}
           />
         )}
         <PluginWidgets placement="sidebar-after-mode" />
