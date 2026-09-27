@@ -76,7 +76,7 @@ export function getApiBaseUrl(config: BackendConfig = readBackendConfig()): stri
     return `${normalizeRemote(config.url)}/api`;
   }
   if (isDesktopApp()) {
-    return `http://localhost:${config.port ?? DEFAULT_PORT}/api`;
+    return `http://127.0.0.1:${config.port ?? DEFAULT_PORT}/api`;
   }
   return "/api";
 }
@@ -124,7 +124,7 @@ export function getSocketUrl(config: BackendConfig = readBackendConfig()): strin
     return normalizeRemote(config.url);
   }
   if (isDesktopApp()) {
-    return `http://localhost:${config.port ?? DEFAULT_PORT}`;
+    return `http://127.0.0.1:${config.port ?? DEFAULT_PORT}`;
   }
   if (import.meta.env.DEV) {
     // Fall back to the current page origin (undefined) rather than localhost:3001, so

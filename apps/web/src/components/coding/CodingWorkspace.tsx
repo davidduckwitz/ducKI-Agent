@@ -30,6 +30,7 @@ import { useIsMobile } from "../../lib/useMediaQuery";
 import { useTheme } from "../theme/ThemeProvider";
 import { extractChangedFiles, stripToolMarkers } from "../../lib/extractChangedFiles";
 import { toastManager } from "../../lib/toast";
+import { CodingFolderPicker, FolderBrowserDialog } from "./CodingFolderPicker";
 import { PanelEmpty } from "../ui/panel";
 import { SplitHandle } from "../ui/split-handle";
 import { CodingEditorTabs } from "./CodingEditorTabs";
@@ -213,6 +214,9 @@ export function CodingWorkspace() {
 
   const [newProjectName, setNewProjectName] = useState("");
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
+  const [createProjectMode, setCreateProjectMode] = useState<"new" | "link">("new");
+  const [linkFolderPath, setLinkFolderPath] = useState("");
+  const [browsingLinkFolder, setBrowsingLinkFolder] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -691,9 +695,13 @@ export function CodingWorkspace() {
   });
 
   const createProject = useMutation({
-    mutationFn: (name: string) => api.coding.createProject(name),
+    mutationFn: (name: string) =>
+      createProjectMode === "link"
+        ? api.coding.linkProject(linkFolderPath.trim(), name || undefined)
+        : api.coding.createProject(name),
     onSuccess: async (data: { created: boolean; slug: string; path: string }) => {
       setNewProjectName("");
+      setLinkFolderPath("");
       setShowCreateProjectModal(false);
       // Recreating a slug that was deleted earlier in this session makes it a live project
       // again - without lifting the tombstone it would be permanently unable to open a chat.
@@ -712,6 +720,7 @@ export function CodingWorkspace() {
     },
     onError: (error) => {
       console.error("Failed to create project:", error);
+      toastManager.error(error instanceof Error ? error.message : "Projekt konnte nicht angelegt werden");
       // Keep modal open on error so user can try again
     },
   });
@@ -1065,10 +1074,11 @@ export function CodingWorkspace() {
             {(projectsQuery.data ?? []).length === 0 && <option value="">{t("codingPage.noProjects")}</option>}
             {(projectsQuery.data ?? []).map((project) => (
               <option key={project.slug} value={project.slug}>
-                {project.slug}
+                {project.slug}{(project as { linked?: boolean }).linked ? " 📁" : ""}
               </option>
             ))}
           </select>
+          <CodingFolderPicker compact projects={projectsQuery.data ?? []} />
           <button
             type="button"
             onClick={() => setProjectToDelete(selectedProject)}
@@ -1405,15 +1415,62 @@ export function CodingWorkspace() {
               </button>
             </div>
             <div className="space-y-4 p-5">
+              <div className="flex gap-1 rounded-lg bg-muted/40 p-1 text-sm">
+                {(["new", "link"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    className={`flex-1 rounded-md px-3 py-1.5 ${createProjectMode === mode ? "bg-card font-medium shadow" : "text-muted-foreground hover:text-foreground"}`}
+                    onClick={() => setCreateProjectMode(mode)}
+                  >
+                    {mode === "new" ? "Neues Projekt" : "Bestehenden Ordner öffnen"}
+                  </button>
+                ))}
+              </div>
+              {createProjectMode === "link" && (
+                <div className="space-y-1">
+                  <div className="flex gap-2">
+                  <input
+                    autoFocus
+                    className="input min-w-0 flex-1 font-mono text-sm"
+                    value={linkFolderPath}
+                    onChange={(e) => setLinkFolderPath(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && linkFolderPath.trim()) createProject.mutate(newProjectName.trim());
+                    }}
+                    placeholder="z.B. M:\projekte\mein-repo oder /home/user/code/app"
+                  />
+                  <button type="button" className="btn-secondary shrink-0" onClick={() => setBrowsingLinkFolder(true)}>
+                    Durchsuchen…
+                  </button>
+                  </div>
+                  {browsingLinkFolder && (
+                    <FolderBrowserDialog
+                      initialPath={linkFolderPath.trim()}
+                      onCancel={() => setBrowsingLinkFolder(false)}
+                      onSelect={(folder) => {
+                        setBrowsingLinkFolder(false);
+                        setLinkFolderPath(folder);
+                      }}
+                    />
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Der Ordner wird direkt bearbeitet (keine Kopie). Name optional – Standard ist der Ordnername.
+                    Entfernen hebt nur die Verknüpfung auf, die Dateien bleiben erhalten.
+                  </p>
+                </div>
+              )}
               <input
-                autoFocus
+                autoFocus={createProjectMode === "new"}
                 className="input w-full"
                 value={newProjectName}
                 onChange={(e) => setNewProjectName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && newProjectName.trim()) createProject.mutate(newProjectName.trim());
+                  if (e.key !== "Enter") return;
+                  if (createProjectMode === "link" ? linkFolderPath.trim() : newProjectName.trim()) {
+                    createProject.mutate(newProjectName.trim());
+                  }
                 }}
-                placeholder={t("codingPage.projectPlaceholder")}
+                placeholder={createProjectMode === "link" ? "Projektname (optional)" : t("codingPage.projectPlaceholder")}
               />
               <div className="flex justify-end gap-2">
                 <button className="btn-secondary" onClick={() => setShowCreateProjectModal(false)}>
@@ -1422,7 +1479,10 @@ export function CodingWorkspace() {
                 <button
                   className="btn-primary"
                   onClick={() => createProject.mutate(newProjectName.trim())}
-                  disabled={!newProjectName.trim() || createProject.isPending}
+                  disabled={
+                    (createProjectMode === "link" ? !linkFolderPath.trim() : !newProjectName.trim()) ||
+                    createProject.isPending
+                  }
                 >
                   <Plus className="mr-1 inline h-4 w-4" />
                   {t("common.create")}
@@ -1478,7 +1538,14 @@ export function CodingWorkspace() {
                 </ul>
               )}
 
-              <p className="text-xs text-destructive">{t("codingPage.deleteProjectWarning")}</p>
+              {deletionPreviewQuery.data?.linked ? (
+                <p className="text-xs text-muted-foreground">
+                  Verknüpfter Ordner <span className="font-mono">{deletionPreviewQuery.data.path}</span>: nur die
+                  Verknüpfung und die Chats werden entfernt, die Dateien bleiben unangetastet.
+                </p>
+              ) : (
+                <p className="text-xs text-destructive">{t("codingPage.deleteProjectWarning")}</p>
+              )}
 
               <div className="flex justify-end gap-2">
                 <button className="btn-secondary" onClick={() => setProjectToDelete(null)}>

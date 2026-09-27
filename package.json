@@ -17,6 +17,7 @@
     "typecheck": "pnpm -r run typecheck",
     "clean": "pnpm -r run clean",
     "whisper:build": "node scripts/build-whisper.js",
+    "whisper:build:cuda": "node scripts/build-whisper.js --cuda",
     "electron:dev": "concurrently \"pnpm dev\" \"wait-on http://localhost:5173 && pnpm --filter @ducki/desktop run dev\"",
     "electron:build": "pnpm build:web && pnpm build:server && pnpm --filter @ducki/desktop run dist",
     "tauri:dev": "pnpm --filter @ducki/tauri-desktop run dev",

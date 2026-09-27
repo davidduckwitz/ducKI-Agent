@@ -5,12 +5,9 @@ import { join } from "node:path";
 import { CodingAgent } from "../src/coding/coding-agent";
 
 /**
- * Regression coverage for the EXPLORE/PLAN write lock: previously the ">> PHASE: X" markers
- * were only scanned AFTER a whole attempt finished (extractAndEmitPhaseEvents), purely for UI
- * events - nothing stopped the model from writing files while still declaring itself in a
- * read-only phase. The phase-lock hook enforces it live, with the same "refuse once, then get
- * out of the way" bound as the read-before-edit rule so a model that never emits the marker at
- * all cannot deadlock the run.
+ * Controller progress is derived from tool activity. Legacy phase markers are accepted for old
+ * conversations, but a real mutation advances EXPLORE/PLAN to EDIT without forcing the model to
+ * spend another turn printing marker prose.
  */
 function buildCodingAgent(sandboxRoot: string): CodingAgent {
   const provider = {
@@ -26,7 +23,7 @@ function buildCodingAgent(sandboxRoot: string): CodingAgent {
   return new CodingAgent(provider, db, undefined, { sandboxRoot });
 }
 
-describe("CodingAgent phase lock", () => {
+describe("CodingAgent controller-owned phase progress", () => {
   it("does not block writes before any phase marker has been seen (unstarted)", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-phase-lock-"));
     try {
@@ -39,35 +36,29 @@ describe("CodingAgent phase lock", () => {
     }
   });
 
-  it("blocks a write while still in EXPLORE, then lets it through once (bounded)", async () => {
+  it("advances from EXPLORE to EDIT when a write is attempted", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-phase-lock-"));
     try {
       const agent = buildCodingAgent(sandbox);
       (agent as any).updatePhaseFromResponse(">> PHASE: EXPLORE");
       const hook = (agent as any).agent.hookRegistry.executeHooks.bind((agent as any).agent.hookRegistry);
-      const call = () => hook("beforeTool", { toolName: "filesystem", input: { action: "write", path: "a.txt", content: "x" } });
-
-      const first = await call();
-      expect(first.proceed).toBe(false);
-      expect(first.reason).toContain("EXPLORE");
-      expect(first.reason).toContain(">> PHASE: EDIT");
-
-      const second = await call();
-      expect(second.proceed, "a repeated call must not deadlock the run").toBe(true);
+      const result = await hook("beforeTool", { toolName: "filesystem", input: { action: "write", path: "a.txt", content: "x" } });
+      expect(result.proceed).toBe(true);
+      expect((agent as any).currentPhase).toBe("edit");
     } finally {
       rmSync(sandbox, { recursive: true, force: true });
     }
   });
 
-  it("blocks during PLAN the same way it blocks during EXPLORE", async () => {
+  it("advances from PLAN to EDIT without requiring a marker", async () => {
     const sandbox = mkdtempSync(join(tmpdir(), "ducki-phase-lock-"));
     try {
       const agent = buildCodingAgent(sandbox);
       (agent as any).updatePhaseFromResponse("<< EXPLORE COMPLETE\n>> PHASE: PLAN");
       const hook = (agent as any).agent.hookRegistry.executeHooks.bind((agent as any).agent.hookRegistry);
       const result = await hook("beforeTool", { toolName: "filesystem", input: { action: "edit", path: "a.txt", oldString: "a", newString: "b" } });
-      expect(result.proceed).toBe(false);
-      expect(result.reason).toContain("PLAN");
+      expect(result.proceed).toBe(true);
+      expect((agent as any).currentPhase).toBe("edit");
     } finally {
       rmSync(sandbox, { recursive: true, force: true });
     }

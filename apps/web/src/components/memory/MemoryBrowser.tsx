@@ -888,12 +888,12 @@ export function MemoryBrowser() {
       )}
 
       {activeTab === "wiki" && wikiSubTab === "graph" && (
-        <div className="card space-y-2">
+        <div className="card min-w-0 space-y-2">
           <h2 className="text-lg font-semibold">Graph Editor</h2>
           <p className="text-xs text-gray-500">
             Knoten = Wiki-Notizen, Kanten = [[Wikilinks]]. Gestrichelt = Ziel nicht gefunden. Klick auf einen Knoten oeffnet die Verbindungen.
           </p>
-          <WikiGraph className="h-[75vh] min-h-[520px]" />
+          <WikiGraph className="min-h-[420px] lg:h-[calc(100dvh-18rem)] lg:max-h-[900px]" />
         </div>
       )}
 

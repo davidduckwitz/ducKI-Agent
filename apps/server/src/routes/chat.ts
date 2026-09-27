@@ -41,7 +41,11 @@ chatRouter.post("/transcribe", async (req, res, next) => {
     }
 
     const db = req.app.locals["db"] as DatabaseService;
-    const text = await transcribeAudioBuffer(db, audioBuffer);
+    const text = await transcribeAudioBuffer(db, audioBuffer, {
+      language: typeof body.language === "string" ? body.language : undefined,
+      mimeType: typeof body.mimeType === "string" ? body.mimeType : undefined,
+      partial: body.partial === true,
+    });
 
     const elapsed = Date.now() - startTime;
 

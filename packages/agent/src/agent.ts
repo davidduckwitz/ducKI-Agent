@@ -511,6 +511,9 @@ export class Agent {
   private enablePlanning: boolean;
   private enableAutoMemory: boolean;
   private disableQualityPasses: boolean;
+  private includeTaskRules: boolean;
+  private includeInstalledSkillCatalog: boolean;
+  private includeMemoryContext: boolean;
   /** See stickySkillSelection option: when true, skill selection is computed once and reused
    *  across run() calls on this same instance until resetSkillSelectionCache() clears it. */
   private stickySkillSelection: boolean;
@@ -635,6 +638,9 @@ export class Agent {
     this.enablePlanning = options.enablePlanning ?? true;
     this.enableAutoMemory = options.enableAutoMemory ?? (process.env["AGENT_AUTO_MEMORY"] ?? "true").toLowerCase() !== "false";
     this.disableQualityPasses = options.disableQualityPasses ?? false;
+    this.includeTaskRules = options.includeTaskRules ?? true;
+    this.includeInstalledSkillCatalog = options.includeInstalledSkillCatalog ?? true;
+    this.includeMemoryContext = options.includeMemoryContext ?? true;
     this.stickySkillSelection = options.stickySkillSelection ?? false;
     this.allowedSkillSlugs = options.allowedSkillSlugs ? new Set(options.allowedSkillSlugs) : undefined;
     this.respectPersonaLength = options.respectPersonaLength ?? false;
@@ -7190,26 +7196,28 @@ export class Agent {
     // already sitting in the system prompt, instead of repeating the same fact under a third
     // header every iteration.
     let memoryContextLines: string[] = [];
-    try {
-      // Single consolidated pool: importance-sorted memories plus memories whose content
-      // matches the user's actual question, merged and similarity-deduped into one capped
-      // list (see buildConsolidatedSystemContext) - replaces what used to be two separately
-      // built, only-exact-match-deduped blocks ("Relevant Memory" + "Task-Relevant Memory")
-      // that could both show near-identical phrasings of the same fact.
-      const relevantTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
-      memoryContext = await this.memory.buildConsolidatedSystemContext(
-        this.conversation.id,
-        effectiveInput,
-        relevantTypes
-      );
-      memoryContextLines = memoryContext
-        .split("\n")
-        .filter((line) => line.startsWith("- "))
-        .map((line) => line.slice(2).trim());
-    } catch (memoryError) {
-      this.logger.warn("Failed to build system memory context", {
-        error: memoryError instanceof Error ? memoryError.message : String(memoryError),
-      });
+    if (this.includeMemoryContext) {
+      try {
+        // Single consolidated pool: importance-sorted memories plus memories whose content
+        // matches the user's actual question, merged and similarity-deduped into one capped
+        // list (see buildConsolidatedSystemContext) - replaces what used to be two separately
+        // built, only-exact-match-deduped blocks ("Relevant Memory" + "Task-Relevant Memory")
+        // that could both show near-identical phrasings of the same fact.
+        const relevantTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
+        memoryContext = await this.memory.buildConsolidatedSystemContext(
+          this.conversation.id,
+          effectiveInput,
+          relevantTypes
+        );
+        memoryContextLines = memoryContext
+          .split("\n")
+          .filter((line) => line.startsWith("- "))
+          .map((line) => line.slice(2).trim());
+      } catch (memoryError) {
+        this.logger.warn("Failed to build system memory context", {
+          error: memoryError instanceof Error ? memoryError.message : String(memoryError),
+        });
+      }
     }
 
     // Conversation compression (P3.1): summarize older history once per run so long
@@ -7282,7 +7290,11 @@ export class Agent {
     const availableTools = this.executor
       .listTools()
       .filter((tool) => isToolActive(tool.name, toolManifests, enabledOptionalToolsSet));
-    const toolContext = availableTools.length > 0
+    // Native tool schemas already carry each tool's name, description, and JSON schema. Listing
+    // the same tools again in prose wastes prompt tokens and can make the model mix native and
+    // text protocols. Text-only providers still need the catalogue for discovery.
+    const nativeToolsForRun = controls.enableNativeTools && (this.provider.supportsNativeTools?.() ?? false);
+    const toolContext = !nativeToolsForRun && availableTools.length > 0
       ? `\n\n## Available Tools\n${availableTools.map((tool) => `- ${tool.name}: ${tool.description}`).join("\n")}`
       : "";
     // A caller-supplied plan (e.g. the user-approved plan from the UI's Plan tab) is used
@@ -7409,7 +7421,7 @@ export class Agent {
         });
       }
     }
-    const installedSkillsContext = installedSkillManifests.length > 0
+    const installedSkillsContext = this.includeInstalledSkillCatalog && installedSkillManifests.length > 0
       ? `\n\n## Installed Skills\n${installedSkillManifests
           .map((skill) => `- ${skill.slug}: ${skill.description ?? "No description"}`)
           .join("\n")}`
@@ -7430,7 +7442,7 @@ export class Agent {
           .join("\n\n")}`
       : "";
 
-    const taskRules = taskRulesGuidance();
+    const taskRules = this.includeTaskRules ? taskRulesGuidance() : "";
     const platformHint = platformHintGuidance(options.channelHint as PlatformChannel | undefined);
 
     // Soul is the bot's identity (slot #1 in system prompt), like hermes SOUL.md
@@ -7712,38 +7724,40 @@ export class Agent {
         ...toolsUsed.slice(-3),
       ];
       let dynamicMemoryContext = "";
-      try {
-        const memoryKeywords = this.extractMemoryKeywords(dynamicMemorySignals);
-        const keywordSig = memoryKeywords.join("|");
-        if (keywordSig === cachedMemoryKeywordSig) {
-          // Same keywords as the previous iteration - reuse the already-retrieved context.
-          dynamicMemoryContext = cachedDynamicMemoryContext;
-        } else {
-          // Same long-term-only-for-coding scoping as the getRelevantContext call above -
-          // see its comment for why semantic memories matter for plain chat.
-          const dynamicMemoryTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
-          // Lower cap than before (3, was 5) and excludes anything similar to what's already
-          // in the system prompt's consolidated memory block (memoryContextLines) - this hint
-          // exists to surface NEW recall as the run's own actions narrow the query, not to
-          // repeat the same facts under a third header every iteration.
-          dynamicMemoryContext = memoryKeywords.length > 0
-            ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 3, dynamicMemoryTypes, memoryContextLines)
-            : "";
-          cachedMemoryKeywordSig = keywordSig;
-          cachedDynamicMemoryContext = dynamicMemoryContext;
-          if (dynamicMemoryContext) {
-            emit("reasoning", "Memory-Kontext abgerufen.", {
-              keywords: memoryKeywords.slice(0, 5),
-            });
+      if (this.includeMemoryContext) {
+        try {
+          const memoryKeywords = this.extractMemoryKeywords(dynamicMemorySignals);
+          const keywordSig = memoryKeywords.join("|");
+          if (keywordSig === cachedMemoryKeywordSig) {
+            // Same keywords as the previous iteration - reuse the already-retrieved context.
+            dynamicMemoryContext = cachedDynamicMemoryContext;
+          } else {
+            // Same long-term-only-for-coding scoping as the getRelevantContext call above -
+            // see its comment for why semantic memories matter for plain chat.
+            const dynamicMemoryTypes: Array<"long-term" | "semantic"> = codingRun ? ["long-term"] : ["long-term", "semantic"];
+            // Lower cap than before (3, was 5) and excludes anything similar to what's already
+            // in the system prompt's consolidated memory block (memoryContextLines) - this hint
+            // exists to surface NEW recall as the run's own actions narrow the query, not to
+            // repeat the same facts under a third header every iteration.
+            dynamicMemoryContext = memoryKeywords.length > 0
+              ? await this.memory.buildDynamicContextWithKeywords(memoryKeywords, this.conversation.id, 3, dynamicMemoryTypes, memoryContextLines)
+              : "";
+            cachedMemoryKeywordSig = keywordSig;
+            cachedDynamicMemoryContext = dynamicMemoryContext;
+            if (dynamicMemoryContext) {
+              emit("reasoning", "Memory-Kontext abgerufen.", {
+                keywords: memoryKeywords.slice(0, 5),
+              });
+            }
           }
+        } catch (memoryError) {
+          this.logger.warn("Failed to build dynamic memory context", {
+            error: memoryError instanceof Error ? memoryError.message : String(memoryError),
+          });
+          emit("guardrail", "Memory context build failed, continuing without dynamic memory", {
+            error: memoryError instanceof Error ? memoryError.message : "unknown error",
+          });
         }
-      } catch (memoryError) {
-        this.logger.warn("Failed to build dynamic memory context", {
-          error: memoryError instanceof Error ? memoryError.message : String(memoryError),
-        });
-        emit("guardrail", "Memory context build failed, continuing without dynamic memory", {
-          error: memoryError instanceof Error ? memoryError.message : "unknown error",
-        });
       }
 
       const buildConversationWindow = (messageLimit: number, charLimit: number): LLMMessage[] => {

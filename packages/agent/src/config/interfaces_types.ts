@@ -27,6 +27,20 @@ export interface AgentOptions {
    */
   disableQualityPasses?: boolean;
   /**
+   * Include the generic project/task/workflow/gateway rules in the system prompt. Dedicated
+   * agents with a curated tool set can disable these rules so the prompt does not advertise
+   * capabilities they intentionally do not expose.
+   */
+  includeTaskRules?: boolean;
+  /**
+   * Include the full installed-skill catalogue in the model prompt. Skill selection still runs
+   * when false and selected skill contents are still loaded; this only removes the redundant
+   * list of every skill from dedicated-agent prompts.
+   */
+  includeInstalledSkillCatalog?: boolean;
+  /** Include long-term and per-iteration recalled memory in prompts. */
+  includeMemoryContext?: boolean;
+  /**
    * When true, skill selection (auto-scoring + related-skill expansion + SKILL.md loading) is
    * computed once and reused across every run() call on this instance, instead of being
    * recomputed from scratch on each one. Meant for a caller that issues several run() calls for

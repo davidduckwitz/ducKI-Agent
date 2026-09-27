@@ -164,6 +164,9 @@ describe("CodingAgent continues when there's no verifyCommand and the checklist 
       "[TOOL:filesystem action=write path=index.html]\n<html></html>\n[/TOOL]",
       '[TOOL:todo({"action":"write","items":[{"title":"Write index.html","status":"done"},{"title":"Verify it works"}]})]',
       "Fertig.",
+      // The generic conversation compressor may consume one scripted completion between
+      // attempts now that the first write is no longer blocked by phase-marker choreography.
+      "[TOOL:todo action=update id=2 status=done]",
       "[TOOL:todo action=update id=2 status=done]",
       "Fertig.",
     ]);

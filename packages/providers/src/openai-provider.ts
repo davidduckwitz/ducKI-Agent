@@ -124,6 +124,12 @@ export interface ToOpenAIMessagesOptions {
    * so only the gateway that actually benefits opts in.
    */
   emitCacheControl?: boolean;
+  /**
+   * Also put a breakpoint on the LAST message, so the growing conversation history is cached
+   * incrementally (each iteration reads the previous prefix at the cached rate). Only for models
+   * with an explicit prompt cache (Anthropic via OpenRouter); requires emitCacheControl.
+   */
+  cacheHistory?: boolean;
 }
 
 export function toOpenAIMessages(
@@ -144,7 +150,7 @@ export function toOpenAIMessages(
     }
   }
 
-  return messages.map((m): ChatCompletionMessageParam => {
+  const converted = messages.map((m): ChatCompletionMessageParam => {
     if (m.role === "tool") {
       const text = typeof m.content === "string" ? m.content : "tool result";
       if (m.toolCallId && echoedToolCallIds.has(m.toolCallId)) {
@@ -206,6 +212,28 @@ export function toOpenAIMessages(
 
     return userMessage;
   });
+
+  if (options.emitCacheControl && options.cacheHistory) addHistoryCacheBreakpoint(converted);
+  return converted;
+}
+
+/** Marks the last text part of the final user/tool message as a cache breakpoint. */
+function addHistoryCacheBreakpoint(messages: ChatCompletionMessageParam[]): void {
+  const last = messages[messages.length - 1] as { role: string; content: unknown } | undefined;
+  if (!last || (last.role !== "user" && last.role !== "tool")) return;
+  if (typeof last.content === "string") {
+    if (!last.content) return;
+    last.content = [{ type: "text", text: last.content, cache_control: { type: "ephemeral" } }];
+    return;
+  }
+  if (!Array.isArray(last.content)) return;
+  for (let i = last.content.length - 1; i >= 0; i--) {
+    const part = last.content[i] as { type?: string; text?: string; cache_control?: unknown };
+    if (part?.type === "text" && part.text) {
+      part.cache_control = { type: "ephemeral" };
+      return;
+    }
+  }
 }
 
 export class OpenAIProvider implements LLMProvider {
@@ -226,6 +254,11 @@ export class OpenAIProvider implements LLMProvider {
    * opt-in rather than always-on.
    */
   protected emitsPromptCacheControl(): boolean {
+    return false;
+  }
+
+  /** Whether to also cache the conversation history (see ToOpenAIMessagesOptions.cacheHistory). */
+  protected cachesHistory(): boolean {
     return false;
   }
 
@@ -396,7 +429,7 @@ export class OpenAIProvider implements LLMProvider {
 
     const buildRequest = (withTools: boolean) => ({
       model: this.model,
-      messages: toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl() }),
+      messages: toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl(), cacheHistory: this.cachesHistory() }),
       temperature: merged.temperature,
       top_p: merged.topP,
       max_tokens: merged.maxTokens,
@@ -476,7 +509,7 @@ export class OpenAIProvider implements LLMProvider {
     onChunk?: (chunk: string) => void
   ): Promise<LLMResponse> {
     const merged = { ...this.defaultOptions, ...options };
-    const openAiMessages = toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl() });
+    const openAiMessages = toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl(), cacheHistory: this.cachesHistory() });
     const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
 
     // `withTools` is an explicit param (not just closing over `useNativeTools`) so the

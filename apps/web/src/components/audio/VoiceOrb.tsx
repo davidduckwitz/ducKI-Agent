@@ -1,21 +1,43 @@
 import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { createAudioLevelAnalyser, type AudioLevelAnalyserHandle } from "../../lib/audioLevelAnalyser";
+import { api } from "../../lib/api";
 import { onVoiceCaptureStarted, onVoiceCaptureStopped } from "../../lib/voiceCaptureBus";
 import { isPlaybackActive } from "../../lib/voicePlaybackRegistry";
 import { readVoiceOutput } from "../../lib/voiceOutputAnalyser";
 import { useAppStore } from "../../lib/store";
+import { buildVoiceMemoryGraph, type VoiceMemoryGraph } from "./voiceMemoryGraph";
 
 export type VoiceOrbStatus = "idle" | "listening" | "thinking" | "speaking" | "user-speaking";
 const LABELS: Record<VoiceOrbStatus, string> = {
   idle: "Bereit für dich", listening: "Ich höre zu", thinking: "Agent arbeitet",
   speaking: "Agent spricht", "user-speaking": "Du sprichst",
 };
+const MEMORY_STATUS_COLOR: Record<string, string> = {
+  approved: "52,211,153",
+  candidate: "251,191,36",
+  rejected: "248,113,113",
+  error: "248,113,113",
+  folder: "167,139,250",
+};
 
 // Perspective-projected 3D particle shell. All audio sampling and animation stays outside
 // React: only semantic state transitions cause renders, never individual audio frames.
 export function VoiceOrb({ size = 420 }: { size?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const memoryGraphRef = useRef<VoiceMemoryGraph | null>(null);
   const [status, setStatus] = useState<VoiceOrbStatus>("idle");
+  const graphQuery = useQuery({
+    queryKey: ["wiki", "graph"],
+    queryFn: () => api.wiki.graph(),
+    refetchInterval: 30000,
+    retry: false,
+  });
+
+  useEffect(() => {
+    memoryGraphRef.current = buildVoiceMemoryGraph(graphQuery.data);
+  }, [graphQuery.data]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d", { alpha: false });
@@ -97,6 +119,110 @@ export function VoiceOrb({ size = 420 }: { size?: number }) {
       halo.addColorStop(0.7, `rgba(85,30,125,${0.06 + energy * 0.12})`);
       halo.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = halo; ctx.fillRect(0, 0, width, width);
+
+      // Read-only LLM-wiki memory: index.md stays at the origin while every other
+      // note rotates around it in 3D. This is intentionally painted before the
+      // particle shell, so memory reads as a deep background layer instead of
+      // competing with the live voice visualization.
+      const memoryGraph = memoryGraphRef.current;
+      if (memoryGraph) {
+        const graphRadius = width * 0.285;
+        // The Z-axis rotation is the obvious circular orbit around index.md in
+        // screen space. A slower Y-axis turn preserves the spatial 3D depth.
+        const orbitRotation = motion.matches ? 0.35 : t * 0.115;
+        const depthRotation = motion.matches ? 0.2 : t * 0.047;
+        const orbitCos = Math.cos(orbitRotation), orbitSin = Math.sin(orbitRotation);
+        const yawCos = Math.cos(depthRotation), yawSin = Math.sin(depthRotation);
+        const tilt = -0.28;
+        const tiltCos = Math.cos(tilt), tiltSin = Math.sin(tilt);
+        const projected = memoryGraph.nodes.map((node, index) => {
+          const floatingY = index === memoryGraph.rootIndex || motion.matches
+            ? node.y
+            : node.y + Math.sin(t * 0.7 + node.phase) * 0.035;
+          const orbitX = node.x * orbitCos - floatingY * orbitSin;
+          const orbitY = node.x * orbitSin + floatingY * orbitCos;
+          const rotatedX = orbitX * yawCos + node.z * yawSin;
+          const rotatedZ = node.z * yawCos - orbitX * yawSin;
+          const rotatedY = orbitY * tiltCos - rotatedZ * tiltSin;
+          const depth = orbitY * tiltSin + rotatedZ * tiltCos;
+          const perspective = 3.4 / (3.4 - depth);
+          return {
+            node,
+            index,
+            x: width / 2 + rotatedX * graphRadius * perspective,
+            y: width / 2 + rotatedY * graphRadius * perspective,
+            z: depth,
+            perspective,
+          };
+        });
+
+        ctx.save();
+        ctx.globalCompositeOperation = "source-over";
+        ctx.lineCap = "round";
+        for (const edge of memoryGraph.edges) {
+          const source = projected[edge.source];
+          const targetNode = projected[edge.target];
+          if (!source || !targetNode) continue;
+          const depthAlpha = Math.max(0.55, Math.min(1, (source.z + targetNode.z + 2.2) / 4.4));
+          ctx.beginPath();
+          ctx.moveTo(source.x, source.y);
+          ctx.lineTo(targetNode.x, targetNode.y);
+          ctx.shadowColor = edge.direct ? "rgba(129,140,248,0.7)" : "rgba(56,189,248,0.35)";
+          ctx.shadowBlur = edge.direct ? 7 : 4;
+          ctx.strokeStyle = edge.direct
+            ? `rgba(165,180,252,${(0.52 + energy * 0.1) * depthAlpha})`
+            : `rgba(125,211,252,${0.3 * depthAlpha})`;
+          ctx.lineWidth = edge.direct ? 1.65 : 1;
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+
+        for (const point of projected) {
+          const root = point.index === memoryGraph.rootIndex;
+          const rgb = root ? "251,191,36" : MEMORY_STATUS_COLOR[point.node.status] ?? "96,165,250";
+          const depthAlpha = root ? 1 : Math.max(0.55, Math.min(0.9, (point.z + 1.8) / 3));
+          const radius = (root ? 6.4 : point.node.kind === "folder" ? 3.4 : 3) * point.perspective * width / 420;
+          ctx.shadowColor = `rgba(${rgb},${root ? 0.85 : 0.45})`;
+          ctx.shadowBlur = root ? 15 : 7;
+          ctx.fillStyle = `rgba(${rgb},${depthAlpha})`;
+          ctx.beginPath();
+          if (point.node.kind === "folder" && !root) {
+            ctx.rect(point.x - radius, point.y - radius, radius * 2, radius * 2);
+          } else {
+            ctx.arc(point.x, point.y, Math.max(1, radius), 0, Math.PI * 2);
+          }
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.strokeStyle = root ? "rgba(254,243,199,0.95)" : `rgba(${rgb},0.9)`;
+          ctx.lineWidth = root ? 1.5 : 0.8;
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+
+        const root = projected[memoryGraph.rootIndex];
+        if (root) {
+          ctx.fillStyle = "rgba(253,230,138,0.8)";
+          ctx.font = `600 ${Math.max(8, width / 48)}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillText("index.md", root.x, root.y + Math.max(13, width / 27));
+        }
+        if (width >= 340) {
+          // A few front-facing first-hop labels make the memory recognizable without
+          // turning the small audio orb into an unreadable editor view.
+          const visibleLabels = projected
+            .filter((point) => point.node.hop === 1 && point.z > -0.1)
+            .sort((a, b) => b.z - a.z)
+            .slice(0, 6);
+          ctx.font = `${Math.max(7, width / 58)}px sans-serif`;
+          ctx.fillStyle = "rgba(191,219,254,0.52)";
+          for (const point of visibleLabels) {
+            const title = point.node.title.length > 16 ? `${point.node.title.slice(0, 15)}…` : point.node.title;
+            ctx.fillText(title, point.x, point.y + Math.max(9, width / 38));
+          }
+        }
+        ctx.restore();
+      }
+
       ctx.globalCompositeOperation = "lighter";
       for (const point of points) {
         const longitude = (point.azimuth + Math.PI) / (2 * Math.PI);

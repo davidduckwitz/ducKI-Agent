@@ -483,6 +483,10 @@ export const useAppStore = create<AppState>((set, get) => ({
                 content: event.message,
                 timestamp: event.timestamp,
                 metadata: {
+                  // Server timestamps can lag the client clock (remote/Tailscale clients), which
+                  // made ChatContainer's "newer than conversation open" autoplay gate treat a
+                  // just-arrived reply as history. Live receipt is the reliable signal.
+                  liveReceivedAt: Date.now(),
                   ...(displayMessageId ? { displayMessageId } : {}),
                   ...(s.pendingLocalMessageId ? { localMessageId: s.pendingLocalMessageId } : {}),
                 },
@@ -591,6 +595,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             content: data.response,
             timestamp: msgTimestamp,
             metadata: {
+              liveReceivedAt: Date.now(),
               localMessageId: localTurnId,
               serverMessageId: data.messageId,
             },

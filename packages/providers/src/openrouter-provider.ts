@@ -15,6 +15,11 @@ export class OpenRouterProvider extends OpenAIProvider {
     return true;
   }
 
+  /** Only Anthropic models on OpenRouter use explicit breakpoints; others cache automatically. */
+  protected override cachesHistory(): boolean {
+    return /anthropic\/|claude/i.test(this.model);
+  }
+
   constructor(options: Partial<ProviderOptions> & { model: string }) {
     super({
       baseUrl: options.baseUrl ?? "https://openrouter.ai/api/v1",

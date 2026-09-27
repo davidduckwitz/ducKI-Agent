@@ -211,6 +211,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
     section: "Speech",
     defaultValue: "nodejs-whisper",
     options: [
+      { label: "faster-whisper Server (schnell, CUDA/CPU, Live-Text)", value: "faster-whisper" },
       { label: "Local Command", value: "local" },
       { label: "nodejs-whisper", value: "nodejs-whisper" },
       { label: "OpenAI", value: "openai" },

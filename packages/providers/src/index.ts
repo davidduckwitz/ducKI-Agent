@@ -59,8 +59,11 @@ export function createProvider(config: ProviderFactoryConfig): LLMProvider {
         model: config.model,
       });
     case "claude":
-      return new AnthropicAdapter({
-        baseUrl: "https://api.anthropic.com/v1",
+      // ClaudeProvider, not AnthropicAdapter: native tool_use, real streaming, reasoning options,
+      // abort signal and history caching. The adapter only simulated streaming and forced the
+      // text [TOOL:...] protocol, which cost quality, latency and tokens on every iteration.
+      return new ClaudeProvider({
+        baseUrl: config.baseUrl ?? "https://api.anthropic.com/v1",
         apiKey: config.apiKey ?? process.env["CLAUDE_API_KEY"],
         model: config.model ?? process.env["CLAUDE_MODEL"] ?? "claude-3-5-sonnet-20241022",
       });
@@ -103,6 +106,7 @@ export type SpeechToTextProviderFactoryConfig = {
   args?: string[];
   workingDirectory?: string;
   timeoutMs?: number;
+  inputExt?: string;
   modelRootPath?: string;
   autoDownloadModel?: boolean;
   withCuda?: boolean;
@@ -154,6 +158,7 @@ export function createSpeechToTextProvider(
             ? ["1", "true", "yes", "on"].includes(process.env["NODEJS_WHISPER_USE_CUDA"].trim().toLowerCase())
             : resolveNodejsWhisperCudaDefault()),
         timeoutMs: config.timeoutMs,
+        inputExt: config.inputExt,
       });
     default:
       throw new Error(`Unknown speech-to-text provider: ${String(config.name)}`);

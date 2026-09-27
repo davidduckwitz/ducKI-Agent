@@ -73,11 +73,12 @@ if (!cmake) {
   process.exit(1);
 }
 
-const withCuda = ["1", "true", "yes", "on"].includes((process.env["NODEJS_WHISPER_USE_CUDA"] ?? "").toLowerCase());
+const withCuda = process.argv.includes("--cuda") || ["1", "true", "yes", "on"].includes((process.env["NODEJS_WHISPER_USE_CUDA"] ?? "").toLowerCase());
 
 try {
   const configureArgs = ["-B", "build", "-DCMAKE_BUILD_TYPE=Release", "-DWHISPER_BUILD_TESTS=OFF"];
-  if (withCuda) configureArgs.push("-DGGML_CUDA=1");
+  // Explicit OFF too, so a later CPU rebuild does not inherit a cached CUDA configure.
+  configureArgs.push(withCuda ? "-DGGML_CUDA=1" : "-DGGML_CUDA=0");
   run(cmake, configureArgs, whisperCppPath);
   run(cmake, ["--build", "build", "--config", "Release", "--target", "whisper-cli"], whisperCppPath);
 } catch (error) {

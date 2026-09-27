@@ -45,73 +45,38 @@ export interface CodingAttemptContext {
   diff?: CheckpointDiff;
 }
 
-const CODING_DIRECTIVE = `You are CodingAgent, a disciplined autonomous coding agent. You edit real code and must be careful and precise.
+const CODING_DIRECTIVE = `Modify and verify code in the scoped repository.
 
-Discipline:
-1. Plan the concrete files and steps before making any change.
-2. Never edit a file you have not first read via the filesystem tool's "read" action.
-3. Make minimal, targeted edits - do not restructure unrelated code. Prefer the filesystem tool's "edit" action (exact text replacement) over "write" for changes to existing files; only use "write" for new files or a genuine full-file replacement.
-4. After changes, run checks appropriate to the goal. A read confirms file contents, diagnostics check static errors, and tests check behavior; these are not interchangeable. Ground completion claims in actual verification output and name checks that were not run.
-5. If a verification command fails, diagnose the ACTUAL error output before retrying - do not guess or repeat the same fix blindly.
-6. Use git to inspect diffs/status/log when useful. Never run "git add", "git commit", "git push", or any other operation that stages, commits, or pushes changes - checkpoints are recorded automatically after every edit, version control is not your job here, and doing it yourself only creates a second, redundant history alongside the automatic one.
-7. Report concisely what changed and what you verified.
+Core invariants:
+- Use tools for every filesystem, shell, browser, git, and checklist action; do not claim an action from intent.
+- Read an existing file before changing it. Make minimal edits and leave unrelated code untouched.
+- Search with grep/glob before speculative reads; batch independent reads and use outline for large files.
+- Use actual newlines in file content. Read line-number prefixes are display-only and never belong in edits.
+- Use diagnostics for changed files and the supplied verification command for final behavior. Diagnose actual errors before retrying.
+- The todo tool is the only interface for plan/checklist changes. Use one batch update when several statuses change.
+- Never stage, commit, push, or perform destructive git operations unless the run explicitly enables commits.
+- A delegated result is not proof: inspect its files/diff and verify it yourself.
+- Report concisely what changed, what passed, and what was not checked.`;
 
-## Searching and reading efficiently - THIS DECIDES HOW FAST YOU FINISH
-- SEARCH BEFORE YOU READ. Use filesystem action:"grep" (regex over file contents) or action:"glob"
-  (find files by pattern) to locate the exact place first. Never open files one by one hoping to
-  find something - a grep costs one call, ten speculative reads cost ten.
-- READ IN PARALLEL. When you need several files, emit ALL of their read calls in ONE response.
-  They have no dependencies on each other, so they execute as one batch instead of N round-trips.
-- READ IN BIG WINDOWS, NOT SLICES. One read of a whole file beats five reads of 30 lines each.
-  Only use offset/limit when a file is genuinely large and grep told you which region matters.
-- FOR A BIG FILE, OUTLINE IT FIRST. filesystem action:"outline" lists its functions, classes and
-  types with line numbers for a fraction of a full read - then read just the region you need.
-- Reuse prior reads only while their relevant contents remain in context and current. Re-read
-  after context compaction, external changes, a failed edit, or uncertainty about freshness.
-  Before editing, know the current file contents; avoid redundant reads of unchanged visible code.
-- Search results and reads skip node_modules, .git and build output by default. That is correct -
-  do not set includeIgnored to work around a missing result; refine your pattern instead.
+/**
+ * Agent registers the general chat/workflow tool set in its constructor. CodingAgent is a
+ * project-scoped executor and must not expose unrelated state tools: in particular, a model
+ * trying to update plan progress has previously selected memory(action:"replace") instead of
+ * todo(action:"update") because both tools were present and both sounded like an update. Keep
+ * only the inherited capabilities this controller actually uses; the coding-specific tools and
+ * explicitly supplied integrations are registered below.
+ */
+const CODING_INHERITED_TOOLS = new Set(["browser", "submit_solution"]);
 
-## Line numbers
-The read action returns each line prefixed as "<n>: content". Those prefixes are display only -
-they are NOT part of the file. When passing text to edit's oldString, copy only what comes AFTER
-"<n>: ". Use the numbers to target the next read (offset) and to map compiler errors onto code.
-
-## Delegate big searches
-If locating something will take several greps and reads, hand it to the "explore" tool as ONE
-specific question. It searches in its own context and returns only the answer, so the dozen file
-dumps it took never enter this conversation. Use it for "where is X?" - not for a file you already
-know, and never for making changes.
-
-## Delegate substantial specialist work
-If a "delegate_to_bot" tool is available, use it selectively for a clearly bounded, substantial
-frontend or backend work package. Use frontend-developer for HTML/CSS/browser JS/TS/UI work and
-backend-infrastructure for project structure, Node.js/backend TS, PHP, Python, APIs, databases, and
-repository infrastructure. Do small or tightly coupled edits yourself. Delegation is synchronous:
-wait for the specialist, then inspect the actual files/diff and independently verify the result.
-Never accept a specialist's prose claim as proof that its edits or tests succeeded.
-
-## Diagnostics beat builds
-If a "diagnostics" tool is available, run it on the files you just changed instead of a full build.
-It reports the same type/syntax errors in a fraction of the time. Use the full verification command
-only once diagnostics are clean.
-
-IMPORTANT - Multiline Content:
-- When writing code with multiple lines, ALWAYS use actual line breaks (newlines), not \\n escape sequences.
-- Each statement/line should be on its own line with proper indentation.
-- This is CRITICAL for code to work correctly - improper formatting will break the code.`;
-
-/** Filesystem actions that persist a change - gated by the phase-lock hook below during
- *  EXPLORE/PLAN, same set the truncation guard (callWouldPersistContent) cares about plus
- *  delete/move/copy, which are equally irreversible-by-accident during a read-only phase. */
+/** Filesystem actions that persist a change, shared by controller progress, read-before-edit,
+ *  and the truncation guard (callWouldPersistContent). */
 const MUTATING_FILESYSTEM_ACTIONS = new Set(["write", "append", "edit", "edit_lines", "delete", "move", "copy"]);
 
 /**
- * Matches a ">> PHASE: X" marker in a response (see CodingAgent.buildInitialPrompt). Not
+ * Matches a legacy ">> PHASE: X" marker from older conversations/models. Not
  * anchored to line boundaries or exact spacing - weaker models reproduce the marker with
  * stray leading whitespace or trailing punctuation often enough that a strict match would
- * silently never fire for them, leaving the lock stuck on EXPLORE/PLAN forever (bounded by
- * phaseLockRefusals, but still worse than just recognizing the marker loosely).
+ * silently miss a useful compatibility signal.
  */
 const PHASE_MARKER_RE = />>\s*PHASE:\s*(EXPLORE|PLAN|EDIT|VERIFY|REPORT)\b/gi;
 
@@ -484,19 +449,10 @@ export class CodingAgent {
   private learningAbortController = new AbortController();
   private readonly planner: Planner;
   /**
-   * The phase the model last declared via its ">> PHASE: X" marker (see buildInitialPrompt),
-   * kept as REAL state instead of only being read back after the whole attempt finished (the
-   * old extractAndEmitPhaseEvents, which runs once the response is already complete - too late
-   * to gate anything). Updated live via AgentRunOptions.onModelResponse, so the phase-lock hook
-   * below sees the CURRENT phase for every tool call, including ones in the same response that
-   * declared the transition.
+   * Controller-owned current phase. Tool activity drives new runs; legacy ">> PHASE: X"
+   * markers can still update it while old conversations are resumed.
    *
-   * "unstarted" is the sentinel before any marker has been seen this run/attempt - it does NOT
-   * lock writes. Only "explore"/"plan" do. This matters for anything that drives the discipline
-   * hooks without going through the actual phase-prompt flow (unit tests calling the hook
-   * directly, runOnExistingConversation, a caller-supplied existingPlan skipping straight to
-   * edits) - none of those ever call updatePhaseFromResponse, so without this sentinel they
-   * would be locked out of every write by a default they never opted into.
+   * "unstarted" is the sentinel before a run establishes structured progress.
    */
   private currentPhase: "unstarted" | "explore" | "plan" | "edit" | "verify" | "report" = "unstarted";
   /** True once THIS run has confirmed the sandbox's shadow-git checkpoint store is actually
@@ -506,10 +462,6 @@ export class CodingAgent {
    *  real, diffable history is confirmed to exist for this sandbox - never assumed in advance,
    *  since a run whose checkpoints never got a chance to initialize must keep that fallback. */
   private checkpointsUsable = false;
-  /** How often the phase lock refused a write this run - bounded for the same reason as
-   *  readBeforeEditRefusals (see that hook): an unbounded refusal on a model that never emits
-   *  the phase marker would deadlock the run instead of ever letting it edit anything. */
-  private phaseLockRefusals = 0;
   /** Fire-and-forget `diffCheckpoint` calls spawned per model turn (see onModelResponse below) -
    *  tracked so finalize() can await them before run() resolves. Without this, a git.exe process
    *  spawned by the last turn's diff can still be reading/writing inside sandboxRoot/CHECKPOINT_DIR
@@ -550,7 +502,7 @@ export class CodingAgent {
    * Also tracks whether the emitted payload already carried the `result`/`error` text so a
    * duplicate completed event with richer info can merge that text in (see emitPhase).
    */
-  private livePhaseEmitted = new Map<string, { rank: number; hasResult: boolean; hasError: boolean }>();
+  private livePhaseEmitted = new Map<string, { rank: number; type: CodingPhaseEvent["type"]; hasResult: boolean; hasError: boolean }>();
   /**
    * Files whose last edit left live (from auto-diagnostics) diagnostic errors, mapped to the
    * error count and a sample of what the errors look like. Updated by the afterTool hook below
@@ -854,43 +806,24 @@ export class CodingAgent {
         },
       },
       {
-        name: "coding-discipline-phase-lock",
-        priority: 55,
+        // Controller-owned progress: real tool activity is a stronger phase/current-step signal
+        // than asking the model to print magic prose markers. Hooks run in ascending priority:
+        // read-before-edit runs first (60), then this hook records the accepted action.
+        name: "coding-controller-progress",
+        priority: 61,
         handler: async (context: any) => {
-          const toolName = context.toolName as string;
-          const input = context.input as Record<string, unknown>;
-          if (toolName !== "filesystem") return { proceed: true };
-
-          const action = String(input.action ?? "").toLowerCase();
-          if (!MUTATING_FILESYSTEM_ACTIONS.has(action)) return { proceed: true };
-          if (this.currentPhase !== "explore" && this.currentPhase !== "plan") return { proceed: true };
-
-          // Bounded exactly like read-before-edit above: one refusal states the rule, then get
-          // out of the way rather than risk deadlocking a run whose model never emits the
-          // ">> PHASE: EDIT" marker at all.
-          this.phaseLockRefusals++;
-          if (this.phaseLockRefusals === 1) {
-            return {
-              proceed: false,
-              reason:
-                `Discipline violation: you are still in the ${this.currentPhase.toUpperCase()} phase (no ` +
-                `">> PHASE: EDIT" marker seen yet), which is read/plan-only - no file changes yet. ` +
-                `State "<< ${this.currentPhase.toUpperCase()} COMPLETE" and ">> PHASE: EDIT" first, then repeat this call.`,
-            };
+          if (this.planOnlyExploreActive) return { proceed: true };
+          const toolName = String(context.toolName ?? "");
+          const input = (context.input as Record<string, unknown> | undefined) ?? {};
+          if (["filesystem", "shell", "browser", "diagnostics", "explore"].includes(toolName)) {
+            this.ensureActiveTodoForTool(toolName, input);
           }
-          this.emit("decision", `Phasensperre uebergangen (Phase: ${this.currentPhase}).`, {
-            phase: this.currentPhase,
-            refusals: this.phaseLockRefusals,
-          });
-          // The model is now demonstrably editing, whatever text marker it did or didn't
-          // produce - a mutating filesystem call is a stronger, structural signal than the
-          // freetext ">> PHASE: EDIT" marker updatePhaseFromResponse relies on. Without this,
-          // currentPhase stays stuck at "explore"/"plan" for the REST of the run once a model
-          // that never emits the marker gets past this one-time bypass: every later write keeps
-          // logging a misleading "Phasensperre uebergangen (Phase: explore)", and any prompt
-          // text that references currentPhase (e.g. buildFollowUpPrompt) would describe a phase
-          // the run is clearly long past.
-          this.currentPhase = "edit";
+          if (
+            toolName === "filesystem" &&
+            MUTATING_FILESYSTEM_ACTIONS.has(String(input["action"] ?? "").toLowerCase())
+          ) {
+            this.transitionControllerPhase("edit");
+          }
           return { proceed: true };
         },
       },
@@ -1097,6 +1030,18 @@ export class CodingAgent {
       // Code responses are long and slow to re-evaluate; the reflection/verify
       // passes repeatedly hit their timeout with a local model. Skip them here.
       disableQualityPasses: true,
+      // Generic Task Rules advertise memory/project/task/workflow/gateway operations. Those
+      // tools are intentionally removed below, so keeping their instructions would both waste
+      // prompt space and invite calls to unavailable/incorrect tools.
+      includeTaskRules: false,
+      // Skill selection/loading remains active, but advertising every installed skill after the
+      // relevant ones were already selected adds noise without giving this scoped agent a new
+      // capability.
+      includeInstalledSkillCatalog: false,
+      // Coding progress is already grounded in plan/checklist/journal/status. Generic recalled
+      // memories add unrelated cross-run prose and another lookup on every iteration.
+      includeMemoryContext: false,
+      enableAutoMemory: false,
       // CodingAgent already has its OWN structured plan (this.planner.createPlan() above,
       // seeded into this.todos before the attempt loop starts). Agent.run()'s enablePlanning
       // defaults to true and would otherwise call the Planner AGAIN, independently, on every
@@ -1138,6 +1083,10 @@ export class CodingAgent {
       // status tool) - it never needed cross-conversation "recall" in the first place.
       isolatedMemory: true,
     });
+
+    for (const tool of this.agent.executor.listTools()) {
+      if (!CODING_INHERITED_TOOLS.has(tool.name)) this.agent.executor.unregisterTool(tool.name);
+    }
 
     const baseFsTool = options.sandboxRoot
       ? createScopedFilesystemTool(options.sandboxRoot, () => this.checkpointsUsable)
@@ -1186,8 +1135,7 @@ export class CodingAgent {
   }
 
   /**
-   * Scans a model response for phase markers and (a) updates currentPhase - which the phase-lock
-   * hook (see the constructor) reads for every tool call in this same response - and (b) emits
+   * Scans a model response for legacy phase markers and (a) updates currentPhase and (b) emits
    * live phase events so the UI's phase bar advances in real time instead of only when the whole
    * attempt finishes.
    *
@@ -1198,7 +1146,7 @@ export class CodingAgent {
    * Handles BOTH start markers (">> PHASE: X") and completion markers ("<< X COMPLETE"), and
    * processes them in source order so a response that contains two full phases still emits both
    * transitions in the right sequence. currentPhase becomes the LAST started phase, matching the
-   * previous behaviour (the phase-lock only ever needed the latest declared phase).
+   * previous behaviour.
    */
   private updatePhaseFromResponse(response: string): void {
     const transitions: Array<{ index: number; phase: string; event: "phase_started" | "phase_completed" }> = [];
@@ -1215,7 +1163,7 @@ export class CodingAgent {
     }
     transitions.sort((a, b) => a.index - b.index);
 
-    // The phase-lock reads the LAST started phase (unchanged from before).
+    // currentPhase follows the LAST started phase.
     let lastStarted: string | undefined;
     for (const transition of transitions) {
       if (transition.event === "phase_started") lastStarted = transition.phase;
@@ -1234,6 +1182,82 @@ export class CodingAgent {
         attempt: this.currentAttempt,
       });
     }
+  }
+
+  /** Controller-owned phase transitions. Freely emitted prose markers remain supported by
+   * updatePhaseFromResponse for old conversations/models, but new runs no longer depend on them. */
+  private transitionControllerPhase(phase: CodingPhaseEvent["phase"]): void {
+    if (this.currentPhase === phase) return;
+    const previous = this.currentPhase;
+    if (previous !== "unstarted") {
+      const priorState = this.livePhaseEmitted.get(previous);
+      if (priorState?.rank === 1) {
+        this.emitPhase({
+          type: "phase_completed",
+          phase: previous,
+          title: previous.charAt(0).toUpperCase() + previous.slice(1),
+          timestamp: new Date().toISOString(),
+          attempt: this.currentAttempt,
+        });
+      }
+    }
+    this.currentPhase = phase;
+    this.emitPhase({
+      type: "phase_started",
+      phase,
+      title: phase.charAt(0).toUpperCase() + phase.slice(1),
+      timestamp: new Date().toISOString(),
+      attempt: this.currentAttempt,
+    });
+  }
+
+  private completeControllerPhase(phase: CodingPhaseEvent["phase"], result?: string): void {
+    this.emitPhase({
+      type: "phase_completed",
+      phase,
+      title: phase.charAt(0).toUpperCase() + phase.slice(1),
+      ...(result ? { result: result.slice(0, 500) } : {}),
+      timestamp: new Date().toISOString(),
+      attempt: this.currentAttempt,
+    });
+  }
+
+  private failControllerPhase(phase: CodingPhaseEvent["phase"], result?: string): void {
+    this.emitPhase({
+      type: "phase_failed",
+      phase,
+      title: phase.charAt(0).toUpperCase() + phase.slice(1),
+      ...(result ? { error: result.slice(0, 500) } : {}),
+      timestamp: new Date().toISOString(),
+      attempt: this.currentAttempt,
+    });
+  }
+
+  /** Ensures actual work is attributed to a checklist step even when the model omits todo:update. */
+  private ensureActiveTodoForTool(toolName: string, input: Record<string, unknown>): void {
+    const items = this.todos.snapshot();
+    if (items.some((item) => item.status === "in_progress")) return;
+    const pending = items.filter((item) => item.status === "pending");
+    if (pending.length === 0) return;
+
+    const action = String(input["action"] ?? "").toLowerCase();
+    const mutation = toolName === "filesystem" && MUTATING_FILESYSTEM_ACTIONS.has(action);
+    const rawPath = String(input["path"] ?? input["destination"] ?? "").replaceAll("\\", "/").toLowerCase();
+    const stepsByTitle = new Map((this.currentPlan?.steps ?? []).map((step) => [step.title.trim().toLowerCase(), step]));
+    const pathMatched = rawPath
+      ? pending.find((item) => {
+          const step = stepsByTitle.get(item.title.trim().toLowerCase());
+          return step?.expectedFiles?.some((file) => {
+            const expected = file.replaceAll("\\", "/").toLowerCase();
+            return rawPath === expected || rawPath.endsWith(`/${expected}`) || expected.endsWith(`/${rawPath}`);
+          });
+        })
+      : undefined;
+    const target = pathMatched
+      ?? pending.find((item) => checklistItemNeedsEvidence(item.title) === mutation)
+      ?? pending[0];
+    if (!target) return;
+    this.todos.update(target.id, "in_progress", "Controller: durch reale Tool-Aktivitaet gestartet.");
   }
 
   /** Absolute location of a model-supplied path, resolved against the sandbox when there is one. */
@@ -1547,7 +1571,10 @@ export class CodingAgent {
   }
 
   private todoInputClosesChecklist(input: Record<string, unknown>): boolean {
-    const action = String(input["action"] ?? "").toLowerCase();
+    const requestedAction = String(input["action"] ?? "").toLowerCase();
+    const action = requestedAction === "replace"
+      ? (Array.isArray(input["items"]) ? "write" : "update")
+      : requestedAction;
     if (action === "write") {
       const items = input["items"];
       return Array.isArray(items) && items.length > 0 && items.every((item) => {
@@ -1608,8 +1635,7 @@ export class CodingAgent {
     this.readBeforeEditRefusals = new Map<string, number>();
     this.currentPhase = "unstarted";
     this.checkpointsUsable = false;
-    this.phaseLockRefusals = 0;
-    this.livePhaseEmitted = new Map<string, { rank: number; hasResult: boolean; hasError: boolean }>();
+    this.livePhaseEmitted = new Map<string, { rank: number; type: CodingPhaseEvent["type"]; hasResult: boolean; hasError: boolean }>();
     this.pendingDiagnosticErrors = new Map<string, { count: number; errors: string[] }>();
     this.diagnosticGuardRefusals = 0;
     this.pendingMutationSinceLastDiff = false;
@@ -1843,6 +1869,7 @@ export class CodingAgent {
     };
 
     const finalize = async (candidate: CodingRunResult): Promise<CodingRunResult> => {
+      this.transitionControllerPhase("report");
       const result = await finalizeCore(candidate);
       let learned = false;
       if (projectLearning && result.success && result.verified && result.verifyCommand && !opts.planOnly) {
@@ -1861,6 +1888,7 @@ export class CodingAgent {
         openChecklistCount: result.completionEvidence?.openChecklistItems.length ?? 0,
         llm: executionMetrics,
       } });
+      this.completeControllerPhase("report", result.summary);
       return result;
     };
 
@@ -2056,6 +2084,12 @@ export class CodingAgent {
       };
     }
 
+    // Planning is complete before execution begins. From here on, controller-observed reads
+    // belong to EXPLORE; the first real filesystem mutation advances the run to EDIT.
+    this.transitionControllerPhase("plan");
+    this.completeControllerPhase("plan", `${plan.steps.length} structured step(s)`);
+    this.transitionControllerPhase("explore");
+
     const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
 
     let lastSummary = "";
@@ -2138,11 +2172,9 @@ export class CodingAgent {
       const retryHint = attempt > 1 ? this.beforeRetry(attemptContext) : "";
       if (retryHint) prompt += `\n\n${retryHint}`;
       if (projectContext) prompt += `\n\n${projectContext}`;
-      // Follow-up prompts (buildFollowUpPrompt) never restate the phase contract - they go
-      // straight to "diagnose and fix". Leaving currentPhase at whatever attempt 1 last saw
-      // (possibly still "explore" if it timed out early) would permanently lock every retry
-      // out of editing, since nothing in a follow-up prompt would ever move it forward again.
-      if (attempt > 1) this.currentPhase = "edit";
+      // A retry continues implementation. Set this structurally rather than asking the model to
+      // restate a phase marker in every follow-up prompt.
+      if (attempt > 1) this.transitionControllerPhase("edit");
       // The `deadline` check above only ever fires BETWEEN attempts - a single attempt can run
       // up to maxIterations tool-call iterations, and Agent's own progress timeout only catches
       // true stalls (it re-arms on every event, so a model that keeps doing SOMETHING, just
@@ -2519,7 +2551,7 @@ export class CodingAgent {
       // runBrowserVerify() for why this exists at all.
       if (!verifyCommand) {
         staticEntryFile = this.detectStaticEntryFile();
-        if (staticEntryFile && this.agent.executor.listTools().some((tool) => tool.name === "browser")) {
+        if (staticEntryFile && this.previewBaseUrl && this.agent.executor.listTools().some((tool) => tool.name === "browser")) {
           verifyCommand = `browser check: ${staticEntryFile} (console/page errors)`;
           usingBrowserVerify = true;
           if (!browserVerifyRetryBudgetApplied) {
@@ -2601,6 +2633,7 @@ export class CodingAgent {
         return finalize({ success: true, verified: false, summary: lastSummary, attempts: attempt, conversationId });
       }
 
+      this.transitionControllerPhase("verify");
       const verifyResult = usingBrowserVerify
         ? await this.runBrowserVerify(staticEntryFile!)
         : await this.agent.executor.execute("shell", {
@@ -2616,6 +2649,8 @@ export class CodingAgent {
           ...(attemptContext.diff ? [`Checkpoint baseline: ${attemptContext.diff.sha}`,
             `Verified patch sha256: ${createHash("sha256").update(attemptContext.diff.patch).digest("hex")}`] : []));
         this.reconcileFinalStepAfterVerification(lastSummary);
+        this.reconcileChecklistAfterVerification(changedFiles);
+        this.completeControllerPhase("verify", `Passed: ${verifyCommand}`);
 
         // The verify command only proves the working tree doesn't currently fail its
         // build/tests - it says nothing about whether the checklist's own construction steps
@@ -2661,6 +2696,7 @@ export class CodingAgent {
       }
 
       const verifyError = condenseVerifyOutput(verifyResult.error ?? JSON.stringify(verifyResult.data ?? ""));
+      this.failControllerPhase("verify", verifyError);
       this.emit("decision", `Verifikation "${verifyCommand}" fehlgeschlagen.`, {
         attempt,
         verifyCommand,
@@ -3030,6 +3066,51 @@ export class CodingAgent {
   }
 
   /**
+   * Successful project verification is controller-owned evidence for verification/report
+   * steps. A construction step also needs every expected file to exist and to appear in this
+   * run's real changed-file set. This closes trustworthy progress without asking the model to
+   * spend another turn calling todo:update, while leaving ambiguous work open.
+   */
+  private reconcileChecklistAfterVerification(changedFiles: ReadonlySet<string>): void {
+    const plan = this.currentPlan;
+    if (!plan) return;
+    const stepsByTitle = new Map(plan.steps.map((step) => [step.title.trim().toLowerCase(), step]));
+    const changedBasenames = new Set([...changedFiles].map((file) => file.replaceAll("\\", "/").split("/").filter(Boolean).at(-1)?.toLowerCase()));
+    const completed: string[] = [];
+
+    for (const item of this.todos.snapshot()) {
+      if (item.status === "done" || item.status === "blocked") continue;
+      const step = stepsByTitle.get(item.title.trim().toLowerCase());
+      // A passing command plus the already-produced final summary proves VERIFY/REPORT-like
+      // steps. It does not by itself prove that an earlier investigate/read/analyze step ran.
+      const controllerProven = /^\s*(verify|test|check|confirm|validate|review|report)\b/i.test(item.title);
+      const expectedFiles = step?.expectedFiles?.filter((file) => file.trim().length > 0) ?? [];
+      const hasAllExpectedFiles = expectedFiles.length > 0 && expectedFiles.every((file) => {
+        const basename = file.replaceAll("\\", "/").split("/").filter(Boolean).at(-1);
+        const normalized = basename?.toLowerCase();
+        return Boolean(normalized && changedBasenames.has(normalized) && this.sandboxContainsFile(normalized));
+      });
+      if (!controllerProven && !hasAllExpectedFiles) continue;
+
+      this.todos.update(
+        item.id,
+        "done",
+        controllerProven
+          ? "Controller: durch erfolgreiche Verifikation bestaetigt."
+          : "Controller: alle erwarteten Dateien geaendert, vorhanden und erfolgreich verifiziert."
+      );
+      completed.push(item.title);
+    }
+
+    if (completed.length > 0) {
+      this.emit("decision", `${completed.length} Checklisten-Schritt(e) aus Verifikationsevidenz abgeschlossen.`, {
+        verifiedChecklistItems: completed,
+        todo_items: this.todos.snapshot(),
+      });
+    }
+  }
+
+  /**
    * Mirrors a checklist REWRITE (todo:write, i.e. TodoList.replace - see the TodoList
    * constructor wiring above) back into the Plan object the UI's Plan tab actually renders.
    *
@@ -3257,7 +3338,10 @@ export class CodingAgent {
     // bar. A duplicate also costs an extra DB row + WS event for no information.
     const rank = event.type === "phase_started" ? 1 : 2;
     const previous = this.livePhaseEmitted.get(event.phase);
-    if (previous !== undefined && previous.rank >= rank) {
+    // A later successful retry may upgrade VERIFY from failed to completed. Other same-rank
+    // events remain duplicates, preserving the single monotonic lifecycle per phase.
+    const upgradesFailure = previous?.type === "phase_failed" && event.type === "phase_completed";
+    if (previous !== undefined && previous.rank >= rank && !upgradesFailure) {
       // A duplicate COMPLETED event from the end-of-attempt backfill can carry the text the
       // model wrote between the phase markers - which the live path (updatePhaseFromResponse)
       // did not extract, so the previously-emitted row lacks it. Merge that text in as a
@@ -3268,6 +3352,7 @@ export class CodingAgent {
     }
     this.livePhaseEmitted.set(event.phase, {
       rank,
+      type: event.type,
       hasResult: typeof event.result === "string" && event.result.trim().length > 0,
       hasError: typeof event.error === "string" && event.error.trim().length > 0,
     });
@@ -3301,7 +3386,7 @@ export class CodingAgent {
    */
   private mergePhaseResultIfRicher(
     event: CodingPhaseEvent,
-    previous: { rank: number; hasResult: boolean; hasError: boolean }
+    previous: { rank: number; type: CodingPhaseEvent["type"]; hasResult: boolean; hasError: boolean }
   ): void {
     // A started event carries no result/error worth merging, and a failed event is not the
     // "content between markers" case this exists for.
@@ -3318,6 +3403,7 @@ export class CodingAgent {
 
     this.livePhaseEmitted.set(event.phase, {
       rank: previous.rank,
+      type: previous.type,
       hasResult: previous.hasResult || newResult,
       hasError: previous.hasError || newError,
     });
@@ -3434,26 +3520,14 @@ export class CodingAgent {
     // after the first.
     if (compact) {
       return [
-        "Keep updating the todo checklist AS YOU GO (in_progress before writing, done the moment that",
-        "step's own change is written and correct) - do not batch it at the end, and do not credit a",
-        "later step's work to whichever step is still marked in_progress.",
+        "Keep the todo checklist accurate. Use one batch update for multiple status changes;",
+        "never mark a step done without its own implementation or verification evidence.",
       ];
     }
     return [
-      "Track your progress with the todo tool: it already contains the plan below as pending steps.",
-      "That checklist is what the user watches live while you work, so update it AS YOU GO, not in a",
-      "batch at the end: mark a step in_progress before starting it, and call todo:update the moment",
-      "that step's own change is written and looks correct - do not wait for the final project-wide",
-      "verification command before checking off an individual step; that command only confirms the",
-      "whole task at the end, and holding every step open until then is exactly what makes the checklist",
-      "look frozen to the user. Only keep a step open if ITS OWN change is not actually done yet or a",
-      "diagnostic specific to it is still failing - never mark a step done on the strength of an",
-      "announcement alone, without having made the corresponding edit.",
-      "One step must be in_progress before you write anything for it - progress is attributed to",
-      "WHICHEVER step is currently in_progress, so if you keep step 1 in_progress while actually writing",
-      "step 3's content, that work gets credited to step 1 and steps 2+ stay stuck open forever. Never",
-      "write content that belongs to a later step while an earlier step is still the one marked",
-      "in_progress - close the current step first, then advance the next one to in_progress, then write.",
+      "The todo checklist already contains this plan and is visible to the user.",
+      "The controller activates a step when work starts. Keep statuses accurate, batch multiple",
+      "updates in one todo call, and mark done only with that step's own evidence.",
     ];
   }
 
@@ -3466,25 +3540,10 @@ export class CodingAgent {
     if (!this.sandboxRoot) return [];
     const lines = [
       `Project root: ${this.sandboxRoot}`,
-      "",
       "CRITICAL PATH HANDLING:",
-      `- ONLY use RELATIVE paths from the project root (e.g., 'src/index.ts', 'package.json', 'docs/README.md')`,
-      `- NEVER use absolute paths (no leading /)`,
-      `- NEVER include 'shared-workspace' or 'coding' in your file paths`,
-      `- ALL file operations (filesystem AND shell) are automatically scoped to ${this.sandboxRoot}`,
-      `- Examples of CORRECT paths: 'index.html', 'src/app.ts', 'config/settings.json'`,
-      `- Examples of WRONG paths: '/apps/server/...', 'shared-workspace/...', 'coding/...'`,
-      "",
-      "YOUR OWN PLANNING / STATUS NOTES:",
-      "- If you keep a status file, progress log, or planning note FOR YOURSELF (not something the",
-      "  user asked you to build), it belongs under 'plans/' (e.g. 'plans/STATUS.md') - never at the",
-      "  project root and never under a name you invent fresh each run.",
-      "- Before writing one, list 'plans/' first. If a status/plan file already exists there, UPDATE",
-      "  that file - do not create a second one with a different name. You will not remember this run",
-      "  on the next one; the file is the only memory of it, so there must only ever be one.",
-      "- Only write one at all if it actually serves a purpose (a genuinely multi-attempt or",
-      "  multi-session task). A short, single-pass fix does not need a status file - do not create",
-      "  one out of habit.",
+      "- Use only paths relative to the project root; tools are already scoped there.",
+      "- Never prefix paths with the absolute root, shared-workspace, coding, or the project slug.",
+      "- Put optional agent-only status notes under plans/ and reuse an existing note; skip them for short tasks.",
       "",
     ];
     if (this.previewBaseUrl && compact) {
@@ -3494,23 +3553,10 @@ export class CodingAgent {
       const previewUrl = `${this.previewBaseUrl}/api/coding/projects/${basename(this.sandboxRoot)}/serve/index.html`;
       lines.push(
         "BROWSER PREVIEW / TESTING:",
-        `- To look at or test this project in the browser tool, navigate to: ${previewUrl}`,
-        `- NEVER use a 'file://' URL for this project - it looks like it works, but Chromium blocks`,
-        `  ES module scripts and fetch() under file:, so the page silently fails in ways that look`,
-        `  like a real bug. The URL above is a real HTTP server and serves the project correctly.`,
-        `- For a new browser check, the FIRST browser call MUST be action:"launch" with url:${previewUrl}.`,
-        `  Do not call goto with a guessed or fixed sessionId. Read the launch result and use its`,
-        `  exact returned sessionId for every later screenshot/click/evaluate/get_page_errors call.`,
-        `  If the tool supports screenshot_url or verify_page, those macros may be used instead.`,
-        `- Use browser snapshot before clicking. Prefer role/name targeting over coordinate guesses;`,
-        `  snapshots include rendered off-screen controls and Puppeteer will scroll them into view.`,
-        `- After click/type/scroll, read a fresh snapshot or use expect/get_content before deciding`,
-        `  what happened. Never infer success from an old screenshot or from the click result alone.`,
-        `- If you add a favicon, link it with a RELATIVE href (e.g. <link rel="icon" href="favicon.ico">),`,
-        `  never a leading-slash absolute path ('/favicon.ico'). The project is served under a`,
-        `  per-project path, not the site root - an absolute href (and the browser's own automatic`,
-        `  '/favicon.ico' probe when no <link> exists at all) resolves against the site root and 404s`,
-        `  even when the file exists in this project, exactly like './app.js' would if it were absolute.`,
+        `- Use ${previewUrl}; never use file://.`,
+        "- Launch with that URL or use verify_page. Reuse only the sessionId returned by the tool.",
+        "- Inspect a fresh snapshot/result after interactions; do not infer success from a click alone.",
+        "- Project assets, including explicit favicon links, must use relative URLs.",
         "",
       );
     }
@@ -3547,12 +3593,10 @@ export class CodingAgent {
       "EXECUTION CONTRACT:",
       ...(mutationExpected
         ? [
-            "- This is a coding execution run. Describing or announcing a write does not change the project.",
-            "- At least one real filesystem mutation must be recorded before the controller can accept success.",
+            "- This run requires a real repository change; prose is not execution evidence.",
           ]
         : ["- This is an explicitly read-only coding review; do not mutate project files."]),
-      "- A final answer while required checklist steps are still open is rejected as incomplete.",
-      "- When you know the next action, emit its tool call immediately; do not spend a turn promising it.",
+      "- Use the next required tool immediately. Completion is rejected while required steps remain open.",
       "",
       ...(allowGitCommit
         ? [
@@ -3564,63 +3608,19 @@ export class CodingAgent {
         : []),
       ...this.checklistMaintenanceBlock(),
       "",
-      "The status tool gives you a one-call snapshot of your current phase, checklist, open diagnostic",
-      "errors, and what files have actually changed this attempt. Use it after a few edits when you need",
-      "to confirm what still needs work - it is faster than re-reading files or recounting from history.",
+      "Use status when you need current checklist, changed-file, or diagnostic ground truth.",
       "",
-      "A planning subagent already analyzed this goal and drafted the following plan:",
+      "APPROVED PLAN:",
       "",
       plan.steps.map((step, i) => this.renderPlanStep(step, i)).join("\n"),
       "",
-      "STEP CONTRACTS ARE EXECUTABLE REQUIREMENTS:",
-      "- Treat each step's CONTRACT as the definition of done, not as optional documentation.",
-      "- Work only on the expected files named for the current step unless EXPLORE proves the plan wrong; if so, update the checklist explicitly.",
-      "- Before marking a step done, satisfy every acceptance criterion and run every listed verification command.",
-      "- Run the listed verification command exactly as written when it is available. Do not replace it with a weaker check or claim success from intent.",
-      "- If a criterion or verification cannot be proven, mark the step blocked with a short note instead of done.",
-      "",
-      "Work in these phases, and EXPLICITLY STATE the phase you are starting and completing:",
-      "1. EXPLORE - locate the relevant files and read them before changing anything.",
-      "   At start: \">> PHASE: EXPLORE\"",
-      "   At end: \"<< EXPLORE COMPLETE\"",
-      "2. PLAN - review the draft plan above against what you found in EXPLORE. Name the exact files",
-      "   you will edit and what changes each one needs. If exploration shows the draft needs to",
-      "   change (a step is unnecessary, missing, or targets the wrong file), call todo action:\"write\"",
-      "   with the corrected steps - do not silently ignore the draft, adjust it explicitly.",
-      "   At start: \">> PHASE: PLAN\"",
-      "   At end: \"<< PLAN COMPLETE\"",
-      "3. EDIT - make minimal, targeted edits (prefer the filesystem tool's \"edit\" action). This phase covers",
-      "   ALL plan steps, but you must still work through them ONE AT A TIME, not as one combined write:",
-      "     a. call todo:update to mark the next step in_progress",
-      "     b. make ONLY the change that step's own title/description describes - nothing from a later step",
-      "     c. call todo:update to mark that exact step done, the moment its own change is written and correct",
-      "     d. repeat a-c for the next pending step",
-      "   Do NOT produce the complete final file in your first edit and then retroactively check off every",
-      "   step at once - e.g. if step 1 says \"create the HTML skeleton\", write only the skeleton (no styling",
-      "   classes, no script logic yet) even if you already know what steps 2/3 will add; those belong to",
-      "   their own step's edit and their own todo:update call. The checklist the user watches is driven ONLY",
-      "   by these todo:update calls, not by prose - a step every step is genuinely, individually done before",
-      "   moving to the next.",
-      "   Loaded skills are guidance already included in your context, not executable tools. Never call a",
-      "   skill slug and never use skill_manage action:\"execute\" to apply a skill; perform the actual",
-      "   filesystem, shell, browser, git, diagnostics, or todo action directly.",
-      "   At start: \">> PHASE: EDIT\"",
-      "   At end (only once every plan step above is marked done): \"<< EDIT COMPLETE\"",
-      "4. VERIFY - re-read what you changed and run the verification command below. If a plan step's own",
-      "   title/description names a specific file (e.g. \"Create index.html skeleton structure\"), actually",
-      "   list/read that exact file here and confirm it exists on disk - do not infer from memory that an",
-      "   earlier step must have created it. Writing a self-authored check script for this counts only if it",
-      "   genuinely fails when the named file is missing; a check that can pass regardless (e.g. grepping for",
-      "   a keyword across the whole project instead of the specific file) is not verification.",
-      "   At start: \">> PHASE: VERIFY\"",
-      "   At end: \"<< VERIFY COMPLETE\"",
-      "5. REPORT - list the files you changed and what the verification showed. Every file you claim exists",
-      "   or is complete must be one you (or a step before this one) actually wrote and then re-read in THIS",
-      "   run - never state a file \"has the complete structure\" or similar based on what the plan intended",
-      "   rather than what you confirmed. The controller checks this claim against the real checkpoint diff,",
-      "   not against this text, so an unconfirmed claim here gets the affected step reopened next attempt.",
-      "   At start: \">> PHASE: REPORT\"",
-      "   At end: \"<< REPORT COMPLETE\""
+      "EXECUTE:",
+      "- Inspect only the files needed for the next open step, then perform its concrete action.",
+      "- Step CONTRACT fields are requirements: respect dependencies/files, satisfy acceptance criteria,",
+      "  and run listed verification commands. If the plan is wrong, rewrite it once with todo action:\"write\".",
+      "- Do not narrate phase markers; the controller derives phases and progress from real tool actions.",
+      "- If evidence is unavailable, leave the step open or blocked instead of claiming success.",
+      "- Finish with a concise changed-files and verification summary."
     );
 
     if (verifyCommand) {
@@ -3661,13 +3661,13 @@ export class CodingAgent {
       opening,
       "",
       mutationExpected
-        ? "The controller will reject success unless a real filesystem mutation is recorded and every required checklist step is closed. Prose claims do not count. Call the next tool immediately instead of announcing it."
-        : "This run is explicitly read-only. The controller still requires every checklist step to be closed; prose claims do not count as evidence.",
+        ? "Continue with the first open step. Success requires a real file change, closed checklist, and passing verification."
+        : "Continue the read-only review and close each checklist step with evidence.",
       "",
       allowGitCommit
         ? "Reminder: git commits are explicitly enabled for this run (AGENT_CODING_ALLOW_GIT_COMMIT) - you may still stage/commit your own changes if useful."
         : "",
-      "BEFORE YOU ACT, call the status tool. It tells you in one call what normally takes several reads: which steps are already done (from the checklist), what files you actually changed (from the checkpoint diff - not your memory), and whether any diagnostics are still failing. Your conversation context may have been trimmed and earlier results may no longer be visible, so do NOT rely on what you remember - ask the status tool for ground truth.",
+      "Call status once for the current checklist, changed files, and diagnostics; then act on the first open step.",
       // Full browser instructions only when THIS follow-up is itself about a browser runtime
       // failure - the model is actively debugging the preview right now, so the launch/session/
       // favicon rules are directly relevant. Every other follow-up gets the compact pointer.

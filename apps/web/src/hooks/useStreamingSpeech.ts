@@ -8,6 +8,7 @@ import { splitForSpeech } from "../lib/splitForSpeech";
 import { onVoiceReplyInterrupted } from "../lib/voiceCaptureBus";
 import { useAppStore } from "../lib/store";
 import { speechFlushBoundary } from "../lib/speechFlushBoundary";
+import { recordStreamedSpeech, setReplyInterrupted } from "../lib/streamedSpeechRegistry";
 
 /**
  * Speaks `streamingContent` as it grows, instead of waiting for `status === "complete"`.
@@ -39,11 +40,15 @@ export function useStreamingSpeech(streamingContent: string, active: boolean): {
   useEffect(() => {
     const offInterrupt = onVoiceReplyInterrupted(() => {
       interruptedRef.current = true;
+      setReplyInterrupted(true);
       stopRef.current();
       playerRef.current?.stop();
     });
     const offStore = useAppStore.subscribe((state, previous) => {
-      if (state.isLoading && !previous.isLoading) interruptedRef.current = false;
+      if (state.isLoading && !previous.isLoading) {
+        interruptedRef.current = false;
+        setReplyInterrupted(false);
+      }
     });
     return () => { offInterrupt(); offStore(); };
   }, []);
@@ -139,6 +144,9 @@ export function useStreamingSpeech(streamingContent: string, active: boolean): {
       if (activeRef.current) {
         const remainder = lastRawRef.current.slice(spokenUpToRef.current).trim();
         if (remainder) speakBatch(remainder);
+        // Tell the committed MessageRow (VoicePlayback) what this block already covered, so it
+        // only speaks what never came through the chunk stream.
+        recordStreamedSpeech(lastRawRef.current);
       }
       spokenUpToRef.current = 0;
       lastRawRef.current = "";
@@ -217,6 +225,7 @@ export function useStreamingSpeech(streamingContent: string, active: boolean): {
         if (remainder) {
           spokenUpToRef.current = lastRawRef.current.length;
           speakBatch(remainder);
+          recordStreamedSpeech(lastRawRef.current);
         }
         if (streamingRef.current) playerRef.current?.end();
       }, 0);

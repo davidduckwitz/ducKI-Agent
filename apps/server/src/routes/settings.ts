@@ -1,4 +1,5 @@
 import { autoStartChatterbox, chatterboxStatus, controlChatterbox } from "../lib/chatterbox-runtime.js";
+import { autoStartSttServer, controlSttServer, sttServerStatus } from "../lib/stt-runtime.js";
 import { Router, type IRouter } from "express";
 import type { Request } from "express";
 import type { Server as SocketIOServer } from "socket.io";
@@ -93,6 +94,22 @@ settingsRouter.post("/model-profile/apply", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+settingsRouter.get("/stt-server/status", async (req, res, next) => {
+  try { res.json(createApiResponse(await sttServerStatus(req.app.locals["db"] as DatabaseService))); }
+  catch (error) { next(error); }
+});
+settingsRouter.post("/stt-server/:action", async (req, res, next) => {
+  const action = req.params["action"];
+  if (!["start", "stop", "load", "unload"].includes(action ?? "")) {
+    res.status(400).json(createApiError("Unknown STT server action")); return;
+  }
+  try {
+    const task = controlSttServer(req.app.locals["db"] as DatabaseService, action as "start" | "stop" | "load" | "unload");
+    void task.catch((error) => console.error("STT server action failed", error));
+    res.status(202).json(createApiResponse({ accepted: true }));
+  } catch (error) { res.status(409).json(createApiError(error instanceof Error ? error.message : String(error))); }
+});
+
 settingsRouter.get("/chatterbox/status", async (req, res, next) => {
   try { res.json(createApiResponse(await chatterboxStatus(req.app.locals["db"] as DatabaseService))); }
   catch (error) { next(error); }
@@ -135,6 +152,9 @@ settingsRouter.put("/:key", async (req, res, next) => {
 
     if (["DEFAULT_TEXT_TO_SPEECH_PROVIDER", "CHATTERBOX_AUTO_START"].includes(key)) {
       void autoStartChatterbox(req.app.locals["db"] as DatabaseService).catch(console.error);
+    }
+    if (["DEFAULT_SPEECH_TO_TEXT_PROVIDER", "STT_SERVER_AUTO_START"].includes(key)) {
+      void autoStartSttServer(req.app.locals["db"] as DatabaseService).catch(console.error);
     }
     notifySettingsChanged(req, [key]);
     res.json(createApiResponse({ updated: true, providerReloaded }));

@@ -1,4 +1,5 @@
 import { autoStartChatterbox, stopChatterbox } from "./lib/chatterbox-runtime.js";
+import { autoStartSttServer, stopSttServer } from "./lib/stt-runtime.js";
 import "dotenv/config";
 import "./bootstrap-workspace.js";
 import express from "express";
@@ -726,6 +727,7 @@ async function bootstrap(): Promise<void> {
 
 	app.locals["db"] = db;
 	void autoStartChatterbox(db).catch((error) => console.error("Chatterbox autostart failed", error));
+	void autoStartSttServer(db).catch((error) => console.error("STT server autostart failed", error));
 	app.locals["logger"] = logger;
 	app.locals["provider"] = providerRef.current;
 	app.locals["workflowEngine"] = workflowEngineRef.current;
@@ -876,6 +878,7 @@ async function bootstrap(): Promise<void> {
 		// keep holding their port after a restart.
 		stopAllBackgroundProcesses();
 		stopChatterbox();
+		try { stopSttServer(); } catch (error) { console.error("STT server stop failed", error); }
 		void mcpRegistry.shutdown();
 		io.close();
 		httpServer.close(() => {

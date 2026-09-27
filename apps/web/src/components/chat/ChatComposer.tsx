@@ -60,7 +60,7 @@ export function ChatComposer({
   const shouldSendAfterTranscribeRef = useRef(false);
   const { enableTTS, autoPlayTTS, setAutoPlayTTS } = useVoiceSettings();
   const {
-    isListening, voiceError, voiceRetryAvailable, toggle: handleVoiceToggle,
+    isListening, voiceError, voiceRetryAvailable, partialText, toggle: handleVoiceToggle,
     clearError,
   } = useVoiceCapture({
     onStop,
@@ -188,6 +188,12 @@ export function ChatComposer({
               Done
             </button>
           </div>
+        </div>
+      )}
+
+      {isListening && partialText && (
+        <div className="mb-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground italic" aria-live="polite">
+          {partialText} …
         </div>
       )}
 

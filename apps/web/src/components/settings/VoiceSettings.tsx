@@ -1,4 +1,5 @@
 import { ChatterboxControls } from "./ChatterboxControls";
+import { SttServerControls } from "./SttServerControls";
 import { useEffect, useState } from "react";
 import { Volume2, Mic, MessageCircle } from "lucide-react";
 import { useVoiceSettings } from "../../hooks/useVoiceSettings";
@@ -119,6 +120,7 @@ export function VoiceSettings() {
 
           {enableSTT && (
             <div className="space-y-4">
+              <SttServerControls />
               <div className="space-y-2">
                 <label className="block text-sm font-medium">Sprache</label>
                 <select

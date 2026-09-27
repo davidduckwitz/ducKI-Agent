@@ -4,6 +4,7 @@ import type { DatabaseService } from "@ducki/database";
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { homedir } from "node:os";
 import { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { listCheckpoints, diffCheckpoint, restoreCheckpoint } from "@ducki/agent";
 import type { LLMProvider, LLMMessage } from "@ducki/providers";
@@ -32,7 +33,37 @@ export function resolveCodingSandboxRoot(input?: string): string {
   if (!/^[A-Za-z0-9_.-]+$/.test(slug) || slug === "." || slug === "..") {
     throw new Error(`Invalid coding project path: ${input}`);
   }
+  const linked = readLinkedProjects()[slug.toLowerCase()];
+  if (linked) return linked;
   return resolve(CODING_ROOT, slug);
+}
+
+/**
+ * Linked projects: arbitrary folders outside CODING_ROOT registered under a slug, so the coding
+ * area (file tree, editor, agent sandbox) can work on existing code in place. The registry is a
+ * plain JSON map slug -> absolute path next to the managed projects. Deleting a linked project
+ * only unlinks it - the folder itself belongs to the user and is never removed.
+ */
+const LINKED_PROJECTS_FILE = join(CODING_ROOT, ".ducki-linked-projects.json");
+
+export function readLinkedProjects(): Record<string, string> {
+  try {
+    if (!existsSync(LINKED_PROJECTS_FILE)) return {};
+    const parsed = JSON.parse(readFileSync(LINKED_PROJECTS_FILE, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out: Record<string, string> = {};
+    for (const [slug, path] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof path === "string" && isAbsolute(path)) out[slug] = resolve(path);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeLinkedProjects(map: Record<string, string>): void {
+  ensureCodingRoot();
+  writeFileSync(LINKED_PROJECTS_FILE, JSON.stringify(map, null, 2), "utf8");
 }
 
 /** /read liefert den kompletten Inhalt im JSON-Body - eine hunderte-MB-Datei würde hier
@@ -73,16 +104,18 @@ function sanitizeRelativePath(input: string): string {
   return normalized;
 }
 
-function projectRoot(project: string): { slug: string; absolute: string } {
+function projectRoot(project: string): { slug: string; absolute: string; linked: boolean } {
   const slug = sanitizeSegment(project);
   if (!slug) {
     throw new Error("Invalid project name");
   }
+  const linked = readLinkedProjects()[slug];
+  if (linked) return { slug, absolute: linked, linked: true };
   const abs = resolve(CODING_ROOT, slug);
   if (!abs.startsWith(CODING_ROOT)) {
     throw new Error("Project path escapes coding root");
   }
-  return { slug, absolute: abs };
+  return { slug, absolute: abs, linked: false };
 }
 
 function absoluteFromProjectRelative(projectAbsRoot: string, relativePath: string): string {
@@ -160,8 +193,102 @@ codingRouter.get("/projects", (_req, res) => {
   ensureCodingRoot();
   const dirs = readdirSync(CODING_ROOT, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => ({ slug: entry.name, name: entry.name }));
+    .map((entry) => ({ slug: entry.name, name: entry.name, linked: false as boolean, path: undefined as string | undefined }));
+  for (const [slug, path] of Object.entries(readLinkedProjects())) {
+    dirs.push({ slug, name: slug, linked: true, path });
+  }
+  dirs.sort((a, b) => a.slug.localeCompare(b.slug));
   res.json(createApiResponse(dirs));
+});
+
+/**
+ * Folder browser for "open existing folder": lists sub-directories of `path` on the server's
+ * disk (browsers cannot hand out absolute paths). Without a path it returns the roots - drive
+ * letters on Windows, "/" and the home directory elsewhere.
+ */
+codingRouter.get("/browse", (req, res) => {
+  try {
+    const raw = String(req.query["path"] ?? "").trim();
+    if (!raw) {
+      const roots: Array<{ name: string; path: string }> = [];
+      if (process.platform === "win32") {
+        for (let code = 65; code <= 90; code++) {
+          const drive = `${String.fromCharCode(code)}:\\`;
+          try {
+            if (existsSync(drive)) roots.push({ name: drive, path: drive });
+          } catch {
+            // unreadable drive - skip
+          }
+        }
+      } else {
+        roots.push({ name: "/", path: "/" });
+      }
+      const home = homedir();
+      roots.unshift({ name: `~ (${home})`, path: home });
+      res.json(createApiResponse({ path: "", parent: null, entries: roots }));
+      return;
+    }
+    if (!isAbsolute(raw)) {
+      res.status(400).json(createApiError("Pfad muss absolut sein"));
+      return;
+    }
+    const absolute = resolve(raw);
+    if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
+      res.status(404).json(createApiError(`Ordner nicht gefunden: ${absolute}`));
+      return;
+    }
+    const entries = readdirSync(absolute, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name !== ".ducki-checkpoints")
+      .map((entry) => ({ name: entry.name, path: join(absolute, entry.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    const parentDir = dirname(absolute);
+    res.json(createApiResponse({
+      path: absolute,
+      // At a filesystem root dirname() returns the root itself; null sends the UI back to the root list.
+      parent: parentDir === absolute ? "" : parentDir,
+      entries,
+    }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
+});
+
+/** Registers an existing folder anywhere on disk as a coding project (no copy, works in place). */
+codingRouter.post("/projects/link", (req, res) => {
+  try {
+    ensureCodingRoot();
+    const rawPath = String(req.body?.path ?? "").trim().replace(/^["']|["']$/g, "");
+    if (!rawPath || !isAbsolute(rawPath)) {
+      res.status(400).json(createApiError("Bitte einen absoluten Ordnerpfad angeben"));
+      return;
+    }
+    const absolute = resolve(rawPath);
+    if (!existsSync(absolute) || !statSync(absolute).isDirectory()) {
+      res.status(400).json(createApiError(`Ordner nicht gefunden: ${absolute}`));
+      return;
+    }
+    const requestedName = String(req.body?.name ?? "").trim();
+    const baseName = absolute.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) ?? "";
+    const slug = sanitizeSegment(requestedName || baseName);
+    if (!slug) {
+      res.status(400).json(createApiError("Ungueltiger Projektname"));
+      return;
+    }
+    const linked = readLinkedProjects();
+    if (linked[slug] && linked[slug] !== absolute) {
+      res.status(409).json(createApiError(`Projektname "${slug}" ist bereits mit ${linked[slug]} verknuepft`));
+      return;
+    }
+    if (!linked[slug] && existsSync(resolve(CODING_ROOT, slug))) {
+      res.status(409).json(createApiError(`Ein Projekt "${slug}" existiert bereits - bitte anderen Namen waehlen`));
+      return;
+    }
+    linked[slug] = absolute;
+    writeLinkedProjects(linked);
+    res.json(createApiResponse({ created: true, linked: true, slug, path: absolute }));
+  } catch (error) {
+    res.status(400).json(createApiError(error instanceof Error ? error.message : String(error)));
+  }
 });
 
 codingRouter.post("/projects", (req, res) => {
@@ -542,13 +669,14 @@ function parseConversationId(raw: unknown): number | undefined {
 codingRouter.get("/projects/:project/deletion-preview", async (req, res) => {
   try {
     const db = req.app.locals["db"] as DatabaseService;
-    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+    const { slug, absolute, linked } = projectRoot(String(req.params["project"] ?? ""));
     if (!existsSync(absolute)) {
       res.status(404).json(createApiError("Project not found"));
       return;
     }
 
-    const entries = listRecursive(absolute);
+    // Linked folders are never deleted, so there are no files at stake.
+    const entries = linked ? [] : listRecursive(absolute);
     const files = entries.filter((entry) => entry.type === "file");
     const conversations = await findCodingConversations(
       db,
@@ -570,6 +698,8 @@ codingRouter.get("/projects/:project/deletion-preview", async (req, res) => {
 
     res.json(createApiResponse({
       project: slug,
+      linked,
+      ...(linked ? { path: absolute } : {}),
       fileCount: files.length,
       totalBytes: files.reduce((sum, file) => sum + (file.size ?? 0), 0),
       conversations: conversationDetails,
@@ -591,7 +721,7 @@ codingRouter.delete("/projects/:project", async (req, res) => {
   try {
     ensureCodingRoot();
     const db = req.app.locals["db"] as DatabaseService;
-    const { slug, absolute } = projectRoot(String(req.params["project"] ?? ""));
+    const { slug, absolute, linked } = projectRoot(String(req.params["project"] ?? ""));
 
     // projectRoot already rejects traversal, but "" would resolve to the coding root itself and
     // wipe every project at once - a slip that has no valid interpretation.
@@ -599,7 +729,7 @@ codingRouter.delete("/projects/:project", async (req, res) => {
       res.status(400).json(createApiError("Refusing to delete the coding root"));
       return;
     }
-    if (!existsSync(absolute)) {
+    if (!linked && !existsSync(absolute)) {
       res.status(404).json(createApiError("Project not found"));
       return;
     }
@@ -622,10 +752,18 @@ codingRouter.delete("/projects/:project", async (req, res) => {
       }
     }
 
-    rmSync(absolute, { recursive: true, force: true });
+    if (linked) {
+      // A linked folder belongs to the user: only drop the registration, never touch the files.
+      const map = readLinkedProjects();
+      delete map[slug];
+      writeLinkedProjects(map);
+    } else {
+      rmSync(absolute, { recursive: true, force: true });
+    }
 
     res.json(createApiResponse({
       deleted: true,
+      unlinked: linked,
       project: slug,
       deletedConversationIds,
     }));

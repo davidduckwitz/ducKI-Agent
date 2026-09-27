@@ -13,6 +13,8 @@ interface NodejsWhisperSpeechToTextProviderOptions extends SpeechToTextProviderO
   autoDownloadModel?: boolean;
   withCuda?: boolean;
   timeoutMs?: number;
+  /** File extension of the incoming audio (webm/ogg/...), so ffmpeg probes the right container. */
+  inputExt?: string;
 }
 
 function parseBoolean(input: string | undefined, fallback = false): boolean {
@@ -103,7 +105,7 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
     ensureWindowsCmakeInPath();
     this.assertWhisperCliAvailable();
 
-    const timeoutMs = this.whisperOptions.timeoutMs ?? Number.parseInt(process.env["NODEJS_WHISPER_TIMEOUT_MS"] ?? "180000", 10);
+    const timeoutMs = this.whisperOptions.timeoutMs ?? Number.parseInt(process.env["NODEJS_WHISPER_TIMEOUT_MS"] ?? "60000", 10);
     const modelName =
       this.whisperOptions.modelName ??
       process.env["NODEJS_WHISPER_MODEL_NAME"]?.trim() ??
@@ -131,7 +133,7 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
       "auto";
 
     const tempDir = await mkdtemp(join(tmpdir(), "ducki-nodejs-whisper-"));
-    const inputExt = (process.env["NODEJS_WHISPER_INPUT_EXT"] ?? process.env["LOCAL_STT_INPUT_EXT"] ?? "ogg").trim().replace(/^\.+/, "") || "ogg";
+    const inputExt = (this.whisperOptions.inputExt ?? process.env["NODEJS_WHISPER_INPUT_EXT"] ?? process.env["LOCAL_STT_INPUT_EXT"] ?? "ogg").trim().replace(/^\.+/, "") || "ogg";
     const inputPath = join(tempDir, `input.${inputExt}`);
     try {
       await writeFile(inputPath, audioBuffer);

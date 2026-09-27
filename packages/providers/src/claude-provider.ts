@@ -17,23 +17,36 @@ type CacheableTool = Anthropic.Tool & CacheControl;
 type CachingUsage = { cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 type ContentBlockParamLike = { type: string; [key: string]: unknown };
 
-function convertLLMContentToAnthropic(
-  content: string | LLMContent[]
-): Anthropic.MessageParam["content"] {
-  if (typeof content === "string") {
-    return [{ type: "text", text: content }];
+/** data: URLs must be sent as a base64 source - the `url` source only accepts http(s). */
+function toImageBlock(url: string): ContentBlockParamLike {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+  if (match) {
+    return { type: "image", source: { type: "base64", media_type: match[1], data: match[2] } };
   }
-  const result: Array<{ type: string; [key: string]: unknown }> = [];
+  return { type: "image", source: { type: "url", url } };
+}
+
+/** Always returns block objects; empty text blocks are dropped because the API rejects them. */
+function convertLLMContentToAnthropic(content: string | LLMContent[]): ContentBlockParamLike[] {
+  if (typeof content === "string") {
+    return content.trim() ? [{ type: "text", text: content }] : [];
+  }
+  const result: ContentBlockParamLike[] = [];
   for (const part of content) {
     if (part.type === "text") {
-      result.push({ type: "text", text: part.text });
+      if (part.text?.trim()) result.push({ type: "text", text: part.text });
     } else if (part.type === "image_url") {
-      result.push({ type: "image", source: { type: "url", url: part.image_url.url } });
+      result.push(toImageBlock(part.image_url.url));
     } else if (part.type === "image_data") {
-      result.push({ type: "image", source: { type: "url", url: part.image_data.url } });
+      result.push(toImageBlock(part.image_data.url));
     }
   }
-  return result as unknown as Anthropic.MessageParam["content"];
+  return result;
+}
+
+function contentAsText(content: string | LLMContent[]): string {
+  if (typeof content === "string") return content;
+  return content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
 }
 
 /**
@@ -43,33 +56,125 @@ function convertLLMContentToAnthropic(
  * turn. So adjacent same-role messages are merged into one (their content blocks simply
  * concatenate, which is exactly how the API models a multi-part turn) and a leading
  * assistant turn is dropped rather than sent to be rejected.
+ *
+ * Tool results: same rule as toOpenAIMessages - a native tool_result is only valid when the
+ * preceding assistant turn carries the matching tool_use. The agent currently stores assistant
+ * turns as plain text, so most results go out as a "[Tool result]" user text block instead of
+ * an orphaned tool_result the API would reject.
+ *
+ * The last block of the final message gets a cache breakpoint, so the growing history is cached
+ * incrementally: each iteration reads the previous iteration's prefix at the cached rate instead
+ * of re-paying the whole conversation.
  */
-function toAnthropicMessages(messages: LLMMessage[]): Anthropic.MessageParam[] {
-  const mapped = messages
-    .filter((m) => m.role !== "system")
-    .map((m): Anthropic.MessageParam => ({
-      role: m.role === "assistant" ? "assistant" : "user",
-      content: convertLLMContentToAnthropic(m.content),
-    }));
+export function toAnthropicMessages(messages: LLMMessage[]): Anthropic.MessageParam[] {
+  const echoedToolUseIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "assistant" && m.toolCalls) {
+      for (const call of m.toolCalls) echoedToolUseIds.add(call.id);
+    }
+  }
+
+  const mapped: Array<{ role: "user" | "assistant"; content: ContentBlockParamLike[] }> = [];
+  for (const m of messages) {
+    if (m.role === "system") continue;
+
+    if (m.role === "tool") {
+      const text = contentAsText(m.content);
+      if (m.toolCallId && echoedToolUseIds.has(m.toolCallId)) {
+        mapped.push({
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: m.toolCallId, content: text || "(empty result)" }],
+        });
+      } else {
+        mapped.push({ role: "user", content: [{ type: "text", text: `[Tool result]\n${text || "(empty result)"}` }] });
+      }
+      continue;
+    }
+
+    if (m.role === "assistant") {
+      const content = convertLLMContentToAnthropic(m.content);
+      for (const call of m.toolCalls ?? []) {
+        let input: unknown = {};
+        try {
+          input = JSON.parse(call.function.arguments || "{}");
+        } catch {
+          input = { raw: call.function.arguments };
+        }
+        content.push({ type: "tool_use", id: call.id, name: call.function.name, input });
+      }
+      mapped.push({ role: "assistant", content });
+      continue;
+    }
+
+    mapped.push({ role: "user", content: convertLLMContentToAnthropic(m.content) });
+  }
 
   while (mapped.length > 0 && mapped[0]!.role === "assistant") {
     mapped.shift();
   }
 
-  const merged: Anthropic.MessageParam[] = [];
+  const merged: Array<{ role: "user" | "assistant"; content: ContentBlockParamLike[] }> = [];
   for (const message of mapped) {
+    if (message.content.length === 0) continue;
     const previous = merged[merged.length - 1];
     if (previous && previous.role === message.role) {
-      previous.content = [
-        ...(previous.content as unknown as ContentBlockParamLike[]),
-        ...(message.content as unknown as ContentBlockParamLike[]),
-      ] as unknown as Anthropic.MessageParam["content"];
+      // tool_result blocks must come first in a user turn.
+      previous.content = [...previous.content, ...message.content].sort(
+        (a, b) => Number(b.type === "tool_result") - Number(a.type === "tool_result")
+      );
       continue;
     }
-    merged.push(message);
+    merged.push({ role: message.role, content: [...message.content] });
   }
 
-  return merged;
+  enforceToolPairing(merged);
+
+  const lastMessage = merged[merged.length - 1];
+  const lastBlock = lastMessage?.content[lastMessage.content.length - 1];
+  if (lastBlock) lastBlock["cache_control"] = { type: "ephemeral" };
+
+  return merged as unknown as Anthropic.MessageParam[];
+}
+
+/**
+ * The API only accepts a tool_use whose tool_result sits in the IMMEDIATELY following user turn,
+ * and a tool_result only right after its tool_use. The history does not guarantee that (a user
+ * message or compression can land in between, a result can be pruned), so any block that is not
+ * correctly paired is degraded to plain text instead of failing the whole request with a 400.
+ */
+function enforceToolPairing(messages: Array<{ role: "user" | "assistant"; content: ContentBlockParamLike[] }>): void {
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    const previous = messages[i - 1];
+    const next = messages[i + 1];
+
+    if (message.role === "assistant") {
+      const answered = new Set(
+        next?.role === "user"
+          ? next.content.filter((b) => b.type === "tool_result").map((b) => b["tool_use_id"] as string)
+          : []
+      );
+      message.content = message.content.map((block) =>
+        block.type === "tool_use" && !answered.has(block["id"] as string)
+          ? { type: "text", text: `[Tool call] ${String(block["name"])} ${JSON.stringify(block["input"] ?? {})}` }
+          : block
+      );
+      continue;
+    }
+
+    const requested = new Set(
+      previous?.role === "assistant"
+        ? previous.content.filter((b) => b.type === "tool_use").map((b) => b["id"] as string)
+        : []
+    );
+    message.content = message.content
+      .map((block) =>
+        block.type === "tool_result" && !requested.has(block["tool_use_id"] as string)
+          ? { type: "text", text: `[Tool result]\n${String(block["content"] ?? "")}` }
+          : block
+      )
+      .sort((a, b) => Number(b.type === "tool_result") - Number(a.type === "tool_result"));
+  }
 }
 
 /**
@@ -135,9 +240,10 @@ export class ClaudeProvider implements LLMProvider {
     this.baseUrl = options.baseUrl || "https://api.anthropic.com/v1";
     this.apiKey = options.apiKey ?? "";
 
+    // The SDK appends /v1/messages itself, so a base URL ending in /v1 would yield /v1/v1/...
     this.client = new Anthropic({
       apiKey: this.apiKey,
-      baseURL: this.baseUrl,
+      baseURL: this.baseUrl.replace(/\/+$/, "").replace(/\/v1$/, ""),
     });
   }
 

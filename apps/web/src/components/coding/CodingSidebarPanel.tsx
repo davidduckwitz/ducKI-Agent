@@ -8,11 +8,14 @@ import { useI18n } from "../../lib/i18n";
 import { useCodingSession } from "../../lib/codingSessionStore";
 import { useUiStore } from "../../lib/uiStore";
 import { CollapsibleSection } from "../ui/collapsible-section";
+import { CodingFolderPicker } from "./CodingFolderPicker";
 import { CodingFileTree, type CodingFileItem } from "./CodingFileTree";
 
 interface CodingProject {
   slug: string;
   name: string;
+  linked?: boolean;
+  path?: string;
 }
 
 export function CodingSidebarPanel() {
@@ -143,10 +146,11 @@ export function CodingSidebarPanel() {
         {(projectsQuery.data ?? []).length === 0 && <option value="">{t("codingPage.noProjects")}</option>}
         {(projectsQuery.data ?? []).map((project) => (
           <option key={project.slug} value={project.slug}>
-            {project.slug}
+            {project.slug}{(project as { linked?: boolean }).linked ? " 📁" : ""}
           </option>
         ))}
       </select>
+      <CodingFolderPicker projects={projectsQuery.data ?? []} />
 
       {selectedProject && (
         <>

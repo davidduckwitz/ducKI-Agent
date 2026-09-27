@@ -604,7 +604,18 @@ export const api = {
 
   coding: {
     status: () => request<{ enabled: boolean; root: string }>("/coding/status"),
-    listProjects: () => request<Array<{ slug: string; name: string }>>("/coding/projects"),
+    listProjects: () => request<Array<{ slug: string; name: string; linked?: boolean; path?: string }>>("/coding/projects"),
+    /** Lists sub-directories on the server's disk for the folder picker ("" = roots/drives). */
+    browseFolders: (path = "") =>
+      request<{ path: string; parent: string | null; entries: Array<{ name: string; path: string }> }>(
+        `/coding/browse?path=${encodeURIComponent(path)}`
+      ),
+    /** Registers an existing folder anywhere on disk as a coding project (works in place). */
+    linkProject: (path: string, name?: string) =>
+      request<{ created: boolean; linked: true; slug: string; path: string }>("/coding/projects/link", {
+        method: "POST",
+        body: JSON.stringify({ path, name }),
+      }),
     createProject: (name: string) =>
       request<{ created: boolean; slug: string; path: string }>("/coding/projects", {
         method: "POST",
@@ -658,6 +669,8 @@ export const api = {
     deletionPreview: (project: string, conversationId?: number) =>
       request<{
         project: string;
+        linked?: boolean;
+        path?: string;
         fileCount: number;
         totalBytes: number;
         conversations: Array<{ id: number; name: string; messageCount: number }>;

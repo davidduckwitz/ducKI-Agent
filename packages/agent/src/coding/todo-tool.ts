@@ -204,7 +204,14 @@ export function createTodoTool(list: TodoList): ToolExecutor {
       },
     },
     async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const action = String(input["action"] ?? "list").toLowerCase();
+      const requestedAction = String(input["action"] ?? "list").toLowerCase();
+      // Tolerate the natural "replace" wording used by some models for plan updates. The
+      // payload shape makes the intent unambiguous: items replaces the step set, while
+      // id/status or updates changes progress. This is deliberately handled by todo itself;
+      // plan state must never spill into the unrelated persistent-memory tool.
+      const action = requestedAction === "replace"
+        ? (Array.isArray(input["updates"]) || input["id"] !== undefined ? "update" : "write")
+        : requestedAction;
 
       if (action === "list") {
         return { success: true, data: { items: list.snapshot(), open: list.openCount } };

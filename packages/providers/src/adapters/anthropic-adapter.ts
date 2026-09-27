@@ -84,16 +84,26 @@ export class AnthropicAdapter extends BaseAdapter {
     for (const message of mapped) {
       const previous = merged[merged.length - 1];
       if (previous && previous.role === message.role) {
-        previous.content = [
-          ...(Array.isArray(previous.content) ? previous.content : [previous.content]),
-          ...(Array.isArray(message.content) ? message.content : [message.content]),
-        ];
+        previous.content = [...this.toContentBlocks(previous.content), ...this.toContentBlocks(message.content)];
         continue;
       }
       merged.push({ role: message.role, content: message.content });
     }
 
     return merged;
+  }
+
+  /**
+   * Content arrays must hold block objects - a bare string inside the array is rejected with
+   * "Input should be an object". Empty text blocks are rejected too, so they are dropped.
+   */
+  private toContentBlocks(content: unknown): unknown[] {
+    const items = Array.isArray(content) ? content : [content];
+    return items.flatMap((item) => {
+      if (typeof item === "string") return item.trim() ? [{ type: "text", text: item }] : [];
+      if (item && typeof item === "object") return [item];
+      return [];
+    });
   }
 
   /**

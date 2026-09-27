@@ -4,6 +4,24 @@ import { startVoiceActivityWatcher, type VoiceActivityWatcherHandle } from "../l
 import { emitVoiceCaptureStarted, emitVoiceCaptureStopped, interruptVoiceReply, onVoiceEndRequested, onVoiceToggleRequested } from "../lib/voiceCaptureBus";
 import { stopAllPlayback } from "../lib/voicePlaybackRegistry";
 
+// Live previews only work with the faster-whisper STT server; after a refusal we stop asking for
+// a while instead of paying a failed request on every recording.
+let partialsUnsupportedUntil = 0;
+const PARTIAL_INTERVAL_MS = 1200;
+
+function whisperLanguage(locale: string): string {
+  return (locale || "").split("-")[0]?.toLowerCase() || "de";
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  }
+  return btoa(binary);
+}
+
 // One owner for permission requests, recording, transcription and hands-free restarts.
 export function useVoiceCapture(callbacks: { onText: (text: string) => void; onStop: () => void; onEnd: () => void }) {
   const settings = useVoiceSettings();
@@ -12,6 +30,7 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
   const [isListening, setListening] = useState(false);
   const [voiceError, setError] = useState<string | null>(null);
   const [voiceRetryAvailable, setRetry] = useState(false);
+  const [partialText, setPartialText] = useState("");
   const session = useRef(0);
   const enabled = useRef(false);
   const busy = useRef(false);
@@ -20,11 +39,13 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
   const watcher = useRef<VoiceActivityWatcherHandle | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
   const restart = useRef<ReturnType<typeof setTimeout>>();
+  const partialTimer = useRef<ReturnType<typeof setInterval>>();
   const request = useRef<AbortController | null>(null);
   const startRef = useRef<() => Promise<void>>(async () => {});
 
   const release = () => {
     clearTimeout(timer.current);
+    clearInterval(partialTimer.current);
     watcher.current?.stop();
     watcher.current = null;
     stream.current?.getTracks().forEach((track) => track.stop());
@@ -68,16 +89,13 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
       capture.onstop = async () => {
         if (!current()) return;
         release();
+        setPartialText("");
         try {
           if (!heardSpeech) return;
           const blob = new Blob(chunks, { type: capture.mimeType });
           if (blob.size < 100) throw new Error("Zu kurze Aufnahme. Bitte erneut sprechen.");
           setError("Transkribiere …");
-          const bytes = new Uint8Array(await blob.arrayBuffer());
-          let binary = "";
-          for (let offset = 0; offset < bytes.length; offset += 8192) {
-            binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
-          }
+          const audio = await blobToBase64(blob);
           if (!current()) return;
           const controller = new AbortController();
           request.current = controller;
@@ -85,7 +103,7 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
           try {
             const response = await fetch("/api/chat/transcribe", {
               method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
-              body: JSON.stringify({ audio: btoa(binary), mimeType: capture.mimeType }),
+              body: JSON.stringify({ audio, mimeType: capture.mimeType, language: whisperLanguage(config.sttLanguage) }),
             });
             const result = await response.json();
             if (!current()) return;
@@ -115,7 +133,25 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
         setError("Aufnahmefehler. Bitte Mikrofon prüfen und erneut starten.");
         setRetry(true);
       };
-      capture.start();
+      // Timeslice so partial previews can transcribe the audio recorded so far (chunk 0 carries
+      // the container header, so chunks[0..n] is always a decodable file).
+      capture.start(500);
+      let partialInFlight = false;
+      partialTimer.current = setInterval(async () => {
+        if (partialInFlight || Date.now() < partialsUnsupportedUntil || !heardSpeech || capture.state !== "recording" || !chunks.length) return;
+        partialInFlight = true;
+        try {
+          const audio = await blobToBase64(new Blob(chunks, { type: capture.mimeType }));
+          const response = await fetch("/api/chat/transcribe", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ audio, mimeType: capture.mimeType, language: whisperLanguage(config.sttLanguage), partial: true }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) { partialsUnsupportedUntil = Date.now() + 60_000; return; }
+          if (current() && capture.state === "recording") setPartialText(result.data?.text?.trim() ?? "");
+        } catch { /* previews are best effort */ }
+        finally { partialInFlight = false; }
+      }, PARTIAL_INTERVAL_MS);
       if (config.sttMode !== "vad-auto") {
         interruptVoiceReply();
         stopAllPlayback();
@@ -166,5 +202,5 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
     const offEnd = onVoiceEndRequested(end);
     return () => { offToggle(); offEnd(); end(); };
   }, []);
-  return { isListening, voiceError, voiceRetryAvailable, toggle, clearError };
+  return { isListening, voiceError, voiceRetryAvailable, partialText, toggle, clearError };
 }

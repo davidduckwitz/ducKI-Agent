@@ -380,7 +380,8 @@ function resolveDiscordVoiceProviderName(settings: Map<string, string>): Discord
   if (requested === "openai") return "openai";
   if (requested === "ollama") return "ollama";
   if (requested === "silero") return "silero";
-  if (requested === "nodejs-whisper" || requested === "nodewhisper") return "nodejs-whisper";
+  // faster-whisper is a server-only path (stt-runtime.ts); Discord uses nodejs-whisper for it.
+  if (requested === "nodejs-whisper" || requested === "nodewhisper" || requested === "faster-whisper") return "nodejs-whisper";
   return "local";
 }
 

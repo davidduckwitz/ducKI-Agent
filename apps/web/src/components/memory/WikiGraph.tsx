@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, type SimulationLinkDatum, type SimulationNodeDatum } from "d3-force";
-import { Compass, Minus, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { Compass, Maximize2, Minus, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { api } from "../../lib/api";
 
 interface ActivationNode {
@@ -35,6 +35,12 @@ interface GraphEdgeData {
 type SimNode = SimulationNodeDatum & GraphNodeData;
 type SimLink = SimulationLinkDatum<SimNode> & Pick<GraphEdgeData, "id" | "origin" | "resolved">;
 
+export interface GraphTransform {
+  x: number;
+  y: number;
+  k: number;
+}
+
 const STATUS_COLOR: Record<string, string> = {
   approved: "#34d399",
   candidate: "#fbbf24",
@@ -47,6 +53,50 @@ function nodeRadius(node: GraphNodeData): number {
   if (node.kind === "folder") return 7 + Math.min(node.degree, 20) * 1.3;
   const base = isEntryPoint(node.id) ? 13 : 9;
   return base + Math.min(node.degree, 12) * 2.1;
+}
+
+/**
+ * Centers every positioned node in the viewport and leaves enough room for its
+ * circle and label. Keeping this calculation pure makes the most important
+ * canvas guarantee (no nodes clipped at the edges) straightforward to test.
+ */
+export function graphFitTransform(
+  nodes: Array<GraphNodeData & SimulationNodeDatum>,
+  width: number,
+  height: number,
+  padding = 48,
+): GraphTransform {
+  const positioned = nodes.filter((node) => Number.isFinite(node.x) && Number.isFinite(node.y));
+  if (positioned.length === 0) return { x: 0, y: 0, k: 1 };
+
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const node of positioned) {
+    const radius = nodeRadius(node);
+    // Labels are centered and can be wider than their node. This conservative
+    // estimate prevents long note names from being cut off at either side.
+    const halfLabelWidth = Math.min(160, Math.max(radius, node.title.length * 3.2));
+    minX = Math.min(minX, (node.x ?? 0) - halfLabelWidth);
+    maxX = Math.max(maxX, (node.x ?? 0) + halfLabelWidth);
+    minY = Math.min(minY, (node.y ?? 0) - radius);
+    maxY = Math.max(maxY, (node.y ?? 0) + radius + 18);
+  }
+
+  const contentWidth = Math.max(1, maxX - minX);
+  const contentHeight = Math.max(1, maxY - minY);
+  const availableWidth = Math.max(1, width - padding * 2);
+  const availableHeight = Math.max(1, height - padding * 2);
+  const k = Math.min(1.25, Math.max(0.1, Math.min(availableWidth / contentWidth, availableHeight / contentHeight)));
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  return {
+    k,
+    x: width / 2 - centerX * k,
+    y: height / 2 - centerY * k,
+  };
 }
 
 /** The wiki-index skill maintains exactly this note as the graph's Map-of-Content entry point. */
@@ -90,6 +140,8 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
   const draggingRef = useRef<SimNode | null>(null);
   const panningRef = useRef<{ startX: number; startY: number; origin: { x: number; y: number; k: number } } | null>(null);
   const hoveredRef = useRef<string | null>(null);
+  const fittedGraphRef = useRef<string | null>(null);
+  const viewAdjustedRef = useRef(false);
 
   const [width, setWidth] = useState(800);
   const [height, setHeight] = useState(520);
@@ -183,19 +235,46 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
     linksRef.current = simLinks;
 
     simRef.current?.stop();
+    const graphSignature = [
+      `${width}x${height}`,
+      ...simNodes.map((node) => `${node.id}:${node.title}`).sort(),
+      ...edges.map((edge) => `${edge.source}->${edge.target}`).sort(),
+    ].join("\n");
+    const needsInitialFit = fittedGraphRef.current !== graphSignature;
+    if (needsInitialFit) viewAdjustedRef.current = false;
+    let ticks = 0;
     const sim = forceSimulation(simNodes)
       .force("link", forceLink<SimNode, SimLink>(simLinks).id((d) => d.id).distance(120).strength(0.5))
       .force("charge", forceManyBody().strength(-260))
       .force("center", forceCenter(width / 2, height / 2))
       .force("collide", forceCollide<SimNode>((d) => nodeRadius(d) + 8))
-      .on("tick", draw);
+      .on("tick", () => {
+        draw();
+        ticks += 1;
+        // Fit once the initial layout has spread out enough to measure. Do not
+        // repeat on refetches, because that would discard the user's pan/zoom.
+        if (ticks === 45 && needsInitialFit && !viewAdjustedRef.current) {
+          transformRef.current = graphFitTransform(simNodes, width, height);
+          fittedGraphRef.current = graphSignature;
+          draw();
+        }
+      })
+      .on("end", () => {
+        // The force layout still moves after the early fit. Tighten it once more
+        // at rest, unless the user has deliberately changed the view meanwhile.
+        if (needsInitialFit && !viewAdjustedRef.current) {
+          transformRef.current = graphFitTransform(simNodes, width, height);
+          fittedGraphRef.current = graphSignature;
+          draw();
+        }
+      });
     simRef.current = sim;
 
     return () => {
       sim.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, width]);
+  }, [nodes, edges, width, height]);
 
   function draw() {
     const canvas = canvasRef.current;
@@ -336,6 +415,7 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
   }
 
   function handleMouseDown(e: React.MouseEvent<HTMLCanvasElement>) {
+    viewAdjustedRef.current = true;
     const { x, y } = toGraphCoords(e.clientX, e.clientY);
     const hit = nodeAt(nodesRef.current, x, y, activationById);
     if (hit) {
@@ -390,8 +470,9 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
   }
 
   function zoomAround(factor: number, px: number, py: number) {
+    viewAdjustedRef.current = true;
     const { x, y, k } = transformRef.current;
-    const nextK = Math.min(4, Math.max(0.25, k * factor));
+    const nextK = Math.min(4, Math.max(0.1, k * factor));
     transformRef.current = {
       k: nextK,
       x: px - ((px - x) / k) * nextK,
@@ -414,10 +495,16 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
     zoomAround(factor, width / 2, height / 2);
   }
 
+  function fitGraph() {
+    transformRef.current = graphFitTransform(nodesRef.current, width, height);
+    draw();
+  }
+
   function focusEntryPoint() {
     if (!entryPointNode) return;
     const node = nodesRef.current.find((n) => n.id === entryPointNode.id);
     if (!node) return;
+    viewAdjustedRef.current = true;
     const k = Math.max(transformRef.current.k, 1);
     transformRef.current = { k, x: width / 2 - (node.x ?? 0) * k, y: height / 2 - (node.y ?? 0) * k };
     setSelectedId(node.id);
@@ -452,9 +539,9 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <input
-          className="input flex-1 text-xs"
+          className="input min-w-0 basis-64 flex-1 text-xs"
           placeholder="Von hier aus erschliessen (Aktivierungsmodus)..."
           value={activationQuery}
           onChange={(e) => setActivationQuery(e.target.value)}
@@ -478,11 +565,12 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
           über <code>wiki action=expand</code> lesen würde.
         </p>
       )}
-      <div className={`flex gap-3 ${className}`}>
+      <div className={`flex flex-col gap-3 lg:flex-row ${className}`}>
       <div ref={containerRef} className="relative flex-1 min-w-0 h-full border border-gray-800 rounded-lg overflow-hidden bg-gray-950">
         <canvas
           ref={canvasRef}
-          style={{ width: `${width}px`, height: `${height}px`, cursor: draggingRef.current ? "grabbing" : "grab" }}
+          aria-label="LLM-Wiki Verbindungsgraph"
+          style={{ width: `${width}px`, height: `${height}px`, cursor: draggingRef.current ? "grabbing" : "grab", touchAction: "none" }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -505,6 +593,14 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
           >
             <Minus className="w-3.5 h-3.5" />
           </button>
+          <button
+            className="w-7 h-7 flex items-center justify-center rounded bg-gray-900/90 border border-gray-700 text-gray-200 hover:bg-gray-800"
+            title="Alle Knoten einpassen"
+            aria-label="Alle Knoten einpassen"
+            onClick={fitGraph}
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+          </button>
           {entryPointNode && (
             <button
               className="w-7 h-7 flex items-center justify-center rounded bg-amber-500/90 border border-amber-300 text-gray-900 hover:bg-amber-400"
@@ -518,7 +614,7 @@ export function WikiGraph({ className = "h-[70vh] min-h-[480px]" }: { className?
       </div>
 
       {selectedNode && (
-        <div className="w-72 shrink-0 border border-gray-800 rounded-lg p-3 space-y-3 bg-gray-900 overflow-y-auto">
+        <div className="w-full shrink-0 border border-gray-800 rounded-lg p-3 space-y-3 bg-gray-900 overflow-y-auto lg:w-72">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-semibold text-white">{selectedNode.title}</p>

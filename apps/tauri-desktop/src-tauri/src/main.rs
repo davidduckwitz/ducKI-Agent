@@ -397,6 +397,16 @@ fn start_backend_server(app: &AppHandle) -> Result<(), String> {
     let lock = lock.expect("agent lock checked above");
 
     if !is_port_available(preferred_port) {
+        // A DucKI server started outside this app (dev server, tauri-server) holds the port
+        // without our lock - reuse it instead of treating it as a foreign process.
+        if is_ducki_backend_running(preferred_port) {
+            *app_state.actual_port.lock().unwrap() = preferred_port;
+            *app_state.is_running.lock().unwrap() = true;
+            *app_state.owns_backend.lock().unwrap() = false;
+            println!("[TAURI] Reusing the DucKI Agent already listening on port 3001");
+            drop(lock);
+            return Ok(());
+        }
         return Err(
             "Port 3001 is occupied by a process that is not a compatible DucKI Agent".to_string(),
         );
@@ -955,5 +965,5 @@ fn get_backend_port(app_state: State<AppState>) -> u16 {
 #[tauri::command]
 fn get_backend_url(app_state: State<AppState>) -> String {
     let port = *app_state.actual_port.lock().unwrap();
-    format!("http://localhost:{}", port)
+    format!("http://127.0.0.1:{}", port)
 }

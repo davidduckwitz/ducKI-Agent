@@ -1056,7 +1056,10 @@ export function ChatContainer({ hideTranscript = false }: { hideTranscript?: boo
                     compactMode={compactMode}
                     onResend={item.msg.role === "user" ? () => setComposerDraft({ value: item.msg.content, revision: Date.now() }) : undefined}
                     t={t}
-                    autoPlayVoice={new Date(item.msg.timestamp).getTime() > conversationOpenedAtRef.current}
+                    autoPlayVoice={
+                      item.msg.metadata?.["liveReceivedAt"] !== undefined ||
+                      new Date(item.msg.timestamp).getTime() > conversationOpenedAtRef.current
+                    }
                   />
                 )
               )}
@@ -1076,7 +1079,7 @@ export function ChatContainer({ hideTranscript = false }: { hideTranscript?: boo
               {(isLoading || persistentStreamingContent.trim().length > 0) && (
                 <div className="flex items-end gap-3">
                   <div className="min-w-0 flex-1">
-                    <StreamingRow compactMode={compactMode} streamingContent={persistentStreamingContent} t={t} />
+                    <StreamingRow compactMode={compactMode} streamingContent={persistentStreamingContent} speechContent={streamingContent} t={t} />
                   </div>
                   <div className="hidden shrink-0 sm:block">
                     <DynamicCharacter

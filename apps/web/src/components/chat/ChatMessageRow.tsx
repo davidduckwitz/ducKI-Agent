@@ -570,14 +570,22 @@ export function MessageRow({
 export function StreamingRow({
   compactMode,
   streamingContent,
+  speechContent,
   t,
-}: RowCommonProps & { streamingContent: string; t: (key: string) => string }) {
+}: RowCommonProps & {
+  streamingContent: string;
+  /** Raw store stream for TTS. The displayed text lingers ~300ms after a block commits, so when
+   *  the next block starts inside that window it jumps straight from block A to block B - the
+   *  speech hook never saw the "" block boundary and dropped A's unspoken tail. */
+  speechContent?: string;
+  t: (key: string) => string;
+}) {
   // Only this live-preview box animates - once text lands as a permanent message (see
   // store.ts's assistant_text handling) it renders as plain MarkdownMessage, no smoothing.
   const smoothed = useSmoothedText(streamingContent);
   const { enableTTS, autoPlayTTS, ttsStreamingMode } = useVoiceSettings();
   const streamingSpeechActive = enableTTS && autoPlayTTS && ttsStreamingMode;
-  const { isPlaying: isSpeakingStream } = useStreamingSpeech(streamingContent, streamingSpeechActive);
+  const { isPlaying: isSpeakingStream } = useStreamingSpeech(speechContent ?? streamingContent, streamingSpeechActive);
   useAgentTurnEndSignal(isSpeakingStream, streamingSpeechActive);
   return (
     <div className={ANIMATE_IN}>
