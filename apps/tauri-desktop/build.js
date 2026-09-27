@@ -352,6 +352,11 @@ if (fs.existsSync(pluginsSrc)) {
   log('⚠ apps/server/plugins not found - packaged app will start with zero plugins');
 }
 
+// Seed stamp: the desktop shell re-runs its (additive) prompt/skill/plugin seeding only when this
+// changes, instead of walking the whole plugin tree on every launch (see src-tauri/src/seed.rs).
+fs.writeFileSync(path.join(serverDistDest, 'BUILD_ID'), `${serverPkg.version}-${Date.now().toString(36)}\n`);
+log('✓ BUILD_ID written for first-run seeding');
+
 // Sidecar binary check
 const sidecarPath = path.join(__dirname, 'src-tauri/binaries/node-x86_64-pc-windows-msvc.exe');
 if (fs.existsSync(sidecarPath)) {

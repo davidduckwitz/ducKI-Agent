@@ -88,6 +88,7 @@ import { updatesRouter } from "./routes/updates.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { wikiRouter } from "./routes/wiki.js";
 import { createCryptoPaymentRouter } from "./routes/crypto-payment.js";
+import { registerDesktopShutdownRoute } from "./lib/desktop-shutdown.js";
 import { createToolStagingRouter } from "./routes/tool-staging.js";
 import { screenshotRouter } from "./routes/screenshots.js";
 import { createProviderModelsRouter } from "./routes/provider-models.js";
@@ -808,6 +809,10 @@ async function bootstrap(): Promise<void> {
 	app.get("/health", healthHandler);
 	app.get("/api/health", healthHandler);
 
+	// Graceful stop for the desktop shell (only registered when it passed a token).
+	const shutdownRef: { current: ((signal: string) => void) | null } = { current: null };
+	registerDesktopShutdownRoute(app, () => shutdownRef.current?.("desktop"));
+
 	// Serve Health Dashboard UI
 	app.use(express.static("src/public", { extensions: ["html"] }));
 	app.get("/dashboard", (req, res) => {
@@ -884,7 +889,10 @@ async function bootstrap(): Promise<void> {
 		httpServer.close(() => {
 			process.exit(0);
 		});
+		// Lingering keep-alive connections can hold close() open indefinitely.
+		setTimeout(() => process.exit(0), 3000).unref();
 	};
+	shutdownRef.current = shutdown;
 
 	process.on("SIGINT", () => shutdown("SIGINT"));
 	process.on("SIGTERM", () => shutdown("SIGTERM"));

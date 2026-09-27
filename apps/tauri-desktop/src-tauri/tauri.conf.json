@@ -1,6 +1,6 @@
 {
   "productName": "DucKI Node",
-  "version": "0.1.0",
+  "version": "../package.json",
   "identifier": "de.davidduckwitz.ducki-node",
   "build": {
     "beforeBuildCommand": "pnpm build:prep",
@@ -10,27 +10,74 @@
   "app": {
     "windows": [
       {
-        "label": "main",
+        "label": "splash",
+        "create": false,
+        "url": "desktop-splash.html",
         "title": "DucKI Node",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "visible": false,
-        "theme": "Dark",
-        "backgroundColor": "#080b14",
-        "resizable": true,
-        "fullscreen": false
+        "width": 760,
+        "height": 480,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "center": true,
+        "focus": true,
+        "skipTaskbar": false,
+        "alwaysOnTop": false,
+        "visible": true
       }
     ],
     "security": {
-      "csp": null
-    }
+      "csp": {
+        "default-src": "'self' ipc: http://ipc.localhost",
+        "script-src": "'self' 'wasm-unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src": "'self' data: https://fonts.gstatic.com",
+        "img-src": "'self' data: blob: http: https:",
+        "media-src": "'self' data: blob: mediastream: http: https:",
+        "connect-src": "'self' ipc: http://ipc.localhost http: https: ws: wss: data: blob:",
+        "frame-src": "'self' http: https: blob: data:",
+        "worker-src": "'self' blob: data:",
+        "object-src": "'none'",
+        "base-uri": "'self'"
+      },
+      "capabilities": [
+        "main",
+        "splash"
+      ],
+      "devCsp": {
+        "default-src": "'self' ipc: http://ipc.localhost",
+        "script-src": "'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' http://localhost:* ws://localhost:*",
+        "style-src": "'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src": "'self' data: https://fonts.gstatic.com",
+        "img-src": "'self' data: blob: http: https:",
+        "media-src": "'self' data: blob: mediastream: http: https:",
+        "connect-src": "'self' ipc: http://ipc.localhost http: https: ws: wss: data: blob: ws://localhost:*",
+        "frame-src": "'self' http: https: blob: data:",
+        "worker-src": "'self' blob: data:",
+        "object-src": "'none'",
+        "base-uri": "'self'"
+      }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "David Duckwitz",
+    "copyright": "© David Duckwitz",
+    "category": "Productivity",
+    "shortDescription": "DucKI Node – lokaler KI-Agent",
+    "longDescription": "DucKI Node bündelt Agent-Server und Web-UI: Chat, Coding-Agent, Skills, Plugins, Memory, LLM-Wiki und Voice – lokal auf deinem Rechner.",
+    "homepage": "https://ducki.cloud",
     "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
     "resources": [
@@ -41,7 +88,24 @@
     ],
     "windows": {
       "certificateThumbprint": null,
-      "wix": null
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "German",
+          "English"
+        ],
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "installerHooks": "installer/hooks.nsh",
+        "startMenuFolder": "DucKI Node"
+      }
     }
-  }
+  },
+  "$schema": "https://schema.tauri.app/config/2"
 }

@@ -1,93 +1,75 @@
-# DucKI Node - Tauri Desktop App
+# DucKI Node – Tauri Desktop App
 
-Moderne, unabhängige Desktop-Anwendung basierend auf Tauri (statt Electron).
+Windows-Desktop-App (Tauri 2), die den gebündelten Agent-Server (Node-Sidecar) und die Web-UI
+(`apps/web`) in einer Installation ausliefert.
 
-## Struktur
+## Ablauf für Nutzer
 
-```
-tauri-desktop/
-├── src/                    # Frontend TypeScript/Vite
-│   ├── main.ts            # Entry point
-│   └── index.html         # HTML template
-├── src-tauri/             # Rust/Tauri backend
-│   ├── src/main.rs        # Rust entry point (startet Backend-Server)
-│   └── Cargo.toml         # Rust dependencies
-├── build.js               # Build-Script für Vorbereitung
-├── tauri.conf.json        # Tauri Konfiguration
-└── package.json           # Node dependencies
-```
+1. **Installer (NSIS)**: Installation pro Benutzer, ohne Admin-Rechte, Sprache DE/EN, eigenes
+   Branding mit der Ente (`src-tauri/installer/*.bmp`). Fehlt WebView2, wird es automatisch
+   nachinstalliert.
+2. **Splashscreen** (`apps/web/public/desktop-splash.html`): Die Ente schwimmt, während
+   Migration → Skills/Plugins → Agent-Start mit Fortschritt laufen. Dazu wechseln Feature- und
+   Use-Case-Karten (Memory, LLM-Wiki, Skills, Plugins, Coding-Agent, Voice, …). Bei einem Fehler
+   zeigt er Details sowie die Buttons „Erneut versuchen“, „Logs öffnen“ und „Beenden“.
+3. **Setup-Assistent** (erster Start oder Tray/Menü → „Setup-Assistent …“): Darstellung, LLM-Provider
+   mit Verbindungstest und Modell-Liste, Backend, Connectors, Plugins, Features (Coding, Wiki,
+   Voice), Agent & Skills (inklusive Skill-Import) sowie Desktop-Optionen (Autostart, Tray, Splash,
+   Ordner).
 
-## Voraussetzungen
+## Architektur (`src-tauri/src`)
 
-### Windows
+| Modul | Aufgabe |
+|---|---|
+| `main.rs` | Plugins (single-instance, log, shell, opener, notification, autostart), Setup, Exit-Handling |
+| `startup.rs` | Startsequenz, Fortschritt (`startup://progress`), Splash- und Hauptfenster |
+| `backend.rs` | Port-Wahl (3001, sonst freier Port), Sidecar-Start, Health-Check, sauberes Beenden, Crash-Neustart |
+| `seed.rs` | Migration alter Datenordner, Seeding von Prompts/Skills/Plugins (nur bei neuem `BUILD_ID`) |
+| `menu.rs` | Fenstermenü und Tray (ein gemeinsamer Handler) |
+| `desktop.rs` | Desktop-Einstellungen und `invoke`-Commands für Web-UI und Splash |
+| `win.rs` | Windows: Agent-Mutex und Job Object (beendet den gesamten Prozessbaum) |
 
-1. **Node.js + pnpm** (sollte bereits vorhanden sein)
-2. **Rust Toolchain** - [rustup.rs](https://rustup.rs/) instalieren
-3. **Visual Studio Build Tools** - erforderlich für die Rust-Compilation
+Die Web-UI erfährt den tatsächlichen Agent-Port über `window.__DUCKI_DESKTOP__` (Initialization
+Script, siehe `apps/web/src/lib/backendUrl.ts`). Desktop-Funktionen ruft sie über
+`apps/web/src/lib/desktop.ts` auf (`window.__TAURI__`, `withGlobalTauri`).
 
-Schnelle Installation (PowerShell als Admin):
+Zum Beenden schickt die Shell `POST /api/desktop/shutdown` mit einem Token, das sie bei jedem
+Start neu erzeugt (`apps/server/src/lib/desktop-shutdown.ts`). So laufen die Cleanup-Handler des
+Servers. Erst danach wird das Job Object beendet.
 
-```powershell
-# Rust installieren
-irm https://rustup.rs -outfile rustup-init.exe
-.\rustup-init.exe
+### Pfade
 
-# Visual Studio Build Tools (optional, aber empfohlen)
-# Oder: Visual Studio mit C++-Workload installieren
-```
+| Was | Wo |
+|---|---|
+| Datenbank, Prompts, Einstellungen | `%LOCALAPPDATA%\DucKI Node` |
+| Desktop-Logs (rotierend, 5 × 5 MB) | `%LOCALAPPDATA%\DucKI Node\logs\desktop.log` |
+| Workspace, Skills, Plugins | `%USERPROFILE%\DucKI\…` |
 
-## Workflow
+Ausführlichere Logs: Umgebungsvariable `DUCKI_DESKTOP_LOG=debug` setzen. Dann landet auch die
+stdout-Ausgabe des Servers im Log.
 
-Die Tauri-App ist **vollständig unabhängig** von `pnpm dev`:
+## Entwicklung
 
-### Entwicklung mit Tauri
-
-```bash
-cd apps/tauri-desktop
-pnpm install          # Dependencies installieren
-pnpm dev              # Tauri dev mode starten
-```
-
-Das startet:
-- Vite dev server auf http://localhost:5173
-- Tauri App mit Hot Reload
-- Backend-Server automatisch
-
-### Bestehender Workflow bleibt unverändert
+Voraussetzungen: Rust ≥ 1.77.2 (rustup), Visual Studio Build Tools (C++), Node + pnpm sowie
+ein portables `node.exe` unter `src-tauri/binaries/node-x86_64-pc-windows-msvc.exe`.
 
 ```bash
-# Im Root-Verzeichnis
-pnpm dev              # Startet web + server mit bestehenden Konfigurationen
+pnpm --filter @ducki/web dev          # Vite auf :5173 (devUrl)
+pnpm --filter @ducki/tauri-desktop dev
 ```
 
-### Production Build
+Läuft bereits ein DucKI-Server auf Port 3001, verbindet sich die App mit ihm.
 
 ```bash
-cd apps/tauri-desktop
-pnpm install          # Abhängigkeiten sicherstellen
-pnpm dist             # Erstellt portable .exe + NSIS Installer
+pnpm --filter @ducki/tauri-desktop check   # cargo clippy -D warnings
+pnpm --filter @ducki/tauri-desktop art     # Installer-Bitmaps neu erzeugen
 ```
 
-Output:
-- `dist/DucKI Node 0.1.0.exe` - portable App
-- `dist/DucKI Node Setup 0.1.0.exe` - Installer
+## Release-Build
 
-## Features
+```bash
+pnpm tauri:build    # = web + server bauen, build:prep, tauri build
+```
 
-✅ Unabhängig von pnpm dev Workflow  
-✅ Kleinere Binary (~50-100 MB vs 170+ MB Electron)  
-✅ Bessere Performance  
-✅ Native Windows Integration  
-✅ Automatischer Backend-Server Start  
-✅ Fallback zu Remote-Backend möglich  
-
-## Troubleshooting
-
-### "Rust not found"
-→ Rust toolchain installieren: https://rustup.rs/
-
-### "Backend failed to start"
-→ Check logs in `%APPDATA%\DucKI Node\logs\`
-
-### "pnpm dev" zeigt merkwürdige Fehler
-→ Das ist normal - die Tauri-App und pnpm dev sind voneinander unabhängig
+Ergebnis: `src-tauri/target/release/bundle/nsis/DucKI Node_<version>_x64-setup.exe`.
+Die Version kommt aus `package.json` (`tauri.conf.json` → `"version": "../package.json"`).

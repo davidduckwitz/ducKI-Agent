@@ -1,9 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, ChevronLeft, ChevronRight, Plug, Sparkles, X, AlertTriangle, ExternalLink } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Plug,
+  Sparkles,
+  X,
+  AlertTriangle,
+  ExternalLink,
+  Check,
+  FolderOpen,
+  Loader2,
+  Monitor,
+  Moon,
+  Palette,
+  Puzzle,
+  Sun,
+  Wand2,
+} from "lucide-react";
 import { api, type PluginInfo } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { useTheme } from "../theme/ThemeProvider";
+import { ACCENT_COLORS, ACCENT_SWATCH_CLASS, THEME_MODES, type ThemeMode } from "../../lib/theme";
+import { getDesktopInfo, isTauriDesktop, openDesktopFolder, setDesktopPreferences, type DesktopFolder, type DesktopInfo } from "../../lib/desktop";
 import { BackendSettings } from "../settings/BackendSettings";
 import { PluginSettingsForm } from "../plugins/PluginSettingsForm";
 
@@ -28,11 +49,26 @@ function toBool(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
-/** The wizard step index the generic "Connectors" step lives at (was the Discord-only step). */
-const CONNECTORS_STEP = 2;
+type StepKey = "appearance" | "llm" | "backend" | "connectors" | "plugins" | "features" | "agent" | "desktop" | "summary";
+
+const THEME_MODE_ICONS: Record<ThemeMode, typeof Monitor> = { system: Monitor, light: Sun, dark: Moon };
+
+interface DesktopPrefsState {
+  autostart: boolean;
+  closeToTray: boolean;
+  showSplash: boolean;
+}
+
+interface ProviderTestState {
+  status: "idle" | "testing" | "ok" | "error";
+  models: Array<{ id: string; name: string }>;
+  error?: string;
+}
 
 export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalProps) {
-  const { t } = useI18n();
+  const { t, language, setLanguage, languages } = useI18n();
+  const theme = useTheme();
+  const desktopMode = isTauriDesktop();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const settingsMap = useMemo(() => new Map(settings.map((entry) => [entry.key, entry.value])), [settings]);
@@ -165,6 +201,38 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [autoSkillSelection, setAutoSkillSelection] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_SELECTION"), true));
   const [skillBehavior, setSkillBehavior] = useState<SkillBehavior>((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
   const [autoSkillFallbackNone, setAutoSkillFallbackNone] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
+  const [audioEnabled, setAudioEnabled] = useState(toBool(settingsMap.get("AUDIO_ENABLED"), false));
+
+  // Plugins step: every installed non-connector plugin, toggled locally and applied on finish.
+  const regularPlugins = useMemo(() => (connectorPluginsQuery.data ?? []).filter((p) => !p.connector), [connectorPluginsQuery.data]);
+  const [pluginEnabled, setPluginEnabled] = useState<Record<string, boolean>>({});
+  const isPluginEnabled = (plugin: PluginInfo) => pluginEnabled[plugin.name] ?? plugin.enabled;
+
+  const skillsQuery = useQuery({ queryKey: ["skills"], queryFn: () => api.skills.list(), enabled: open });
+  const [skillImportUrl, setSkillImportUrl] = useState("");
+  const importSkill = useMutation({
+    mutationFn: (url: string) => api.skills.import({ url }),
+    onSuccess: async () => {
+      setSkillImportUrl("");
+      await qc.invalidateQueries({ queryKey: ["skills"] });
+    },
+  });
+
+  const [providerTest, setProviderTest] = useState<ProviderTestState>({ status: "idle", models: [] });
+  useEffect(() => setProviderTest({ status: "idle", models: [] }), [provider]);
+
+  // Desktop step (Tauri shell only): read the shell's current preferences once per opening.
+  const [desktopInfo, setDesktopInfo] = useState<DesktopInfo | null>(null);
+  const [desktopPrefs, setDesktopPrefs] = useState<DesktopPrefsState | null>(null);
+  useEffect(() => {
+    if (!open || !desktopMode) return;
+    getDesktopInfo()
+      .then((info) => {
+        setDesktopInfo(info);
+        if (info) setDesktopPrefs({ autostart: info.autostart, closeToTray: info.closeToTray, showSplash: info.showSplash });
+      })
+      .catch(() => setDesktopInfo(null));
+  }, [open, desktopMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -186,34 +254,51 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
     setAutoSkillSelection(toBool(settingsMap.get("AGENT_AUTO_SKILL_SELECTION"), true));
     setSkillBehavior((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
     setAutoSkillFallbackNone(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
+    setAudioEnabled(toBool(settingsMap.get("AUDIO_ENABLED"), false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settingsMap]);
 
+  /** Settings writes for the currently selected provider (shared by "test" and "finish"). */
+  function providerWrites(): Array<Promise<unknown>> {
+    const writes: Array<Promise<unknown>> = [api.settings.set("DEFAULT_PROVIDER", provider)];
+    if (provider === "lmstudio") {
+      writes.push(api.settings.set("LM_STUDIO_BASE_URL", lmStudioBaseUrl));
+      writes.push(api.settings.set("LM_STUDIO_MODEL", lmStudioModel));
+    }
+    if (provider === "openrouter") {
+      writes.push(api.settings.set("OPENROUTER_API_KEY", openRouterApiKey));
+      writes.push(api.settings.set("OPENROUTER_MODEL", openRouterModel || "openrouter/free"));
+    }
+    if (provider === "openai") {
+      writes.push(api.settings.set("OPENAI_API_KEY", openAiApiKey));
+      writes.push(api.settings.set("OPENAI_MODEL", openAiModel));
+    }
+    if (provider === "ollama") {
+      writes.push(api.settings.set("OLLAMA_BASE_URL", ollamaBaseUrl));
+      writes.push(api.settings.set("OLLAMA_MODEL", ollamaModel));
+    }
+    if (provider === "claude") {
+      writes.push(api.settings.set("CLAUDE_API_KEY", claudeApiKey));
+      writes.push(api.settings.set("CLAUDE_MODEL", claudeModel));
+    }
+    return writes;
+  }
+
+  /** Saves the provider settings, then asks the agent for that provider's model list. */
+  async function testProvider(): Promise<void> {
+    setProviderTest({ status: "testing", models: [] });
+    try {
+      await Promise.all(providerWrites());
+      const result = await api.providerModels.getModels(provider);
+      setProviderTest({ status: "ok", models: result.models ?? [] });
+    } catch (error) {
+      setProviderTest({ status: "error", models: [], error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   const saveSetup = useMutation({
     mutationFn: async () => {
-      const writes: Array<Promise<unknown>> = [];
-      writes.push(api.settings.set("DEFAULT_PROVIDER", provider));
-
-      if (provider === "lmstudio") {
-        writes.push(api.settings.set("LM_STUDIO_BASE_URL", lmStudioBaseUrl));
-        writes.push(api.settings.set("LM_STUDIO_MODEL", lmStudioModel));
-      }
-      if (provider === "openrouter") {
-        writes.push(api.settings.set("OPENROUTER_API_KEY", openRouterApiKey));
-        writes.push(api.settings.set("OPENROUTER_MODEL", openRouterModel || "openrouter/free"));
-      }
-      if (provider === "openai") {
-        writes.push(api.settings.set("OPENAI_API_KEY", openAiApiKey));
-        writes.push(api.settings.set("OPENAI_MODEL", openAiModel));
-      }
-      if (provider === "ollama") {
-        writes.push(api.settings.set("OLLAMA_BASE_URL", ollamaBaseUrl));
-        writes.push(api.settings.set("OLLAMA_MODEL", ollamaModel));
-      }
-      if (provider === "claude") {
-        writes.push(api.settings.set("CLAUDE_API_KEY", claudeApiKey));
-        writes.push(api.settings.set("CLAUDE_MODEL", claudeModel));
-      }
+      const writes: Array<Promise<unknown>> = providerWrites();
 
       // Connector plugins (Discord etc.) are saved+enabled+tested via their own dedicated plugin
       // endpoints (PUT /api/plugins/:name/settings, POST enable/disable, POST connector/test) -
@@ -228,7 +313,20 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
         });
       }
 
+      // Plugin toggles: only touch plugins whose state actually changed.
+      for (const plugin of regularPlugins) {
+        const desired = pluginEnabled[plugin.name];
+        if (desired === undefined || desired === plugin.enabled) continue;
+        await (desired ? api.plugins.enable(plugin.name) : api.plugins.disable(plugin.name)).catch(() => {
+          // A single plugin failing to (un)load must not block finishing the wizard.
+        });
+      }
+      if (desktopMode && desktopPrefs) {
+        await setDesktopPreferences(desktopPrefs).catch(() => {});
+      }
+
       writes.push(api.settings.set("CODING_ENABLED", String(codingEnabled)));
+      writes.push(api.settings.set("AUDIO_ENABLED", String(audioEnabled)));
       writes.push(api.settings.set("WIKI_ENABLED", String(wikiEnabled)));
 
       writes.push(api.settings.set("AGENT_AUTO_SKILL_SELECTION", String(autoSkillSelection)));
@@ -242,6 +340,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
     },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["settings"] });
+      await qc.invalidateQueries({ queryKey: ["plugins"] });
       onClose();
       setStep(0);
     },
@@ -249,19 +348,28 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
 
   if (!open) return null;
 
-  const isLastStep = step === 5;
-  const steps = [
-    t("setupWizard.steps.llm"),
-    t("setupWizard.steps.backend"),
-    t("setupWizard.steps.connectors"),
-    t("setupWizard.steps.features"),
-    t("setupWizard.steps.agent"),
-    t("setupWizard.steps.summary"),
+  const stepKeys: StepKey[] = [
+    "appearance",
+    "llm",
+    "backend",
+    "connectors",
+    "plugins",
+    "features",
+    "agent",
+    ...(desktopMode ? (["desktop"] as StepKey[]) : []),
+    "summary",
   ];
+  const lastStep = stepKeys.length - 1;
+  const stepKey = stepKeys[Math.min(step, lastStep)];
+  const isLastStep = stepKey === "summary";
+  const steps = stepKeys.map((key) => t(`setupWizard.steps.${key}`));
+  const enabledPluginCount = regularPlugins.filter(isPluginEnabled).length;
+  const modelListId = "setup-wizard-models";
+  const modelInputProps = providerTest.models.length > 0 ? { list: modelListId } : {};
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl rounded-xl border border-gray-800 bg-gray-950 shadow-2xl">
+      <div className="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-xl border border-gray-800 bg-gray-950 shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
           <div className="flex items-start gap-4">
             <div>
@@ -269,7 +377,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <Sparkles className="w-5 h-5 text-amber-300" />
                 {t("setupWizard.title")}
               </h2>
-              <p className="text-xs text-gray-400 mt-1">{t("setupWizard.step")} {step + 1} {t("setupWizard.of")} 6</p>
+              <p className="text-xs text-gray-400 mt-1">{t("setupWizard.step")} {step + 1} {t("setupWizard.of")} {stepKeys.length}</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 mt-1">
@@ -298,11 +406,72 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
         </div>
 
         <div className="border-b border-gray-800 bg-gray-900/40 px-5 py-3">
-          <p className="text-sm leading-6 text-gray-300">{t(`setupWizard.stepDescriptions.${["llm", "backend", "connectors", "features", "agent", "summary"][step]}`)}</p>
+          <p className="text-sm leading-6 text-gray-300">{t(`setupWizard.stepDescriptions.${stepKey}`)}</p>
         </div>
 
-        <div className="p-5 space-y-4">
-          {step === 0 && (
+        <div className="p-5 space-y-4 overflow-y-auto min-h-0">
+          {stepKey === "appearance" && (
+            <div className="space-y-5">
+              <h3 className="text-base font-semibold flex items-center gap-2"><Palette className="w-4 h-4 text-amber-300" /> {t("setupWizard.section.appearance")}</h3>
+              <div className="space-y-2">
+                <label className="text-sm text-gray-300 block">{t("setupWizard.appearance.language")}</label>
+                <div className="flex flex-wrap gap-2">
+                  {languages.map((entry) => (
+                    <button
+                      key={entry.code}
+                      type="button"
+                      onClick={() => setLanguage(entry.code)}
+                      className={language === entry.code ? "btn-primary flex items-center gap-2" : "btn-secondary flex items-center gap-2"}
+                    >
+                      <img src={entry.flagSrc} alt="" className="h-3 w-4 rounded-[2px]" />
+                      {entry.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm text-gray-300 block">{t("themeSettings.modeTitle")}</label>
+                <div className="flex flex-wrap gap-2">
+                  {THEME_MODES.map((value) => {
+                    const Icon = THEME_MODE_ICONS[value];
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => theme.setMode(value)}
+                        className={theme.mode === value ? "btn-primary flex items-center gap-2" : "btn-secondary flex items-center gap-2"}
+                      >
+                        <Icon className="w-4 h-4" />
+                        {t(`themeSettings.mode.${value}`)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm text-gray-300 block">{t("themeSettings.accentTitle")}</label>
+                <div className="flex flex-wrap gap-3">
+                  {ACCENT_COLORS.map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => theme.setAccent(value)}
+                      title={t(`themeSettings.accent.${value}`)}
+                      aria-label={t(`themeSettings.accent.${value}`)}
+                      className={`relative w-9 h-9 rounded-full border-2 transition ${ACCENT_SWATCH_CLASS[value]} ${
+                        theme.accent === value ? "border-white" : "border-transparent hover:border-gray-500"
+                      }`}
+                    >
+                      {theme.accent === value && <Check className="w-4 h-4 text-white absolute inset-0 m-auto drop-shadow" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-gray-400">{t("setupWizard.appearance.hint")}</p>
+            </div>
+          )}
+
+          {stepKey === "llm" && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.llm")}</h3>
               <label className="text-sm text-gray-300 block">{t("setupWizard.provider")}</label>
@@ -317,49 +486,75 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
               {provider === "lmstudio" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input className="input" value={lmStudioBaseUrl} onChange={(e) => setLmStudioBaseUrl(e.target.value)} placeholder={t("setupWizard.placeholders.lmStudioBaseUrl")} />
-                  <input className="input" value={lmStudioModel} onChange={(e) => setLmStudioModel(e.target.value)} placeholder={t("setupWizard.placeholders.lmStudioModel")} />
+                  <input className="input" value={lmStudioModel} onChange={(e) => setLmStudioModel(e.target.value)} placeholder={t("setupWizard.placeholders.lmStudioModel")} {...modelInputProps} />
                 </div>
               )}
 
               {provider === "openrouter" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input className="input" type="password" value={openRouterApiKey} onChange={(e) => setOpenRouterApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.openRouterApiKey")} />
-                  <input className="input" value={openRouterModel} onChange={(e) => setOpenRouterModel(e.target.value)} placeholder="openrouter/free" />
+                  <input className="input" value={openRouterModel} onChange={(e) => setOpenRouterModel(e.target.value)} placeholder="openrouter/free" {...modelInputProps} />
                 </div>
               )}
 
               {provider === "openai" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input className="input" type="password" value={openAiApiKey} onChange={(e) => setOpenAiApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.openAiApiKey")} />
-                  <input className="input" value={openAiModel} onChange={(e) => setOpenAiModel(e.target.value)} placeholder="gpt-4o" />
+                  <input className="input" value={openAiModel} onChange={(e) => setOpenAiModel(e.target.value)} placeholder="gpt-4o" {...modelInputProps} />
                 </div>
               )}
 
               {provider === "ollama" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input className="input" value={ollamaBaseUrl} onChange={(e) => setOllamaBaseUrl(e.target.value)} placeholder={t("setupWizard.placeholders.ollamaBaseUrl")} />
-                  <input className="input" value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} placeholder={t("setupWizard.placeholders.ollamaModel")} />
+                  <input className="input" value={ollamaModel} onChange={(e) => setOllamaModel(e.target.value)} placeholder={t("setupWizard.placeholders.ollamaModel")} {...modelInputProps} />
                 </div>
               )}
 
               {provider === "claude" && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <input className="input" type="password" value={claudeApiKey} onChange={(e) => setClaudeApiKey(e.target.value)} placeholder={t("setupWizard.placeholders.claudeApiKey")} />
-                  <input className="input" value={claudeModel} onChange={(e) => setClaudeModel(e.target.value)} placeholder="claude-3-5-sonnet-20241022" />
+                  <input className="input" value={claudeModel} onChange={(e) => setClaudeModel(e.target.value)} placeholder="claude-3-5-sonnet-20241022" {...modelInputProps} />
                 </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <button type="button" className="btn-secondary inline-flex items-center gap-2 text-sm" disabled={providerTest.status === "testing"} onClick={() => void testProvider()}>
+                  {providerTest.status === "testing" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+                  {t("setupWizard.llmTest.button")}
+                </button>
+                {providerTest.status === "ok" && (
+                  <span className="text-xs text-emerald-300 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    {t("setupWizard.llmTest.ok").replace("{count}", String(providerTest.models.length))}
+                  </span>
+                )}
+                {providerTest.status === "error" && (
+                  <span className="text-xs text-amber-300 flex items-center gap-1 min-w-0">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate" title={providerTest.error}>{t("setupWizard.llmTest.failed")}: {providerTest.error}</span>
+                  </span>
+                )}
+              </div>
+              {providerTest.models.length > 0 && (
+                <datalist id={modelListId}>
+                  {providerTest.models.map((model) => (
+                    <option key={model.id} value={model.id}>{model.name}</option>
+                  ))}
+                </datalist>
               )}
 
             </div>
           )}
 
-          {step === 1 && (
+          {stepKey === "backend" && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">Backend-Verbindung</h3>
               <BackendSettings />
             </div>
           )}
 
-          {step === CONNECTORS_STEP && (
+          {stepKey === "connectors" && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold flex items-center gap-2"><Plug className="w-4 h-4 text-cyan-300" /> {t("setupWizard.section.connectors")}</h3>
               <p className="text-xs text-gray-400">{t("setupWizard.connectors.intro")}</p>
@@ -441,7 +636,56 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
             </div>
           )}
 
-          {step === 3 && (
+          {stepKey === "plugins" && (
+            <div className="space-y-3">
+              <h3 className="text-base font-semibold flex items-center gap-2"><Puzzle className="w-4 h-4 text-violet-300" /> {t("setupWizard.section.plugins")}</h3>
+              <p className="text-xs text-gray-400">{t("setupWizard.plugins.intro")}</p>
+              {connectorPluginsQuery.isLoading ? (
+                <p className="text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> …</p>
+              ) : regularPlugins.length === 0 ? (
+                <p className="text-sm text-gray-400">{t("setupWizard.plugins.none")}</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {regularPlugins.map((plugin) => {
+                    const enabled = isPluginEnabled(plugin);
+                    return (
+                      <label
+                        key={plugin.name}
+                        className={`flex items-start gap-3 rounded-lg border p-3 text-sm cursor-pointer transition-colors ${
+                          enabled ? "border-emerald-500/40 bg-emerald-500/5" : "border-gray-800 bg-gray-900"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          checked={enabled}
+                          onChange={(e) => setPluginEnabled((prev) => ({ ...prev, [plugin.name]: e.target.checked }))}
+                        />
+                        <span className="min-w-0">
+                          <span className="font-medium flex items-center gap-1.5">
+                            <span>{plugin.icon ?? "🧩"}</span>
+                            <span className="truncate">{plugin.name}</span>
+                            <span className="text-[10px] text-gray-500">v{plugin.version}</span>
+                          </span>
+                          {plugin.description && <span className="mt-0.5 text-xs text-gray-400 line-clamp-2">{plugin.description}</span>}
+                          {plugin.toolNames.length > 0 && (
+                            <span className="block text-[11px] text-gray-500 mt-1">
+                              {t("setupWizard.plugins.tools").replace("{count}", String(plugin.toolNames.length))}
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              <button type="button" className="inline-flex items-center gap-1 text-cyan-300 underline text-xs" onClick={() => { onClose(); navigate("/plugins"); }}>
+                <ExternalLink className="w-3 h-3" /> {t("setupWizard.plugins.more")}
+              </button>
+            </div>
+          )}
+
+          {stepKey === "features" && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.features")}</h3>
               <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
@@ -452,10 +696,14 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 <span>{t("setupWizard.features.wiki")}</span>
                 <input type="checkbox" checked={wikiEnabled} onChange={(e) => setWikiEnabled(e.target.checked)} />
               </label>
+              <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
+                <span>{t("setupWizard.features.voice")}</span>
+                <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} />
+              </label>
             </div>
           )}
 
-          {step === 4 && (
+          {stepKey === "agent" && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.agent")}</h3>
               <label className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
@@ -483,13 +731,97 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                   </select>
                 </div>
               )}
+
+              <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-sm text-gray-300">{t("setupWizard.skills.installed").replace("{count}", String(skillsQuery.data?.length ?? 0))}</label>
+                  {desktopMode && (
+                    <button type="button" className="text-xs text-cyan-300 underline inline-flex items-center gap-1" onClick={() => void openDesktopFolder("skills")}>
+                      <FolderOpen className="w-3 h-3" /> {t("setupWizard.desktop.folders.skills")}
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                  {(skillsQuery.data ?? []).map((skill) => (
+                    <span key={skill.slug} title={skill.description} className="rounded-md border border-gray-700 bg-gray-950 px-2 py-0.5 text-xs text-gray-300">
+                      {skill.name || skill.slug}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    className="input flex-1"
+                    value={skillImportUrl}
+                    onChange={(e) => setSkillImportUrl(e.target.value)}
+                    placeholder={t("setupWizard.skills.importPlaceholder")}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary text-sm inline-flex items-center gap-2"
+                    disabled={!skillImportUrl.trim() || importSkill.isPending}
+                    onClick={() => importSkill.mutate(skillImportUrl.trim())}
+                  >
+                    {importSkill.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {t("setupWizard.skills.import")}
+                  </button>
+                </div>
+                {importSkill.isSuccess && <p className="text-xs text-emerald-300">{t("setupWizard.skills.imported").replace("{slug}", importSkill.data.slug)}</p>}
+                {importSkill.isError && <p className="text-xs text-amber-300">{importSkill.error instanceof Error ? importSkill.error.message : String(importSkill.error)}</p>}
+              </div>
             </div>
           )}
 
-          {step === 5 && (
+          {stepKey === "desktop" && (
+            <div className="space-y-3">
+              <h3 className="text-base font-semibold flex items-center gap-2"><Monitor className="w-4 h-4 text-sky-300" /> {t("setupWizard.section.desktop")}</h3>
+              {!desktopPrefs ? (
+                <p className="text-sm text-gray-400 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> …</p>
+              ) : (
+                <>
+                  {(
+                    [
+                      ["autostart", "setupWizard.desktop.autostart", "setupWizard.desktop.autostartHint"],
+                      ["closeToTray", "setupWizard.desktop.closeToTray", "setupWizard.desktop.closeToTrayHint"],
+                      ["showSplash", "setupWizard.desktop.showSplash", "setupWizard.desktop.showSplashHint"],
+                    ] as const
+                  ).map(([key, label, hint]) => (
+                    <label key={key} className="flex items-center justify-between gap-4 rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
+                      <span>
+                        {t(label)}
+                        <span className="block text-xs text-gray-400 mt-0.5">{t(hint)}</span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={desktopPrefs[key]}
+                        onChange={(e) => setDesktopPrefs((prev) => (prev ? { ...prev, [key]: e.target.checked } : prev))}
+                      />
+                    </label>
+                  ))}
+                  <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 space-y-2">
+                    <p className="text-sm text-gray-300">{t("setupWizard.desktop.folders.title")}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {(["workspace", "skills", "plugins", "data", "logs"] as DesktopFolder[]).map((kind) => (
+                        <button key={kind} type="button" className="btn-secondary text-xs inline-flex items-center gap-1.5" onClick={() => void openDesktopFolder(kind)}>
+                          <FolderOpen className="w-3.5 h-3.5" /> {t(`setupWizard.desktop.folders.${kind}`)}
+                        </button>
+                      ))}
+                    </div>
+                    {desktopInfo && (
+                      <p className="text-[11px] text-gray-500 break-all">
+                        {t("setupWizard.desktop.workspacePath")}: {desktopInfo.workspaceDir} · {t("setupWizard.desktop.agentPort")}: {desktopInfo.port} · v{desktopInfo.version}
+                      </p>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {stepKey === "summary" && (
             <div className="space-y-3">
               <h3 className="text-base font-semibold">{t("setupWizard.section.summary")}</h3>
               <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm space-y-2">
+                <p><strong>{t("setupWizard.summary.appearance")}:</strong> {languages.find((l) => l.code === language)?.label} · {t(`themeSettings.mode.${theme.mode}`)} · {t(`themeSettings.accent.${theme.accent}`)}</p>
                 <p><strong>{t("setupWizard.summary.provider")}:</strong> {provider}</p>
                 {provider === "openrouter" && <p><strong>{t("setupWizard.summary.openRouterModel")}:</strong> {openRouterModel || "openrouter/free"}</p>}
                 {provider === "claude" && <p><strong>{t("setupWizard.summary.claudeModel")}:</strong> {claudeModel}</p>}
@@ -504,8 +836,13 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                 </p>
                 <p><strong>{t("setupWizard.summary.coding")}:</strong> {codingEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
                 <p><strong>{t("setupWizard.summary.wiki")}:</strong> {wikiEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
+                <p><strong>{t("setupWizard.summary.voice")}:</strong> {audioEnabled ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
+                <p><strong>{t("setupWizard.summary.plugins")}:</strong> {enabledPluginCount} / {regularPlugins.length}</p>
                 <p><strong>{t("setupWizard.summary.skillBehavior")}:</strong> {skillBehavior === "automatic" ? t("setupWizard.agent.behaviorAutomatic") : t("setupWizard.agent.behaviorActive")}</p>
                 <p><strong>{t("setupWizard.summary.skillSelection")}:</strong> {autoSkillSelection ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
+                {desktopMode && desktopPrefs && (
+                  <p><strong>{t("setupWizard.summary.autostart")}:</strong> {desktopPrefs.autostart ? t("setupWizard.summary.on") : t("setupWizard.summary.off")}</p>
+                )}
               </div>
               <p className="text-xs text-gray-400 flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-300" />{t("setupWizard.summary.saveHint")}</p>
             </div>
@@ -532,13 +869,13 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
               onClick={async () => {
                 // Leaving the Connectors step: save + soft-test every connector plugin before
                 // marking the step done, without blocking navigation on a failed test.
-                if (step === CONNECTORS_STEP) {
+                if (stepKey === "connectors") {
                   await saveAndTestAllConnectors.mutateAsync().catch(() => {});
                 }
-                setStep((s) => Math.min(5, s + 1));
+                setStep((s) => Math.min(lastStep, s + 1));
               }}
             >
-              {saveAndTestAllConnectors.isPending && step === CONNECTORS_STEP ? t("setupWizard.connectors.testing") : t("setupWizard.next")} <ChevronRight className="w-4 h-4" />
+              {saveAndTestAllConnectors.isPending && stepKey === "connectors" ? t("setupWizard.connectors.testing") : t("setupWizard.next")} <ChevronRight className="w-4 h-4" />
             </button>
           )}
         </div>

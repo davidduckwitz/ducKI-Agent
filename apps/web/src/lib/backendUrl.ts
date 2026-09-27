@@ -31,6 +31,21 @@ export function isDesktopApp(): boolean {
   return isTauri || isElectron;
 }
 
+/**
+ * The desktop shell injects the port its bundled agent actually listens on (it falls back to a
+ * free port when 3001 is taken by another program) via an initialization script. That value is
+ * authoritative for "local" mode in the desktop app; the saved config port is only a fallback.
+ */
+export function desktopInjectedPort(): number | undefined {
+  if (typeof window === "undefined") return undefined;
+  const port = (window as unknown as { __DUCKI_DESKTOP__?: { port?: unknown } }).__DUCKI_DESKTOP__?.port;
+  return typeof port === "number" && Number.isInteger(port) && port > 0 ? port : undefined;
+}
+
+function desktopLocalPort(config: BackendConfig): number {
+  return desktopInjectedPort() ?? config.port ?? DEFAULT_PORT;
+}
+
 /** Read synchronously - a value read in an effect arrives one render too late. */
 export function readBackendConfig(): BackendConfig {
   if (typeof window === "undefined") return DEFAULT_BACKEND_CONFIG;
@@ -76,7 +91,7 @@ export function getApiBaseUrl(config: BackendConfig = readBackendConfig()): stri
     return `${normalizeRemote(config.url)}/api`;
   }
   if (isDesktopApp()) {
-    return `http://127.0.0.1:${config.port ?? DEFAULT_PORT}/api`;
+    return `http://127.0.0.1:${desktopLocalPort(config)}/api`;
   }
   return "/api";
 }
@@ -124,7 +139,7 @@ export function getSocketUrl(config: BackendConfig = readBackendConfig()): strin
     return normalizeRemote(config.url);
   }
   if (isDesktopApp()) {
-    return `http://127.0.0.1:${config.port ?? DEFAULT_PORT}`;
+    return `http://127.0.0.1:${desktopLocalPort(config)}`;
   }
   if (import.meta.env.DEV) {
     // Fall back to the current page origin (undefined) rather than localhost:3001, so

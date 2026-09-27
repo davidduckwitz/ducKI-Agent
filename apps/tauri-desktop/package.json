@@ -7,18 +7,12 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "build:prep": "node build.js",
-    "preview": "vite preview",
-    "type-check": "tsc --noEmit",
+    "art": "node scripts/generate-installer-art.mjs",
+    "check": "cd src-tauri && cargo clippy --all-targets -- -D warnings",
     "dist": "pnpm -w build:web && pnpm -w build:server && pnpm build:prep && tauri build"
   },
-  "dependencies": {
-    "@tauri-apps/api": "^2.0.0"
-  },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0",
-    "@types/node": "^22.0.0",
-    "esbuild": "^0.21.5",
-    "typescript": "^5.5.0",
-    "vite": "^5.0.0"
+    "@tauri-apps/cli": "^2.12.0",
+    "esbuild": "^0.21.5"
   }
 }

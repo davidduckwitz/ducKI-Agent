@@ -7999,7 +7999,13 @@ export class Agent {
           signal: this.abortController?.signal,
         };
         if (nativeToolsEnabled) {
-          const allToolDefs = this.executor.getToolDefinitions();
+          // Bridge tools get registered into the executor on first activation. Exclude them
+          // here so they aren't counted/partitioned as core AND appended again as bridgeDefs —
+          // that produced a duplicate 'tool_search' from the 2nd iteration on (LM Studio rejects it).
+          const bridgeToolNames = ["tool_search", "tool_describe", "tool_call"];
+          const allToolDefs = this.executor
+            .getToolDefinitions()
+            .filter((d) => !bridgeToolNames.includes(d.name));
 
           // Progressive disclosure: when tool schema tokens exceed a threshold of the
           // context budget, hide non-core tools behind tool_search/tool_describe/tool_call
@@ -8027,7 +8033,7 @@ export class Agent {
               }
 
               // Get bridge tool definitions (they're now in the executor)
-              const bridgeDefs = ["tool_search", "tool_describe", "tool_call"]
+              const bridgeDefs = bridgeToolNames
                 .map((name) => this.executor.getTool(name)?.definition)
                 .filter((d): d is ToolDefinition => d != null);
 

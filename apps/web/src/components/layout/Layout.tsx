@@ -90,6 +90,13 @@ export function Layout() {
     firstRunCheckDone.current = true;
   }, [setSetupModalOpen, settingsQuery.data]);
 
+  // The desktop shell's tray/menu "Setup-Assistent" entry.
+  useEffect(() => {
+    const open = () => setSetupModalOpen(true);
+    window.addEventListener("ducki:open-setup", open);
+    return () => window.removeEventListener("ducki:open-setup", open);
+  }, [setSetupModalOpen]);
+
   useEffect(() => {
     initSocket();
     return () => disconnectSocket();

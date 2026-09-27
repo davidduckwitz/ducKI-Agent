@@ -61,6 +61,22 @@ describe("backendUrl", () => {
     expect(getSocketUrl()).toBe("http://127.0.0.1:4123");
   });
 
+  it("prefers the port injected by the desktop shell over the saved one", () => {
+    setDesktop(true);
+    store({ type: "local", port: 3001 });
+    const w = window as unknown as Record<string, unknown>;
+    w["__DUCKI_DESKTOP__"] = { port: 51234 };
+    try {
+      expect(getApiBaseUrl()).toBe("http://127.0.0.1:51234/api");
+      expect(getSocketUrl()).toBe("http://127.0.0.1:51234");
+      // Remote mode still wins - the injected port only describes the bundled agent.
+      store({ type: "remote", url: "http://10.0.0.2:3001" });
+      expect(getApiBaseUrl()).toBe("http://10.0.0.2:3001/api");
+    } finally {
+      delete w["__DUCKI_DESKTOP__"];
+    }
+  });
+
   it("routes HTTP and socket to the same remote host", () => {
     store({ type: "remote", url: "https://agent.example.com/" });
     // Trailing slash normalised, /api appended for REST, bare origin for the socket.

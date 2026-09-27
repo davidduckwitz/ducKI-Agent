@@ -24,6 +24,16 @@ export const THEME_RADIUS_KEY = "ducki.theme.radius";
 
 export const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 export const ACCENT_COLORS: AccentColor[] = ["blue", "violet", "green", "orange", "rose", "zinc"];
+
+/** Tailwind background class previewing each accent (Settings theme tab, setup wizard). */
+export const ACCENT_SWATCH_CLASS: Record<AccentColor, string> = {
+  blue: "bg-[hsl(217,91%,60%)]",
+  violet: "bg-[hsl(258,90%,66%)]",
+  green: "bg-[hsl(142,71%,40%)]",
+  orange: "bg-[hsl(24,95%,53%)]",
+  rose: "bg-[hsl(346,77%,50%)]",
+  zinc: "bg-[hsl(240,5%,34%)]",
+};
 export const THEME_FONTS: ThemeFont[] = ["system", "modern", "humanist", "serif", "mono"];
 
 export const DEFAULT_THEME_MODE: ThemeMode = "dark";

@@ -1,3 +1,4 @@
+import { describe, expect, test } from "vitest";
 import { splitMarkdownSegments } from "./markdownSegments";
 
 describe("splitMarkdownSegments", () => {

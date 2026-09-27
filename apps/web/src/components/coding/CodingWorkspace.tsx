@@ -19,6 +19,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import "../../lib/monacoSetup";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor as MonacoEditorNS, Range as MonacoRange } from "monaco-editor";
 import { api } from "../../lib/api";

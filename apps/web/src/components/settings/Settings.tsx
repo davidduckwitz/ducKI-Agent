@@ -7,7 +7,7 @@ import { api } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useTheme } from "../theme/ThemeProvider";
-import { ACCENT_COLORS, THEME_FONTS, THEME_FONT_STACKS, THEME_MODES, type AccentColor, type ThemeFont, type ThemeMode } from "../../lib/theme";
+import { ACCENT_COLORS, ACCENT_SWATCH_CLASS, THEME_FONTS, THEME_FONT_STACKS, THEME_MODES, type ThemeFont, type ThemeMode } from "../../lib/theme";
 import { cn } from "../../lib/utils";
 import { ChatCleanupSettings } from "./ChatCleanupSettings";
 import { ProviderConfigSettings } from "./ProviderConfigSettings";
@@ -1681,15 +1681,6 @@ const THEME_MODE_ICONS: Record<ThemeMode, typeof Monitor> = {
   system: Monitor,
   light: Sun,
   dark: Moon,
-};
-
-const ACCENT_SWATCH_CLASS: Record<AccentColor, string> = {
-  blue: "bg-[hsl(217,91%,60%)]",
-  violet: "bg-[hsl(258,90%,66%)]",
-  green: "bg-[hsl(142,71%,40%)]",
-  orange: "bg-[hsl(24,95%,53%)]",
-  rose: "bg-[hsl(346,77%,50%)]",
-  zinc: "bg-[hsl(240,5%,34%)]",
 };
 
 function ThemeSettingsTab() {

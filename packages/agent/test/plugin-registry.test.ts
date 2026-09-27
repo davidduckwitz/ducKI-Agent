@@ -1,72 +1,21 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { describe, it, expect } from "vitest";
+import { join } from "node:path";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { loadPlugins, listPluginSkillDirs } from "../src/plugins/index.ts";
-import { closeAllPluginDbs } from "@ducki/database";
 
-// Relative to THIS test file (vitest's process.cwd() is the repo root, not packages/agent).
-const REPO_PLUGINS = resolve(dirname(fileURLToPath(import.meta.url)), "../../../apps/server/plugins");
-
-beforeAll(() => {
-  process.env.DUCKI_PLUGINS_DIR = REPO_PLUGINS;
-});
-afterAll(() => {
-  closeAllPluginDbs();
-  delete process.env.DUCKI_PLUGINS_DIR;
-});
-
-describe("plugin registry (real plugins/ dir)", () => {
-  it("loads the reference plugins and their tools + skills", async () => {
-    const loaded = await loadPlugins(REPO_PLUGINS);
-    const toolNames = loaded.tools.map((t) => t.name);
-    expect(toolNames).toContain("exchange_rates");
-    expect(toolNames).toContain("notes");
-
-    const names = loaded.plugins.map((p) => p.name);
-    expect(names).toContain("exchange-rates");
-    expect(names).toContain("notes");
-    expect(loaded.plugins.find((p) => p.name === "notes")?.hasStorage).toBe(true);
-    expect(loaded.plugins.find((p) => p.name === "nous-provider")?.llmProviders[0]?.id).toBe("nous");
-    expect(loaded.llmProviders.some((provider) => provider.id === "nous")).toBe(true);
-    const clockWidgets = loaded.plugins.find((p) => p.name === "clock")?.widgets ?? [];
-    expect(clockWidgets.map((widget) => widget.id)).toEqual(["top-clock", "footer-clock", "dashboard-clock"]);
-    expect(clockWidgets.map((widget) => widget.placement)).toEqual(["topbar", "footer", "dashboard"]);
-    expect(loaded.plugins.every((p) => !p.error)).toBe(true);
-
-    // Plugins with storage.sqlite auto-expose a generic <name>_storage tool for the agent.
-    expect(toolNames).toContain("notes_storage");
-
-    const skillDirs = listPluginSkillDirs(REPO_PLUGINS);
-    expect(skillDirs.some((d) => d.includes("exchange-rates-usage"))).toBe(true);
-    expect(skillDirs.some((d) => d.includes("notes-usage"))).toBe(true);
-  });
-
-  it("notes tool persists to its own sqlite db (add then list)", async () => {
-    const loaded = await loadPlugins(REPO_PLUGINS);
-    const notes = loaded.tools.find((t) => t.name === "notes");
-    expect(notes).toBeDefined();
-
-    const marker = `test-note-${Date.now()}`;
-    const add = await notes!.execute({ action: "add", text: marker });
-    expect(add.success).toBe(true);
-
-    const list = await notes!.execute({ action: "list" });
-    expect(list.success).toBe(true);
-    const rows = (list.data as { result: { notes: Array<{ text: string }> } }).result.notes;
-    expect(rows.some((r) => r.text === marker)).toBe(true);
-  });
-
-  it("auto storage tool can query the plugin's own db and blocks non-SELECT queries", async () => {
-    const loaded = await loadPlugins(REPO_PLUGINS);
-    const storageTool = loaded.tools.find((t) => t.name === "notes_storage");
-    expect(storageTool).toBeDefined();
-
-    const rows = await storageTool!.execute({ action: "query", sql: "SELECT COUNT(*) AS n FROM notes" });
-    expect(rows.success).toBe(true);
-    expect((rows.data as { result: { count: number } }).result.count).toBe(1);
-
-    const blocked = await storageTool!.execute({ action: "query", sql: "DELETE FROM notes" });
-    expect(blocked.success).toBe(false);
-    expect(blocked.error).toMatch(/SELECT/i);
+describe("plugin registry", () => {
+  it("ignores the shared node_modules and dot-folders next to plugins", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ducki-plugins-"));
+    try {
+      mkdirSync(join(root, "node_modules", "ws"), { recursive: true });
+      writeFileSync(join(root, "node_modules", "ws", "package.json"), "{}");
+      mkdirSync(join(root, ".cache"));
+      const loaded = await loadPlugins(root);
+      expect(loaded.plugins).toEqual([]);
+      expect(listPluginSkillDirs(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

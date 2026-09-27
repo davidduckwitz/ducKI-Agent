@@ -1,25 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Capability for the DucKI Node main window",
+  "identifier": "main",
+  "description": "DucKI Node main window. Everything privileged (sidecar, tray, notifications, opener) is driven from Rust, so the web UI only needs core IPC plus the app's own desktop_* commands.",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "core:tray:default",
-    "core:window:allow-hide",
-    "core:window:allow-show",
-    "core:window:allow-close",
-    "notification:default",
-    "shell:allow-open",
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/node",
-          "sidecar": true,
-          "args": true
-        }
-      ]
-    }
-  ]
+  "permissions": ["core:default"]
 }

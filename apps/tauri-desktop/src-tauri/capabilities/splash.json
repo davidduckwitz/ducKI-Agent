@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "splash",
+  "description": "Startup splash: listens to startup progress, can be dragged, and calls retry/open-logs/quit.",
+  "windows": ["splash"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}
