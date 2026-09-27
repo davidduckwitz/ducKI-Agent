@@ -177,11 +177,20 @@ function readJsonFile(path: string): unknown {
  * building tools or opening plugin databases. Used by the agent's per-run skill-manifest
  * load so plugin skills join progressive disclosure cheaply and with hot-reload.
  */
+/**
+ * Plugin folders only. The desktop app seeds runtime deps shared by several plugins into
+ * `<plugins>/node_modules` (Node resolves them by walking up from each plugin dir) - that folder,
+ * like any dot-folder, is infrastructure and must not show up as a broken "plugin".
+ */
+function isPluginDirEntry(entry: { name: string; isDirectory(): boolean }): boolean {
+  return entry.isDirectory() && entry.name !== "node_modules" && !entry.name.startsWith(".");
+}
+
 export function listPluginSkillDirs(root = pluginsRoot()): string[] {
   if (!existsSync(root)) return [];
   let entries: string[];
   try {
-    entries = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    entries = readdirSync(root, { withFileTypes: true }).filter(isPluginDirEntry).map((d) => d.name);
   } catch {
     return [];
   }
@@ -480,7 +489,7 @@ export async function loadPlugins(root = pluginsRoot(), capabilities?: AgentCapa
 
   let entries: string[];
   try {
-    entries = readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    entries = readdirSync(root, { withFileTypes: true }).filter(isPluginDirEntry).map((d) => d.name);
   } catch (error) {
     logger.warn("Could not read plugins directory", { error: error instanceof Error ? error.message : String(error) });
     return result;
