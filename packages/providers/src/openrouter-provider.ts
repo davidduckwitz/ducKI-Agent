@@ -20,6 +20,16 @@ export class OpenRouterProvider extends OpenAIProvider {
     return /anthropic\/|claude/i.test(this.model);
   }
 
+  /**
+   * With reasoning enabled, OpenRouter returns the model's reasoning as `reasoning_details`
+   * and expects them back on an assistant turn that continues with tool results - Anthropic
+   * models reject a tool-use continuation without its thinking, Gemini loses its thought
+   * signature. Harmless for models that return none.
+   */
+  protected override echoesReasoningDetails(): boolean {
+    return true;
+  }
+
   constructor(options: Partial<ProviderOptions> & { model: string }) {
     super({
       baseUrl: options.baseUrl ?? "https://openrouter.ai/api/v1",

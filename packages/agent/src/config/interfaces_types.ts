@@ -120,6 +120,9 @@ export interface AgentRunResult {
    *  from an abort notice instead of pattern-matching the response text. Undefined for a
    *  run that ended on its own. */
   abortedReason?: string;
+  /** True when the loop used up its whole iteration budget - the last response may be an
+   *  intermediate step rather than a final answer. */
+  iterationLimitReached?: boolean;
 }
 
 export interface AgentRunContextCaps {
@@ -144,6 +147,17 @@ export interface AgentRunOptions {
   reasoningEffort?: import("@ducki/shared").ReasoningEffort;
   /** Deterministic, caller-owned state that survives lossy history compression. */
   getWorkingState?: () => string;
+  /**
+   * Replaces the agent's configured base system prompt for this run only (soul, skills, tool
+   * and memory context are still appended). Keep it identical across a run's calls - it is part
+   * of the cached prompt prefix.
+   */
+  systemPromptOverride?: string;
+  /**
+   * Quiet per-iteration reminders: no run-journal hint, and the getWorkingState block is only
+   * appended when it changed since the previous iteration instead of on every call.
+   */
+  minimalReminders?: boolean;
   stream?: boolean;
   onChunk?: (chunk: string) => void;
   onEvent?: (event: AgentRunEvent) => void;
@@ -661,6 +675,28 @@ export interface AgentRuntimeControls {
   maxContextChars: number;
   /** Coding-run override for maxContextChars. Settings key: AGENT_CODING_MAX_CONTEXT_CHARS */
   codingMaxContextChars: number;
+  /**
+   * How many history messages a coding run keeps in the LLM context window (the general agent
+   * keeps 60). Every tool call costs two messages, so 60 meant the model lost the files it had
+   * read after roughly 30 calls. Settings key: AGENT_CODING_MAX_CONTEXT_MESSAGES
+   */
+  codingMaxContextMessages: number;
+  /**
+   * Per-message character cap for non-tool history messages in coding runs.
+   * Settings key: AGENT_CODING_MAX_CONTEXT_MESSAGE_CHARS
+   */
+  codingMaxContextMessageChars: number;
+  /**
+   * When the history outgrows the budget, replace OLD large tool outputs with a short
+   * "pruned" note instead of dropping whole messages - the call sequence and the model's own
+   * reasoning stay visible (opencode-style pruning). Settings key: AGENT_CODING_PRUNE_TOOL_OUTPUTS
+   */
+  codingPruneToolOutputs: boolean;
+  /**
+   * Characters of the NEWEST tool outputs that are always kept verbatim when pruning is on.
+   * Settings key: AGENT_CODING_PRUNE_PROTECT_CHARS
+   */
+  codingPruneProtectChars: number;
   /**
    * Lines the filesystem tool's `read` action returns when the model gives no explicit
    * `limit`, injected as that default by the agent's tool-input preflight.

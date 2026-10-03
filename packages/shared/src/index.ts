@@ -43,6 +43,13 @@ export interface LLMMessage {
    * invalidates the cache on every iteration and costs more than it saves.
    */
   cacheControl?: "ephemeral";
+  /**
+   * Opaque provider reasoning blocks (Anthropic `thinking` / `redacted_thinking`, signature
+   * included) produced together with this assistant turn's tool calls. With extended thinking
+   * enabled, the Messages API requires them to be echoed back verbatim in front of the turn's
+   * tool_use blocks. In-memory only - they are never persisted or shown.
+   */
+  thinkingBlocks?: unknown[];
 }
 
 export interface ToolCall {
@@ -58,6 +65,8 @@ export interface LLMResponse {
   content: string;
   thinking?: string;
   toolCalls?: ToolCall[];
+  /** See LLMMessage.thinkingBlocks - the caller stores these on the assistant history entry. */
+  thinkingBlocks?: unknown[];
   usage: {
     promptTokens: number;
     completionTokens: number;

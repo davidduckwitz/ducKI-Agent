@@ -664,6 +664,43 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
     });
 
+    // The server tells a client that opened/re-joined a conversation mid-run (it missed that
+    // run's chat:start) that the conversation is busy, so the input stays locked instead of
+    // letting a second, parallel run start on it.
+    socket.on("chat:running", (data: { conversationId?: number }) => {
+      // Only for the open chat, like chat:start: this socket leaves the room of any other
+      // conversation, so it would never see the chat:complete that clears the entry again.
+      if (typeof data?.conversationId !== "number" || !belongsToActiveConversation(data.conversationId)) return;
+      const runningId = data.conversationId;
+      set((s) => {
+        const nextRunning = new Set(s.runningConversationIds);
+        nextRunning.add(runningId);
+        return { runningConversationIds: nextRunning, isLoading: true };
+      });
+    });
+
+    // Our message was refused because another run (a CodingAgent run) owns the conversation.
+    // Drop the optimistic bubble and explain. Loading stays on only if that run is known to be
+    // streaming here (the server sends chat:running right before this) - it ends that state
+    // with its own chat:complete; otherwise the input is released again.
+    socket.on("chat:rejected", (data: { conversationId?: number; localMessageId?: string; timestamp?: string }) => {
+      if (!belongsToActiveConversation(data.conversationId)) return;
+      const notice: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: t("chat.codingRunActive"),
+        timestamp: data.timestamp ?? new Date().toISOString(),
+      };
+      set((s) => ({
+        messages: [
+          ...s.messages.filter((m) => !data.localMessageId || m.id !== data.localMessageId),
+          notice,
+        ],
+        pendingLocalMessageId: undefined,
+        isLoading: typeof data.conversationId === "number" && s.runningConversationIds.has(data.conversationId),
+      }));
+    });
+
     socket.on("chat:stopped", (data: { conversationId?: number; timestamp?: string }) => {
       if (!belongsToActiveConversation(data.conversationId)) return;
       const msg: ChatMessage = {

@@ -38,6 +38,10 @@ export function openAIReasoningOptions(provider: string, model: string, options:
 export function claudeReasoningOptions(model: string, options: GenerateOptions): Record<string, unknown> {
   const effort = resolveReasoningEffort(options);
   if (effort === undefined) return {};
+  // Claude 2 / 3.x (except 3.7) have no extended thinking and reject the parameter with a 400.
+  // The effort is ambient (AsyncLocalStorage), so it also reaches sub-agents that run on such
+  // an older model - they must simply run without it.
+  if (/claude-(?:instant|2|3-(?:5-)?(?:opus|sonnet|haiku))/.test(model)) return {};
   if (effort === "off") return { thinking: { type: "disabled" } };
   if (/claude-(?:(?:opus|sonnet)-(?:4-[6-9]|[5-9])|(?:fable|mythos)-5)/.test(model)) {
     return {

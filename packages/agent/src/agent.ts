@@ -9,7 +9,7 @@ import { getRootLogger } from "@ducki/logger";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve, basename, sep } from "node:path";
 import { listPluginSkillDirs } from "./plugins/index.js";
-import { skillsRoot as resolveSkillsRoot } from "@ducki/shared";
+import { skillsRoot as resolveSkillsRoot, pluginsRoot } from "@ducki/shared";
 import { randomUUID, createHash } from "node:crypto";
 import { ConversationManager } from "./conversation/conversation.js";
 import { MemorySystem } from "./memory/memory.js";
@@ -55,6 +55,7 @@ import type { ToolDefinition } from "@ducki/shared";
 import { TaskBoard } from "./task-board/task-board.js";
 import { TieredContextCompressor } from "./context/tiered-compressor.js";
 import { restoreContextInvariants } from "./context/context-invariants.js";
+
 import type { ToolApprovalPolicy } from "./tools/tool-approval-policy.js";
 import { createCompletionTool } from "./tools/completion-tool.js";
 import { retryWithBackoff, DEFAULT_RETRY_CONFIG, adjustTimeoutForCompression } from "./utils/retry-utils.js";
@@ -67,6 +68,7 @@ import { ThinkBlockParser } from "./parsers/think-block-parser.js";
 import { ToolDependencyChecker } from "./tool-strategy/tool-dependencies.js";
 
 import { AgentOptions, AgentEventEmitter, AgentStatus, AgentRunResult, SkillManifest, SkillSummary, SkillScore, AgentRuntimeControls, AgentRunEvent, AgentRunContextCaps, AgentRunOptions, AgentRunAttachment, AgentRunEventType, RunJournalEntry } from "./config/interfaces_types";
+import { computeToolPruneCut, prunedToolOutput } from "./context/tool-output-pruning.js";
 // Event Emitter for Agent lifecycle events (chunk streaming, state updates)
 
 /**
@@ -4638,6 +4640,10 @@ export class Agent {
       codingMaxToolResultFieldChars: 30000,
       maxContextChars: 120000,
       codingMaxContextChars: 200000,
+      codingMaxContextMessages: 400,
+      codingMaxContextMessageChars: 40000,
+      codingPruneToolOutputs: true,
+      codingPruneProtectChars: 160000,
       filesystemReadDefaultLines: 4000,
       filesystemReadMaxBytes: 1048576,
       filesystemReadMaxLineChars: 4000,
@@ -4762,6 +4768,10 @@ export class Agent {
         codingMaxToolResultFieldChars: this.parseNumberSetting(get("AGENT_CODING_MAX_TOOL_FIELD_CHARS"), defaults.codingMaxToolResultFieldChars, 500, 400000),
         maxContextChars: this.parseNumberSetting(get("AGENT_MAX_CONTEXT_CHARS"), defaults.maxContextChars, 2000, 1000000),
         codingMaxContextChars: this.parseNumberSetting(get("AGENT_CODING_MAX_CONTEXT_CHARS"), defaults.codingMaxContextChars, 2000, 2000000),
+        codingMaxContextMessages: this.parseNumberSetting(get("AGENT_CODING_MAX_CONTEXT_MESSAGES"), defaults.codingMaxContextMessages, 10, 5000),
+        codingMaxContextMessageChars: this.parseNumberSetting(get("AGENT_CODING_MAX_CONTEXT_MESSAGE_CHARS"), defaults.codingMaxContextMessageChars, 1000, 1000000),
+        codingPruneToolOutputs: this.parseBooleanSetting(get("AGENT_CODING_PRUNE_TOOL_OUTPUTS"), defaults.codingPruneToolOutputs),
+        codingPruneProtectChars: this.parseNumberSetting(get("AGENT_CODING_PRUNE_PROTECT_CHARS"), defaults.codingPruneProtectChars, 10000, 2000000),
         filesystemReadDefaultLines: this.parseNumberSetting(get("AGENT_FS_READ_DEFAULT_LINES"), defaults.filesystemReadDefaultLines, 50, 100000),
         filesystemReadMaxBytes: this.parseNumberSetting(get("AGENT_FS_READ_MAX_BYTES"), defaults.filesystemReadMaxBytes, 4096, 10485760),
         filesystemReadMaxLineChars: this.parseNumberSetting(get("AGENT_FS_READ_MAX_LINE_CHARS"), defaults.filesystemReadMaxLineChars, 200, 50000),
@@ -5176,6 +5186,75 @@ export class Agent {
   private isBrowserTool(toolName: string | undefined): boolean {
     const n = (toolName ?? "").trim().toLowerCase();
     return n === "browser" || n === "browser-control" || n === "browser_control";
+  }
+
+  /** Reads `display_images` from a tool result (top level or a plugin module tool's nested
+   *  `result`). Only server-local paths and data: URLs are accepted - a tool must not be able to
+   *  make the chat load arbitrary remote URLs. */
+  private extractDisplayImages(data: unknown): Array<{ url: string; title?: string; caption?: string; mimeType?: string }> {
+    const record = data && typeof data === "object" ? (data as Record<string, unknown>) : undefined;
+    const nested = record?.["result"] && typeof record["result"] === "object" ? (record["result"] as Record<string, unknown>) : undefined;
+    const raw = record?.["display_images"] ?? nested?.["display_images"];
+    if (!Array.isArray(raw)) return [];
+    const images: Array<{ url: string; title?: string; caption?: string; mimeType?: string }> = [];
+    for (const item of raw.slice(0, 6)) {
+      if (!item || typeof item !== "object") continue;
+      const entry = item as Record<string, unknown>;
+      const url = typeof entry["url"] === "string" ? entry["url"] : "";
+      if (!url.startsWith("/api/") && !url.startsWith("data:image/")) continue;
+      images.push({
+        url,
+        ...(typeof entry["title"] === "string" ? { title: entry["title"] } : {}),
+        ...(typeof entry["caption"] === "string" ? { caption: entry["caption"] } : {}),
+        ...(typeof entry["mimeType"] === "string" ? { mimeType: entry["mimeType"] } : {}),
+      });
+    }
+    return images;
+  }
+
+  /** Hands a tool's display image to the vision model, the same way browser screenshots are,
+   *  so "Is someone at the door?" can be answered from the camera snapshot itself. Plugin data
+   *  URLs are read straight from the plugin's data/ folder (no HTTP round trip). */
+  private async attachDisplayImageForVision(
+    toolName: string,
+    image: { url: string; title?: string; caption?: string }
+  ): Promise<void> {
+    try {
+      let buffer: Buffer | undefined;
+      if (image.url.startsWith("data:image/")) {
+        buffer = Buffer.from(image.url.slice(image.url.indexOf(",") + 1), "base64");
+      } else {
+        const match = /^\/api\/plugins\/([a-z0-9][a-z0-9_-]*)\/data\/(.+)$/i.exec(image.url.split("?")[0] ?? "");
+        if (!match) return;
+        const dataRoot = resolve(pluginsRoot(), match[1]!, "data");
+        const target = resolve(dataRoot, decodeURIComponent(match[2]!));
+        if (!target.startsWith(dataRoot + sep) || !existsSync(target)) return;
+        buffer = readFileSync(target);
+      }
+      if (!buffer?.length) return;
+      buffer = await this.compressImageBuffer(buffer);
+      if (buffer.length > 150000) {
+        this.logger.warn("Tool display image too large for vision after compression", { toolName, size: buffer.length });
+        return;
+      }
+      this.history.clearByType("screenshot");
+      const label = image.caption ?? image.title ?? toolName;
+      const screenshotMessage: LLMMessage = {
+        role: "user",
+        content: [
+          { type: "text", text: `Image returned by the ${toolName} tool: ${label}. It is already shown to the user; describe or analyze it only as far as the user's request needs.` },
+          { type: "image_url", image_url: { url: `data:image/jpeg;base64,${buffer.toString("base64")}`, detail: "high" } },
+        ],
+        metadata: { source: "tool_display_image", toolName, url: image.url },
+      };
+      this.currentScreenshotMessage = screenshotMessage;
+      this.history.add(screenshotMessage, "screenshot");
+    } catch (error) {
+      this.logger.warn("Failed to attach tool display image for vision", {
+        toolName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async handleScreenshotCapture(
@@ -6211,6 +6290,18 @@ export class Agent {
             });
           }
 
+          // Generic "show this image to the user" convention: any tool (plugin module tools
+          // included, whose payload is nested under data.result) can return display_images.
+          const displayImages = executed.result.success ? this.extractDisplayImages(executed.result.data) : [];
+          if (displayImages.length > 0) {
+            emit("tool_image", displayImages.map((image) => image.title ?? "Bild").join(", "), {
+              toolBatchId,
+              toolName: toolCall?.toolName,
+              callId: executed.id,
+              images: displayImages,
+            });
+          }
+
           const resultForLlm = screenshotBase64
             ? {
                 ...executed.result,
@@ -6288,6 +6379,9 @@ export class Agent {
             toolCall?.input ?? {},
             executed.result
           );
+          if (displayImages.length > 0 && this.visionEnabled) {
+            await this.attachDisplayImageForVision(toolCall?.toolName ?? "unknown", displayImages[0]!);
+          }
 
           // Extract and track the latest browser sessionId from results
           if (toolCall?.toolName === "browser" && executed.result.success) {
@@ -7448,9 +7542,10 @@ export class Agent {
     // Soul is the bot's identity (slot #1 in system prompt), like hermes SOUL.md
     const soulContext = this.soul ? `\n\n${this.soul}` : "";
 
+    const runSystemPrompt = options.systemPromptOverride ?? this.systemPrompt;
     const baseSystemPrompt =
       soulContext +
-      this.systemPrompt +
+      runSystemPrompt +
       installedSkillsContext +
       requestedSkillsContext +
       toolContext +
@@ -7462,7 +7557,7 @@ export class Agent {
 
     const compactBaseSystemPrompt =
       soulContext +
-      this.systemPrompt +
+      runSystemPrompt +
       installedSkillsContext +
       compactRequestedSkillsContext +
       toolContext +
@@ -7474,7 +7569,7 @@ export class Agent {
 
     const minimalBaseSystemPrompt =
       soulContext +
-      this.systemPrompt +
+      runSystemPrompt +
       toolContext +
       (planContext ? `\n\n## Working Plan\n${JSON.stringify(planContext, null, 2)}` : "") +
       memoryContext +
@@ -7542,14 +7637,24 @@ export class Agent {
     const contextCaps = options.contextCaps;
     const basMaxSystemPromptChars = envCap("AGENT_MAX_SYSTEM_PROMPT_CHARS", effectiveMode === "full" ? 120000 : 20000, 2000);
     const basMaxDynamicMemoryChars = envCap("AGENT_MAX_DYNAMIC_MEMORY_CHARS", effectiveMode === "full" ? 24000 : 0, 0);
-    const basMaxContextMessages = envCap("AGENT_MAX_CONTEXT_MESSAGES", effectiveMode === "full" ? 60 : effectiveMode === "lightweight" ? 999 : 8, 1);
+    // A full-mode coding run gets its own, settings-backed history window (AGENT_CODING_MAX_CONTEXT_*):
+    // at 60 messages the model lost the files it had read after ~30 tool calls and began editing
+    // from memory. An explicit contextCaps override below still wins.
+    const codingContextWindow = codingRun && effectiveMode === "full";
+    const basMaxContextMessages = codingContextWindow
+      ? adjustedControls.codingMaxContextMessages
+      : envCap("AGENT_MAX_CONTEXT_MESSAGES", effectiveMode === "full" ? 60 : effectiveMode === "lightweight" ? 999 : 8, 1);
     // "full" mode's fallback comes from the configured (and, for coding runs, already
     // overridden - see the codingRun block above) budget rather than a fixed 120000, so
     // raising AGENT_MAX_CONTEXT_CHARS / AGENT_CODING_MAX_CONTEXT_CHARS in Settings actually
     // takes effect for models whose window isn't in TokenCounter's table (a known model's
     // budget is derived from its real window instead - see modelDerivedMaxContextChars below).
     const basMaxContextChars = envCap("AGENT_MAX_CONTEXT_CHARS", effectiveMode === "full" ? adjustedControls.maxContextChars : 60000, 2000);
-    const basMaxContextMessageChars = envCap("AGENT_MAX_CONTEXT_MESSAGE_CHARS", effectiveMode === "full" ? 12000 : 2000, 200);
+    const basMaxContextMessageChars = codingContextWindow
+      ? adjustedControls.codingMaxContextMessageChars
+      : envCap("AGENT_MAX_CONTEXT_MESSAGE_CHARS", effectiveMode === "full" ? 12000 : 2000, 200);
+    const pruneOldToolOutputs = codingContextWindow && adjustedControls.codingPruneToolOutputs;
+    const pruneProtectChars = adjustedControls.codingPruneProtectChars;
 
     const maxSystemPromptChars = withOverride(contextCaps?.maxSystemPromptChars, basMaxSystemPromptChars, 2000);
     const maxDynamicMemoryChars = withOverride(contextCaps?.maxDynamicMemoryChars, basMaxDynamicMemoryChars, 0);
@@ -7609,6 +7714,11 @@ export class Agent {
     // Non-convergence detection: consecutive iterations re-issuing the SAME read-only call set
     // (identical signatures, no mutation in between) are a loop, not work. Declared here so the
     // streak survives iterations; reset by any mutation or a changed read set.
+    // Messages older than this index have their large tool outputs pruned (coding runs, see
+    // buildConversationWindow). Survives iterations so the cut only ever moves forward.
+    let toolPruneCutIndex = 0;
+    // Last getWorkingState() text sent to the model (minimalReminders only).
+    let lastSentWorkingState: string | undefined;
     let staleReadStreak = 0;
     let previousReadCallSignatures: string[] | undefined;
     let previousReadContentSignatures: string[] | undefined;
@@ -7701,7 +7811,16 @@ export class Agent {
 
       // Run journal: always-on (unless disabled), checklist-independent reminder of
       // actions already taken this run. Reassigned each iteration; buildMessages closes over it.
-      const runJournalHint = runJournalEnabled ? this.renderRunJournalHint(runJournal) : "";
+      const runJournalHint = runJournalEnabled && !options.minimalReminders ? this.renderRunJournalHint(runJournal) : "";
+
+      // Computed once per iteration (buildMessages may run several times on overflow retries).
+      // minimalReminders: repeat the state only when it changed - an unchanged block every
+      // iteration is noise the model learns to skim (or worse, keeps re-acting on).
+      const currentWorkingState = options.getWorkingState?.();
+      const workingStateHint = options.minimalReminders && currentWorkingState === lastSentWorkingState
+        ? undefined
+        : currentWorkingState;
+      lastSentWorkingState = currentWorkingState;
 
       // Vision nudge: when the current turn carries an actual image (user attachment or
       // browser screenshot), the system prompt's tool-call protocol otherwise dominates and
@@ -7795,6 +7914,9 @@ export class Agent {
         // result for it; every earlier copy is stale.
         const seenDedupeKeys = new Set<string>();
 
+        // Batched, forward-only cut - see computeToolPruneCut for why it must not move every call.
+        if (pruneOldToolOutputs) toolPruneCutIndex = computeToolPruneCut(allMessages, pruneProtectChars, toolPruneCutIndex);
+
         for (let index = allMessages.length - 1; index >= 0; index--) {
           const message = allMessages[index];
           if (!message) continue;
@@ -7819,6 +7941,17 @@ export class Agent {
                 continue;
               }
               seenDedupeKeys.add(dedupeKey);
+            }
+
+            // Old large tool outputs give way before anything else does (see toolPruneCutIndex):
+            // a big result collapses to a note instead of the budget check below cutting off the
+            // whole older history (goal, reasoning, call sequence).
+            const note = pruneOldToolOutputs ? prunedToolOutput(message, index, toolPruneCutIndex) : undefined;
+            if (note !== undefined) {
+              selected.push({ ...message, content: note });
+              selectedByIndex.set(index, { ...message, content: note });
+              usedChars += note.length;
+              continue;
             }
           }
 
@@ -7920,7 +8053,7 @@ export class Agent {
           contextOptions?.charLimit ?? maxContextChars
         );
 
-        const workingStateHint = options.getWorkingState?.();
+
         const volatileSuffix = `${clippedDynamicMemory}${checklistHint}${runJournalHint}${visionNudgeHint}${workingStateHint ? `\n\n[Current working state]\n${workingStateHint}` : ""}`.trim();
         this.logger.debug("Prompt context metrics", {
           staticPromptHash: createHash("sha256").update(clippedPrompt).digest("hex").slice(0, 16),
@@ -7940,6 +8073,9 @@ export class Agent {
       // parser downstream - the model never had to hand-serialize the call into prose, so
       // nothing can leak into a file's content.
       let currentNativeToolCalls: ToolCall[] | undefined;
+      // Anthropic thinking blocks that produced currentNativeToolCalls - echoed back verbatim on
+      // the assistant history entry (see LLMMessage.thinkingBlocks).
+      let currentThinkingBlocks: unknown[] | undefined;
       // Some backends (reasoning models like gpt-oss) can burn the ENTIRE completion budget
       // on their hidden "reasoning" channel and return empty `content` with finish_reason
       // "length" - the model never actually got to answer or call a tool, it just ran out of
@@ -8063,6 +8199,7 @@ export class Agent {
         }
         // Reset per-turn so a native call from a previous iteration never re-executes.
         currentNativeToolCalls = undefined;
+        currentThinkingBlocks = undefined;
         currentFinishReason = undefined;
         if (options.stream && this.provider.supportsStreaming()) {
           try {
@@ -8078,6 +8215,7 @@ export class Agent {
               estimated: result.usage.estimated === true,
             };
             currentNativeToolCalls = result.toolCalls;
+            currentThinkingBlocks = result.thinkingBlocks;
             currentFinishReason = result.finishReason;
             return result.content;
           } catch (e) {
@@ -8106,6 +8244,7 @@ export class Agent {
                 estimated: retried.usage.estimated === true,
               };
               currentNativeToolCalls = retried.toolCalls;
+              currentThinkingBlocks = retried.thinkingBlocks;
               currentFinishReason = retried.finishReason;
               return retried.content;
             } catch (retryError) {
@@ -8125,6 +8264,7 @@ export class Agent {
               estimated: syncResult.usage.estimated === true,
             };
             currentNativeToolCalls = syncResult.toolCalls;
+            currentThinkingBlocks = syncResult.thinkingBlocks;
             currentFinishReason = syncResult.finishReason;
             return syncResult.content;
           }
@@ -8137,6 +8277,7 @@ export class Agent {
           estimated: result.usage.estimated === true,
         };
         currentNativeToolCalls = result.toolCalls;
+        currentThinkingBlocks = result.thinkingBlocks;
         currentFinishReason = result.finishReason;
         return result.content;
       };
@@ -8423,6 +8564,7 @@ export class Agent {
         content: response,
         metadata: assistantMetadata,
         ...(protocolNativeToolCalls ? { toolCalls: protocolNativeToolCalls } : {}),
+        ...(protocolNativeToolCalls && currentThinkingBlocks ? { thinkingBlocks: currentThinkingBlocks } : {}),
       };
       await this.conversation.addMessage(assistantMessage);
       this.history.add(assistantMessage);
@@ -9752,6 +9894,7 @@ export class Agent {
       ...(checklistActive ? { checklistRunId } : {}),
       ...(runJournalEnabled ? { runJournal } : {}),
       ...(runAbortedEarly ? { abortedReason: runAbortedEarly } : {}),
+      ...(!runAbortedEarly && iterations >= adjustedControls.maxIterations ? { iterationLimitReached: true } : {}),
     };
   }
 

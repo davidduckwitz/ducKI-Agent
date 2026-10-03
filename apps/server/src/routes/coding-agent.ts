@@ -12,6 +12,7 @@ import {
   unregisterCodingRun,
   acquireCodingRunLock,
   releaseCodingRunLock,
+  isChatRunActive,
 } from "../lib/coding-run-registry.js";
 import { notifyCodingRunFinished } from "../lib/coding-notify.js";
 import { loadProviderFromSettings } from "../lib/provider-settings.js";
@@ -185,6 +186,16 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         return;
       }
       lockedConversationId = requestedConversationId;
+      // A generic WebSocket chat run is already working on this conversation - a coding run
+      // next to it would put two agents on one transcript. Checked right after the lock is
+      // taken (no await in between) so the WS side can't start in the gap either.
+      if (isChatRunActive(requestedConversationId)) {
+        releaseCodingRunLock(requestedConversationId);
+        res
+          .status(409)
+          .json(createApiError("A chat run is already in progress for this conversation"));
+        return;
+      }
     }
 
     let reuseConversationId: number | undefined;
@@ -272,12 +283,15 @@ codingAgentRouter.post("/run", async (req, res, next) => {
         onConversationStarted: (conversationId) => {
           emitConversationId = conversationId;
           runConversationId = conversationId;
-          registerCodingRun(conversationId, codingAgent);
-          agentRegistryRunId = agentRegistry.register({
-            source: "chat_http",
-            conversationId,
-            label: "CodingAgent (HTTP)",
-          });
+          registerCodingRun(conversationId, codingAgent, { streamsToChat: true });
+          agentRegistryRunId = agentRegistry.register(
+            {
+              source: "chat_http",
+              conversationId,
+              label: "CodingAgent (HTTP)",
+            },
+            { stop: () => codingAgent.stop() }
+          );
           // Emit chat:start so the frontend store's isLoading flips to true.
           if (io) {
             io.to(`conversation:${conversationId}`).emit("coding_agent_started", { conversationId });
@@ -303,6 +317,15 @@ codingAgentRouter.post("/run", async (req, res, next) => {
       if (isAbortError(error)) {
         res.json(createApiResponse({ success: false, verified: false, stopped: true, summary: "Vom Nutzer gestoppt", attempts: 0 }));
         return;
+      }
+      // chat:start already went out to the room - without a closing event every viewer (and
+      // any client told "chat:running" on join) would stay in the loading state forever.
+      if (io && emitConversationId !== undefined) {
+        io.to(`conversation:${emitConversationId}`).emit("chat:error", {
+          error: error instanceof Error ? error.message : String(error),
+          conversationId: emitConversationId,
+          timestamp: new Date().toISOString(),
+        });
       }
       throw error;
     } finally {

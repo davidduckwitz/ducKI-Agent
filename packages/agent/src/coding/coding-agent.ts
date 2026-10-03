@@ -36,6 +36,15 @@ import { CodingRunState, type VerifyFailureUpdate } from "./coding-run-state.js"
 import type { CheckpointDiff } from "./checkpoints.js";
 import { ProjectLearning, codingProjectId } from "./project-learning.js";
 import { SkillLearner, createSkillLearnTool } from "../skills/skill-learner.js";
+import type { ReasoningEffort } from "@ducki/shared";
+import {
+  buildLeanCodingSystemPrompt,
+  buildLeanGoalPrompt,
+  buildLeanVerifyFailurePrompt,
+  loadProjectInstructions,
+  parseThinkingEffort,
+  providerSupportsCodingThinking,
+} from "./lean-prompt.js";
 
 export interface CodingAttemptContext {
   goal: string;
@@ -446,6 +455,19 @@ export class CodingAgent {
   private readonly todos: TodoList;
   private readonly logger: Logger;
   private readonly learningProvider: LLMProvider;
+  /** Main model - consulted for which reasoning parameters it accepts (see run()). */
+  private readonly provider: LLMProvider;
+  /** Whether the provider needs the text [TOOL:...] protocol block in its system prompt. */
+  private readonly needsTextToolFormat: boolean;
+  /**
+   * True while a lean-mode run is in progress (CODING_AGENT_LEAN_MODE): one continuous agent
+   * loop with the model owning its own todo list. Switches off the controller behaviors that
+   * only make sense around a pre-generated plan - auto-activating checklist steps and
+   * rejecting completion over open checklist items.
+   */
+  private leanRun = false;
+  /** Per-run Agent.run() options shared by every call of the run (lean prompt, reminder mode). */
+  private runPromptOptions: { systemPromptOverride?: string; minimalReminders?: boolean } = {};
   private learningAbortController = new AbortController();
   private readonly planner: Planner;
   /**
@@ -603,6 +625,7 @@ export class CodingAgent {
   ) {
     this.defaultMaxAttempts = Math.max(1, options.maxAttempts ?? 4);
     this.learningProvider = options.explorerProvider ?? provider;
+    this.provider = provider;
     this.sandboxRoot = options.sandboxRoot;
     this.previewBaseUrl = options.previewBaseUrl;
     this.eventEmitter = eventEmitter;
@@ -632,6 +655,7 @@ export class CodingAgent {
     // block - appending it anyway just adds ~1.5-2KB of now-irrelevant instructions to every
     // single LLM call of the run, and risks the model mixing both formats.
     const needsTextToolFormat = !(provider.supportsNativeTools?.() ?? false);
+    this.needsTextToolFormat = needsTextToolFormat;
     const basePrompt =
       options.systemPrompt ??
       (needsTextToolFormat ? `${CODING_DIRECTIVE}\n\n${TOOL_CALL_FORMAT_BLOCK}` : CODING_DIRECTIVE);
@@ -1235,6 +1259,8 @@ export class CodingAgent {
 
   /** Ensures actual work is attributed to a checklist step even when the model omits todo:update. */
   private ensureActiveTodoForTool(toolName: string, input: Record<string, unknown>): void {
+    // Lean mode: the checklist is the model's own working list, not a controller plan.
+    if (this.leanRun) return;
     const items = this.todos.snapshot();
     if (items.some((item) => item.status === "in_progress")) return;
     const pending = items.filter((item) => item.status === "pending");
@@ -1623,7 +1649,310 @@ export class CodingAgent {
   protected beforeRetry(_context: CodingAttemptContext): string { return ""; }
 
   async run(goal: string, opts: CodingRunOptions = {}): Promise<CodingRunResult> {
-    return withReasoningEffort(opts.reasoningEffort, () => this.runWithReasoning(goal, opts));
+    const effort = opts.reasoningEffort ?? (await this.defaultThinkingEffort());
+    return withReasoningEffort(effort, () => this.runWithReasoning(goal, opts));
+  }
+
+  /**
+   * Extended thinking / reasoning for coding runs when the caller did not pick an effort
+   * (Settings: CODING_AGENT_EXTENDED_THINKING, _EFFORT, _LOCAL). Provider-neutral - the providers
+   * translate the effort into Anthropic `thinking`, OpenAI `reasoning_effort` or OpenRouter
+   * `reasoning` - but only applied where the model is known to accept it.
+   */
+  private async defaultThinkingEffort(): Promise<ReasoningEffort | undefined> {
+    try {
+      const [enabled, effort, local] = await Promise.all([
+        this.db.getSetting("CODING_AGENT_EXTENDED_THINKING"),
+        this.db.getSetting("CODING_AGENT_THINKING_EFFORT"),
+        this.db.getSetting("CODING_AGENT_EXTENDED_THINKING_LOCAL"),
+      ]);
+      if ((enabled ?? "").trim().toLowerCase() === "false") return undefined;
+      if (!providerSupportsCodingThinking(this.provider, (local ?? "").trim().toLowerCase() === "true")) return undefined;
+      return parseThinkingEffort(effort ?? undefined, "medium");
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Lean system prompt for this run (see lean-prompt.ts); keeps the text tool-call protocol
+   *  for providers without native tool calling, exactly like the classic base prompt does. */
+  private buildLeanSystemPrompt(allowGitCommit: boolean): string {
+    const root = this.sandboxRoot;
+    const projectInstructions = loadProjectInstructions(root);
+    const prompt = buildLeanCodingSystemPrompt({
+      sandboxRoot: root,
+      platform: process.platform,
+      date: new Date().toISOString().slice(0, 10),
+      isGitRepo: root ? existsSync(join(root, ".git")) : false,
+      allowGitCommit,
+      ...(projectInstructions ? { projectInstructions } : {}),
+      ...(this.previewBaseUrl && root
+        ? { previewUrl: `${this.previewBaseUrl}/api/coding/projects/${basename(root)}/serve/index.html` }
+        : {}),
+    });
+    if (projectInstructions) {
+      this.emit("decision", `Projekt-Anweisungen aus ${projectInstructions.file} geladen.`, { projectInstructions: projectInstructions.file });
+    }
+    return this.needsTextToolFormat ? `${prompt}\n\n${TOOL_CALL_FORMAT_BLOCK}` : prompt;
+  }
+
+  /**
+   * Lean mode (CODING_AGENT_LEAN_MODE): the opencode-style loop. The model works through the
+   * goal in ONE continuous conversation - exploring, keeping its own todo list, editing and
+   * checking - and the controller only steps in at the end with the verification command. A
+   * failed verification is fed back into the SAME conversation as the next user turn instead
+   * of restarting the model on a summary, so it keeps everything it has read and tried.
+   *
+   * Kept from the classic controller: per-round checkpoints (reviewable/undoable), checkpoint-
+   * diff evidence for changed files, the Stop button, stall-guardrail recovery, the identical-
+   * failure stop, browser verification for static pages, and finalize()'s completion contract.
+   */
+  private async runLeanLoop(ctx: {
+    goal: string;
+    opts: CodingRunOptions;
+    conversationId: number;
+    maxAttempts: number;
+    verifyCommand: string | undefined;
+    verificationEnabled: boolean;
+    projectContext: string;
+    minimalReminders: boolean;
+    staleReadRecoveryEnabled: boolean;
+    staleReadRecoveryMax: number;
+    staleReadRecoveryRequireSameContent: boolean;
+    browserVerifyRepairAttempts: number;
+    runState: CodingRunState;
+    maxIdenticalVerifyFailures: number;
+    executionMetrics: { inputTokens: number; outputTokens: number; calls: number; estimated: boolean };
+    verificationEvidence: string[];
+    changedFiles: Set<string>;
+    finalize: (candidate: CodingRunResult) => Promise<CodingRunResult>;
+    markFileChange: () => void;
+  }): Promise<CodingRunResult> {
+    const { goal, opts, conversationId, runState, executionMetrics, changedFiles, finalize } = ctx;
+    let { maxAttempts, verifyCommand } = ctx;
+    let usingBrowserVerify = false;
+    let staticEntryFile: string | undefined;
+    const deadline = opts.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
+    const withCommand = () => (verifyCommand ? { verifyCommand } : {});
+
+    let journal: RunJournalEntry[] = [];
+    let summary = "";
+    let prompt = buildLeanGoalPrompt(goal, ctx.verificationEnabled ? verifyCommand : undefined, ctx.projectContext);
+    let promptDisplay = goal;
+    this.transitionControllerPhase("explore");
+
+    for (let round = 1; round <= maxAttempts; round++) {
+      this.currentAttempt = round;
+      if (deadline && Date.now() > deadline && round > 1) {
+        this.emit("decision", `Zeitbudget von ${opts.timeoutMs}ms aufgebraucht - Lauf wird beendet.`, { attempt: round - 1 });
+        return finalize({
+          success: false, verified: false, attempts: round - 1, conversationId, ...withCommand(),
+          summary: `${summary}\n\n[Stopped: time budget of ${opts.timeoutMs}ms exhausted after ${round - 1} round(s).]`,
+        });
+      }
+      this.emit("iteration", `Coding-Runde ${round}/${maxAttempts}`, { attempt: round, maxAttempts, verifyCommand, leanMode: true });
+
+      const checkpoint = this.sandboxRoot
+        ? await createCheckpoint(this.sandboxRoot, `Before round ${round}: ${goal.slice(0, 80)}`)
+        : undefined;
+      if (checkpoint) this.checkpointsUsable = true;
+
+      try {
+        const remainingMs = deadline ? deadline - Date.now() : undefined;
+        let runResult: AgentRunResult;
+        try {
+          runResult = await this.agent.run(prompt, {
+            onEvent: (event) => {
+              const usage = event.data?.llmTokens as { input?: number; output?: number; estimated?: boolean } | undefined;
+              if (usage) {
+                executionMetrics.calls++;
+                executionMetrics.inputTokens += usage.input ?? 0;
+                executionMetrics.outputTokens += usage.output ?? 0;
+                executionMetrics.estimated ||= usage.estimated === true;
+              }
+            },
+            getWorkingState: () => this.renderWorkingState(ctx.minimalReminders, () => ({
+              goal, round, checklist: this.todos.snapshot(), changedFiles: [...changedFiles],
+              diagnostics: [...this.pendingDiagnosticErrors.entries()], verification: runState.failureSnapshot(),
+            })),
+            ...this.runPromptOptions,
+            initialRunJournal: journal,
+            getCurrentStepId: () => this.todos.currentStepId(),
+            ...(ctx.staleReadRecoveryEnabled ? {
+              staleReadRecovery: {
+                maxRecoveries: ctx.staleReadRecoveryMax,
+                requireSameContent: ctx.staleReadRecoveryRequireSameContent,
+              },
+            } : {}),
+            ...(remainingMs && remainingMs > 0 ? { timeoutMsOverride: remainingMs } : {}),
+            ...(opts.onChunk ? { stream: true, onChunk: opts.onChunk } : {}),
+            displayContent: promptDisplay,
+            persistUserTurn: round === 1,
+            ...(round === 1 && opts.localMessageId ? { localMessageId: opts.localMessageId } : {}),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/Agent timeout after/.test(message)) {
+            this.emit("decision", "Runde durch Fortschritts-Timeout abgebrochen - Lauf wird gestoppt.", { attempt: round, error: message });
+            return finalize({
+              success: false, verified: false, attempts: round, conversationId, ...withCommand(),
+              summary: `${summary}\n\n[Stopped: ${message}]`,
+            });
+          }
+          throw error;
+        }
+
+        journal = runResult.runJournal ?? journal;
+        for (const entry of journal) {
+          if (entry.success && entry.toolName === "filesystem" && /^(write|append|edit|edit_lines|delete|move|copy)\b/i.test(entry.summary)) {
+            ctx.markFileChange();
+            const path = entry.summary.replace(/^\S+\s+/, "").trim();
+            if (path) changedFiles.add(path);
+          }
+        }
+        summary = runResult.response;
+        runState.lastSummary = summary;
+        runState.journal = journal;
+
+        // Same lifecycle hooks as the classic attempt loop, so subclasses (FailureAwareCodingAgent's
+        // failure reflection) keep working in lean mode.
+        const attemptContext: CodingAttemptContext = { goal, attempt: round, state: runState, ...(verifyCommand ? { verifyCommand } : {}) };
+        if (this.sandboxRoot && checkpoint) {
+          const diff = await diffCheckpoint(this.sandboxRoot, checkpoint.sha);
+          attemptContext.diff = diff;
+          runState.markFileChanges(diff?.files.length ?? 0);
+          if ((diff?.files.length ?? 0) > 0) {
+            ctx.markFileChange();
+            for (const file of diff?.files ?? []) changedFiles.add(file.path);
+          }
+        }
+
+        if (runResult.abortedReason === "user_stopped") {
+          return finalize({ success: false, verified: false, summary, attempts: round, conversationId, ...withCommand() });
+        }
+        await this.onAttemptFinished(attemptContext);
+
+        // The loop was cut off (stall guardrail or iteration budget) rather than finishing on its
+        // own: its last response is not a conclusion, so do not grade it - let the model continue
+        // in the same conversation with a short, specific nudge.
+        const stalled = runResult.abortedReason === "stale_read_loop" ||
+          runResult.abortedReason === "repeated_error_loop" ||
+          runResult.abortedReason === "consecutive_tool_failures";
+        if ((stalled || runResult.iterationLimitReached) && round < maxAttempts) {
+          this.emit("decision", stalled
+            ? `Runde ${round} durch Guardrail beendet (${runResult.abortedReason}) - Fortsetzung mit Hinweis.`
+            : `Runde ${round} hat ihr Schritt-Budget aufgebraucht - Fortsetzung im selben Verlauf.`,
+            { attempt: round, abortedReason: runResult.abortedReason, iterationLimitReached: runResult.iterationLimitReached === true });
+          prompt = stalled
+            ? "Your last turn was stopped because you kept repeating the same tool call without progress. Do not repeat it. Either make a concrete, different change, or - if the work is already correct - say so and summarize."
+            : "You ran out of tool-call steps for that turn. Continue exactly where you left off; do not redo finished work.";
+          promptDisplay = stalled ? "[Fortsetzung nach Guardrail]" : "[Fortsetzung]";
+          continue;
+        }
+
+        if (!ctx.verificationEnabled) {
+          this.emit("decision", "Verifikation deaktiviert - Ergebnis bleibt ungeprueft.", { attempt: round });
+          return finalize({ success: true, verified: false, summary, attempts: round, conversationId });
+        }
+
+        if (!verifyCommand) {
+          staticEntryFile = this.detectStaticEntryFile();
+          if (staticEntryFile && this.previewBaseUrl && this.agent.executor.listTools().some((tool) => tool.name === "browser")) {
+            verifyCommand = `browser check: ${staticEntryFile} (console/page errors)`;
+            usingBrowserVerify = true;
+            maxAttempts += ctx.browserVerifyRepairAttempts;
+          }
+        }
+        if (!verifyCommand) {
+          this.emit("decision", "Keine Verifikation moeglich - Ergebnis ist ungeprueft.", { attempt: round });
+          return finalize({ success: true, verified: false, summary, attempts: round, conversationId });
+        }
+
+        this.transitionControllerPhase("verify");
+        const verifyResult = usingBrowserVerify
+          ? await this.runBrowserVerify(staticEntryFile!)
+          : await this.agent.executor.execute("shell", {
+              command: verifyCommand,
+              ...(this.sandboxRoot ? { cwd: this.sandboxRoot } : {}),
+            });
+        if (verifyResult.success) {
+          ctx.verificationEvidence.splice(0, ctx.verificationEvidence.length,
+            `Verification passed: ${verifyCommand}`,
+            `Verification output sha256: ${createHash("sha256").update(JSON.stringify(verifyResult)).digest("hex")}`);
+          this.completeControllerPhase("verify", `Passed: ${verifyCommand}`);
+          this.emit("decision", `Verifikation "${verifyCommand}" erfolgreich.`, { attempt: round, verifyCommand });
+          return finalize({ success: true, verified: true, summary, attempts: round, conversationId, verifyCommand });
+        }
+
+        const verifyError = condenseVerifyOutput(verifyResult.error ?? JSON.stringify(verifyResult.data ?? ""));
+        this.failControllerPhase("verify", verifyError);
+        this.emit("decision", `Verifikation "${verifyCommand}" fehlgeschlagen.`, { attempt: round, verifyCommand, error: verifyError.slice(0, 500) });
+        const failure = runState.recordVerifyFailure(verifyError);
+        attemptContext.verifyCommand = verifyCommand;
+        if (round < maxAttempts && failure.shouldReflect) await this.onVerificationFailed(attemptContext, failure);
+        if (failure.shouldStopForNonConvergence && (!usingBrowserVerify || round >= maxAttempts)) {
+          this.emit("decision",
+            `Abgebrochen: ${ctx.maxIdenticalVerifyFailures} Runden in Folge mit identischem Verifikationsfehler - keine Konvergenz erkennbar.`,
+            { attempt: round, verifyCommand });
+          return finalize({
+            success: false, verified: false, attempts: round, conversationId, verifyCommand,
+            summary: `${summary}\n\n[Stopped: ${round} rounds in a row produced the exact same verification error:]\n${verifyError}`,
+          });
+        }
+        if (round >= maxAttempts) {
+          return finalize({
+            success: false, verified: false, attempts: round, conversationId, verifyCommand,
+            summary: `${summary}\n\nVerification command "${verifyCommand}" failed:\n${verifyError}`,
+          });
+        }
+        prompt = buildLeanVerifyFailurePrompt(verifyCommand, verifyError, failure.identicalToPrevious);
+        const retryHint = this.beforeRetry({ ...attemptContext, attempt: round + 1 });
+        if (retryHint) prompt += `
+
+${retryHint}`;
+        promptDisplay = `[Verifikation fehlgeschlagen: ${verifyCommand}]`;
+        this.transitionControllerPhase("edit");
+      } finally {
+        if (checkpoint) {
+          const discarded = await discardNoopCheckpoint(this.sandboxRoot!, checkpoint.sha);
+          if (!discarded) {
+            this.emit("decision", `Checkpoint vor Runde ${round} erstellt.`, {
+              checkpoint_sha: checkpoint.sha,
+              checkpoint_label: checkpoint.label,
+              attempt: round,
+            });
+          }
+        }
+      }
+    }
+
+    return finalize({ success: false, verified: false, summary, attempts: maxAttempts, conversationId, ...withCommand() });
+  }
+
+  /**
+   * Working-state block for Agent.run(). The compact form (minimal reminders) is short prose
+   * containing only what is actionable - open todos and files with diagnostic errors - so that
+   * together with Agent's "only when changed" rule it reads like an occasional system reminder
+   * rather than a JSON dump on every call.
+   */
+  private renderWorkingState(
+    compact: boolean,
+    full: () => Record<string, unknown>,
+  ): string {
+    if (!compact) return JSON.stringify(full());
+    const lines: string[] = [];
+    const open = this.todos.snapshot().filter((item) => item.status === "pending" || item.status === "in_progress");
+    if (open.length > 0) {
+      lines.push(`Open todos: ${open.map((item) => `${item.title}${item.status === "in_progress" ? " (in progress)" : ""}`).join("; ")}`);
+    }
+    if (this.pendingDiagnosticErrors.size > 0) {
+      lines.push(
+        `Files with diagnostic errors: ${[...this.pendingDiagnosticErrors.entries()]
+          .map(([file, info]) => `${file} (${info.count}: ${info.errors.slice(0, 2).join("; ")})`)
+          .join(" | ")}`
+      );
+    }
+    return lines.join("\n");
   }
 
   private async runWithReasoning(goal: string, opts: CodingRunOptions): Promise<CodingRunResult> {
@@ -1746,6 +2075,10 @@ export class CodingAgent {
     // this closure only READS it, and isn't called until well after that assignment runs.
     let fileChangesObserved = false;
     const changedFiles = new Set<string>();
+    // Assigned for real once the run knows what it is doing (plan-derived in the classic loop,
+    // see below; caller-provided or false in lean mode). Declared up here because
+    // enforceCompletionContract closes over it and the lean path finalizes before any plan exists.
+    let mutationExpected = opts.mutationExpected ?? !opts.planOnly;
 
     const enforceCompletionContract = (candidate: CodingRunResult): CodingRunResult => {
       const openChecklistItems = this.todos
@@ -1777,7 +2110,7 @@ export class CodingAgent {
           success: false,
           summary: `${candidate.summary}\n\n[Incomplete: ${reason}.]`,
         };
-      } else if (candidate.success && openChecklistItems.length > 0) {
+      } else if (candidate.success && openChecklistItems.length > 0 && !this.leanRun) {
         const reason = `${openChecklistItems.length} required checklist step(s) remain open: ${openChecklistItems.join(", ")}`;
         this.emit("decision", "Abschluss abgelehnt: Pflichtschritte sind noch offen.", {
           completion_contract: "checklist_open",
@@ -1931,6 +2264,36 @@ export class CodingAgent {
     // goal (recover from crash/stop with the SAME conversation). A new goal always gets a
     // fresh plan; the old plan + checklist are still loaded below for hydration, but only
     // the checklist status (what was already done) carries over — not the plan steps.
+    // --- Lean mode / prompt / reminders (Settings > Coding Agent; each switchable on its own) ---
+    // CODING_AGENT_LEAN_MODE: one continuous agent loop (opencode-style) instead of
+    // planner -> phased attempts -> checklist grounding. Plan Mode and caller-supplied plans
+    // keep the classic controller, which is what they are built on.
+    const leanMode = settingEnabled("CODING_AGENT_LEAN_MODE", true) && !opts.planOnly && !opts.existingPlan;
+    // CODING_AGENT_LEAN_PROMPT: workflow/conventions/environment prompt + AGENTS.md/CLAUDE.md.
+    const leanPromptEnabled = settingEnabled("CODING_AGENT_LEAN_PROMPT", true);
+    // CODING_AGENT_MINIMAL_REMINDERS: no per-call run journal / JSON state dump.
+    const minimalReminders = settingEnabled("CODING_AGENT_MINIMAL_REMINDERS", true);
+    this.leanRun = leanMode;
+    this.runPromptOptions = {
+      ...(leanPromptEnabled ? { systemPromptOverride: this.buildLeanSystemPrompt(allowGitCommit) } : {}),
+      ...(minimalReminders ? { minimalReminders: true } : {}),
+    };
+    this.emit("decision", leanMode ? "Coding-Modus: schlank (ein durchgehender Agent-Loop)." : "Coding-Modus: klassisch (Planner + Versuche).", {
+      leanMode,
+      leanPrompt: leanPromptEnabled,
+      minimalReminders,
+    });
+    if (leanMode) {
+      mutationExpected = opts.mutationExpected ?? false;
+      return this.runLeanLoop({
+        goal, opts, conversationId, maxAttempts, verifyCommand, verificationEnabled, projectContext,
+        minimalReminders, staleReadRecoveryEnabled, staleReadRecoveryMax, staleReadRecoveryRequireSameContent,
+        browserVerifyRepairAttempts, runState, maxIdenticalVerifyFailures, executionMetrics, verificationEvidence,
+        changedFiles, finalize,
+        markFileChange: () => { fileChangesObserved = true; },
+      });
+    }
+
     const persisted = isResuming && !opts.existingPlan ? await this.loadPersistedState(conversationId) : undefined;
 
     // Read-only investigation happens BEFORE every newly generated plan. This grounds expected
@@ -1956,6 +2319,7 @@ export class CodingAgent {
             "do not propose the plan itself, that happens separately.",
           {
             ...(opts.onChunk ? { stream: true, onChunk: opts.onChunk } : {}),
+            ...this.runPromptOptions,
             displayContent: `[Plan-Modus] Recherche fuer: ${goal}`,
           }
         );
@@ -2005,7 +2369,7 @@ export class CodingAgent {
     // step looks like real construction work (or its title is unrecognized - default stays
     // strict), the whole run still requires evidence. Deliberately read-only review callers
     // (opts.mutationExpected explicitly set) and Plan Mode (opts.planOnly) still win outright.
-    const mutationExpected = opts.mutationExpected ?? (opts.planOnly ? false : planRequiresMutation(plan));
+    mutationExpected = opts.mutationExpected ?? (opts.planOnly ? false : planRequiresMutation(plan));
     // A plan this call just created itself (not one the caller already had - opts.existingPlan
     // came with its own id from wherever it was loaded) is persisted to the `plans` table right
     // here, not only broadcast as an event. Without this row, the ONLY record of the plan was
@@ -2204,12 +2568,13 @@ export class CodingAgent {
               executionMetrics.estimated ||= usage.estimated === true;
             }
           },
-          getWorkingState: () => JSON.stringify({
+          getWorkingState: () => this.renderWorkingState(minimalReminders, () => ({
             goal, attempt, phase: this.currentPhase, checklist: this.todos.snapshot(),
             changedFiles: [...changedFiles], diagnostics: [...this.pendingDiagnosticErrors.entries()],
             verification: runState.failureSnapshot(), rejectedApproaches: runState.ruledOut,
             nextStep: this.todos.currentStepId(), journal: journal.slice(-8),
-          }),
+          })),
+          ...this.runPromptOptions,
           initialRunJournal: journal,
           getCurrentStepId: () => this.todos.currentStepId(),
           ...(staleReadRecoveryEnabled ? {

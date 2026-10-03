@@ -23,6 +23,7 @@ const WHITELISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
   "tool_retry",
   "mode_selected",
   "browser_preview",
+  "tool_image",
   "thinking",
   "internal_instruction",
   "assistant_text",

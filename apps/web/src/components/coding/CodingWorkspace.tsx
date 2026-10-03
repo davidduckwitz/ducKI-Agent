@@ -999,6 +999,19 @@ export function CodingWorkspace() {
         // No run was actually started for this submit - drop the optimistic bubble instead of
         // leaving it stuck forever with no response, and release the send guard.
         setMessages((prev) => prev.filter((m) => m.id !== messageId));
+        // The server refused because a regular chat run is still working on this conversation
+        // (see isChatRunActive in coding-run-registry) - say so instead of silently dropping it.
+        if (error instanceof Error && error.message.includes("chat run is already in progress")) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant" as const,
+              content: t("chat.chatRunActive"),
+              timestamp: new Date().toISOString(),
+            },
+          ]);
+        }
         sendGuardRef.current = false;
         setIsSendPending(false);
       });

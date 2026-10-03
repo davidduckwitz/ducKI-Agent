@@ -130,6 +130,13 @@ export interface ToOpenAIMessagesOptions {
    * with an explicit prompt cache (Anthropic via OpenRouter); requires emitCacheControl.
    */
   cacheHistory?: boolean;
+  /**
+   * Echo an assistant turn's reasoning blocks (LLMMessage.thinkingBlocks) back as
+   * `reasoning_details` next to its tool_calls. OpenRouter requires this for reasoning models
+   * that continue a tool-use turn (Anthropic, Gemini, ...); plain OpenAI-compatible servers
+   * have no such field and some reject it, so it stays off by default.
+   */
+  echoReasoningDetails?: boolean;
 }
 
 export function toOpenAIMessages(
@@ -173,7 +180,8 @@ export function toOpenAIMessages(
             type: "function",
             function: { name: c.function.name, arguments: c.function.arguments },
           })),
-        };
+          ...(options.echoReasoningDetails && m.thinkingBlocks?.length ? { reasoning_details: m.thinkingBlocks } : {}),
+        } as ChatCompletionMessageParam;
       }
       return { role: "assistant", content };
     }
@@ -259,6 +267,11 @@ export class OpenAIProvider implements LLMProvider {
 
   /** Whether to also cache the conversation history (see ToOpenAIMessagesOptions.cacheHistory). */
   protected cachesHistory(): boolean {
+    return false;
+  }
+
+  /** Whether to capture and echo reasoning_details (see ToOpenAIMessagesOptions.echoReasoningDetails). */
+  protected echoesReasoningDetails(): boolean {
     return false;
   }
 
@@ -429,7 +442,7 @@ export class OpenAIProvider implements LLMProvider {
 
     const buildRequest = (withTools: boolean) => ({
       model: this.model,
-      messages: toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl(), cacheHistory: this.cachesHistory() }),
+      messages: toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl(), cacheHistory: this.cachesHistory(), echoReasoningDetails: this.echoesReasoningDetails() }),
       temperature: merged.temperature,
       top_p: merged.topP,
       max_tokens: merged.maxTokens,
@@ -494,9 +507,13 @@ export class OpenAIProvider implements LLMProvider {
         }
       : { ...estimateUsage(buildRequest(useNativeTools).messages, choice.message.content ?? ""), estimated: true };
 
+    const reasoningDetails = this.echoesReasoningDetails()
+      ? (choice.message as { reasoning_details?: unknown }).reasoning_details
+      : undefined;
     return {
       content: choice.message.content ?? "",
       toolCalls: fromOpenAIToolCalls(choice.message.tool_calls),
+      ...(Array.isArray(reasoningDetails) && reasoningDetails.length > 0 ? { thinkingBlocks: reasoningDetails } : {}),
       usage,
       model: completion.model,
       finishReason: choice.finish_reason ?? undefined,
@@ -509,7 +526,7 @@ export class OpenAIProvider implements LLMProvider {
     onChunk?: (chunk: string) => void
   ): Promise<LLMResponse> {
     const merged = { ...this.defaultOptions, ...options };
-    const openAiMessages = toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl(), cacheHistory: this.cachesHistory() });
+    const openAiMessages = toOpenAIMessages(messages, { emitCacheControl: this.emitsPromptCacheControl(), cacheHistory: this.cachesHistory(), echoReasoningDetails: this.echoesReasoningDetails() });
     const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
 
     // `withTools` is an explicit param (not just closing over `useNativeTools`) so the
@@ -578,6 +595,10 @@ export class OpenAIProvider implements LLMProvider {
     // Tool-call deltas arrive fragmented across chunks, keyed by `index`; accumulate the
     // id/name/arguments pieces per slot and assemble them once the stream ends.
     const toolCallAccum: Array<{ id: string; name: string; arguments: string }> = [];
+    // OpenRouter streams reasoning_details as fragments of the same block (same type/index);
+    // their text/summary/data/signature pieces are concatenated back into whole blocks.
+    const reasoningAccum = new Map<string, Record<string, unknown>>();
+    const collectReasoning = this.echoesReasoningDetails();
 
     try {
       for await (const chunk of stream) {
@@ -586,6 +607,22 @@ export class OpenAIProvider implements LLMProvider {
         if (delta) {
           fullContent += delta;
           onChunk?.(delta);
+        }
+        const reasoningDeltas = collectReasoning
+          ? (choice0?.delta as { reasoning_details?: unknown } | undefined)?.reasoning_details
+          : undefined;
+        if (Array.isArray(reasoningDeltas)) {
+          for (const fragment of reasoningDeltas as Array<Record<string, unknown>>) {
+            const key = `${String(fragment["type"] ?? "")}:${String(fragment["index"] ?? 0)}`;
+            const block = reasoningAccum.get(key);
+            if (!block) {
+              reasoningAccum.set(key, { ...fragment });
+              continue;
+            }
+            for (const field of ["text", "summary", "data", "signature"]) {
+              if (typeof fragment[field] === "string") block[field] = `${typeof block[field] === "string" ? block[field] : ""}${fragment[field]}`;
+            }
+          }
         }
         const toolDeltas = choice0?.delta?.tool_calls;
         if (toolDeltas) {
@@ -646,12 +683,14 @@ export class OpenAIProvider implements LLMProvider {
           }))
       : undefined;
     const normalizedToolCalls = toolCalls && toolCalls.length > 0 ? toolCalls : undefined;
+    const thinkingBlocks = reasoningAccum.size > 0 ? { thinkingBlocks: [...reasoningAccum.values()] } : {};
 
     if (!reportedUsage) {
       const estimate = estimateUsage(openAiMessages, fullContent);
       return {
         content: fullContent,
         toolCalls: normalizedToolCalls,
+        ...thinkingBlocks,
         usage: { ...estimate, estimated: true },
         model: finalModel,
         finishReason: finalFinishReason,
@@ -661,6 +700,7 @@ export class OpenAIProvider implements LLMProvider {
     return {
       content: fullContent,
       toolCalls: normalizedToolCalls,
+      ...thinkingBlocks,
       finishReason: finalFinishReason,
       usage: { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens, cachedInputTokens },
       model: finalModel,

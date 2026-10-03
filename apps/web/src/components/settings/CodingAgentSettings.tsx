@@ -17,7 +17,18 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
   // Live preview: simulate a plan size and show which budget/timeout a run would get.
   const [previewSteps, setPreviewSteps] = useState(4);
 
+  /** Experimental opencode-style switches - each one independently, until testing shows which help. */
+  const qualityToggleKeys = [
+    "CODING_AGENT_LEAN_MODE",
+    "CODING_AGENT_LEAN_PROMPT",
+    "CODING_AGENT_MINIMAL_REMINDERS",
+    "CODING_AGENT_EXTENDED_THINKING",
+    "CODING_AGENT_EXTENDED_THINKING_LOCAL",
+  ];
+
   const settingKeys = [
+    ...qualityToggleKeys,
+    "CODING_AGENT_THINKING_EFFORT",
     "CODING_AGENT_MAX_ITERATIONS",
     "CODING_AGENT_MAX_ITERATIONS_SIMPLE",
     "CODING_AGENT_MAX_ITERATIONS_MEDIUM",
@@ -72,6 +83,12 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
 
   const getDefaultValue = (key: string): string => {
     const defaults: Record<string, string> = {
+      CODING_AGENT_LEAN_MODE: "true",
+      CODING_AGENT_LEAN_PROMPT: "true",
+      CODING_AGENT_MINIMAL_REMINDERS: "true",
+      CODING_AGENT_EXTENDED_THINKING: "true",
+      CODING_AGENT_EXTENDED_THINKING_LOCAL: "false",
+      CODING_AGENT_THINKING_EFFORT: "medium",
       CODING_AGENT_MAX_ITERATIONS: "100",
       CODING_AGENT_MAX_ITERATIONS_SIMPLE: "20",
       CODING_AGENT_MAX_ITERATIONS_MEDIUM: "50",
@@ -102,6 +119,18 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
 
   const getDescription = (key: string): string => {
     const descriptions: Record<string, string> = {
+      CODING_AGENT_LEAN_MODE:
+        "Ein durchgehender Agent-Loop wie bei opencode: das Modell erkundet, plant (eigene Todo-Liste), editiert und prüft selbst im selben Gesprächsverlauf. Der Controller greift erst am Ende mit dem Verify-Befehl ein; ein Fehlschlag geht als Nachricht in denselben Verlauf zurück. 'Max Retry-Versuche' zählt dann diese Verify-Runden. Aus = klassischer Controller (Planner, Phasen, Versuche mit Zusammenfassung, Checklisten-Prüfung). Plan-Modus und vorgegebene Pläne nutzen immer den klassischen Controller.",
+      CODING_AGENT_LEAN_PROMPT:
+        "Ausführlicher System-Prompt nach opencode/Claude-Code-Vorbild: Arbeitsablauf (verstehen → umsetzen → prüfen → berichten), Code-Konventionen, Tool-Regeln, Umgebung (Betriebssystem/Shell, Datum, Git) und die AGENTS.md bzw. CLAUDE.md des Projekts. Aus = die bisherige kurze Coding-Direktive.",
+      CODING_AGENT_MINIMAL_REMINDERS:
+        "Keine Run-Journal- und JSON-Zustandsblöcke mehr bei jedem Modellaufruf. Offene Todos und Dateien mit Diagnosefehlern werden nur noch als kurzer Hinweis gesendet, wenn sich daran etwas geändert hat. Aus = bisheriges Verhalten (voller Zustand bei jedem Aufruf).",
+      CODING_AGENT_EXTENDED_THINKING:
+        "Aktiviert Reasoning für Coding-Läufe, wenn im Chat keine eigene Stufe gewählt ist: Extended Thinking bei Claude (inkl. korrekter Rückgabe der Thinking-Blöcke bei Tool-Aufrufen), reasoning_effort bei OpenAI-Reasoning-Modellen (o-Serie, GPT-5+), reasoning bei OpenRouter. Modelle ohne Reasoning-Unterstützung laufen unverändert.",
+      CODING_AGENT_EXTENDED_THINKING_LOCAL:
+        "Reasoning auch für lokale Provider (LM Studio, Ollama). Standard aus: LM Studio wechselt mit gesetzter Reasoning-Stufe auf die Responses-API, was nicht jedes lokale Modell unterstützt.",
+      CODING_AGENT_THINKING_EFFORT:
+        "Reasoning-Stufe für Coding-Läufe. Claude Haiku 4.5 / ältere Modelle: low = 1024, medium = 4096, high = 8192, xhigh = 16384 Thinking-Tokens; neuere Claude-Modelle nutzen adaptives Thinking mit dieser Effort-Stufe.",
       CODING_AGENT_MAX_ITERATIONS:
         "Maximale Iterationen für den Chat Coding Agent (Standard für alle Plan-Umsetzungen). Bestimmt, wie viele Gedankenschritte der Agent pro Versuch durchlaufen kann. Vorrang: Diese Einstellungen (einfach/mittel/komplex nach Schrittzahl) gelten für die Chat-Plan-Umsetzung ('Umsetzen') und überstimmen dort AGENT_MAX_ITERATIONS und AGENT_CODING_MAX_ITERATIONS. Coding-Area-Chat und CodingWorkspace-Plan nutzen weiterhin AGENT_CODING_MAX_ITERATIONS.",
       CODING_AGENT_MAX_ITERATIONS_SIMPLE:
@@ -156,6 +185,12 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
 
   const getLabel = (key: string): string => {
     const labels: Record<string, string> = {
+      CODING_AGENT_LEAN_MODE: "Schlanker Modus (ein durchgehender Loop)",
+      CODING_AGENT_LEAN_PROMPT: "Ausführlicher Coding-Prompt + AGENTS.md",
+      CODING_AGENT_MINIMAL_REMINDERS: "Minimale Zwischen-Hinweise",
+      CODING_AGENT_EXTENDED_THINKING: "Extended Thinking / Reasoning",
+      CODING_AGENT_EXTENDED_THINKING_LOCAL: "Reasoning auch für lokale Modelle",
+      CODING_AGENT_THINKING_EFFORT: "Reasoning-Stufe",
       CODING_AGENT_MAX_ITERATIONS: "Max Iterationen (Chat)",
       CODING_AGENT_MAX_ITERATIONS_SIMPLE: "Max Iterationen (einfach)",
       CODING_AGENT_MAX_ITERATIONS_MEDIUM: "Max Iterationen (mittel)",
@@ -250,8 +285,59 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
 
       {/* Settings Grid */}
       <div className="space-y-4 rounded-lg border border-border bg-card/50 p-4">
-        {/* Iterations Settings */}
+        {/* Experimental coding-quality switches (opencode-style) */}
         <div className="space-y-3">
+          <div>
+            <h4 className="text-sm font-medium">Coding-Qualität (experimentell)</h4>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Einzeln abschaltbar, um die Wirkung zu vergleichen. Gelten für alle Provider; die
+              Kontext-Limits stehen unter Agent → „Datei-Limits (Coding Agent)“.
+            </p>
+          </div>
+          <div className="space-y-3 pl-4">
+            {qualityToggleKeys.map((key) => (
+              <div key={key} className="flex items-center justify-between gap-4 border-b border-border pb-3">
+                <div>
+                  <label className="block text-sm font-medium text-foreground">{getLabel(key)}</label>
+                  <p className="mt-1 max-w-xl text-xs text-muted-foreground">{getDescription(key)}</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={getDisplayValue(key) === "true"}
+                  onChange={(e) => {
+                    const value = e.target.checked ? "true" : "false";
+                    setEdits((prev) => ({ ...prev, [key]: value }));
+                    save.mutate({ key, value });
+                  }}
+                  className="h-4 w-4 shrink-0 rounded accent-primary"
+                />
+              </div>
+            ))}
+            <div className="space-y-1">
+              <label className="flex items-center justify-between text-sm">
+                <span className="font-medium text-foreground">{getLabel("CODING_AGENT_THINKING_EFFORT")}</span>
+                <span className="text-xs text-muted-foreground">Standard: {getDefaultValue("CODING_AGENT_THINKING_EFFORT")}</span>
+              </label>
+              <p className="text-xs text-muted-foreground">{getDescription("CODING_AGENT_THINKING_EFFORT")}</p>
+              <select
+                value={getDisplayValue("CODING_AGENT_THINKING_EFFORT")}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setEdits((prev) => ({ ...prev, CODING_AGENT_THINKING_EFFORT: value }));
+                  save.mutate({ key: "CODING_AGENT_THINKING_EFFORT", value });
+                }}
+                className="input w-full"
+              >
+                {["low", "medium", "high", "xhigh"].map((effort) => (
+                  <option key={effort} value={effort}>{effort}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Iterations Settings */}
+        <div className="space-y-3 border-t border-border pt-4">
           <div className="flex items-center gap-2">
             <h4 className="text-sm font-medium">Iterationslimits</h4>
             <div className="group relative cursor-help">

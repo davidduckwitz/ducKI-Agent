@@ -298,4 +298,4 @@ export function getDefaultTextToSpeechProvider(): TextToSpeechProvider {
     | "breeze";
   return createTextToSpeechProvider({ name: providerName });
 }
-export { withReasoningEffort } from "./reasoning.js";
+export { withReasoningEffort, resolveReasoningEffort } from "./reasoning.js";

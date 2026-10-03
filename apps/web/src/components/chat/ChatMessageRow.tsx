@@ -5,6 +5,7 @@ import { eventDataWithoutInternalText, eventIcon, eventLabel, eventTone, extract
 import type { RenderedChatMessage } from "./chatTypes";
 import { api } from "../../lib/api";
 import { BrowserPreview } from "./BrowserPreview";
+import { ToolImagePreview } from "./ToolImagePreview";
 import { ChecklistView, type ChecklistItemView } from "./ChecklistView";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { ReasoningDisplay } from "./ReasoningDisplay";
@@ -130,6 +131,14 @@ export function EventRow({
     return (
       <div className={`${ANIMATE_IN} space-y-2`}>
         <BrowserPreview msg={msg} />
+      </div>
+    );
+  }
+
+  if (msg.eventType === "tool_image") {
+    return (
+      <div className={ANIMATE_IN}>
+        <ToolImagePreview msg={msg} />
       </div>
     );
   }

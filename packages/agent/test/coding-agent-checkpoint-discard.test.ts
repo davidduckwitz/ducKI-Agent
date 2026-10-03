@@ -14,7 +14,8 @@ import { listCheckpoints } from "../src/coding/checkpoints.js";
 function stubDb() {
   let nextId = 1;
   const known: Record<string, (...args: any[]) => any> = {
-    getAllSettings: async () => [],
+    // Covers the classic controller (planner + attempts); lean mode has its own tests.
+    getAllSettings: async () => [{ key: "CODING_AGENT_LEAN_MODE", value: "false" }],
     getDynamicToolByName: async () => undefined,
     getSetting: async () => undefined,
     createConversation: async (data: { name: string }) => ({ id: nextId++, name: data.name }),

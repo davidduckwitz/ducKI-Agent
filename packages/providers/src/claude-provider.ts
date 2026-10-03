@@ -44,6 +44,52 @@ function convertLLMContentToAnthropic(content: string | LLMContent[]): ContentBl
   return result;
 }
 
+function isThinkingBlock(block: unknown): block is ContentBlockParamLike {
+  const type = (block as { type?: unknown } | null)?.type;
+  return type === "thinking" || type === "redacted_thinking";
+}
+
+/** The thinking / redacted_thinking blocks of a response, kept verbatim (signature included). */
+function extractThinkingBlocks(blocks: ReadonlyArray<unknown>): unknown[] | undefined {
+  const thinking = blocks.filter(isThinkingBlock);
+  return thinking.length > 0 ? thinking : undefined;
+}
+
+/**
+ * Reconciles a converted history with the request's thinking setting.
+ *
+ * - Thinking off: every echoed thinking block is removed - they only belong to thinking requests.
+ * - Thinking on: the API requires the final assistant turn, when it carries tool_use, to start
+ *   with the thinking block that produced it. That is impossible when the turn came from a run
+ *   without thinking or was reloaded from the database (thinking blocks are never persisted).
+ *   Rather than failing with a 400, such a request runs without thinking - the next turn, which
+ *   is generated with thinking again, restores the chain.
+ *
+ * Returns whether thinking can stay enabled.
+ */
+export function withThinkingCompatibleHistory(
+  messages: Array<{ role: "user" | "assistant"; content: ContentBlockParamLike[] }>,
+  thinkingEnabled: boolean
+): boolean {
+  let keepThinking = thinkingEnabled;
+  if (keepThinking) {
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    if (
+      lastAssistant &&
+      lastAssistant.content.some((block) => block.type === "tool_use") &&
+      !isThinkingBlock(lastAssistant.content[0])
+    ) {
+      keepThinking = false;
+    }
+  }
+  if (!keepThinking) {
+    for (const message of messages) {
+      if (message.role === "assistant") message.content = message.content.filter((block) => !isThinkingBlock(block));
+    }
+  }
+  return keepThinking;
+}
+
 function contentAsText(content: string | LLMContent[]): string {
   if (typeof content === "string") return content;
   return content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
@@ -92,7 +138,10 @@ export function toAnthropicMessages(messages: LLMMessage[]): Anthropic.MessagePa
     }
 
     if (m.role === "assistant") {
-      const content = convertLLMContentToAnthropic(m.content);
+      // Thinking blocks are only meaningful in front of the tool_use blocks they produced, and
+      // the API requires them first in the turn (see withThinkingCompatibleHistory).
+      const thinking = m.toolCalls?.length ? (m.thinkingBlocks ?? []).filter(isThinkingBlock) : [];
+      const content = [...thinking, ...convertLLMContentToAnthropic(m.content)];
       for (const call of m.toolCalls ?? []) {
         let input: unknown = {};
         try {
@@ -118,9 +167,12 @@ export function toAnthropicMessages(messages: LLMMessage[]): Anthropic.MessagePa
     if (message.content.length === 0) continue;
     const previous = merged[merged.length - 1];
     if (previous && previous.role === message.role) {
-      // tool_result blocks must come first in a user turn.
+      // tool_result blocks must come first in a user turn, thinking blocks first in an
+      // assistant turn.
       previous.content = [...previous.content, ...message.content].sort(
-        (a, b) => Number(b.type === "tool_result") - Number(a.type === "tool_result")
+        (a, b) =>
+          Number(b.type === "tool_result" || isThinkingBlock(b)) -
+          Number(a.type === "tool_result" || isThinkingBlock(a))
       );
       continue;
     }
@@ -159,6 +211,10 @@ function enforceToolPairing(messages: Array<{ role: "user" | "assistant"; conten
           ? { type: "text", text: `[Tool call] ${String(block["name"])} ${JSON.stringify(block["input"] ?? {})}` }
           : block
       );
+      // A turn whose tool calls were all degraded to text no longer needs its thinking blocks.
+      if (!message.content.some((block) => block.type === "tool_use")) {
+        message.content = message.content.filter((block) => !isThinkingBlock(block));
+      }
       continue;
     }
 
@@ -266,12 +322,29 @@ export class ClaudeProvider implements LLMProvider {
 
     const system = buildSystemBlocks(messages);
     if (system) request.system = system as unknown as Anthropic.MessageCreateParams["system"];
-    if (merged.temperature !== undefined) request.temperature = merged.temperature;
     if (this.supportsNativeTools() && merged.tools && merged.tools.length > 0) {
       request.tools = toAnthropicTools(merged.tools) as unknown as Anthropic.Tool[];
     }
 
-    return Object.assign(request, claudeReasoningOptions(this.model, merged));
+    const reasoning = claudeReasoningOptions(this.model, merged);
+    const thinkingType = (reasoning["thinking"] as { type?: string } | undefined)?.type;
+    const thinkingRequested = thinkingType === "enabled" || thinkingType === "adaptive";
+    const keepThinking = withThinkingCompatibleHistory(
+      request.messages as unknown as Array<{ role: "user" | "assistant"; content: ContentBlockParamLike[] }>,
+      thinkingRequested
+    );
+    if (thinkingRequested && !keepThinking) {
+      // Only the thinking switch goes; a raised max_tokens or an effort level stay valid.
+      delete reasoning["thinking"];
+    }
+    // Extended thinking rejects a custom temperature, so a caller's value (planner 0.3, repair
+    // passes 0.4, ...) is only forwarded while thinking is off for this request. Decided here
+    // alone - the reasoning options' own `temperature: undefined` would otherwise also erase it
+    // for a request that just lost its thinking above.
+    delete reasoning["temperature"];
+    if (merged.temperature !== undefined && !keepThinking) request.temperature = merged.temperature;
+
+    return Object.assign(request, reasoning);
   }
 
   async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
@@ -308,6 +381,8 @@ export class ClaudeProvider implements LLMProvider {
 
     const toolCalls = fromAnthropicToolUse(response.content);
     if (toolCalls) result.toolCalls = toolCalls;
+    const thinkingBlocks = extractThinkingBlocks(response.content as unknown[]);
+    if (thinkingBlocks) result.thinkingBlocks = thinkingBlocks;
     return result;
   }
 
@@ -327,11 +402,30 @@ export class ClaudeProvider implements LLMProvider {
     let cachedInputTokens = 0;
     let cacheWriteTokens = 0;
     let finishReason: string | undefined;
+    // The pinned SDK (0.28) predates extended thinking: its MessageStream keeps a thinking block
+    // as it was STARTED (empty text, empty signature) and drops thinking_delta/signature_delta,
+    // so finalMessage() cannot supply echo-able blocks. They are assembled here from the raw
+    // events instead, keyed by content-block index.
+    const thinkingByIndex = new Map<number, Record<string, unknown>>();
 
     for await (const chunk of stream) {
       if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
         fullContent += chunk.delta.text;
         onChunk?.(chunk.delta.text);
+      }
+
+      const raw = chunk as unknown as {
+        type: string;
+        index?: number;
+        content_block?: Record<string, unknown>;
+        delta?: { type?: string; thinking?: string; signature?: string };
+      };
+      if (raw.type === "content_block_start" && raw.index !== undefined && isThinkingBlock(raw.content_block)) {
+        thinkingByIndex.set(raw.index, { ...raw.content_block });
+      } else if (raw.type === "content_block_delta" && raw.index !== undefined && thinkingByIndex.has(raw.index)) {
+        const block = thinkingByIndex.get(raw.index)!;
+        if (raw.delta?.type === "thinking_delta") block["thinking"] = `${String(block["thinking"] ?? "")}${raw.delta.thinking ?? ""}`;
+        if (raw.delta?.type === "signature_delta") block["signature"] = `${String(block["signature"] ?? "")}${raw.delta.signature ?? ""}`;
       }
 
       if (chunk.type === "message_start" && chunk.message.usage) {
@@ -365,6 +459,8 @@ export class ClaudeProvider implements LLMProvider {
       finishReason,
     };
     if (toolCalls) result.toolCalls = toolCalls;
+    const thinkingBlocks = [...thinkingByIndex.entries()].sort(([a], [b]) => a - b).map(([, block]) => block);
+    if (thinkingBlocks.length > 0) result.thinkingBlocks = thinkingBlocks;
     return result;
   }
 

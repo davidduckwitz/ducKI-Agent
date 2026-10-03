@@ -14,6 +14,19 @@
       "runtimeArgs": ["--filter", "@ducki/web", "dev"],
       "port": 5174,
       "autoPort": true
+    },
+    {
+      "name": "ducki-voice",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "../ducki-voice", "run", "dev"],
+      "port": 5180
+    },
+    {
+      "name": "erpel",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@ducki/erpel", "dev"],
+      "port": 5188,
+      "autoPort": true
     }
   ]
 }

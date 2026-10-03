@@ -11,6 +11,8 @@ export type AgentEventType =
   | "tool_retry"
   | "mode_selected"
   | "browser_preview"
+  /** Images a tool returned via display_images (e.g. a camera snapshot), shown inline. */
+  | "tool_image"
   | "thinking"
   | "internal_instruction"
   /**

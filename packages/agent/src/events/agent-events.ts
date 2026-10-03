@@ -124,6 +124,8 @@ export const AGENT_EVENT_TYPES = {
   GUARDRAIL: "guardrail",
   MODE_SELECTED: "mode_selected",
   BROWSER_PREVIEW: "browser_preview",
+  /** Images a tool asked to show the user inline (result.display_images), e.g. camera snapshots. */
+  TOOL_IMAGE: "tool_image",
 } as const;
 
 export type AgentRunEventType = typeof AGENT_EVENT_TYPES[keyof typeof AGENT_EVENT_TYPES];

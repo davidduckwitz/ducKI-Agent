@@ -8,7 +8,14 @@ import type { DatabaseService } from "@ducki/database";
 import { getRootLogger } from "@ducki/logger";
 import { isAbortError } from "@ducki/providers";
 import { agentRegistry } from "../lib/agent-registry.js";
-import { stopCodingRun } from "../lib/coding-run-registry.js";
+import {
+  stopCodingRun,
+  isCodingRunBusy,
+  isCodingRunStreaming,
+  streamingCodingRunIds,
+  markChatRun,
+  unmarkChatRun,
+} from "../lib/coding-run-registry.js";
 import {
   createCheckpoint,
   createScopedFilesystemTool,
@@ -250,6 +257,11 @@ export function setupWebSocket(
           id: socket.id,
           conversationId: data.conversationId,
         });
+        // A client that opens a conversation after its run started missed that run's
+        // chat:start, so it looked idle and let the user send a second, parallel run.
+        if (runningConversations.has(data.conversationId) || isCodingRunStreaming(data.conversationId)) {
+          socket.emit("chat:running", { conversationId: data.conversationId });
+        }
       }
     });
     socket.on("chat:leave", (data?: { conversationId?: number }) => {
@@ -276,7 +288,10 @@ export function setupWebSocket(
       socket.emit("server:hello", {
         protocolVersion: SERVER_PROTOCOL_VERSION,
         serverTime: new Date().toISOString(),
-        snapshot: buildHelloSnapshot(getGatewayStatus(), Array.from(runningConversations.keys())),
+        snapshot: buildHelloSnapshot(
+          getGatewayStatus(),
+          Array.from(new Set([...runningConversations.keys(), ...streamingCodingRunIds()]))
+        ),
       });
     });
 
@@ -382,11 +397,35 @@ export function setupWebSocket(
           await existingRun;
         }
 
+        // An HTTP CodingAgent run owns this conversation right now - starting the generic agent
+        // next to it would put two agents on one transcript (and possibly the same files).
+        // Checked after the await above and synchronously before the lock is taken below, so a
+        // coding run can't slip in between. Only the sender is told: a room-wide chat:error would
+        // flip every viewer's loading state off although the coding run keeps going.
+        if (isCodingRunBusy(resolvedConversationId)) {
+          logger.warn("Rejecting chat:message - a CodingAgent run is active for this conversation", {
+            conversationId: resolvedConversationId,
+          });
+          // chat:running first, so the client's rejection handler already knows whether the
+          // conversation is still busy (keep the input locked) or not (release it).
+          if (isCodingRunStreaming(resolvedConversationId)) {
+            socket.emit("chat:running", { conversationId: resolvedConversationId });
+          }
+          socket.emit("chat:rejected", {
+            conversationId: resolvedConversationId,
+            localMessageId: data.localMessageId,
+            reason: "coding_run_active",
+            timestamp: new Date().toISOString(),
+          });
+          return;
+        }
+
         // Create a promise to track this execution
         const runPromise = new Promise<void>((resolve) => {
           resolveRun = resolve;
         });
         runningConversations.set(resolvedConversationId, runPromise);
+        markChatRun(resolvedConversationId);
 
         registryRunId = agentRegistry.register({
           source: "chat_ws",
@@ -746,10 +785,12 @@ export function setupWebSocket(
         for (const runAgent of runAgents) {
           unregisterActiveAgent(socket.id, runAgent);
         }
-        // Clear the conversation lock
-        if (conversationId && runningConversations.has(conversationId)) {
+        // Clear the conversation lock - only if this run actually took it (an early return,
+        // e.g. the coding-run rejection above, must not release a lock it never held).
+        if (conversationId && resolveRun && runningConversations.has(conversationId)) {
           runningConversations.delete(conversationId);
-          resolveRun!();
+          unmarkChatRun(conversationId);
+          resolveRun();
         }
       }
     });
