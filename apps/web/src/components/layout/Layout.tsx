@@ -166,7 +166,7 @@ export function Layout() {
 
   return (
     // 100dvh instead of 100vh: mobile browser chrome otherwise pushes the composer off-screen.
-    <div className="flex h-[100dvh] overflow-hidden bg-background text-foreground">
+    <div className="flex h-[100dvh] overflow-hidden pb-[env(safe-area-inset-bottom)] bg-background text-foreground">
       <Sidebar
         navGroups={navGroups}
         codingEnabled={codingEnabled}

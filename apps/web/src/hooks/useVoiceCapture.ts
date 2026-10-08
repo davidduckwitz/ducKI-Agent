@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useVoiceSettings } from "./useVoiceSettings";
-import { startVoiceActivityWatcher, type VoiceActivityWatcherHandle } from "../lib/voiceActivityDetection";
+import { startVoiceActivityWatcher, unlockVoiceAudio, type VoiceActivityWatcherHandle } from "../lib/voiceActivityDetection";
 import { emitVoiceCaptureStarted, emitVoiceCaptureStopped, interruptVoiceReply, onVoiceEndRequested, onVoiceToggleRequested } from "../lib/voiceCaptureBus";
 import { stopAllPlayback } from "../lib/voicePlaybackRegistry";
 
@@ -75,13 +75,20 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
     let heardSpeech = config.sttMode !== "vad-auto";
     try {
       clearError();
+      if (!navigator.mediaDevices?.getUserMedia) {
+        // Browsers hide mediaDevices on plain http:// pages (anything but localhost) - typical when
+        // opening the UI via a Tailscale IP / http://name.ts.net:5173 from an iPad.
+        throw new Error(window.isSecureContext === false
+          ? "Mikrofon nicht verfügbar: Die Seite läuft über unverschlüsseltes HTTP. Bitte über HTTPS öffnen (z. B. `tailscale serve`, https://<name>.ts.net)."
+          : "Dieser Browser unterstützt keine Mikrofonaufnahme.");
+      }
       const input = await navigator.mediaDevices.getUserMedia({ audio: {
         echoCancellation: true, noiseSuppression: true, autoGainControl: true,
       } });
       if (!current()) { input.getTracks().forEach((track) => track.stop()); return; }
       stream.current = input;
       const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"]
-        .find((type) => MediaRecorder.isTypeSupported(type));
+        .find((type) => typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type));
       const capture = new MediaRecorder(input, mimeType ? { mimeType } : undefined);
       recorder.current = capture;
       const chunks: Blob[] = [];
@@ -193,6 +200,7 @@ export function useVoiceCapture(callbacks: { onText: (text: string) => void; onS
     }
     if (busy.current) { end(); return; }
     enabled.current = true;
+    unlockVoiceAudio();
     await start();
   };
   const toggleRef = useRef(toggle);

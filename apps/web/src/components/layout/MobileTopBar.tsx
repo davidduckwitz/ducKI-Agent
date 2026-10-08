@@ -38,7 +38,7 @@ export function MobileTopBar({
   };
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-2 md:hidden">
+    <header className="flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b border-border bg-card px-2 pt-[env(safe-area-inset-top)] lg:hidden">
       <button
         type="button"
         onClick={() => setMobileNavOpen(true)}

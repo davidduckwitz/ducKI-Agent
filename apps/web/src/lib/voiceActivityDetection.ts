@@ -24,17 +24,40 @@ export interface VoiceActivityWatcherHandle {
   stop: () => void;
 }
 
+type AudioContextCtor = typeof AudioContext;
+function audioContextCtor(): AudioContextCtor | undefined {
+  return window.AudioContext || (window as unknown as { webkitAudioContext?: AudioContextCtor }).webkitAudioContext;
+}
+
+// iOS/iPadOS Safari only lets an AudioContext leave "suspended" when resume() runs inside a user
+// gesture. Contexts created later (after the awaited getUserMedia, or on the hands-free restart
+// timer) stay silent forever, so the analyser reads 0 and VAD never hears speech. One shared
+// context is therefore created + resumed from the tap and reused for every recording.
+let sharedContext: AudioContext | null = null;
+
+/** Call synchronously from a click/tap handler, before any `await`. */
+export function unlockVoiceAudio(): void {
+  const Ctor = audioContextCtor();
+  if (!Ctor) return;
+  try {
+    if (!sharedContext || sharedContext.state === "closed") sharedContext = new Ctor();
+    if (sharedContext.state === "suspended") void sharedContext.resume().catch(() => {});
+  } catch {
+    sharedContext = null;
+  }
+}
+
 export function startVoiceActivityWatcher(
   stream: MediaStream,
   options: VoiceActivityWatcherOptions
 ): VoiceActivityWatcherHandle {
-  const AudioContextCtor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  const AudioContextCtor = audioContextCtor();
   if (!AudioContextCtor) {
     // No Web Audio API - the caller's max-duration timer remains the only stop condition.
     return { stop: () => {} };
   }
 
-  const audioContext = new AudioContextCtor();
+  const audioContext = sharedContext && sharedContext.state !== "closed" ? sharedContext : new AudioContextCtor();
   const source = audioContext.createMediaStreamSource(stream);
   const analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
@@ -56,7 +79,8 @@ export function startVoiceActivityWatcher(
     } catch {
       // Already disconnected - nothing to do.
     }
-    void audioContext.close().catch(() => {});
+    // The shared context stays open so it keeps its gesture-granted "running" state.
+    if (audioContext !== sharedContext) void audioContext.close().catch(() => {});
   };
 
   const tick = () => {

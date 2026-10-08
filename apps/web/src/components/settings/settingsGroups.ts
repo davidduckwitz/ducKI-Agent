@@ -328,6 +328,7 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
         "CODING_AGENT_MAX_ATTEMPTS",
         "CODING_AGENT_TIMEOUT_MS",
         "CODING_AGENT_EXPLORE_TIMEOUT_MS",
+        "AGENT_LOCAL_MAX_OUTPUT_TOKENS",
         "CODING_AGENT_ENABLE_VERIFY",
       ],
     },

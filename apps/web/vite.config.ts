@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
@@ -29,6 +30,12 @@ const allowedHosts = [".ts.net"];
 // VITE_PREVIEW_HOST (e.g. 0.0.0.0) to opt into network/Tailscale access.
 const previewHost = process.env["VITE_PREVIEW_HOST"] ?? "127.0.0.1";
 
+// Optional native TLS (e.g. certs from `tailscale cert <name>.ts.net`). Note: a Vite port speaks
+// EITHER http OR https. For both at once use `tailscale serve` (HTTPS :443 -> http :5173).
+const certFile = process.env["VITE_HTTPS_CERT"];
+const keyFile = process.env["VITE_HTTPS_KEY"];
+const https = certFile && keyFile ? { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) } : undefined;
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -38,6 +45,7 @@ export default defineConfig({
   },
   server: {
     host: true,
+    https,
     allowedHosts,
     port,
     strictPort: false,
@@ -45,6 +53,7 @@ export default defineConfig({
   },
   preview: {
     host: previewHost,
+    https,
     allowedHosts,
     port,
     strictPort: false,

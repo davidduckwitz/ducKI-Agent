@@ -113,8 +113,9 @@ const LEGACY_SETTINGS: Readonly<Record<string, string>> = {
   CODING_AGENT_MAX_ITERATIONS_MEDIUM: "50",
   CODING_AGENT_MAX_ITERATIONS_COMPLEX: "100",
   CODING_AGENT_MAX_ATTEMPTS: "3",
-  CODING_AGENT_TIMEOUT_MS: "300000",
-  CODING_AGENT_EXPLORE_TIMEOUT_MS: "180000",
+  // Match the route defaults in routes/coding-agent.ts (30 min run, 10 min explore).
+  CODING_AGENT_TIMEOUT_MS: "1800000",
+  CODING_AGENT_EXPLORE_TIMEOUT_MS: "600000",
 };
 
 const SMALL_SETTINGS: Readonly<Record<string, string>> = {

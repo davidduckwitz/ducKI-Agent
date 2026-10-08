@@ -29,6 +29,14 @@ export function useIsMobile(): boolean {
   return useMediaQuery(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
 }
 
+/** Matches Tailwind's `lg` - tablets in portrait (iPad) still get the drawer, not the squeezed desktop rail. */
+export const COMPACT_BREAKPOINT = 1024;
+
+/** True below `lg`: phones and portrait tablets, where the sidebar is an off-canvas drawer. */
+export function useIsCompact(): boolean {
+  return useMediaQuery(`(max-width: ${COMPACT_BREAKPOINT - 1}px)`);
+}
+
 /** True when the primary input is touch - used to drop hover-only affordances. */
 export function useIsTouch(): boolean {
   return useMediaQuery("(hover: none) and (pointer: coarse)");

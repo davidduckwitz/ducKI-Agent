@@ -388,6 +388,28 @@
     }
   }
 
+  /* Touch-Geraete jeder Groesse (iPad inkl.): kein Auto-Zoom beim Fokus, kein Doppeltipp-Zoom auf
+     Buttons, kein haengenbleibender Hover-Zustand und kein Gummiband-Scrollen der ganzen Seite. */
+  @media (pointer: coarse) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+
+    button,
+    a,
+    [role="button"] {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html,
+    body {
+      overscroll-behavior: none;
+    }
+  }
+
   /* Breite Tabellen duerfen in ihrem eigenen Container scrollen, statt die
      Seite waagerecht aufzuziehen. */
   .table-scroll {

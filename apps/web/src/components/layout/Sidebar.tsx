@@ -3,7 +3,7 @@ import { AudioLines, ChevronDown, Code2, FilePlus2, FolderPlus, LayoutGrid, Mess
 import { useI18n } from "../../lib/i18n";
 import { useAppStore } from "../../lib/store";
 import { useUiStore, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "../../lib/uiStore";
-import { useIsMobile } from "../../lib/useMediaQuery";
+import { useIsCompact } from "../../lib/useMediaQuery";
 import { useCodingSession } from "../../lib/codingSessionStore";
 import { SplitHandle } from "../ui/split-handle";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
@@ -88,7 +88,7 @@ export function Sidebar({
   const { setConversationId } = useAppStore();
   const { sidebarCollapsed, toggleSidebar, sidebarWidth, setSidebarWidth, mobileNavOpen, setMobileNavOpen } =
     useUiStore();
-  const isMobile = useIsMobile();
+  const isMobile = useIsCompact();
   const runCodingCommand = useCodingSession((s) => s.runCommand);
   const busy = runningCount > 0 || runningTools.size > 0;
 
@@ -109,11 +109,11 @@ export function Sidebar({
             type="button"
             aria-label={t("layout.sidebar.closeNav")}
             onClick={() => setMobileNavOpen(false)}
-            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
           />
         )}
         <aside
-          className={`fixed inset-y-0 left-0 z-50 flex w-[min(20rem,85vw)] flex-col border-r border-border bg-card shadow-2xl transition-transform duration-200 ease-out md:hidden ${
+          className={`fixed inset-y-0 left-0 z-50 flex w-[min(20rem,85vw)] flex-col border-r border-border bg-card shadow-2xl transition-transform duration-200 ease-out lg:hidden ${
             mobileNavOpen ? "translate-x-0" : "-translate-x-full"
           }`}
           aria-hidden={!mobileNavOpen}

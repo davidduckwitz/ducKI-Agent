@@ -29,6 +29,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
   const settingKeys = [
     ...qualityToggleKeys,
     "CODING_AGENT_THINKING_EFFORT",
+    "AGENT_LOCAL_MAX_OUTPUT_TOKENS",
     "CODING_AGENT_MAX_ITERATIONS",
     "CODING_AGENT_MAX_ITERATIONS_SIMPLE",
     "CODING_AGENT_MAX_ITERATIONS_MEDIUM",
@@ -89,6 +90,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_EXTENDED_THINKING: "true",
       CODING_AGENT_EXTENDED_THINKING_LOCAL: "false",
       CODING_AGENT_THINKING_EFFORT: "medium",
+      AGENT_LOCAL_MAX_OUTPUT_TOKENS: "6144",
       CODING_AGENT_MAX_ITERATIONS: "100",
       CODING_AGENT_MAX_ITERATIONS_SIMPLE: "20",
       CODING_AGENT_MAX_ITERATIONS_MEDIUM: "50",
@@ -131,6 +133,8 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
         "Reasoning auch für lokale Provider (LM Studio, Ollama). Standard aus: LM Studio wechselt mit gesetzter Reasoning-Stufe auf die Responses-API, was nicht jedes lokale Modell unterstützt.",
       CODING_AGENT_THINKING_EFFORT:
         "Reasoning-Stufe für Coding-Läufe. Claude Haiku 4.5 / ältere Modelle: low = 1024, medium = 4096, high = 8192, xhigh = 16384 Thinking-Tokens; neuere Claude-Modelle nutzen adaptives Thinking mit dieser Effort-Stufe.",
+      AGENT_LOCAL_MAX_OUTPUT_TOKENS:
+        "Ausgabe-Limit pro Modellaufruf für lokale Modelle (LM Studio, Ollama). Denken und Antwort teilen sich dieses Limit; ein kleines Modell in einer Denkschleife verbrennt sonst bis zu 16384 Tokens, bevor etwas passiert. Standard 6144; 0 = aus (nutzt das allgemeine Limit). Ein explizit gesetztes AGENT_MAX_OUTPUT_TOKENS (z. B. über das Modellprofil) hat Vorrang. Bei sehr großen Dateien in einem Schreib-Aufruf ggf. erhöhen.",
       CODING_AGENT_MAX_ITERATIONS:
         "Maximale Iterationen für den Chat Coding Agent (Standard für alle Plan-Umsetzungen). Bestimmt, wie viele Gedankenschritte der Agent pro Versuch durchlaufen kann. Vorrang: Diese Einstellungen (einfach/mittel/komplex nach Schrittzahl) gelten für die Chat-Plan-Umsetzung ('Umsetzen') und überstimmen dort AGENT_MAX_ITERATIONS und AGENT_CODING_MAX_ITERATIONS. Coding-Area-Chat und CodingWorkspace-Plan nutzen weiterhin AGENT_CODING_MAX_ITERATIONS.",
       CODING_AGENT_MAX_ITERATIONS_SIMPLE:
@@ -191,6 +195,7 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
       CODING_AGENT_EXTENDED_THINKING: "Extended Thinking / Reasoning",
       CODING_AGENT_EXTENDED_THINKING_LOCAL: "Reasoning auch für lokale Modelle",
       CODING_AGENT_THINKING_EFFORT: "Reasoning-Stufe",
+      AGENT_LOCAL_MAX_OUTPUT_TOKENS: "Max Output-Tokens (lokale Modelle)",
       CODING_AGENT_MAX_ITERATIONS: "Max Iterationen (Chat)",
       CODING_AGENT_MAX_ITERATIONS_SIMPLE: "Max Iterationen (einfach)",
       CODING_AGENT_MAX_ITERATIONS_MEDIUM: "Max Iterationen (mittel)",

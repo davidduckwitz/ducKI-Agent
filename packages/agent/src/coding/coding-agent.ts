@@ -1668,7 +1668,10 @@ export class CodingAgent {
       ]);
       if ((enabled ?? "").trim().toLowerCase() === "false") return undefined;
       if (!providerSupportsCodingThinking(this.provider, (local ?? "").trim().toLowerCase() === "true")) return undefined;
-      return parseThinkingEffort(effort ?? undefined, "medium");
+      // Local models get "low" unless the user picked an effort: small models tend to deliberate
+      // in circles, so they start lean and think harder only on explicit request.
+      const isLocal = this.provider.name === "lmstudio" || this.provider.name === "ollama";
+      return parseThinkingEffort(effort ?? undefined, isLocal ? "low" : "medium");
     } catch {
       return undefined;
     }
