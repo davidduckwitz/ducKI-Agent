@@ -120,6 +120,7 @@ pub fn build_native_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .text("agent_health", "Systemstatus im Browser öffnen")
         .build()?;
     let help = SubmenuBuilder::new(app, "&Hilfe")
+        .text("help_update", "Nach Updates suchen …")
         .text("help_docs", "DucKI-Webseite")
         .text("open_logs", "Desktop-Logs öffnen")
         .separator()
@@ -158,6 +159,10 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) {
         "agent_health" => {
             let url = format!("http://127.0.0.1:{}/dashboard", backend::current_port(app));
             let _ = app.opener().open_url(url, None::<&str>);
+        }
+        "help_update" | "update_check" => {
+            dispatch_to_ui(app, "ducki:check-update", "");
+            show_main_window(app);
         }
         "help_docs" => {
             let _ = app.opener().open_url("https://ducki.cloud", None::<&str>);
@@ -220,6 +225,7 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .item(&MenuItemBuilder::with_id("nav_setup", "Setup-Assistent …").build(app)?)
         .item(&separator()?)
         .item(&MenuItemBuilder::with_id("restart", "Agent neu starten").build(app)?)
+        .item(&MenuItemBuilder::with_id("update_check", "Nach Updates suchen …").build(app)?)
         .item(&MenuItemBuilder::with_id("logs", "Log-Anzeige öffnen").build(app)?)
         .item(&MenuItemBuilder::with_id("data", "Datenordner öffnen").build(app)?)
         .item(&separator()?)

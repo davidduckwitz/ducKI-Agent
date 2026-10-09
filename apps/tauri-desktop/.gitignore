@@ -24,3 +24,8 @@ Thumbs.db
 .vscode
 *.swp
 *.swo
+
+# Update signing key (never commit)
+signing/*.key
+update-server/*.exe
+update-server/*.sig

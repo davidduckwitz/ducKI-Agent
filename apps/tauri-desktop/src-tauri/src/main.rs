@@ -8,6 +8,7 @@ mod paths;
 mod seed;
 mod startup;
 mod state;
+mod updater;
 mod win;
 
 use std::sync::atomic::Ordering;
@@ -57,6 +58,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_autostart::Builder::new()
                 .args([MINIMIZED_ARG])
@@ -92,6 +94,8 @@ fn main() {
             desktop::desktop_info,
             desktop::desktop_set_preferences,
             desktop::desktop_open_folder,
+            updater::check_update,
+            updater::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

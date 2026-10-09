@@ -1,0 +1,11 @@
+{
+    "version":  "1.0.2",
+    "notes":  "Update Workflow in Settings: Update auslösen, Einstellungen für Update-Prüfung",
+    "pub_date":  "2026-10-09T12:38:40Z",
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGVBUWhxN2ZHeFNOOUlIRFZ2MUp6T1JJWlc4Tk1ZZHltcXdWYUZqVHBTYXc4K0FsVTl1cXdQcFNNclJTR0owOGMrL1ZLMnNqazVJVGpwODMxeExCY1FvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTQ5NTE5CWZpbGU6RHVjS0kgTm9kZV8xLjAuMl94NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjIKcG1mcEVFQnNsNi9JVXhNdCtVSFFDQXlTbHpLNkxKSXR4MjdkOTZsVFNPK2pjMXZFQ3pQR00xcnJVdS8rTHp3TEFXT0VWMUE4bENRR2UzdVg0YVdkRFE9PQo=",
+                                             "url":  "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.2_x64-setup.exe"
+                                         }
+                  }
+}

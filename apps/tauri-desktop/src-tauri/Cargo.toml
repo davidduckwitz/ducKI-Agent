@@ -1,6 +1,6 @@
 [package]
 name = "ducki-desktop"
-version = "0.1.0"
+version = "1.0.2"
 description = "DucKI Node Desktop Application"
 authors = ["David Duckwitz"]
 license = "UNLICENSED"
@@ -22,6 +22,7 @@ tauri-plugin-opener = "2.6"
 tauri-plugin-single-instance = "2.5"
 tauri-plugin-autostart = "2.6"
 tauri-plugin-log = "2.10"
+tauri-plugin-updater = "2"
 log = "0.4"
 
 [features]

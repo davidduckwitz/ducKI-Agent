@@ -24,7 +24,7 @@ import { api, type PluginInfo } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import { useTheme } from "../theme/ThemeProvider";
 import { ACCENT_COLORS, ACCENT_SWATCH_CLASS, THEME_MODES, type ThemeMode } from "../../lib/theme";
-import { getDesktopInfo, isTauriDesktop, openDesktopFolder, setDesktopPreferences, type DesktopFolder, type DesktopInfo } from "../../lib/desktop";
+import { getDesktopInfo, isTauriDesktop, openDesktopFolder, setDesktopPreferences, type DesktopFolder, type DesktopInfo, type UpdateInterval } from "../../lib/desktop";
 import { BackendSettings } from "../settings/BackendSettings";
 import { PluginSettingsForm } from "../plugins/PluginSettingsForm";
 
@@ -57,6 +57,8 @@ interface DesktopPrefsState {
   autostart: boolean;
   closeToTray: boolean;
   showSplash: boolean;
+  autoUpdateCheck: boolean;
+  updateInterval: UpdateInterval;
 }
 
 interface ProviderTestState {
@@ -229,7 +231,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
     getDesktopInfo()
       .then((info) => {
         setDesktopInfo(info);
-        if (info) setDesktopPrefs({ autostart: info.autostart, closeToTray: info.closeToTray, showSplash: info.showSplash });
+        if (info) setDesktopPrefs({ autostart: info.autostart, closeToTray: info.closeToTray, showSplash: info.showSplash, autoUpdateCheck: info.autoUpdateCheck, updateInterval: info.updateInterval });
       })
       .catch(() => setDesktopInfo(null));
   }, [open, desktopMode]);
@@ -322,7 +324,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
         });
       }
       if (desktopMode && desktopPrefs) {
-        await setDesktopPreferences(desktopPrefs).catch(() => {});
+        await setDesktopPreferences(desktopPrefs).then(() => window.dispatchEvent(new Event("ducki:desktop-prefs-changed"))).catch(() => {});
       }
 
       writes.push(api.settings.set("CODING_ENABLED", String(codingEnabled)));
@@ -783,6 +785,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                       ["autostart", "setupWizard.desktop.autostart", "setupWizard.desktop.autostartHint"],
                       ["closeToTray", "setupWizard.desktop.closeToTray", "setupWizard.desktop.closeToTrayHint"],
                       ["showSplash", "setupWizard.desktop.showSplash", "setupWizard.desktop.showSplashHint"],
+                      ["autoUpdateCheck", "setupWizard.desktop.autoUpdateCheck", "setupWizard.desktop.autoUpdateCheckHint"],
                     ] as const
                   ).map(([key, label, hint]) => (
                     <label key={key} className="flex items-center justify-between gap-4 rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
@@ -797,6 +800,21 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
                       />
                     </label>
                   ))}
+                  <label className="flex items-center justify-between gap-4 rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm">
+                    <span>
+                      {t("setupWizard.desktop.updateInterval")}
+                      <span className="block text-xs text-gray-400 mt-0.5">{t("setupWizard.desktop.updateIntervalHint")}</span>
+                    </span>
+                    <select
+                      className="input w-auto"
+                      value={desktopPrefs.updateInterval}
+                      onChange={(e) => setDesktopPrefs((prev) => (prev ? { ...prev, updateInterval: e.target.value as UpdateInterval } : prev))}
+                    >
+                      <option value="off">{t("setupWizard.desktop.updateIntervalOff")}</option>
+                      <option value="hourly">{t("setupWizard.desktop.updateIntervalHourly")}</option>
+                      <option value="daily">{t("setupWizard.desktop.updateIntervalDaily")}</option>
+                    </select>
+                  </label>
                   <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 space-y-2">
                     <p className="text-sm text-gray-300">{t("setupWizard.desktop.folders.title")}</p>
                     <div className="flex flex-wrap gap-2">

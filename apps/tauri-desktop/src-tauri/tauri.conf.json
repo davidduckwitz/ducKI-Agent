@@ -63,6 +63,17 @@
     },
     "withGlobalTauri": true
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxQzU4NUM5NkI5N0Q5NDkKUldSSjJaZHJ5WVhGOGE0SlhqUVZkMDZYUEV5TEFrMkFwbFZZb0UxMVNGUDYydEJvWkR3bWZnVnkK",
+      "endpoints": [
+        "https://ducki.cloud/updates/desktop/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": [
@@ -71,6 +82,7 @@
     "publisher": "David Duckwitz",
     "copyright": "© David Duckwitz",
     "category": "Productivity",
+    "createUpdaterArtifacts": true,
     "shortDescription": "DucKI Node – lokaler KI-Agent",
     "longDescription": "DucKI Node bündelt Agent-Server und Web-UI: Chat, Coding-Agent, Skills, Plugins, Memory, LLM-Wiki und Voice – lokal auf deinem Rechner.",
     "homepage": "https://ducki.cloud",

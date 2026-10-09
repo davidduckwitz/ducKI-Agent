@@ -4,6 +4,8 @@
  * needed in the web bundle, and in a plain browser every helper here degrades to a no-op.
  */
 
+export type UpdateInterval = "off" | "hourly" | "daily";
+
 export interface DesktopInfo {
   version: string;
   port: number;
@@ -16,12 +18,16 @@ export interface DesktopInfo {
   autostart: boolean;
   closeToTray: boolean;
   showSplash: boolean;
+  autoUpdateCheck: boolean;
+  updateInterval: UpdateInterval;
 }
 
 export interface DesktopPreferencesPatch {
   autostart?: boolean;
   closeToTray?: boolean;
   showSplash?: boolean;
+  autoUpdateCheck?: boolean;
+  updateInterval?: UpdateInterval;
 }
 
 export type DesktopFolder = "workspace" | "data" | "logs" | "plugins" | "skills";
@@ -52,4 +58,41 @@ export async function setDesktopPreferences(patch: DesktopPreferencesPatch): Pro
 export async function openDesktopFolder(kind: DesktopFolder): Promise<void> {
   const invoke = tauriInvoke();
   if (invoke) await invoke("desktop_open_folder", { kind });
+}
+
+export interface DesktopUpdateInfo {
+  version: string;
+  currentVersion: string;
+  notes: string | null;
+}
+
+export interface DesktopUpdateProgress {
+  downloaded: number;
+  total: number | null;
+}
+
+/** Asks the update server for a newer desktop version. Resolves to null if up to date. */
+export async function checkDesktopUpdate(): Promise<DesktopUpdateInfo | null> {
+  const invoke = tauriInvoke();
+  return invoke ? invoke<DesktopUpdateInfo | null>("check_update") : null;
+}
+
+/** Downloads and installs the update; the desktop shell restarts the app. Only returns on failure. */
+export async function installDesktopUpdate(): Promise<void> {
+  const invoke = tauriInvoke();
+  if (invoke) await invoke("install_update");
+}
+
+/** Subscribes to download progress. Returns an unsubscribe function. */
+export function onDesktopUpdateProgress(handler: (p: DesktopUpdateProgress) => void): () => void {
+  const listen = (
+    window as unknown as {
+      __TAURI__?: { event?: { listen?: (name: string, cb: (e: { payload: DesktopUpdateProgress }) => void) => Promise<() => void> } };
+    }
+  ).__TAURI__?.event?.listen;
+  if (!listen) return () => undefined;
+  const pending = listen("update-progress", (e) => handler(e.payload));
+  return () => {
+    void pending.then((unlisten) => unlisten());
+  };
 }

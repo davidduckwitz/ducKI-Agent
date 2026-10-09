@@ -435,7 +435,51 @@ export class OpenAIProvider implements LLMProvider {
     throw lastError;
   }
 
+  /**
+   * Last line of defence for isMalformedToolCallArgumentsError. The native-tools fallback below
+   * can only fire once per provider instance; afterwards the request carries no `tools`, yet
+   * llama.cpp still parses the model's own tool-call markup server-side and answers 500 when
+   * that call was cut off mid-string (output budget spent on reasoning, or a huge payload).
+   * Rethrowing kills the whole run on a failure that is just "the model ran out of room".
+   * Report it as what it is - an empty, length-truncated turn - so the agent's existing
+   * budget-exhausted recovery (smaller step, reasoning off) handles it.
+   */
+  private truncatedToolCallResponse(messages: LLMMessage[], error: unknown): LLMResponse {
+    logger.warn("Backend rejected a cut-off tool call (500 parse error) - reporting it as a length-truncated empty turn", {
+      provider: this.name,
+      error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
+    });
+    return {
+      content: "",
+      model: this.model,
+      usage: { ...estimateUsage(toOpenAIMessages(messages, {}), ""), estimated: true },
+      finishReason: "length",
+    };
+  }
+
   async generate(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
+    try {
+      return await this.generateOnce(messages, options);
+    } catch (error) {
+      if (this.isMalformedToolCallArgumentsError(error)) return this.truncatedToolCallResponse(messages, error);
+      throw error;
+    }
+  }
+
+  async generateStream(
+    messages: LLMMessage[],
+    options?: GenerateOptions,
+    onChunk?: (chunk: string) => void
+  ): Promise<LLMResponse> {
+    try {
+      return await this.generateStreamOnce(messages, options, onChunk);
+    } catch (error) {
+      if (this.isMalformedToolCallArgumentsError(error)) return this.truncatedToolCallResponse(messages, error);
+      throw error;
+    }
+  }
+
+  private async generateOnce(messages: LLMMessage[], options?: GenerateOptions): Promise<LLMResponse> {
     logger.debug("generate() called", { providerName: this.name, type: this.constructor.name });
     const merged = { ...this.defaultOptions, ...options };
     const useNativeTools = this.supportsNativeTools() && (merged.tools?.length ?? 0) > 0;
@@ -520,7 +564,7 @@ export class OpenAIProvider implements LLMProvider {
     };
   }
 
-  async generateStream(
+  private async generateStreamOnce(
     messages: LLMMessage[],
     options?: GenerateOptions,
     onChunk?: (chunk: string) => void

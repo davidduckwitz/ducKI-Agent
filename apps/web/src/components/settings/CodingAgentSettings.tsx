@@ -424,6 +424,40 @@ export function CodingAgentSettings({ settingsMap }: CodingAgentSettingsProps) {
           </div>
         </div>
 
+        {/* Output budget for local models (think-loop guard) */}
+        <div className="space-y-3 border-t border-border pt-4">
+          <h4 className="text-sm font-medium">Ausgabe-Limit (lokale Modelle)</h4>
+          <div className="space-y-3 pl-4">
+            {["AGENT_LOCAL_MAX_OUTPUT_TOKENS"].map((key: string) => (
+              <div key={key} className="space-y-1">
+                <label className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-foreground">{getLabel(key)}</span>
+                  <span className="text-xs text-muted-foreground">Standard: {getDefaultValue(key)}</span>
+                </label>
+                <p className="text-xs text-muted-foreground">{getDescription(key)}</p>
+                <div className="flex gap-2 items-start">
+                  <input
+                    type="number"
+                    min="0"
+                    max="128000"
+                    step="1024"
+                    value={getDisplayValue(key)}
+                    onChange={(e) => setEdits(prev => ({ ...prev, [key]: e.target.value }))}
+                    className="input flex-1"
+                  />
+                  <button
+                    onClick={() => save.mutate({ key, value: getDisplayValue(key) })}
+                    className="btn-primary flex items-center gap-1"
+                    disabled={save.isPending}
+                  >
+                    <Save className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Deterministic planning and read-loop recovery */}
         <div className="space-y-3 border-t border-border pt-4">
           <h4 className="text-sm font-medium">Planung &amp; Lese-Recovery</h4>

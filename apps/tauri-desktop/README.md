@@ -73,3 +73,16 @@ pnpm tauri:build    # = web + server bauen, build:prep, tauri build
 
 Ergebnis: `src-tauri/target/release/bundle/nsis/DucKI Node_<version>_x64-setup.exe`.
 Die Version kommt aus `package.json` (`tauri.conf.json` → `"version": "../package.json"`).
+
+## Auto-Update
+
+Die App prüft beim Start (abschaltbar im Setup-Assistenten) und über Tray/Menü „Nach Updates
+suchen …“ `https://ducki.cloud/updates/desktop/latest.json`. Bei einer neueren Version zeigt die
+Web-UI ein Banner (`DesktopUpdateBanner`); erst der Klick startet `install_update`
+(`src-tauri/src/updater.rs`): Download → Agent stoppen → Datensicherung nach
+`%LOCALAPPDATA%\DucKI Node\backups\vor-update-<Version>` → signierter NSIS-Installer (passiv) →
+Neustart der App. Der Agent muss vor dem Installer stoppen, weil `node.exe` im Installationsordner läuft.
+
+Release: `neue-version.cmd` (oder `release.ps1 -Version 1.0.1 -Notes "…"`), danach `update-server/`
+hochladen – siehe `update-server/ANLEITUNG.md`. Der private Schlüssel `signing/ducki-desktop.key`
+ist nicht im Git: **Backup anlegen**, sonst sind keine Updates mehr möglich.

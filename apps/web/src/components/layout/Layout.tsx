@@ -30,6 +30,7 @@ import { Sidebar } from "./Sidebar";
 import { MobileTopBar } from "./MobileTopBar";
 import { AppToolSidebar } from "./AppToolSidebar";
 import { UpdateStatusBar } from "./UpdateStatusBar";
+import { DesktopUpdateBanner } from "./DesktopUpdateBanner";
 import { useUiStore } from "../../lib/uiStore";
 import type { NavGroup } from "./MoreNavSection";
 
@@ -187,6 +188,7 @@ export function Layout() {
           <Outlet />
         </main>
         <PluginWidgets placement="footer" className="border-t border-border bg-card/95" />
+        <DesktopUpdateBanner busy={busy} />
         <UpdateStatusBar />
       </div>
 

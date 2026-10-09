@@ -18,6 +18,10 @@ pub struct DesktopPrefs {
     /// Closing the window hides it to the tray; the agent keeps running.
     pub close_to_tray: bool,
     pub show_splash: bool,
+    /// Look for a new desktop version on startup (the UI shows a banner; nothing installs unasked).
+    pub auto_update_check: bool,
+    /// Periodic background check while the app runs: "off", "hourly" or "daily".
+    pub update_interval: String,
 }
 
 impl Default for DesktopPrefs {
@@ -25,6 +29,8 @@ impl Default for DesktopPrefs {
         Self {
             close_to_tray: true,
             show_splash: true,
+            auto_update_check: true,
+            update_interval: "daily".into(),
         }
     }
 }
@@ -110,6 +116,8 @@ pub struct DesktopInfo {
     autostart: bool,
     close_to_tray: bool,
     show_splash: bool,
+    auto_update_check: bool,
+    update_interval: String,
 }
 
 fn desktop_info_for(app: &AppHandle) -> DesktopInfo {
@@ -129,6 +137,8 @@ fn desktop_info_for(app: &AppHandle) -> DesktopInfo {
         autostart: is_autostart_enabled(app),
         close_to_tray: prefs.close_to_tray,
         show_splash: prefs.show_splash,
+        auto_update_check: prefs.auto_update_check,
+        update_interval: prefs.update_interval,
     }
 }
 
@@ -138,6 +148,8 @@ pub struct DesktopPrefsPatch {
     autostart: Option<bool>,
     close_to_tray: Option<bool>,
     show_splash: Option<bool>,
+    auto_update_check: Option<bool>,
+    update_interval: Option<String>,
 }
 
 #[tauri::command]
@@ -161,6 +173,14 @@ pub fn desktop_set_preferences(
         }
         if let Some(value) = patch.show_splash {
             prefs.show_splash = value;
+        }
+        if let Some(value) = patch.auto_update_check {
+            prefs.auto_update_check = value;
+        }
+        if let Some(value) = patch.update_interval {
+            if matches!(value.as_str(), "off" | "hourly" | "daily") {
+                prefs.update_interval = value;
+            }
         }
         prefs.save(&state.paths)?;
     }
