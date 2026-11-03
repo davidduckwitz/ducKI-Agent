@@ -14,6 +14,7 @@
   "dependencies": {
     "@ducki/shared": "workspace:*",
     "@monaco-editor/react": "^4.7.0",
+    "@picovoice/porcupine-web": "4.0.1",
     "@radix-ui/react-alert-dialog": "^1.1.21",
     "@radix-ui/react-dialog": "^1.1.21",
     "@radix-ui/react-dropdown-menu": "^2.1.22",
@@ -31,6 +32,7 @@
     "d3-force": "^3.0.0",
     "lucide-react": "^0.408.0",
     "monaco-editor": "^0.55.1",
+    "onnxruntime-web": "1.22.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",

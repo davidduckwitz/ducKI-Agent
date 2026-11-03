@@ -47,6 +47,12 @@ export function unlockVoiceAudio(): void {
   }
 }
 
+/** The gesture-unlocked context (created on demand) for other mic consumers like the wake-word listener. */
+export function getVoiceAudioContext(): AudioContext | null {
+  if (!sharedContext || sharedContext.state === "closed") unlockVoiceAudio();
+  return sharedContext;
+}
+
 export function startVoiceActivityWatcher(
   stream: MediaStream,
   options: VoiceActivityWatcherOptions

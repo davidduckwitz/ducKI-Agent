@@ -5,6 +5,7 @@ export type TTSProvider = "web-speech-api" | "openai" | "elevenlabs" | "piper" |
 export type STTMode = "push-to-talk" | "vad-auto";
 export type TTSEmotionStyle = "neutral" | "cheerful" | "calm" | "empathetic" | "excited";
 export type AgentVoiceReplyStyle = "adapt" | "unchanged";
+export type WakeWordProvider = "openwakeword" | "porcupine";
 
 export interface VoiceSettings {
   // STT Settings
@@ -34,6 +35,23 @@ export interface VoiceSettings {
   continuousConversationMode: boolean;
   agentVoiceReplyStyle: AgentVoiceReplyStyle;
   voiceRetryPromptEnabled: boolean;
+
+  // Wake word ("Hey Jarvis" etc.): mic waits for the phrase, records one request, re-arms
+  wakeWordEnabled: boolean;
+  wakeWordProvider: WakeWordProvider;
+  /** Spoken phrase - shown in the UI and stripped from the start of the transcript. */
+  wakeWordPhrase: string;
+  /** "builtin:hey_jarvis" | "community:en/x/x.onnx" | "custom:file.onnx" */
+  wakeWordOwwModel: string;
+  wakeWordOwwThreshold: number; // 0 to 1
+  wakeWordPorcupineAccessKey: string;
+  /** "builtin:Jarvis" | "custom:file.ppn" */
+  wakeWordPorcupineKeyword: string;
+  wakeWordPorcupineLanguage: string; // "en" | "de"
+  wakeWordPorcupineSensitivity: number; // 0 to 1
+  /** After a reply, listen this long without the wake word (0 = always require it). */
+  wakeWordFollowUpMs: number;
+  wakeWordChime: boolean;
 
   // Advanced
   autoPlayTTS: boolean;
@@ -65,9 +83,25 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   agentVoiceReplyStyle: "adapt",
   voiceRetryPromptEnabled: true,
 
+  wakeWordEnabled: false,
+  wakeWordProvider: "openwakeword",
+  wakeWordPhrase: "Hey Jarvis",
+  wakeWordOwwModel: "builtin:hey_jarvis",
+  wakeWordOwwThreshold: 0.5,
+  wakeWordPorcupineAccessKey: "",
+  wakeWordPorcupineKeyword: "builtin:Jarvis",
+  wakeWordPorcupineLanguage: "en",
+  wakeWordPorcupineSensitivity: 0.5,
+  wakeWordFollowUpMs: 8000,
+  wakeWordChime: true,
+
   autoPlayTTS: false,
   ttsQuality: "high",
 };
+
+type WakeWordSettingKey = Extract<keyof VoiceSettings, `wakeWord${string}`>;
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
 interface VoiceSettingsStore extends VoiceSettings {
   setEnableSTT: (enable: boolean) => void;
@@ -93,6 +127,8 @@ interface VoiceSettingsStore extends VoiceSettings {
   setContinuousConversationMode: (enabled: boolean) => void;
   setAgentVoiceReplyStyle: (style: AgentVoiceReplyStyle) => void;
   setVoiceRetryPromptEnabled: (enabled: boolean) => void;
+
+  setWakeWord: (patch: Partial<Pick<VoiceSettings, WakeWordSettingKey>>) => void;
 
   setAutoPlayTTS: (autoPlay: boolean) => void;
   setTTSQuality: (quality: "low" | "high") => void;
@@ -128,6 +164,13 @@ export const useVoiceSettings = create<VoiceSettingsStore>()(
       setContinuousConversationMode: (enabled) => set({ continuousConversationMode: enabled }),
       setAgentVoiceReplyStyle: (style) => set({ agentVoiceReplyStyle: style }),
       setVoiceRetryPromptEnabled: (enabled) => set({ voiceRetryPromptEnabled: enabled }),
+
+      setWakeWord: (patch) => set({
+        ...patch,
+        ...(patch.wakeWordOwwThreshold !== undefined && { wakeWordOwwThreshold: clamp01(patch.wakeWordOwwThreshold) }),
+        ...(patch.wakeWordPorcupineSensitivity !== undefined && { wakeWordPorcupineSensitivity: clamp01(patch.wakeWordPorcupineSensitivity) }),
+        ...(patch.wakeWordFollowUpMs !== undefined && { wakeWordFollowUpMs: Math.max(0, Math.min(60000, patch.wakeWordFollowUpMs)) }),
+      }),
 
       setAutoPlayTTS: (autoPlay) => set({ autoPlayTTS: autoPlay }),
       setTTSQuality: (quality) => set({ ttsQuality: quality }),

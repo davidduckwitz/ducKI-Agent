@@ -28,6 +28,7 @@ Env vars:
     POCKET_TTS_DEVICE (default "cpu")        "cuda" works but is only ~2.6x faster than CPU
     POCKET_TTS_MAX_MODELS (default 2)        loaded language models kept in memory
     POCKET_TTS_MAX_TEXT_LEN (default 4000)
+    POCKET_TTS_NORMALIZE ("0" disables the German number/symbol spelling-out in tts_text_de.py)
     POCKET_TTS_LAZY_LOAD ("1" = start HTTP first, load on demand)
     POCKET_TTS_SKIP_WARMUP ("1" skips the warmup pass)
 """
@@ -44,6 +45,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, request, send_file, stream_with_context
+
+from tts_text_de import normalize_german
 
 app = Flask(__name__)
 
@@ -184,6 +187,17 @@ def warmup(language):
         log(f"Warmup failed: {error}")
 
 
+def normalize_text(text, language):
+    """Pocket TTS reads raw characters (no number/symbol handling), so digits, currency, dates, units and
+    abbreviations come out garbled in German. Spell them out first. English already reads fine."""
+    if language != "german" or os.environ.get("POCKET_TTS_NORMALIZE") == "0":
+        return text
+    normalized = normalize_german(text)
+    if normalized != text:
+        log(f"Normalized text: {text[:80]!r} -> {normalized[:80]!r}")
+    return normalized
+
+
 def parse_request():
     payload = request.get_json(force=True) or {}
     text = (payload.get("text") or "").strip()
@@ -194,7 +208,8 @@ def parse_request():
     voice_id = payload.get("voice")
     if voice_id and voice_id != "default" and ("/" in voice_id or "\\" in voice_id or ".." in voice_id):
         raise ValueError("Invalid voice id")
-    return text, resolve_language(payload.get("language")), voice_id
+    language = resolve_language(payload.get("language"))
+    return normalize_text(text, language), language, voice_id
 
 
 def generate_chunks(text, language, voice_id, stop=None):

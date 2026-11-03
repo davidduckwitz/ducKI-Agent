@@ -1,11 +1,11 @@
 {
-  "version": "1.0.15",
-  "notes": "Code-Editor in der Desktop-App: Darstellungsfehler behoben (übereinanderliegende Zeilen nach Größenänderung/Hinweisen) und Syntax-Hervorhebung wieder aktiv. Alle bekannten Dateien (PHP, Markdown, Shell, SQL, TXT u.v.m.) lassen sich öffnen und werden eingefärbt. TTS-Updates und TTS-Studio-Plugin.",
-  "pub_date": "2026-11-03T15:35:41Z",
+  "version": "1.0.16",
+  "notes": "WakeUpWord im Voicemodus | TTS für deutsche Zahlen und Zeichen in PocketTTS",
+  "pub_date": "2026-11-03T16:22:49Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGFGaUY4cUNWMlBQYmVEazg2NEFSK3VsZkhid3NhNVVCQkpFMzdRM3ltbkZlZ1NhSTFuenJSQld3MFY2RlA3NmhkYnY0c2RhZzV0bGo2YmFiVjF4MGdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzIwMTQxCWZpbGU6RHVjS0kgTm9kZV8xLjAuMTVfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjEuMC4xNQp4SmxOcU1vbnFNKzJ4OG9EcDhyZGM0dmlzcHhidXJZVEtjOVhqQllwMXpManQ1am1tNGl1V2xoOUt5UUxzemZOQkRYVnZlRlczZTZsZ2FOTlpZMFRCUT09Cg==",
-      "url": "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.15_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGNPT3VjWVJKNVd5VVBnY0FTNE9ZbTVERkU4aWw3OTArSFFFY2N5QUV5Yi82T1pRRDFqV3NwVUFBcThIZlF0SUhTNGRNZmVodXNXNnN1MGlIdlM0UGdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzIyOTY4CWZpbGU6RHVjS0kgTm9kZV8xLjAuMTZfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjEuMC4xNgpvMzZBeFZmWFpZQ1RYdjYycGNkdGwzSm9kenBmMERvTWpZQ3lMdFNOVXJKZHF5dCtNbmxJOFE4MnBRbGswVWpzaFpSdUd2NC8rVGdlRXZEWURzYTFCZz09Cg==",
+      "url": "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.16_x64-setup.exe"
     }
   }
 }

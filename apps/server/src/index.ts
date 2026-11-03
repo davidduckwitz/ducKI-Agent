@@ -91,6 +91,7 @@ import { toolsRouter } from "./routes/tools.js";
 import { updatesRouter } from "./routes/updates.js";
 import { workflowsRouter } from "./routes/workflows.js";
 import { wikiRouter } from "./routes/wiki.js";
+import { wakewordRouter } from "./routes/wakeword.js";
 import { createCryptoPaymentRouter } from "./routes/crypto-payment.js";
 import { registerDesktopShutdownRoute } from "./lib/desktop-shutdown.js";
 import { createToolStagingRouter } from "./routes/tool-staging.js";
@@ -397,6 +398,7 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/tool-staging", createToolStagingRouter());
 	app.use("/api/screenshots", screenshotRouter);
 	app.use("/api/wiki", wikiRouter);
+	app.use("/api/wakeword", wakewordRouter);
 }
 
 async function bootstrap(): Promise<void> {

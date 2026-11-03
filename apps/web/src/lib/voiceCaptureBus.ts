@@ -61,3 +61,24 @@ export function onVoiceCaptureStopped(listener: StopListener): () => void {
   streamStoppedListeners.add(listener);
   return () => streamStoppedListeners.delete(listener);
 }
+
+/** "off": no wake-word session; "loading": engine/models loading; "armed": waiting for the
+ *  phrase; "active": recording a request (after the phrase or inside the follow-up window). */
+export type WakeWordState = "off" | "loading" | "armed" | "active";
+const wakeStateListeners = new Set<(state: WakeWordState) => void>();
+let currentWakeState: WakeWordState = "off";
+
+export function emitWakeWordState(state: WakeWordState): void {
+  if (state === currentWakeState) return;
+  currentWakeState = state;
+  for (const listener of wakeStateListeners) listener(state);
+}
+
+export function getWakeWordState(): WakeWordState {
+  return currentWakeState;
+}
+
+export function onWakeWordStateChanged(listener: (state: WakeWordState) => void): () => void {
+  wakeStateListeners.add(listener);
+  return () => wakeStateListeners.delete(listener);
+}

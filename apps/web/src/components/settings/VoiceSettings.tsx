@@ -4,6 +4,7 @@ import { PocketTtsControls } from "./PocketTtsControls";
 import { TtsVoiceLibrary } from "./TtsVoiceLibrary";
 import { AiStorageCard } from "./AiStorageCard";
 import { SttServerControls } from "./SttServerControls";
+import { WakeWordSettings } from "./WakeWordSettings";
 import { useEffect, useState } from "react";
 import { Volume2, Mic, MessageCircle } from "lucide-react";
 import { useVoiceSettings, type TTSProvider } from "../../hooks/useVoiceSettings";
@@ -693,6 +694,9 @@ export function VoiceSettings() {
           </div>
         </div>
       </section>
+
+      {/* Aktivierungswort */}
+      <WakeWordSettings />
 
       {/* Lokale Engines: Platz verwalten */}
       <AiStorageCard />
