@@ -19,7 +19,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import "../../lib/monacoSetup";
+import { languageForPath } from "../../lib/monacoSetup";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor as MonacoEditorNS, Range as MonacoRange } from "monaco-editor";
 import { api } from "../../lib/api";
@@ -68,20 +68,6 @@ function parseMessageMetadata(raw?: string | null): Record<string, unknown> | un
   } catch {
     return undefined;
   }
-}
-
-function detectLanguage(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  if (ext === "ts" || ext === "tsx") return "typescript";
-  if (ext === "js" || ext === "jsx") return "javascript";
-  if (ext === "json") return "json";
-  if (ext === "md") return "markdown";
-  if (ext === "py") return "python";
-  if (ext === "css") return "css";
-  if (ext === "html") return "html";
-  if (ext === "yml" || ext === "yaml") return "yaml";
-  if (ext === "xml") return "xml";
-  return "plaintext";
 }
 
 function getFileExtension(path: string): string {
@@ -804,9 +790,24 @@ export function CodingWorkspace() {
     setInlineEditSelection(null);
   }, [selectedProject, selectedPath, resetInlineEdit]);
 
+  // @monaco-editor/react reuses an existing model for a path without updating its language, so a
+  // model first created as plaintext (or before the language was known) would stay uncoloured.
+  const syncModelLanguage = useCallback(() => {
+    const model = editorRef.current?.getModel();
+    const monacoApi = monacoApiRef.current;
+    if (!model || !monacoApi || !selectedPath) return;
+    const language = languageForPath(selectedPath);
+    if (model.getLanguageId() !== language) monacoApi.editor.setModelLanguage(model, language);
+  }, [selectedPath]);
+
+  useEffect(() => {
+    syncModelLanguage();
+  }, [syncModelLanguage, selectedProject]);
+
   const handleEditorMount: OnMount = useCallback((editorInstance, monacoApi) => {
     editorRef.current = editorInstance;
     monacoApiRef.current = monacoApi;
+    syncModelLanguage();
     editorInstance.onDidChangeCursorSelection((event) => {
       const model = editorInstance.getModel();
       if (!model || event.selection.isEmpty()) {
@@ -816,7 +817,7 @@ export function CodingWorkspace() {
       const text = model.getValueInRange(event.selection);
       setInlineEditSelection(text.trim() ? text : null);
     });
-  }, []);
+  }, [syncModelLanguage]);
 
   const runInlineEdit = useCallback(async () => {
     const editorInstance = editorRef.current;
@@ -1236,7 +1237,7 @@ export function CodingWorkspace() {
                   <Editor
                     height="100%"
                     path={`${selectedProject}/${selectedPath}`}
-                    language={detectLanguage(selectedPath)}
+                    language={languageForPath(selectedPath)}
                     value={editorContent}
                     onChange={(value) => setDraft(selectedPath, value ?? "")}
                     onMount={handleEditorMount}
@@ -1249,7 +1250,7 @@ export function CodingWorkspace() {
                       smoothScrolling: true,
                       scrollBeyondLastLine: false,
                     }}
-                    theme={resolvedMode === "dark" ? "vs-dark" : "light"}
+                    theme={resolvedMode === "dark" ? "vs-dark" : "vs"}
                   />
                 ) : (
                   <PanelEmpty icon={<FileCode2 className="h-10 w-10" />} title={t("codingPage.binaryFile")} />
