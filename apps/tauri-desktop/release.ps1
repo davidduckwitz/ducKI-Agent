@@ -3,7 +3,8 @@
 
   Aufruf:   .\release.ps1 -Version 1.0.1 -Notes "Was ist neu?"
   Ergebnis: update-server\  mit  DucKI-Node_<Version>_x64-setup.exe, .sig und latest.json
-  Upload:   Inhalt nach https://ducki.cloud/updates/desktop/ (Installer + .sig zuerst, latest.json zuletzt).
+  Upload:   Inhalt nach https://ducki.cloud/updates/desktop/ (components\ + Installer + .sig zuerst, latest.json zuletzt).
+            components\ enthaelt nachinstallierbare Dateien (z.B. Monaco-TS-Worker), auf die die App verweist.
   Wenig Platz auf dem Projektlaufwerk? `$env:CARGO_TARGET_DIR = 'G:\cargo-target\ducki-desktop'` setzen.
   Schluessel: signing\ducki-desktop.key (nicht im Git; Backup ausserhalb des Repos!)
 #>
@@ -64,4 +65,4 @@ $manifest = [ordered]@{
 }
 [IO.File]::WriteAllText((Join-Path $out 'latest.json'), ($manifest | ConvertTo-Json -Depth 5), $utf8)
 Write-Host "Fertig: $out" -ForegroundColor Green
-Write-Host 'Hochladen: Installer + .sig zuerst, latest.json zuletzt.'
+Write-Host 'Hochladen: components\ + Installer + .sig zuerst, latest.json zuletzt.'

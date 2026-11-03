@@ -1,10 +1,19 @@
-import { ethers } from "ethers";
+import type { Wallet as EthersWallet } from "ethers";
 import { BaseWallet, Address, Balance } from "./wallet-base.js";
+import { loadEthers } from "./libs.js";
+
+/** Set once ethers has been loaded, so the sync validateAddress() can also check the checksum. */
+let ethersLoaded: typeof import("ethers") | undefined;
+async function getEthers(): Promise<typeof import("ethers")> {
+  ethersLoaded ??= await loadEthers();
+  return ethersLoaded;
+}
 
 export class EthereumWallet extends BaseWallet {
   currency: "ETH" = "ETH";
 
   override async generateAddress(derivationPath?: string): Promise<Address> {
+    const { ethers } = await getEthers();
     // Generate a new random wallet
     const wallet = ethers.Wallet.createRandom();
 
@@ -29,9 +38,10 @@ export class EthereumWallet extends BaseWallet {
   }
 
   override async importPrivateKey(privateKeyHex: string, label: string): Promise<Address> {
+    const { ethers } = await getEthers();
     try {
       // Create wallet from private key
-      let wallet: ethers.Wallet;
+      let wallet: EthersWallet;
 
       if (privateKeyHex.startsWith("0x")) {
         wallet = new ethers.Wallet(privateKeyHex);
@@ -59,9 +69,11 @@ export class EthereumWallet extends BaseWallet {
   }
 
   override validateAddress(address: string): boolean {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return false;
+    if (!ethersLoaded) return true;
     try {
-      // ethers.getAddress validates and returns checksummed address
-      ethers.getAddress(address);
+      // ethers.getAddress validates the EIP-55 checksum of mixed-case addresses
+      ethersLoaded.ethers.getAddress(address);
       return true;
     } catch {
       return false;

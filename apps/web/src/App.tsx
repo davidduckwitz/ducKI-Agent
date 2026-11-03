@@ -158,6 +158,12 @@ function AppContent() {
     if (enableTTS && ttsProvider === "chatterbox") {
       void fetch(`${getApiBaseUrl()}/settings/chatterbox/auto-start`, { method: "POST" }).catch(console.error);
     }
+    if (enableTTS && ttsProvider === "pocket-tts") {
+      void fetch(`${getApiBaseUrl()}/settings/pocket-tts/auto-start`, { method: "POST" }).catch(console.error);
+    }
+    if (enableTTS && ttsProvider === "qwen3-tts") {
+      void fetch(`${getApiBaseUrl()}/settings/qwen-tts/auto-start`, { method: "POST" }).catch(console.error);
+    }
   }, [enableTTS, ttsProvider]);
   const { t } = useI18n();
   const { toolCalls, removeToolCall } = useAppStore();

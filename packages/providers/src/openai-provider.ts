@@ -436,13 +436,13 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   /**
-   * Last line of defence for isMalformedToolCallArgumentsError. The native-tools fallback below
-   * can only fire once per provider instance; afterwards the request carries no `tools`, yet
-   * llama.cpp still parses the model's own tool-call markup server-side and answers 500 when
-   * that call was cut off mid-string (output budget spent on reasoning, or a huge payload).
-   * Rethrowing kills the whole run on a failure that is just "the model ran out of room".
-   * Report it as what it is - an empty, length-truncated turn - so the agent's existing
-   * budget-exhausted recovery (smaller step, reasoning off) handles it.
+   * Handles isMalformedToolCallArgumentsError. llama.cpp answers 500 when a native tool call
+   * was cut off mid-string (output budget spent on reasoning, or a huge payload) - a one-off
+   * "the model ran out of room", not a missing capability. Report it as what it is, an empty
+   * length-truncated turn, so the agent's budget-exhausted recovery (smaller step, reasoning
+   * off) handles it. It must NOT switch native tools off for the provider instance: that flag
+   * is permanent, and the agent's system prompt is written for one protocol per run - after a
+   * silent downgrade the model gets no tool instructions and emits its own markup as text.
    */
   private truncatedToolCallResponse(messages: LLMMessage[], error: unknown): LLMResponse {
     logger.warn("Backend rejected a cut-off tool call (500 parse error) - reporting it as a length-truncated empty turn", {
@@ -506,20 +506,11 @@ export class OpenAIProvider implements LLMProvider {
       // An intentional cancellation (Stop button, run timeout) must propagate immediately -
       // retrying or falling back to a differently-shaped request would just delay it.
       if (isAbortError(error)) throw error;
-      // Backend doesn't implement the `tools` param (or choked on this call's own tool-call
-      // arguments - see isMalformedToolCallArgumentsError): disable native tools for this
-      // instance and retry once WITHOUT them so the run continues on the text protocol.
+      // Backend does not implement the `tools` param:
+      // disable native tools for this instance and retry once WITHOUT them so the run continues
+      // on the text protocol.
       if (useNativeTools && !this.nativeToolsUnsupported && this.rejectsToolsParam(error)) {
         this.nativeToolsUnsupported = true;
-        completion = await this.withRateLimitRetry(() =>
-          this.client.chat.completions.create(buildRequest(false), { signal: merged.signal })
-        );
-      } else if (useNativeTools && !this.nativeToolsUnsupported && this.isMalformedToolCallArgumentsError(error)) {
-        this.nativeToolsUnsupported = true;
-        logger.warn("Backend failed to parse its own native tool-call arguments as JSON (likely a huge write payload) - falling back to the text [TOOL:...] protocol for this provider instance", {
-          provider: this.name,
-          error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
-        });
         completion = await this.withRateLimitRetry(() =>
           this.client.chat.completions.create(buildRequest(false), { signal: merged.signal })
         );
@@ -614,15 +605,6 @@ export class OpenAIProvider implements LLMProvider {
         // Backend can stream but not with `tools`: disable native tools and reopen the
         // stream without them so the run falls back to the text protocol.
         this.nativeToolsUnsupported = true;
-        stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported, false));
-      } else if (useNativeTools && !this.nativeToolsUnsupported && this.isMalformedToolCallArgumentsError(error)) {
-        // Same fallback as above, for the streaming request path - see
-        // isMalformedToolCallArgumentsError's doc comment.
-        this.nativeToolsUnsupported = true;
-        logger.warn("Backend failed to parse its own native tool-call arguments as JSON (likely a huge write payload) - falling back to the text [TOOL:...] protocol for this provider instance", {
-          provider: this.name,
-          error: error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300),
-        });
         stream = await this.withRateLimitRetry(() => createStream(!this.streamOptionsUnsupported, false));
       } else {
         throw error;

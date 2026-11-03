@@ -2,6 +2,7 @@ import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { DatabaseService } from "@ducki/database";
+import { modelServerEnv } from "./secrets-store.js";
 
 const scripts = fileURLToPath(new URL("../../scripts/", import.meta.url));
 let child: ChildProcess | undefined;
@@ -48,7 +49,7 @@ async function start(db: DatabaseService) {
     const python = process.env["CHATTERBOX_PYTHON"] || (existsSync(venv) ? venv : "python");
     const proc = spawn(python, [`${scripts}chatterbox_server.py`], {
       cwd: scripts, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, CHATTERBOX_HOST: "127.0.0.1", CHATTERBOX_PORT: url.port || "80", CHATTERBOX_LAZY_LOAD: "1", CHATTERBOX_MODEL: "v3" },
+      env: { ...process.env, ...(await modelServerEnv(db)), CHATTERBOX_HOST: "127.0.0.1", CHATTERBOX_PORT: url.port || "80", CHATTERBOX_LAZY_LOAD: "1", CHATTERBOX_MODEL: "v3" },
     });
     child = proc;
     proc.stdout?.on("data", (data: Buffer) => console.info(`[Chatterbox] ${data.toString().trim()}`));

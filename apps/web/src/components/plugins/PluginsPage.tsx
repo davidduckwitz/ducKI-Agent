@@ -5,6 +5,7 @@ import { api, type PluginInfo, type PluginWidgetSpec, type PluginBuilderDraft } 
 import { pluginUiUrl } from "../../lib/backendUrl";
 import { toastManager as toast } from "../../lib/toast";
 import { useAppStore } from "../../lib/store";
+import { useI18n } from "../../lib/i18n";
 import { CreatePluginWizardModal } from "./CreatePluginWizardModal";
 
 /** Public plugin catalog API (filterable via ?search= / ?category=). */
@@ -19,6 +20,7 @@ interface CatalogEntry {
 }
 
 export function PluginsPage() {
+  const { language } = useI18n();
   const [tab, setTab] = useState<"installed" | "catalog">("installed");
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -381,8 +383,8 @@ export function PluginsPage() {
               {p.settingsPage && settingsFor === p.name && (
                 <iframe
                   title={`${p.name} Einstellungen`}
-                  src={pluginUiUrl(p.name, "settings")}
-                  sandbox="allow-scripts allow-forms allow-same-origin"
+                  src={`${pluginUiUrl(p.name, "settings")}?lang=${language}`}
+                  sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"
                   className="mt-3 w-full rounded-md border border-border bg-background"
                   style={{ height: 520 }}
                 />

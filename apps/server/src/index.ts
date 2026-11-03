@@ -1,4 +1,6 @@
 import { autoStartChatterbox, stopChatterbox } from "./lib/chatterbox-runtime.js";
+import { autoStartQwenTts, stopQwenTts } from "./lib/qwen-tts-runtime.js";
+import { autoStartPocketTts, stopPocketTts } from "./lib/pocket-tts-runtime.js";
 import { autoStartSttServer, stopSttServer } from "./lib/stt-runtime.js";
 import "dotenv/config";
 import "./bootstrap-workspace.js";
@@ -64,6 +66,8 @@ import { createBuilderManagementTool } from "./lib/builder-management-tool.js";
 import { initScreenshotStorage } from "./lib/screenshot-storage.js";
 import { agentsRouter } from "./routes/agents.js";
 import { chatRouter } from "./routes/chat.js";
+import { componentsRouter, loadComponentOverrides } from "./routes/components.js";
+import { secretsRouter } from "./routes/secrets.js";
 import { cronjobsRouter } from "./routes/cronjobs.js";
 import { codingRouter, CODING_ROOT, resolveCodingSandboxRoot } from "./routes/coding.js";
 import { codingAgentRouter } from "./routes/coding-agent.js";
@@ -364,6 +368,8 @@ function registerRoutes(app: express.Express, database: DatabaseService): void {
 	app.use("/api/tools", toolsRouter);
 	app.use("/api/memory", memoryRouter);
 	app.use("/api/settings", settingsRouter);
+	app.use("/api/components", componentsRouter);
+	app.use("/api/secrets", secretsRouter);
 	app.use("/api/sync", syncRouter);
 	app.use("/api/provider-models", createProviderModelsRouter(database));
 	app.use("/api/crypto", createCryptoPaymentRouter(database));
@@ -728,6 +734,8 @@ async function bootstrap(): Promise<void> {
 
 	app.locals["db"] = db;
 	void autoStartChatterbox(db).catch((error) => console.error("Chatterbox autostart failed", error));
+	void autoStartPocketTts(db).catch((error) => console.error("Pocket TTS autostart failed", error));
+	void autoStartQwenTts(db).catch((error) => console.error("Qwen3-TTS autostart failed", error));
 	void autoStartSttServer(db).catch((error) => console.error("STT server autostart failed", error));
 	app.locals["logger"] = logger;
 	app.locals["provider"] = providerRef.current;
@@ -794,6 +802,7 @@ async function bootstrap(): Promise<void> {
 	const toolEventBroadcaster = initChatToolEventBroadcaster(logger.child("ChatToolEvents"), io);
 	app.locals["toolEventBroadcaster"] = toolEventBroadcaster;
 
+	await loadComponentOverrides(db).catch((error) => logger.warn("Could not load component path overrides", { error: String(error) }));
 	registerRoutes(app, db);
 
 	// Also mounted under /api because that is the only prefix the web client's dev proxy
@@ -883,6 +892,8 @@ async function bootstrap(): Promise<void> {
 		// keep holding their port after a restart.
 		stopAllBackgroundProcesses();
 		stopChatterbox();
+		try { stopPocketTts(); } catch (error) { console.error("Pocket TTS stop failed", error); }
+		try { stopQwenTts(); } catch (error) { console.error("Qwen3-TTS stop failed", error); }
 		try { stopSttServer(); } catch (error) { console.error("STT server stop failed", error); }
 		void mcpRegistry.shutdown();
 		io.close();

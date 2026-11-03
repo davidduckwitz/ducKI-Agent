@@ -1,8 +1,13 @@
 import { ChatterboxControls } from "./ChatterboxControls";
+import { QwenTtsControls } from "./QwenTtsControls";
+import { PocketTtsControls } from "./PocketTtsControls";
+import { TtsVoiceLibrary } from "./TtsVoiceLibrary";
+import { AiStorageCard } from "./AiStorageCard";
 import { SttServerControls } from "./SttServerControls";
 import { useEffect, useState } from "react";
 import { Volume2, Mic, MessageCircle } from "lucide-react";
-import { useVoiceSettings } from "../../hooks/useVoiceSettings";
+import { useVoiceSettings, type TTSProvider } from "../../hooks/useVoiceSettings";
+import { getApiBaseUrl } from "../../lib/backendUrl";
 import { providerSupportsRealtimeStreaming, providerSupportsEmotionInstructions } from "../../lib/ttsProviderCapabilities";
 
 interface VoiceOption {
@@ -63,10 +68,10 @@ export function VoiceSettings() {
     setVoiceRetryPromptEnabled,
   } = useVoiceSettings();
 
-  const providerSupportsStyle = ttsProvider === "elevenlabs" || ttsProvider === "chatterbox";
+  const providerSupportsStyle = ttsProvider === "elevenlabs" || ttsProvider === "chatterbox" || ttsProvider === "qwen3-tts";
   const providerSupportsVoicePicker =
-    ttsProvider === "openai" || ttsProvider === "elevenlabs" || ttsProvider === "chatterbox" || ttsProvider === "breeze";
-  const providerIsLocal = ttsProvider === "piper" || ttsProvider === "local" || ttsProvider === "chatterbox";
+    ttsProvider === "openai" || ttsProvider === "elevenlabs" || ttsProvider === "chatterbox" || ttsProvider === "qwen3-tts" || ttsProvider === "pocket-tts" || ttsProvider === "breeze";
+  const providerIsLocal = ttsProvider === "piper" || ttsProvider === "local" || ttsProvider === "chatterbox" || ttsProvider === "qwen3-tts" || ttsProvider === "pocket-tts";
   const providerHasSearchableVoices = ttsProvider === "breeze";
 
   const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>([]);
@@ -74,7 +79,7 @@ export function VoiceSettings() {
 
 
   useEffect(() => {
-    if (ttsProvider !== "elevenlabs" && ttsProvider !== "chatterbox" && ttsProvider !== "breeze") {
+    if (ttsProvider !== "elevenlabs" && ttsProvider !== "chatterbox" && ttsProvider !== "qwen3-tts" && ttsProvider !== "pocket-tts" && ttsProvider !== "breeze") {
       setAvailableVoices([]);
       return;
     }
@@ -298,22 +303,24 @@ export function VoiceSettings() {
                 <label className="block text-sm font-medium">TTS-Provider</label>
                 <select
                   value={ttsProvider}
-                  onChange={(e) =>
-                    setTTSProvider(
-                      e.target.value as
-                        | "web-speech-api"
-                        | "openai"
-                        | "elevenlabs"
-                        | "piper"
-                        | "local"
-                        | "silero"
-                        | "chatterbox"
-                        | "breeze"
-                    )
-                  }
+                  onChange={(e) => {
+                    const next = e.target.value as TTSProvider;
+                    setTTSProvider(next);
+                    // Keep the server default in sync (also drives autostart of local engines and
+                    // clients that don't send a provider per request).
+                    if (next !== "web-speech-api" && next !== "silero") {
+                      void fetch(`${getApiBaseUrl()}/settings/DEFAULT_TEXT_TO_SPEECH_PROVIDER`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ value: next }),
+                      }).catch(console.error);
+                    }
+                  }}
                   className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
                 >
                   <option value="chatterbox">Chatterbox Multilingual V3 (lokal, Emotion-Regler)</option>
+                  <option value="qwen3-tts">Qwen3-TTS (lokal, Stimmklon, 10 Sprachen)</option>
+                  <option value="pocket-tts">Pocket TTS (lokal, CPU, Streaming)</option>
                   <option value="breeze">Breeze TTS (Cloud, Streaming, freie Emotion-Steuerung)</option>
                   <option value="web-speech-api">Web Speech API (Browser-native, inkl. Windows Neural Voices)</option>
                   <option value="openai">OpenAI TTS (Cloud)</option>
@@ -325,6 +332,9 @@ export function VoiceSettings() {
                   </option>
                 </select>
                 {ttsProvider === "chatterbox" && <ChatterboxControls />}
+                {ttsProvider === "qwen3-tts" && <QwenTtsControls />}
+                {ttsProvider === "pocket-tts" && <PocketTtsControls />}
+                {(ttsProvider === "qwen3-tts" || ttsProvider === "chatterbox" || ttsProvider === "pocket-tts") && <TtsVoiceLibrary />}
                 {ttsProvider === "breeze" && (
                   <p className="text-xs text-muted-foreground">
                     Breeze-API-Key wird unter Settings → Speech hinterlegt. Cloud-Dienst ohne Selbst-Hosting-Option.
@@ -404,7 +414,52 @@ export function VoiceSettings() {
                 </div>
               )}
 
-              {providerSupportsVoicePicker && ttsProvider !== "chatterbox" && (
+              {providerSupportsVoicePicker && ttsProvider === "qwen3-tts" && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Stimme</label>
+                  <select
+                    value={ttsVoice || "default"}
+                    onChange={(e) => setTTSVoice(e.target.value === "default" ? "" : e.target.value)}
+                    className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {availableVoices.length === 0 && <option value="default">Qwen3-TTS Standard</option>}
+                    {availableVoices.map((v) => (
+                      <option key={v.voiceId} value={v.voiceId}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Base-Modelle klonen aus Referenzaufnahmen unter{" "}
+                    <code className="rounded bg-muted px-1">apps/server/scripts/voices/</code> (gleicher Ordner wie
+                    Chatterbox), CustomVoice-Modelle bieten feste Sprecher. Die Liste erscheint, sobald der Server läuft.
+                  </p>
+                </div>
+              )}
+
+              {providerSupportsVoicePicker && ttsProvider === "pocket-tts" && (
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium">Stimme</label>
+                  <select
+                    value={ttsVoice || "default"}
+                    onChange={(e) => setTTSVoice(e.target.value === "default" ? "" : e.target.value)}
+                    className="w-full px-3 py-1.5 rounded border border-border bg-background text-sm hover:border-foreground/50 focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="default">Standard (Referenzstimme, sonst Stimme der Sprache)</option>
+                    {availableVoices.map((v) => (
+                      <option key={v.voiceId} value={v.voiceId}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Eingebaute Stimmen oder eigene Aufnahmen aus der Referenzstimmen-Bibliothek (Klon nur nach Freischaltung bei Hugging Face).
+                    Die Liste erscheint, sobald der Server läuft.
+                  </p>
+                </div>
+              )}
+
+              {providerSupportsVoicePicker && ttsProvider !== "chatterbox" && ttsProvider !== "qwen3-tts" && ttsProvider !== "pocket-tts" && (
                 <div className="space-y-2">
                   <label className="block text-sm font-medium">Stimme (Voice-ID)</label>
                   <input
@@ -469,7 +524,7 @@ export function VoiceSettings() {
                 </div>
               )}
 
-              {ttsProvider === "web-speech-api" && (
+              {(
                 <div className="space-y-4 rounded bg-accent/10 p-3">
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -485,8 +540,19 @@ export function VoiceSettings() {
                       onChange={(e) => setTTSSpeed(parseFloat(e.target.value))}
                       className="w-full"
                     />
+                    {ttsProvider !== "web-speech-api" && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {ttsSpeed !== 1 && (
+                          <button type="button" className="mr-2 underline" onClick={() => setTTSSpeed(1)}>Auf 1.0x zurücksetzen</button>
+                        )}
+                        {providerSupportsRealtimeStreaming(ttsProvider)
+                          ? "Im Streaming-Modus ändert das Tempo auch die Tonhöhe – für die unverfälschte Stimme (z. B. Klon) bei 1.0x lassen."
+                          : "Tempo der Wiedergabe; die Tonhöhe bleibt erhalten."}
+                      </p>
+                    )}
                   </div>
 
+                  {ttsProvider === "web-speech-api" && (
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-sm font-medium">Tonhöhe</label>
@@ -502,6 +568,7 @@ export function VoiceSettings() {
                       className="w-full"
                     />
                   </div>
+                  )}
 
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -626,6 +693,9 @@ export function VoiceSettings() {
           </div>
         </div>
       </section>
+
+      {/* Lokale Engines: Platz verwalten */}
+      <AiStorageCard />
 
       {/* Info */}
       <div className="rounded-lg bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 p-3 text-sm text-blue-900 dark:text-blue-100">

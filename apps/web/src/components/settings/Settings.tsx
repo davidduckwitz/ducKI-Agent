@@ -1,4 +1,8 @@
 import { ChatterboxControls } from "./ChatterboxControls";
+import { QwenTtsControls } from "./QwenTtsControls";
+import { TtsVoiceLibrary } from "./TtsVoiceLibrary";
+import { AiStorageCard } from "./AiStorageCard";
+import { SecretsSettings } from "./SecretsSettings";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -11,10 +15,10 @@ import { ACCENT_COLORS, ACCENT_SWATCH_CLASS, THEME_FONTS, THEME_FONT_STACKS, THE
 import { cn } from "../../lib/utils";
 import { ChatCleanupSettings } from "./ChatCleanupSettings";
 import { ProviderConfigSettings } from "./ProviderConfigSettings";
-import { CredentialManagementSettings } from "./CredentialManagementSettings";
 import { DatabaseSettings } from "./DatabaseSettings";
 import { AnimationSettings } from "./AnimationSettings";
 import { BackendSettings } from "./BackendSettings";
+import { ComponentsSettings } from "./ComponentsSettings";
 import { CloudBackupSettings } from "./CloudBackupSettings";
 import { VoiceSettings } from "./VoiceSettings";
 import { CodingAgentSettings } from "./CodingAgentSettings";
@@ -380,6 +384,8 @@ const PREDEFINED_FIELDS: SettingField[] = [
     defaultValue: "chatterbox",
     options: [
       { label: "Chatterbox Multilingual V3 (lokal, Emotion-Regler)", value: "chatterbox" },
+      { label: "Qwen3-TTS (lokal, Stimmklon, 10 Sprachen)", value: "qwen3-tts" },
+      { label: "Pocket TTS (lokal, CPU, Streaming, 7 Sprachen)", value: "pocket-tts" },
       { label: "Breeze (Cloud, Streaming, freie Emotion-Steuerung)", value: "breeze" },
       { label: "OpenAI TTS (Cloud)", value: "openai" },
       { label: "ElevenLabs (Cloud)", value: "elevenlabs" },
@@ -399,7 +405,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
     key: "CHATTERBOX_DEFAULT_VOICE",
     label: "Chatterbox Standard-Stimme",
     description:
-      "Dateiname (ohne .wav) einer Referenzaufnahme unter apps/server/scripts/voices/, z.B. 'emma' fuer voices/emma.wav. Leer = eingebaute Standardstimme. Ueberschreibbar im Voice-Tab (dort als Dropdown).",
+      "Name einer Referenzstimme aus der Bibliothek (siehe 'Referenzstimmen' unten, Upload moeglich). Leer = 'cryptnana-1', falls vorhanden, sonst eingebaute Standardstimme. Ueberschreibbar im Voice-Tab (dort als Dropdown).",
     type: "text",
     section: "Speech",
     defaultValue: "",
@@ -411,6 +417,55 @@ const PREDEFINED_FIELDS: SettingField[] = [
     type: "number",
     section: "Speech",
     defaultValue: "0.5",
+  },
+  {
+    key: "POCKET_TTS_SERVER_URL",
+    label: "Pocket TTS Server-URL",
+    description: "Adresse des lokalen Pocket-TTS-Servers (apps/server/scripts/pocket_tts_server.py).",
+    type: "text",
+    section: "Speech",
+    defaultValue: "http://127.0.0.1:8893",
+  },
+  {
+    key: "POCKET_TTS_DEFAULT_VOICE",
+    label: "Pocket TTS Standard-Stimme",
+    description:
+      "Eingebaute Stimme (z.B. juergen, alba, estelle) oder Name einer Referenzaufnahme aus der Bibliothek. Leer = Standardstimme der jeweiligen Sprache. Ueberschreibbar im Voice-Tab.",
+    type: "text",
+    section: "Speech",
+    defaultValue: "",
+  },
+  {
+    key: "QWEN_TTS_SERVER_URL",
+    label: "Qwen3-TTS Server-URL",
+    description: "Adresse des lokalen Qwen3-TTS-Inferenz-Servers (apps/server/scripts/qwen3_tts_server.py).",
+    type: "text",
+    section: "Speech",
+    defaultValue: "http://127.0.0.1:8892",
+  },
+  {
+    key: "QWEN_TTS_MODEL",
+    label: "Qwen3-TTS Modell",
+    description:
+      "Base = Stimmklon aus Referenz-.wav (voices/), CustomVoice = feste Sprecher. Nur 1.7B-CustomVoice versteht Stil-Anweisungen. Wirkt nach Server-Neustart; erster Start laedt die Gewichte von Hugging Face.",
+    type: "select",
+    section: "Speech",
+    defaultValue: "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+    options: [
+      { label: "0.6B Base (Stimmklon, kleinster VRAM-Bedarf)", value: "Qwen/Qwen3-TTS-12Hz-0.6B-Base" },
+      { label: "0.6B CustomVoice (feste Sprecher)", value: "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice" },
+      { label: "1.7B Base (Stimmklon, bessere Qualitaet)", value: "Qwen/Qwen3-TTS-12Hz-1.7B-Base" },
+      { label: "1.7B CustomVoice (feste Sprecher + Stil-Anweisung)", value: "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice" },
+    ],
+  },
+  {
+    key: "QWEN_TTS_DEFAULT_VOICE",
+    label: "Qwen3-TTS Standard-Stimme",
+    description:
+      "Base: Name einer Referenzstimme aus der Bibliothek (Upload unter 'Referenzstimmen'), leer = 'cryptnana-1' bzw. erste vorhandene. CustomVoice: Sprecher wie Ryan, Aiden, Vivian. Ueberschreibbar im Voice-Tab.",
+    type: "text",
+    section: "Speech",
+    defaultValue: "",
   },
   {
     key: "BREEZE_API_KEY",
@@ -2155,6 +2210,8 @@ export function Settings() {
         </div>
       )}
 
+      {activeTab === "Backend" && <ComponentsSettings />}
+
       {activeTab === "Database" && <DatabaseSettings />}
 
       {activeTab === "Cloud-Backup" && <CloudBackupSettings />}
@@ -2200,7 +2257,7 @@ export function Settings() {
         </div>
       )}
 
-      {activeTab === "Credentials" && <CredentialManagementSettings />}
+      {activeTab === "Credentials" && <SecretsSettings />}
 
       {activeTab === "Chat Cleanup" && (
         <div className="card space-y-3">
@@ -2265,6 +2322,9 @@ export function Settings() {
       {activeTab !== "Other" && activeTab !== "Theme" && activeTab !== "Overview" && activeTab !== "Pets" && activeTab !== "Chat Cleanup" && activeTab !== "Provider" && activeTab !== "Database" && activeTab !== "Backend" && activeTab !== "Cloud-Backup" && activeTab !== "Voice" && activeTab !== "Agent" && activeTab !== "Bots" && (
         <div className="space-y-4">
           {activeTab === "Speech" && <ChatterboxControls />}
+          {activeTab === "Speech" && <QwenTtsControls />}
+          {activeTab === "Speech" && <TtsVoiceLibrary />}
+          {activeTab === "Speech" && <AiStorageCard />}
           {(SUBSECTIONS[activeTab] ?? []).map((group) => {
             const groupKeys = new Set(group.keys);
             const fields = PREDEFINED_FIELDS.filter((f) => f.section === activeTab && groupKeys.has(f.key));

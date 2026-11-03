@@ -1,4 +1,5 @@
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
+import { loadOptionalModule } from "@ducki/shared";
 import { existsSync } from "node:fs";
 import { execSync, fork, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
@@ -332,8 +333,9 @@ async function callWorker(input: Record<string, unknown>): Promise<ToolResult> {
   });
 }
 
+// Not shipped in the desktop installer: the "browser" component pack provides it on demand.
 function getPuppeteer(): Promise<typeof import("puppeteer-core")> {
-  return import("puppeteer-core") as Promise<typeof import("puppeteer-core")>;
+  return loadOptionalModule("puppeteer-core", () => import("puppeteer-core") as Promise<typeof import("puppeteer-core")>);
 }
 
 function makeSessionId(): string {

@@ -4725,15 +4725,16 @@ export class Agent {
         protocolErrorRecovery: this.parseBooleanSetting(get("AGENT_PROTOCOL_ERROR_RECOVERY"), defaults.protocolErrorRecovery),
         staleReadLoopThreshold: this.parseNumberSetting(get("AGENT_STALE_READ_STREAK"), defaults.staleReadLoopThreshold, 2, 20),
         selfRepairEnabled: this.parseBooleanSetting(get("AGENT_SELF_REPAIR"), defaults.selfRepairEnabled),
-        // Local runtimes (LM Studio / Ollama) share this ceiling between hidden reasoning and the
-        // answer, so a small model stuck in a think-loop burns the whole 16k before anything
-        // happens. They get a tighter default (AGENT_LOCAL_MAX_OUTPUT_TOKENS, 0 = off); an
-        // explicit AGENT_MAX_OUTPUT_TOKENS always wins.
+        // Optional tighter ceiling for local runtimes (LM Studio / Ollama): reasoning and answer
+        // share it, so a small model stuck in a think-loop burns the whole budget before acting.
+        // Default equals the general limit (= no effect): a low value starves the answer after
+        // long reasoning and cuts tool calls off mid-JSON (llama-server answers 500). 0 = off;
+        // an explicit AGENT_MAX_OUTPUT_TOKENS always wins.
         maxOutputTokens: this.parseNumberSetting(
           get("AGENT_MAX_OUTPUT_TOKENS"),
           (this.provider.name === "lmstudio" || this.provider.name === "ollama")
             ? (() => {
-                const cap = this.parseNumberSetting(get("AGENT_LOCAL_MAX_OUTPUT_TOKENS"), 6144, 0, 128000);
+                const cap = this.parseNumberSetting(get("AGENT_LOCAL_MAX_OUTPUT_TOKENS"), 16384, 0, 128000);
                 return cap > 0 ? Math.min(defaults.maxOutputTokens, Math.max(512, cap)) : defaults.maxOutputTokens;
               })()
             : defaults.maxOutputTokens,

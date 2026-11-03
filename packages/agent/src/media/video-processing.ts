@@ -6,15 +6,13 @@
  * the context window and the vision cost for no benefit -- a sparse set of frames plus the
  * full spoken transcript covers "what was said" and "roughly what was shown" without that.
  *
- * ffmpeg-static/ffprobe-static ship prebuilt binaries per-platform, so unlike the sharp
- * dynamic-import in agent.ts's compressImageBuffer() this is a hard dependency: without a
- * working ffmpeg there is no way to process video at all, so failures here are logged and
- * surfaced as "video analysis unavailable" rather than silently skipped.
+ * ffmpeg is located through media/binaries.ts (settings path, installed component pack, bundled
+ * ffmpeg-static or system PATH). Without a working ffmpeg there is no way to process video at
+ * all, so that case is logged and surfaced as "video analysis unavailable" rather than silently
+ * skipped. ffprobe is optional: the duration falls back to parsing `ffmpeg -i`.
  */
 import ffmpeg from "fluent-ffmpeg";
-import ffmpegPathModule from "ffmpeg-static";
-// @ts-expect-error ffprobe-static ships no type declarations
-import ffprobeStatic from "ffprobe-static";
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +20,15 @@ import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { createSpeechToTextProvider, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault } from "@ducki/providers";
 
-const ffmpegPath = ffmpegPathModule as unknown as string | null;
-const ffprobePath = (ffprobeStatic as { path?: string } | null)?.path;
-if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
-if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath);
+import { findFfmpeg, findFfprobe } from "./binaries.js";
+
+/** Points fluent-ffmpeg at the currently resolvable binaries; returns the ffmpeg path (if any). */
+async function prepareFfmpeg(): Promise<{ ffmpegPath?: string; ffprobePath?: string }> {
+  const [ffmpegPath, ffprobePath] = await Promise.all([findFfmpeg(), findFfprobe()]);
+  if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+  if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath);
+  return { ffmpegPath, ffprobePath };
+}
 
 /** Cap on sampled frames -- keeps vision cost/context bounded regardless of video length. */
 const MAX_FRAMES = 6;
@@ -90,7 +93,19 @@ export async function transcribeExtractedAudio(db: DatabaseService, audioBuffer:
   return text.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}\.\d{3}\]\s*/gm, "").trim();
 }
 
-function probeDurationSec(filePath: string): Promise<number> {
+/** ffprobe-less fallback: ffmpeg prints "Duration: HH:MM:SS.xx" to stderr when run with only -i. */
+function probeDurationViaFfmpeg(ffmpegPath: string, filePath: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath, ["-hide_banner", "-i", filePath], { windowsHide: true, timeout: 30_000 }, (_error, _stdout, stderr) => {
+      const m = String(stderr).match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (!m) return reject(new Error("duration not reported by ffmpeg"));
+      resolve(Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]));
+    });
+  });
+}
+
+function probeDurationSec(filePath: string, binaries: { ffmpegPath?: string; ffprobePath?: string }): Promise<number> {
+  if (!binaries.ffprobePath && binaries.ffmpegPath) return probeDurationViaFfmpeg(binaries.ffmpegPath, filePath);
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err: Error | null, data: { format?: { duration?: number } }) => {
       if (err) return reject(err);
@@ -153,8 +168,9 @@ async function extractSampledFrames(inputPath: string, durationSec: number, work
  *  large, or ffmpeg missing/failing -- so callers can fall back to treating it as a plain
  *  unprocessed attachment instead of failing the whole turn. */
 export async function analyzeVideo(db: DatabaseService, logger: Logger, videoBuffer: Buffer): Promise<VideoAnalysis | null> {
-  if (!ffmpegPath) {
-    logger.warn("ffmpeg-static binary not available, skipping video analysis");
+  const binaries = await prepareFfmpeg();
+  if (!binaries.ffmpegPath) {
+    logger.warn("ffmpeg not available (not installed, not in Settings, not on PATH), skipping video analysis");
     return null;
   }
   if (videoBuffer.length > MAX_INPUT_BYTES) {
@@ -174,7 +190,7 @@ export async function analyzeVideo(db: DatabaseService, logger: Logger, videoBuf
 
     let durationSec = 0;
     try {
-      durationSec = await probeDurationSec(inputPath);
+      durationSec = await probeDurationSec(inputPath, binaries);
     } catch (error) {
       logger.warn("ffprobe failed, continuing without a known duration", {
         error: error instanceof Error ? error.message : String(error),

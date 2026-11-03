@@ -21,7 +21,12 @@ export {
   type PluginBrowserCapabilities,
   type PluginBrowserFrame,
   type PluginBrowserSessionInfo,
+  type PluginSpeechCapabilities,
+  type PluginSpeechSynthesisOptions,
+  type PluginVoiceOption,
+  type PluginReferenceVoice,
 } from "./agent-capabilities.js";
+export { transcodeAudio, type AudioClip, type AudioExportFormat, type TranscodeAudioOptions, type TranscodeAudioResult } from "../media/audio-transcode.js";
 export {
   parsePluginManifest,
   parseOAuthConfig,

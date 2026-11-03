@@ -61,6 +61,7 @@ export function useSpeechSynthesis(): UseSpeechSynthesisResult {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text,
+            provider: ttsProvider,
             voice: ttsVoice || undefined,
             emotionStyle: ttsEmotionStyle,
             emotionInstructions: ttsEmotionInstructions || undefined,

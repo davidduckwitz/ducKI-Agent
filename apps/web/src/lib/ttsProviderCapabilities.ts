@@ -8,7 +8,7 @@ import type { TTSProvider } from "../hooks/useVoiceSettings";
  * the playback path) and VoiceSettings.tsx (which can hint at this in the UI).
  */
 export function providerSupportsRealtimeStreaming(provider: TTSProvider): boolean {
-  return provider === "chatterbox" || provider === "breeze";
+  return provider === "chatterbox" || provider === "qwen3-tts" || provider === "pocket-tts" || provider === "breeze";
 }
 
 /**
@@ -19,5 +19,5 @@ export function providerSupportsRealtimeStreaming(provider: TTSProvider): boolea
  * rather than hiding it outright.
  */
 export function providerSupportsEmotionInstructions(provider: TTSProvider): boolean {
-  return provider === "breeze" || provider === "openai";
+  return provider === "breeze" || provider === "openai" || provider === "qwen3-tts";
 }

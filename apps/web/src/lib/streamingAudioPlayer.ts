@@ -7,6 +7,8 @@ export interface StreamingAudioPlayerOptions {
   voice?: string;
   emotionStyle?: string;
   emotionInstructions?: string;
+  /** Server-side TTS engine; overrides the server's DEFAULT_TEXT_TO_SPEECH_PROVIDER setting. */
+  provider?: string;
   language?: string;
   volume?: number;
   playbackRate?: number;
@@ -56,6 +58,7 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
 
   const textQueue: string[] = [];
   let sending = false;
+  let pcmCarry: number | null = null;
 
   const playingListeners = new Set<(v: boolean) => void>();
   const errorListeners = new Set<(m: string) => void>();
@@ -112,7 +115,21 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
   const schedulePcmChunk = (buffer: ArrayBuffer) => {
     const ctx = ensureAudioContext();
     if (!ctx || !sampleRate) return;
-    const int16 = new Int16Array(buffer);
+    // Whole 16-bit samples only: an odd trailing byte is carried into the next frame so the sample
+    // alignment (and thus the voice) survives arbitrary network slicing.
+    let bytes = new Uint8Array(buffer);
+    if (pcmCarry !== null) {
+      const joined = new Uint8Array(1 + bytes.length);
+      joined[0] = pcmCarry;
+      joined.set(bytes, 1);
+      bytes = joined;
+      pcmCarry = null;
+    }
+    if (bytes.length % 2) {
+      pcmCarry = bytes[bytes.length - 1] ?? null;
+      bytes = bytes.subarray(0, bytes.length - 1);
+    }
+    const int16 = new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length));
     if (int16.length === 0) return;
     const audioBuffer = ctx.createBuffer(1, int16.length, sampleRate);
     const channel = audioBuffer.getChannelData(0);
@@ -172,6 +189,7 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
         voice: options.voice,
         emotionStyle: options.emotionStyle,
         emotionInstructions: options.emotionInstructions,
+        provider: options.provider,
         language: options.language,
       })
     );
@@ -198,6 +216,7 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
           containerMimeType = msg.containerMimeType;
         } else if (msg.type === "done") {
           sending = false;
+          pcmCarry = null;
           sendNextQueued();
         } else if (msg.type === "error") {
           sending = false;

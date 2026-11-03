@@ -1,6 +1,6 @@
 {
   "name": "@ducki/tauri-desktop",
-  "version": "1.0.2",
+  "version": "1.0.12",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "build:prep": "node build.js",
     "art": "node scripts/generate-installer-art.mjs",
     "check": "cd src-tauri && cargo clippy --all-targets -- -D warnings",
-    "dist": "pnpm -w build:web && pnpm -w build:server && pnpm build:prep && tauri build"
+    "dist": "pnpm -w build:web:desktop && pnpm -w build:server && pnpm build:prep && tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.0",

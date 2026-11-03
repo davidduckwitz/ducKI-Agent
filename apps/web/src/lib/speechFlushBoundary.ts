@@ -1,4 +1,4 @@
-// Chatterbox renders whole utterances (T3 has no incremental text input) and each request pays a
+// Whole-sentence chunking (Chatterbox, Qwen3-TTS, Pocket TTS): Chatterbox renders whole utterances (T3 has no incremental text input) and each request pays a
 // fixed generation overhead, so every mid-sentence cut produces an audible pause plus a prosody
 // reset. The server-side ceiling is ~2048 text tokens (~2800 German chars, see splitForSpeech.ts),
 // so these caps are nowhere near the model limit - they only bound time-to-first-audio.

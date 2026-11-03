@@ -89,6 +89,7 @@ export function useStreamingSpeech(streamingContent: string, active: boolean): {
   const ensureStreamPlayer = (): StreamingAudioPlayer => {
     if (!playerRef.current) {
       const player = createStreamingAudioPlayer({
+        provider: ttsProvider,
         voice: ttsVoice || undefined,
         emotionStyle: ttsEmotionStyle,
         emotionInstructions: ttsEmotionInstructions || undefined,
@@ -184,7 +185,7 @@ export function useStreamingSpeech(streamingContent: string, active: boolean): {
 
     const unspoken = raw.slice(spokenUpToRef.current);
     const boundary = streaming
-      ? speechFlushBoundary(unspoken, spokenUpToRef.current === 0, ttsProvider === "chatterbox")
+      ? speechFlushBoundary(unspoken, spokenUpToRef.current === 0, ttsProvider === "chatterbox" || ttsProvider === "qwen3-tts" || ttsProvider === "pocket-tts")
       : (() => {
             let end = 0;
             for (const match of unspoken.matchAll(/[.!?]["')\]]*\s+|\n+/g)) {

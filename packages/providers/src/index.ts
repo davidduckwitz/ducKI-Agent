@@ -22,6 +22,8 @@ import { ElevenLabsTextToSpeechProvider } from "./elevenlabs-text-to-speech-prov
 import { PiperTextToSpeechProvider, type PiperTextToSpeechProviderOptions } from "./piper-text-to-speech-provider.js";
 import { LocalCommandTextToSpeechProvider } from "./local-command-text-to-speech-provider.js";
 import { ChatterboxTextToSpeechProvider } from "./chatterbox-text-to-speech-provider.js";
+import { Qwen3TextToSpeechProvider } from "./qwen3-text-to-speech-provider.js";
+import { PocketTextToSpeechProvider } from "./pocket-text-to-speech-provider.js";
 import { BreezeTextToSpeechProvider } from "./breeze-text-to-speech-provider.js";
 
 export type ProviderName = "openai" | "openrouter" | "lmstudio" | "ollama" | "claude";
@@ -187,14 +189,18 @@ export {
   PiperTextToSpeechProvider,
   LocalCommandTextToSpeechProvider,
   ChatterboxTextToSpeechProvider,
+  Qwen3TextToSpeechProvider,
+  PocketTextToSpeechProvider,
   BreezeTextToSpeechProvider,
 };
 export { listElevenLabsVoices, type ElevenLabsVoiceSummary } from "./elevenlabs-text-to-speech-provider.js";
 export { listChatterboxVoices, isChatterboxServerReachable, type ChatterboxVoiceSummary } from "./chatterbox-text-to-speech-provider.js";
+export { listPocketVoices, isPocketServerReachable, type PocketVoiceSummary } from "./pocket-text-to-speech-provider.js";
+export { listQwen3Voices, isQwen3ServerReachable, type Qwen3VoiceSummary } from "./qwen3-text-to-speech-provider.js";
 export { listBreezeVoices, type BreezeVoiceSummary } from "./breeze-text-to-speech-provider.js";
 
 export type TextToSpeechProviderFactoryConfig = {
-  name: "openai" | "elevenlabs" | "piper" | "local" | "chatterbox" | "breeze";
+  name: "openai" | "elevenlabs" | "piper" | "local" | "chatterbox" | "qwen3-tts" | "pocket-tts" | "breeze";
   baseUrl?: string;
   apiKey?: string;
   model?: string;
@@ -274,6 +280,20 @@ export function createTextToSpeechProvider(config: TextToSpeechProviderFactoryCo
         emotionExaggeration: config.emotionExaggeration,
         timeoutMs: config.timeoutMs,
       });
+    case "qwen3-tts":
+      return new Qwen3TextToSpeechProvider({
+        baseUrl: "",
+        serverUrl: config.serverUrl ?? process.env["QWEN_TTS_SERVER_URL"] ?? "http://127.0.0.1:8892",
+        voice: config.voice,
+        timeoutMs: config.timeoutMs,
+      });
+    case "pocket-tts":
+      return new PocketTextToSpeechProvider({
+        baseUrl: "",
+        serverUrl: config.serverUrl ?? process.env["POCKET_TTS_SERVER_URL"] ?? "http://127.0.0.1:8893",
+        voice: config.voice,
+        timeoutMs: config.timeoutMs,
+      });
     case "breeze":
       return new BreezeTextToSpeechProvider({
         baseUrl: "",
@@ -295,6 +315,8 @@ export function getDefaultTextToSpeechProvider(): TextToSpeechProvider {
     | "piper"
     | "local"
     | "chatterbox"
+    | "qwen3-tts"
+    | "pocket-tts"
     | "breeze";
   return createTextToSpeechProvider({ name: providerName });
 }

@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { getApiBaseUrl, pluginUiUrl } from "../../lib/backendUrl";
 import { usePlugins } from "../../lib/usePlugins";
 import { useAppStore } from "../../lib/store";
+import { useI18n } from "../../lib/i18n";
 
 /**
  * Full-page host for a plugin mini-app. Host bridges are capability-gated: iframe origin,
@@ -19,7 +20,9 @@ export function PluginFrontendView() {
   const socket = useAppStore((s) => s.socket);
   const refreshBrowserSessions = useAppStore((s) => s.refreshBrowserSessions);
 
-  const frontendSrc = useMemo(() => pluginUiUrl(name, "frontend"), [name]);
+  const { language } = useI18n();
+  // ?lang= lets plugin pages follow the app language; changing it reloads the iframe.
+  const frontendSrc = useMemo(() => `${pluginUiUrl(name, "frontend")}?lang=${language}`, [name, language]);
   const frontendOrigin = useMemo(() => {
     try {
       return new URL(frontendSrc, window.location.href).origin;
@@ -161,7 +164,7 @@ export function PluginFrontendView() {
         ref={iframeRef}
         title={`${name} Frontend`}
         src={frontendSrc}
-        sandbox="allow-scripts allow-forms allow-same-origin"
+        sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"
         allow={cameraAllowed ? "camera" : undefined}
         className="min-h-0 flex-1 w-full border-0 bg-background"
       />

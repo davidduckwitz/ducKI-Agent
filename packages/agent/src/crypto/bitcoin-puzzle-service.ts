@@ -16,6 +16,7 @@ import { createInterface } from "node:readline";
 import { resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { BitcoinPuzzleSolver, type SolverState, type SolverConfig, type AttemptRecord } from "./bitcoin-puzzle-solver.js";
+import { loadOptionalModule } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 
 /**
@@ -996,7 +997,7 @@ export class BitcoinPuzzleService {
       console.log(`[BitcoinPuzzleService] Importing found mnemonic to wallet with label: ${label}`);
 
       // Validiere Mnemonic mit bip39
-      const bip39 = await import("bip39");
+      const bip39 = await loadOptionalModule("bip39", () => import("bip39"));
       if (!bip39.validateMnemonic(mnemonic)) {
         console.error(`[BitcoinPuzzleService] Invalid mnemonic format`);
         return { success: false, error: "Invalid mnemonic format" };
@@ -1008,7 +1009,7 @@ export class BitcoinPuzzleService {
       // Leite Schlüssel mit BIP32 ab - USE dynamicimport for bip32
       let address: string | undefined;
       try {
-        const bip32Module = await import("bip32");
+        const bip32Module = await loadOptionalModule("bip32", () => import("bip32"));
         // Handle different export styles (default export or named export)
         const bip32 = (bip32Module as any).default || bip32Module;
 
@@ -1017,7 +1018,7 @@ export class BitcoinPuzzleService {
           const child = root.derivePath("m/44'/0'/0'/0/0"); // Standard BIP44 path for Bitcoin
 
           // Generiere Adresse mit bitcoinjs-lib
-          const bitcoinjslib = await import("bitcoinjs-lib");
+          const bitcoinjslib = await loadOptionalModule("bitcoinjs-lib", () => import("bitcoinjs-lib"));
           const result = bitcoinjslib.payments.p2pkh({ pubkey: child.publicKey });
           address = result.address;
         } else {

@@ -135,6 +135,16 @@ export const SUBSECTIONS: Record<string, SubsectionGroup[]> = {
       keys: ["CHATTERBOX_SERVER_URL", "CHATTERBOX_DEFAULT_VOICE", "CHATTERBOX_EMOTION_EXAGGERATION"],
     },
     {
+      name: "Sprachausgabe (TTS) - Pocket TTS (lokal)",
+      icon: Volume2,
+      keys: ["POCKET_TTS_SERVER_URL", "POCKET_TTS_DEFAULT_VOICE"],
+    },
+    {
+      name: "Sprachausgabe (TTS) - Qwen3-TTS (lokal)",
+      icon: Volume2,
+      keys: ["QWEN_TTS_SERVER_URL", "QWEN_TTS_MODEL", "QWEN_TTS_DEFAULT_VOICE"],
+    },
+    {
       name: "Sprachausgabe (TTS) - Breeze (Cloud, Streaming)",
       icon: Volume2,
       keys: ["BREEZE_API_KEY", "BREEZE_DEFAULT_VOICE_ID", "BREEZE_WS_URL"],

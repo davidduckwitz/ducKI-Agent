@@ -15,7 +15,8 @@ import { tmpdir } from "os";
 import express from "express";
 import { transcribeAudioBuffer } from "../lib/audio-transcription.js";
 import { synthesizeSpeech } from "../lib/audio-synthesis.js";
-import { listElevenLabsVoices, listBreezeVoices, listChatterboxVoices, isChatterboxServerReachable } from "@ducki/providers";
+import { isChatterboxServerReachable, isQwen3ServerReachable, isPocketServerReachable } from "@ducki/providers";
+import { listTtsVoices } from "../lib/tts-voice-listing.js";
 
 export const chatRouter: IRouter = Router();
 
@@ -71,6 +72,7 @@ chatRouter.post("/speak", async (req, res) => {
   try {
     const body = req.body as {
       text?: unknown;
+      provider?: unknown;
       voice?: unknown;
       emotionStyle?: unknown;
       emotionInstructions?: unknown;
@@ -85,6 +87,7 @@ chatRouter.post("/speak", async (req, res) => {
 
     const db = req.app.locals["db"] as DatabaseService;
     const { audio, mimeType } = await synthesizeSpeech(db, text, {
+      provider: typeof body?.provider === "string" ? body.provider : undefined,
       voice: typeof body?.voice === "string" ? body.voice : undefined,
       emotionStyle: typeof body?.emotionStyle === "string" ? body.emotionStyle : undefined,
       emotionInstructions: typeof body?.emotionInstructions === "string" ? body.emotionInstructions : undefined,
@@ -107,43 +110,7 @@ chatRouter.get("/tts-voices", async (req, res) => {
     const provider = String(req.query["provider"] ?? "");
     const query = typeof req.query["q"] === "string" ? req.query["q"] : undefined;
     const db = req.app.locals["db"] as DatabaseService;
-    const allSettings = await db.getAllSettings();
-    const settingValue = (key: string) => allSettings.find((s) => s.key === key)?.value;
-
-    if (provider === "elevenlabs") {
-      const apiKey = settingValue("ELEVENLABS_API_KEY");
-      if (!apiKey) {
-        res.json(createApiResponse({ voices: [] }));
-        return;
-      }
-      const voices = await listElevenLabsVoices(apiKey);
-      res.json(createApiResponse({ voices }));
-      return;
-    }
-
-    if (provider === "breeze") {
-      const apiKey = settingValue("BREEZE_API_KEY");
-      if (!apiKey) {
-        res.json(createApiResponse({ voices: [] }));
-        return;
-      }
-      const voices = await listBreezeVoices(apiKey, query);
-      res.json(createApiResponse({ voices }));
-      return;
-    }
-
-    if (provider === "chatterbox") {
-      const serverUrl = settingValue("CHATTERBOX_SERVER_URL") || "http://127.0.0.1:8890";
-      const chatterboxVoices = await listChatterboxVoices(serverUrl);
-      // Normalize {id, name} to the {voiceId, name} shape every other provider uses, so the
-      // client's voice picker doesn't need a provider-specific field mapping.
-      const voices = chatterboxVoices.map((v) => ({ voiceId: v.id, name: v.name }));
-      res.json(createApiResponse({ voices }));
-      return;
-    }
-
-    // OpenAI's voice set is a small fixed list - nothing worth a network round-trip for.
-    res.json(createApiResponse({ voices: [] }));
+    res.json(createApiResponse({ voices: await listTtsVoices(db, provider, { query }) }));
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     logger.error("TTS voice listing failed", { error: errorMsg });
@@ -154,12 +121,22 @@ chatRouter.get("/tts-voices", async (req, res) => {
 chatRouter.get("/tts-health", async (req, res) => {
   try {
     const provider = String(req.query["provider"] ?? "");
-    if (provider !== "chatterbox") {
+    if (provider !== "chatterbox" && provider !== "qwen3-tts" && provider !== "pocket-tts") {
       res.json(createApiResponse({ reachable: true }));
       return;
     }
     const db = req.app.locals["db"] as DatabaseService;
     const allSettings = await db.getAllSettings();
+    if (provider === "pocket-tts") {
+      const pocketUrl = allSettings.find((s) => s.key === "POCKET_TTS_SERVER_URL")?.value || "http://127.0.0.1:8893";
+      res.json(createApiResponse({ reachable: await isPocketServerReachable(pocketUrl), serverUrl: pocketUrl }));
+      return;
+    }
+    if (provider === "qwen3-tts") {
+      const qwenUrl = allSettings.find((s) => s.key === "QWEN_TTS_SERVER_URL")?.value || "http://127.0.0.1:8892";
+      res.json(createApiResponse({ reachable: await isQwen3ServerReachable(qwenUrl), serverUrl: qwenUrl }));
+      return;
+    }
     const serverUrl = allSettings.find((s) => s.key === "CHATTERBOX_SERVER_URL")?.value || "http://127.0.0.1:8890";
     const reachable = await isChatterboxServerReachable(serverUrl);
     res.json(createApiResponse({ reachable, serverUrl }));

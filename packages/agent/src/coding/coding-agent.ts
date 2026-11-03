@@ -1696,7 +1696,11 @@ export class CodingAgent {
     if (projectInstructions) {
       this.emit("decision", `Projekt-Anweisungen aus ${projectInstructions.file} geladen.`, { projectInstructions: projectInstructions.file });
     }
-    return this.needsTextToolFormat ? `${prompt}\n\n${TOOL_CALL_FORMAT_BLOCK}` : prompt;
+    // Decided per run, not from the constructor snapshot: the provider can lose native tool
+    // support after this agent was built, and a prompt without the text format then leaves the
+    // model with no instructions at all.
+    const textToolFormat = this.needsTextToolFormat || !(this.provider.supportsNativeTools?.() ?? false);
+    return textToolFormat ? `${prompt}\n\n${TOOL_CALL_FORMAT_BLOCK}` : prompt;
   }
 
   /**

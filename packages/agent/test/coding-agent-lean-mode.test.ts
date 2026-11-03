@@ -186,7 +186,13 @@ describe("CodingAgent default reasoning effort", () => {
     const localOn: Array<string | undefined> = [];
     await new CodingAgent(stubProvider("lmstudio", "qwen3", localOn),
       stubDb({ CODING_AGENT_EXTENDED_THINKING_LOCAL: "true" }), undefined, {}).run("tweak", {});
-    expect(localOn.every((effort) => effort === "medium")).toBe(true);
+    // Local models start lean: "low" unless the user picked an effort.
+    expect(localOn.every((effort) => effort === "low")).toBe(true);
+
+    const localHigh: Array<string | undefined> = [];
+    await new CodingAgent(stubProvider("lmstudio", "qwen3", localHigh),
+      stubDb({ CODING_AGENT_EXTENDED_THINKING_LOCAL: "true", CODING_AGENT_THINKING_EFFORT: "high" }), undefined, {}).run("tweak", {});
+    expect(localHigh.every((effort) => effort === "high")).toBe(true);
   });
 
   it("an explicit per-run effort wins over the setting", async () => {

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type TTSProvider = "web-speech-api" | "openai" | "elevenlabs" | "piper" | "local" | "silero" | "chatterbox" | "breeze";
+export type TTSProvider = "web-speech-api" | "openai" | "elevenlabs" | "piper" | "local" | "silero" | "chatterbox" | "qwen3-tts" | "pocket-tts" | "breeze";
 export type STTMode = "push-to-talk" | "vad-auto";
 export type TTSEmotionStyle = "neutral" | "cheerful" | "calm" | "empathetic" | "excited";
 export type AgentVoiceReplyStyle = "adapt" | "unchanged";

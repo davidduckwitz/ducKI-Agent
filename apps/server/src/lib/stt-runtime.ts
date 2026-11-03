@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { DatabaseService } from "@ducki/database";
 import { localChatterboxUrl } from "./chatterbox-runtime.js";
+import { modelServerEnv } from "./secrets-store.js";
 
 // Lifecycle of the local faster-whisper server (scripts/stt_server.py) - same model as
 // chatterbox-runtime.ts: only a process we spawned ourselves is ever stopped.
@@ -43,7 +44,7 @@ async function start(db: DatabaseService) {
     const venv = `${scripts}.venv/${process.platform === "win32" ? "Scripts/python.exe" : "bin/python"}`;
     const python = process.env["STT_PYTHON"] || process.env["CHATTERBOX_PYTHON"] || (existsSync(venv) ? venv : "python");
     const setting = async (key: string) => (await db.getSetting(key))?.trim() || undefined;
-    const env: NodeJS.ProcessEnv = { ...process.env, STT_HOST: "127.0.0.1", STT_PORT: url.port || "80", STT_LAZY_LOAD: "1" };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...(await modelServerEnv(db)), STT_HOST: "127.0.0.1", STT_PORT: url.port || "80", STT_LAZY_LOAD: "1" };
     const model = await setting("STT_SERVER_MODEL");
     const device = await setting("STT_SERVER_DEVICE");
     if (model) env["STT_MODEL"] = model;

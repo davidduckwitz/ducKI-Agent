@@ -8,6 +8,7 @@ import type { LLMContent, LLMMessage } from "@ducki/shared";
 import type { DatabaseService } from "@ducki/database";
 import type { Logger } from "@ducki/logger";
 import { analyzeVideo, transcribeExtractedAudio } from "../media/video-processing.js";
+import { isFfmpegAvailable, transcodeAudio, type AudioClip, type TranscodeAudioOptions, type TranscodeAudioResult } from "../media/audio-transcode.js";
 
 export interface AgentImageInput {
   base64?: string;
@@ -49,11 +50,50 @@ export interface PluginBrowserCapabilities {
   subscribeFrames(sessionId: string, handler: (frame: PluginBrowserFrame) => void): () => void;
 }
 
+export interface PluginSpeechSynthesisOptions {
+  /** TTS engine (openai, elevenlabs, piper, local, chatterbox, qwen3-tts, pocket-tts, breeze); omitted = Voice-tab default. */
+  provider?: string;
+  voice?: string;
+  language?: string;
+  emotionStyle?: string;
+  emotionInstructions?: string;
+  /** Values for the host's TTS settings keys (CHATTERBOX_SERVER_URL, ELEVENLABS_API_KEY, ...)
+   * used for this call only and never persisted; empty values fall back to the stored setting. */
+  settings?: Record<string, string>;
+}
+
+export interface PluginVoiceOption {
+  voiceId: string;
+  name: string;
+}
+
+export interface PluginReferenceVoice {
+  id: string;
+  sizeBytes: number;
+  hasTranscript: boolean;
+  transcript?: string;
+}
+
+/** The host's internal TTS pipeline (same engines/settings as the Voice tab) plus export helpers. */
+export interface PluginSpeechCapabilities {
+  /** apps/server wires this to its settings-driven provider; absent in metadata-only loaders. */
+  synthesize?(text: string, opts?: PluginSpeechSynthesisOptions): Promise<AudioClip>;
+  /** Voices an engine offers (same source as the Voice tab's picker), with optional settings overrides. */
+  listVoices?(provider: string, settings?: Record<string, string>): Promise<PluginVoiceOption[]>;
+  /** The shared reference-voice library (WAV clips) the Voice tab manages for Chatterbox/Qwen3/Pocket. */
+  listReferenceVoices?(): Promise<PluginReferenceVoice[]>;
+  /** Adds a WAV clip to that library, so it also shows up in the agent's Voice tab. */
+  saveReferenceVoice?(id: string, wav: Buffer, opts?: { transcript?: string; overwrite?: boolean }): Promise<void>;
+  transcode(clips: AudioClip[], opts: TranscodeAudioOptions): Promise<TranscodeAudioResult>;
+  ffmpegAvailable(): Promise<boolean>;
+}
+
 export interface AgentCapabilities {
   analyzeImage(images: AgentImageInput[], question?: string): Promise<string>;
   transcribeAudio(audioBuffer: Buffer, opts?: { language?: string }): Promise<string>;
   analyzeVideo(videoBuffer: Buffer, question?: string): Promise<AgentVideoAnalysisResult>;
   analyzeText(text: string, instruction: string): Promise<string>;
+  speech: PluginSpeechCapabilities;
   /** Optional host-owned browser adapter. apps/server wires this in; metadata-only loaders omit it. */
   browser?: PluginBrowserCapabilities;
 }
@@ -119,6 +159,11 @@ export function createAgentCapabilities(
       const messages: LLMMessage[] = [{ role: "user", content: `${instruction.trim()}\n\n${text}` }];
       const response = await provider.generate(messages, { temperature: 0.3, maxTokens: 1500 });
       return response.content;
+    },
+
+    speech: {
+      transcode: transcodeAudio,
+      ffmpegAvailable: isFfmpegAvailable,
     },
   };
 }

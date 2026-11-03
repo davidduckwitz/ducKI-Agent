@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { resolveOptionalModule } from "@ducki/shared";
 import { runWhisperProcess } from "./whisper-process.js";
 import { BaseSpeechToTextProvider, type SpeechToTextProviderOptions } from "./speech-to-text-base.js";
 import { hasCudaToolkit, resolveNodejsWhisperCudaDefault, resolveNodejsWhisperModelDefault } from "./nodejs-whisper-defaults.js";
@@ -47,6 +48,11 @@ const WHISPER_CLI_CANDIDATES = [
   join("build", "whisper-cli"),
 ];
 
+/** Not shipped in the desktop installer: the "nodejs-whisper" component pack provides it on demand. */
+function resolveNodejsWhisper(): string {
+  return resolveOptionalModule("nodejs-whisper", () => createRequire(import.meta.url).resolve("nodejs-whisper"));
+}
+
 /**
  * Resolves the whisper.cpp checkout inside the installed nodejs-whisper package.
  * Returns undefined if the package cannot be located at all.
@@ -55,7 +61,7 @@ function findWhisperCppPath(): string | undefined {
   try {
     // The package's entry point is <pkg>/dist/index.js, so cpp/whisper.cpp sits two
     // levels up from it.
-    const entry = createRequire(import.meta.url).resolve("nodejs-whisper");
+    const entry = resolveNodejsWhisper();
     return join(dirname(dirname(entry)), "cpp", "whisper.cpp");
   } catch {
     return undefined;
@@ -137,7 +143,7 @@ export class NodejsWhisperSpeechToTextProvider extends BaseSpeechToTextProvider 
     const inputPath = join(tempDir, `input.${inputExt}`);
     try {
       await writeFile(inputPath, audioBuffer);
-      const transcript = await runWhisperProcess(createRequire(import.meta.url).resolve("nodejs-whisper"), inputPath, {
+      const transcript = await runWhisperProcess(resolveNodejsWhisper(), inputPath, {
         modelName,
         modelRootPath: modelRootPath ? resolve(modelRootPath) : undefined,
         autoDownloadModelName: autoDownloadModel ? modelName : undefined,

@@ -6,12 +6,26 @@
  * social-media.js, generalized so both core call sites can use ONE implementation instead of
  * three copies of the same yt-dlp/direct-fetch dance.
  */
-import ytDlp from "yt-dlp-exec";
-import ffmpegPath from "ffmpeg-static";
+import { findFfmpeg, findYtDlp } from "./binaries.js";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Logger } from "@ducki/logger";
+
+type YtDlpFn = (url: string, flags?: Record<string, unknown>) => Promise<unknown>;
+
+/** yt-dlp-exec is only the thin JS wrapper; the binary comes from the component resolver. */
+async function loadYtDlp(): Promise<YtDlpFn | null> {
+  const binary = await findYtDlp();
+  if (!binary) return null;
+  try {
+    const mod = (await import("yt-dlp-exec")) as unknown as { default?: { create?: (p: string) => YtDlpFn }; create?: (p: string) => YtDlpFn };
+    const create = mod.create ?? mod.default?.create;
+    return create ? create(binary) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Guard against an accidentally-huge download - matches media/video-processing.ts's own cap. */
 const MAX_VIDEO_BYTES = 80 * 1024 * 1024;
@@ -53,6 +67,9 @@ export async function fetchVideoFromUrl(url: string, logger: Logger): Promise<Vi
   const platform = detectPlatform(url);
 
   try {
+    const ytDlp = await loadYtDlp();
+    if (!ytDlp) throw new Error("yt-dlp is not installed (Settings > Components)");
+    const ffmpegPath = await findFfmpeg();
     const info = await ytDlp(url, { dumpSingleJson: true, noWarnings: true, noPlaylist: true, skipDownload: true });
     if (info && typeof info === "object" && "id" in info && (info as { id?: unknown }).id) {
       const workDir = await mkdtemp(join(tmpdir(), "ducki-video-fetch-"));
@@ -63,7 +80,7 @@ export async function fetchVideoFromUrl(url: string, logger: Logger): Promise<Vi
           mergeOutputFormat: "mp4",
           noPlaylist: true,
           maxFilesize: "80M",
-          ffmpegLocation: (ffmpegPath as unknown as string | null) || undefined,
+          ffmpegLocation: ffmpegPath || undefined,
           noWarnings: true,
         });
         const files = await readdir(workDir);

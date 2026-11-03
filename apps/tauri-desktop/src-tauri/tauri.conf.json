@@ -101,7 +101,7 @@
     "windows": {
       "certificateThumbprint": null,
       "webviewInstallMode": {
-        "type": "embedBootstrapper",
+        "type": "downloadBootstrapper",
         "silent": true
       },
       "nsis": {

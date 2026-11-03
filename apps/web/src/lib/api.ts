@@ -250,6 +250,26 @@ export interface ConnectorStatus {
   updatedAt: string;
 }
 
+export interface ComponentStatus {
+  id: string;
+  /** "binary" = executable (own path possible); "module"/"asset" = installable pack only. */
+  kind: "binary" | "module" | "asset";
+  label: string;
+  description: string;
+  found: boolean;
+  source: "setting" | "pack" | "bundled" | "system" | "missing";
+  path?: string;
+  version?: string;
+  broken?: boolean;
+  installable: boolean;
+  approxSizeMb: number;
+  explicitPath?: string;
+  installing?: boolean;
+  installPhase?: "download" | "verify" | "extract" | "done";
+  installPercent?: number;
+  installError?: string;
+}
+
 export const api = {
   chat: {
     listConversations: (projectId?: number) =>
@@ -522,6 +542,14 @@ export const api = {
       totalTablesInDb?: number;
       tables?: { expected: number; present: string[]; missing: string[]; allPresent: boolean } | null;
     }>("/settings/database/test", { method: "POST", body: JSON.stringify(payload) }),
+  },
+
+  components: {
+    list: () => request<ComponentStatus[]>("/components"),
+    install: (id: string) => request<{ started: boolean }>(`/components/${id}/install`, { method: "POST" }),
+    setPath: (id: string, path: string) =>
+      request<ComponentStatus[]>(`/components/${id}/path`, { method: "PUT", body: JSON.stringify({ path }) }),
+    removePack: (id: string) => request<ComponentStatus[]>(`/components/${id}/pack`, { method: "DELETE" }),
   },
 
   sync: {

@@ -4,17 +4,28 @@
  * Mirrors audio-transcription.ts's settings-driven provider construction.
  */
 import type { DatabaseService } from "@ducki/database";
+import { defaultReferenceVoice } from "./tts-voices.js";
 import { createTextToSpeechProvider, type TextToSpeechProviderFactoryConfig, type TextToSpeechProvider } from "@ducki/providers";
 
 function readSetting(settings: Map<string, string>, key: string, defaultValue?: string): string | undefined {
   return settings.get(key) || defaultValue;
 }
 
+const SERVER_TTS_PROVIDERS = new Set(["openai", "elevenlabs", "piper", "local", "chatterbox", "qwen3-tts", "pocket-tts", "breeze"]);
+
 export interface SynthesizeSpeechOptions {
+  /** Per-request engine chosen in the Voice tab; wins over the DEFAULT_TEXT_TO_SPEECH_PROVIDER setting. */
+  provider?: string;
   voice?: string;
   emotionStyle?: string;
   emotionInstructions?: string;
   language?: string;
+  /**
+   * Per-request values for the TTS settings keys (CHATTERBOX_SERVER_URL, ELEVENLABS_API_KEY, ...)
+   * that win over the stored settings for this call only - never persisted. Lets a plugin keep
+   * its own engine configuration without touching the agent's Voice tab.
+   */
+  settingsOverride?: Record<string, string>;
 }
 
 export interface SynthesizeSpeechResult {
@@ -28,28 +39,54 @@ export interface SynthesizeSpeechResult {
  * endpoint (websocket/audio-stream.ts), which needs the raw provider to check for
  * StreamingTextToSpeechProvider support and call synthesizeStream() itself.
  */
+/** Stored settings with non-empty override values layered on top (overrides are not saved). */
+export async function readTtsSettings(db: DatabaseService, override?: Record<string, string>): Promise<Map<string, string>> {
+  const allSettings = await db.getAllSettings();
+  const settingsMap = new Map(allSettings.map((s) => [s.key, s.value]));
+  for (const [key, value] of Object.entries(override ?? {})) {
+    if (typeof value === "string" && value.trim() !== "") settingsMap.set(key, value.trim());
+  }
+  return settingsMap;
+}
+
 export async function resolveTextToSpeechProvider(
   db: DatabaseService,
   opts: SynthesizeSpeechOptions = {}
 ): Promise<TextToSpeechProvider> {
-  const allSettings = await db.getAllSettings();
-  const settingsMap = new Map(allSettings.map((s) => [s.key, s.value]));
+  const settingsMap = await readTtsSettings(db, opts.settingsOverride);
 
-  const providerName = (readSetting(settingsMap, "DEFAULT_TEXT_TO_SPEECH_PROVIDER", "chatterbox") ?? "chatterbox") as
+  const requested = SERVER_TTS_PROVIDERS.has(opts.provider ?? "") ? opts.provider : undefined;
+  const providerName = (requested ?? readSetting(settingsMap, "DEFAULT_TEXT_TO_SPEECH_PROVIDER", "chatterbox") ?? "chatterbox") as
     | "openai"
     | "elevenlabs"
     | "piper"
     | "local"
     | "chatterbox"
+    | "qwen3-tts"
+    | "pocket-tts"
     | "breeze";
 
   let config: TextToSpeechProviderFactoryConfig;
   switch (providerName) {
+    case "pocket-tts":
+      config = {
+        name: "pocket-tts",
+        serverUrl: readSetting(settingsMap, "POCKET_TTS_SERVER_URL", "http://127.0.0.1:8893"),
+        voice: opts.voice || readSetting(settingsMap, "POCKET_TTS_DEFAULT_VOICE") || defaultReferenceVoice(),
+      };
+      break;
+    case "qwen3-tts":
+      config = {
+        name: "qwen3-tts",
+        serverUrl: readSetting(settingsMap, "QWEN_TTS_SERVER_URL", "http://127.0.0.1:8892"),
+        voice: opts.voice || readSetting(settingsMap, "QWEN_TTS_DEFAULT_VOICE") || defaultReferenceVoice(),
+      };
+      break;
     case "chatterbox":
       config = {
         name: "chatterbox",
         serverUrl: readSetting(settingsMap, "CHATTERBOX_SERVER_URL", "http://127.0.0.1:8890"),
-        voice: opts.voice || readSetting(settingsMap, "CHATTERBOX_DEFAULT_VOICE"),
+        voice: opts.voice || readSetting(settingsMap, "CHATTERBOX_DEFAULT_VOICE") || defaultReferenceVoice(),
         emotionExaggeration: Number.parseFloat(readSetting(settingsMap, "CHATTERBOX_EMOTION_EXAGGERATION", "0.5") ?? "0.5"),
       };
       break;

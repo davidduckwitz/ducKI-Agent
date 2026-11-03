@@ -1,11 +1,11 @@
 {
-    "version":  "1.0.2",
-    "notes":  "Update Workflow in Settings: Update auslösen, Einstellungen für Update-Prüfung",
-    "pub_date":  "2026-10-09T12:38:40Z",
-    "platforms":  {
-                      "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGVBUWhxN2ZHeFNOOUlIRFZ2MUp6T1JJWlc4Tk1ZZHltcXdWYUZqVHBTYXc4K0FsVTl1cXdQcFNNclJTR0owOGMrL1ZLMnNqazVJVGpwODMxeExCY1FvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNTQ5NTE5CWZpbGU6RHVjS0kgTm9kZV8xLjAuMl94NjQtc2V0dXAuZXhlCXZlcnNpb246MS4wLjIKcG1mcEVFQnNsNi9JVXhNdCtVSFFDQXlTbHpLNkxKSXR4MjdkOTZsVFNPK2pjMXZFQ3pQR00xcnJVdS8rTHp3TEFXT0VWMUE4bENRR2UzdVg0YVdkRFE9PQo=",
-                                             "url":  "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.2_x64-setup.exe"
-                                         }
-                  }
+  "version": "1.0.12",
+  "notes": "Kleinerer Installer (~30 MB statt 62 MB): ffmpeg, Browser-Automatisierung, Krypto-Wallets, nodejs-whisper und TypeScript im Code-Editor sind jetzt unter Einstellungen > Komponenten nachinstallierbar.",
+  "pub_date": "2026-10-30T01:09:13Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGJkUUZ2WVNucEQ2SWk1S285N3pqamZsd3lhMnhxYlBlTGN4MVZIR1ZjWDBPRXh0ak82eGlpM2NGRW9IZGZWVTFIM2R1VU9JckpBcW1reXpGY1lXeEFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMzIyNTUzCWZpbGU6RHVjS0kgTm9kZV8xLjAuMTJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjEuMC4xMgozSElVSDJ6TUZkM3dCM1dUMUs1dWRIcGJyU3VwWDdmeFVmQkgxeEdENlBHOGtiQmVTdXdQejdkODdyQmVGeXdXd3ZyUDN1SmJ5dUxkQWpRSXNlM0FEUT09Cg==",
+      "url": "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.12_x64-setup.exe"
+    }
+  }
 }

@@ -40,6 +40,7 @@ const FALLBACK_SAMPLE_RATE = 24000;
 interface SpeakMessage {
   type: "speak";
   text: string;
+  provider?: string;
   voice?: string;
   emotionStyle?: string;
   emotionInstructions?: string;
@@ -118,6 +119,7 @@ export function setupAudioStreamServer(httpServer: HttpServer, db: DatabaseServi
 
     async function handleSpeak(msg: SpeakMessage): Promise<void> {
       const provider = await resolveTextToSpeechProvider(db, {
+        provider: msg.provider,
         voice: msg.voice,
         emotionStyle: msg.emotionStyle,
         emotionInstructions: msg.emotionInstructions,
@@ -129,6 +131,10 @@ export function setupAudioStreamServer(httpServer: HttpServer, db: DatabaseServi
           send({ type: "meta", sampleRate: provider.streamSampleRate });
           metaSent = true;
         }
+        // The upstream HTTP body arrives in arbitrary slices; a 16-bit PCM frame with an odd byte
+        // count makes the browser's Int16Array constructor throw and shifts every later sample by one
+        // byte (garbled/foreign-sounding voice). Only ever forward whole samples.
+        let carry: Buffer | undefined;
         for await (const chunk of provider.synthesizeStream(msg.text, {
           voice: msg.voice,
           emotionStyle: msg.emotionStyle,
@@ -136,7 +142,10 @@ export function setupAudioStreamServer(httpServer: HttpServer, db: DatabaseServi
           language: msg.language,
         })) {
           if (socket.readyState !== socket.OPEN) return;
-          socket.send(chunk, { binary: true });
+          const data = carry ? Buffer.concat([carry, chunk]) : chunk;
+          const usable = data.length - (data.length % 2);
+          carry = usable < data.length ? data.subarray(usable) : undefined;
+          if (usable > 0) socket.send(data.subarray(0, usable), { binary: true });
         }
         send({ type: "done" });
         return;

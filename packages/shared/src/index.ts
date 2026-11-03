@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { resolve, sep } from "node:path";
 export { duckiHome, pluginsRoot, skillsRoot, sharedWorkspaceRoot } from "./runtime-paths.js";
+export * from "./components.js";
+export * from "./module-packs.js";
 
 export {
   foldGerman,

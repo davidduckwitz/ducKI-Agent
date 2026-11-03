@@ -1,9 +1,33 @@
-import * as bip39 from "bip39";
-import * as bitcoin from "bitcoinjs-lib";
-import { BIP32Factory } from "bip32";
-import * as tinysecp from "tiny-secp256k1";
+import { loadOptionalModule } from "@ducki/shared";
+import type { BIP32API } from "bip32";
 
-const bip32 = BIP32Factory(tinysecp);
+/**
+ * The wallet libraries are not shipped in the desktop installer (the "crypto-wallets" component
+ * pack provides them), so they load lazily in start() and the hot loop reads them from here.
+ */
+interface SolverLibs {
+  bip39: typeof import("bip39");
+  bitcoin: typeof import("bitcoinjs-lib");
+  bip32: BIP32API;
+}
+let libs: SolverLibs | undefined;
+
+async function loadSolverLibs(): Promise<SolverLibs> {
+  if (libs) return libs;
+  const [bip39, bitcoin, { BIP32Factory }, tinysecp] = await Promise.all([
+    loadOptionalModule("bip39", () => import("bip39")),
+    loadOptionalModule("bitcoinjs-lib", () => import("bitcoinjs-lib")),
+    loadOptionalModule("bip32", () => import("bip32")),
+    loadOptionalModule("tiny-secp256k1", () => import("tiny-secp256k1")),
+  ]);
+  libs = { bip39, bitcoin, bip32: BIP32Factory(tinysecp) };
+  return libs;
+}
+
+function solverLibs(): SolverLibs {
+  if (!libs) throw new Error("Wallet-Bibliotheken nicht geladen (start() lädt sie)");
+  return libs;
+}
 
 export interface SolverState {
   targetAddress: string;
@@ -139,6 +163,7 @@ class BitcoinPuzzleSolver {
    * Starte den Solver-Prozess mit verschiedenen Kombinationsstrategien
    */
   async start(onProgress?: (state: SolverState) => void): Promise<SolverState> {
+    await loadSolverLibs();
     if (onProgress) {
       this.onProgressCallback = onProgress; // Speichere Callback für spätere Nutzung (z.B. beim Pause)
     }
@@ -168,7 +193,7 @@ class BitcoinPuzzleSolver {
     try {
       // Wenn wir eine Start-Phrase haben, verifiziere sie
       if (this.state.startMnemonic) {
-        if (!bip39.validateMnemonic(this.state.startMnemonic)) {
+        if (!solverLibs().bip39.validateMnemonic(this.state.startMnemonic)) {
           throw new Error("Invalid starting mnemonic");
         }
       }
@@ -214,11 +239,11 @@ class BitcoinPuzzleSolver {
                 // (generatedCount unverändert => gleiche Bedingung) - Endlosschleife.
                 if (this.triedCombinations.has(mnemonic)) {
                   this.state.currentCombinationMode = "random";
-                  mnemonic = bip39.generateMnemonic(128, undefined, this.wordList);
+                  mnemonic = solverLibs().bip39.generateMnemonic(128, undefined, this.wordList);
                 }
               } else {
                 this.state.currentCombinationMode = "random";
-                mnemonic = bip39.generateMnemonic(128, undefined, this.wordList);
+                mnemonic = solverLibs().bip39.generateMnemonic(128, undefined, this.wordList);
               }
 
               // Überprüfe auf Duplikate (interne Datenbank - schnell).
@@ -348,7 +373,7 @@ class BitcoinPuzzleSolver {
     const words: string[] = [];
 
     if (this.wordList.length === 0) {
-      return bip39.generateMnemonic(128, undefined, this.wordList);
+      return solverLibs().bip39.generateMnemonic(128, undefined, this.wordList);
     }
 
     for (let i = 0; i < wordCount; i++) {
@@ -360,7 +385,7 @@ class BitcoinPuzzleSolver {
       }
     }
 
-    return words.length === wordCount ? words.join(" ") : bip39.generateMnemonic(128, undefined, this.wordList);
+    return words.length === wordCount ? words.join(" ") : solverLibs().bip39.generateMnemonic(128, undefined, this.wordList);
   }
 
   /**
@@ -518,6 +543,7 @@ class BitcoinPuzzleSolver {
    */
   private generateAddressFromMnemonic(mnemonic: string): string {
     try {
+      const { bip39, bip32, bitcoin } = solverLibs();
       const seed = bip39.mnemonicToSeedSync(mnemonic);
       const root = bip32.fromSeed(seed);
 

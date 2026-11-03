@@ -2,8 +2,11 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import os from 'os';
+import crypto from 'crypto';
 import { createRequire } from 'module';
 import { spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 import * as esbuild from 'esbuild';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,23 +18,34 @@ const log = (msg) => console.log(`[build] ${msg}`);
 // in resources/server-dist/node_modules; everything else gets inlined into one JS file below.
 const NATIVE_EXTERNALS = [
   '@libsql/client',
-  'tiny-secp256k1',
-  'ecpair',
   'mysql2',
-  'ffmpeg-static',
-  'ffprobe-static',
+  // yt-dlp-exec is only the JS wrapper - its 18MB yt-dlp.exe is skipped below and installed on
+  // demand (Settings > Komponenten), see packages/shared components.ts.
   'fluent-ffmpeg',
-  'nodejs-whisper',
   'yt-dlp-exec',
-  'puppeteer-core',
   'bufferutil',
   'utf-8-validate',
-  '@aws-sdk/client-bedrock-runtime',
 ];
+
+// External to esbuild but NOT installed: these ship on demand instead of in the installer.
+// - ffmpeg-static (~80MB ffmpeg.exe): the "ffmpeg" binary component (gyan.dev build) replaces it;
+//   packages/agent/src/media/binaries.ts imports it optionally.
+// - the module packs from packages/shared/src/module-packs.ts (puppeteer-core, wallet libraries,
+//   nodejs-whisper): every import site goes through loadOptionalModule(), which falls back to
+//   the installed pack. The manifest for those packs is generated further down.
+// A static import of any of these in the bundle would crash the server at startup - checked below.
+const MODULE_PACKS_SRC = path.join(__dirname, '../../packages/shared/dist/module-packs.js');
+if (!fs.existsSync(MODULE_PACKS_SRC)) {
+  log('✗ packages/shared/dist/module-packs.js missing - run "pnpm build:server" first. Aborting.');
+  process.exit(1);
+}
+const { MODULE_PACKS } = await import(pathToFileURL(MODULE_PACKS_SRC).href);
+const PACK_MODULES = Object.values(MODULE_PACKS).flatMap((pack) => pack.modules);
+const OPTIONAL_EXTERNALS = ['ffmpeg-static', ...PACK_MODULES];
 
 log('Preparing DucKI Node (server + desktop) for packaging...');
 
-function copyRecursive(src, dest) {
+function copyRecursive(src, dest, skip) {
   if (!fs.existsSync(src)) {
     return false;
   }
@@ -39,9 +53,10 @@ function copyRecursive(src, dest) {
   for (const file of fs.readdirSync(src)) {
     const srcPath = path.join(src, file);
     const destPath = path.join(dest, file);
+    if (skip && skip(srcPath, file)) continue;
     const stat = fs.statSync(srcPath);
     if (stat.isDirectory()) {
-      copyRecursive(srcPath, destPath);
+      copyRecursive(srcPath, destPath, skip);
     } else {
       fs.copyFileSync(srcPath, destPath);
     }
@@ -170,6 +185,21 @@ const nativeExternalDeps = Object.fromEntries(
   NATIVE_EXTERNALS.map((name) => [name, pinnedVersion(name)]).filter(([, version]) => version !== null)
 );
 
+// pdf-parse@1.x picks its pdf.js build with require(`./pdf.js/${options.version}/build/pdf.js`);
+// esbuild turns that template into a glob and inlines all four bundled pdf.js versions (~11MB).
+// Nothing passes a custom version, so pin the default one.
+const pdfParseSingleVersion = {
+  name: 'pdf-parse-single-version',
+  setup(build) {
+    build.onLoad({ filter: /pdf-parse[\\/]lib[\\/]pdf-parse\.js$/ }, async (args) => {
+      const src = await fs.promises.readFile(args.path, 'utf8');
+      const pinned = src.replace('require(`./pdf.js/${options.version}/build/pdf.js`)', "require('./pdf.js/v1.10.100/build/pdf.js')");
+      if (pinned === src) throw new Error('pdf-parse: version require not found - update the pdf-parse-single-version plugin');
+      return { contents: pinned, loader: 'js' };
+    });
+  },
+};
+
 log(`\n📦 Bundling the server (esbuild) with ${NATIVE_EXTERNALS.length} native/unbundlable package(s) left external...`);
 const bundleResult = await esbuild.build({
   entryPoints: [serverEntry],
@@ -180,7 +210,8 @@ const bundleResult = await esbuild.build({
   target: 'node20',
   sourcemap: false,
   logLevel: 'info',
-  external: NATIVE_EXTERNALS,
+  external: [...NATIVE_EXTERNALS, ...OPTIONAL_EXTERNALS],
+  plugins: [pdfParseSingleVersion],
   // Some bundled CJS deps guard optional native addons behind a plain `require(...)` (e.g. ws's
   // bufferutil/utf-8-validate lookup). esbuild can't statically resolve those, and its ESM output
   // has no ambient `require` - this banner restores one via Node's own module API so those calls
@@ -190,6 +221,17 @@ const bundleResult = await esbuild.build({
 if (bundleResult.errors.length > 0) {
   log('✗ esbuild failed to bundle the server. Aborting.');
   process.exit(1);
+}
+{
+  const bundled = fs.readFileSync(path.join(serverDistDest, 'index.js'), 'utf8');
+  const escape = (x) => x.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const staticHits = OPTIONAL_EXTERNALS.filter((spec) =>
+    new RegExp(`^\\s*import\\s[^;]*?from\\s*["']${escape(spec)}["']`, 'm').test(bundled) ||
+    new RegExp(`^\\s*import\\s*["']${escape(spec)}["']`, 'm').test(bundled));
+  if (staticHits.length > 0) {
+    log(`✗ Static import of on-demand package(s) in the bundle: ${staticHits.join(', ')} - use loadOptionalModule(). Aborting.`);
+    process.exit(1);
+  }
 }
 log('✓ Server bundled into resources/server-dist/index.js');
 
@@ -215,7 +257,7 @@ log('📦 Running "npm install" for native/unbundlable dependencies...');
 const npmInstallResult = spawnSync(
   'npm',
   ['install', '--omit=dev', '--no-audit', '--no-fund', '--no-package-lock'],
-  { cwd: serverDistDest, stdio: 'inherit', shell: true }
+  { cwd: serverDistDest, stdio: 'inherit', shell: true, env: { ...process.env, YOUTUBE_DL_SKIP_DOWNLOAD: 'true' } }
 );
 
 if (npmInstallResult.status !== 0) {
@@ -223,6 +265,78 @@ if (npmInstallResult.status !== 0) {
   process.exit(1);
 }
 log('✓ Native/unbundlable dependencies installed into resources/server-dist/node_modules');
+
+// Shrink the installer: drop payload that is never executed at runtime.
+function pruneDir(rel, why) {
+  const target = path.join(serverDistDest, 'node_modules', rel);
+  if (fs.existsSync(target)) {
+    fs.rmSync(target, { recursive: true, force: true });
+    log(`  ↳ pruned ${rel} (${why})`);
+  }
+}
+pruneDir('yt-dlp-exec/bin', 'yt-dlp.exe is installed on demand');
+pruneDir('ffprobe-static', 'ffprobe is optional/on demand');
+pruneDir('fluent-ffmpeg/coverage', 'test coverage report');
+pruneDir('fluent-ffmpeg/doc', 'API docs');
+pruneDir('@types', 'type declarations');
+
+// Never loaded at runtime: source maps, TypeScript declarations, markdown, test coverage.
+function dirSize(dir) {
+  let bytes = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    bytes += entry.isDirectory() ? dirSize(full) : fs.statSync(full).size;
+  }
+  return bytes;
+}
+function pruneJunk(dir) {
+  let bytes = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (['coverage', '.github'].includes(entry.name)) {
+        bytes += dirSize(full);
+        fs.rmSync(full, { recursive: true, force: true });
+      } else {
+        bytes += pruneJunk(full);
+      }
+    } else if (/\.(map|d\.ts|d\.mts|d\.cts|md|markdown)$/i.test(entry.name)) {
+      bytes += fs.statSync(full).size;
+      fs.rmSync(full, { force: true });
+    }
+  }
+  return bytes;
+}
+log(`  ↳ pruned ${(pruneJunk(path.join(serverDistDest, 'node_modules')) / 1e6).toFixed(1)}MB of maps/typings/docs/coverage`);
+
+// --- On-demand packs: pin every module pack to the exact versions this monorepo resolved and
+// record tarball URL + integrity for each package in its tree. The app installs exactly these
+// (packages/shared/src/module-packs.ts) - no npm and no registry re-resolution on the user's PC.
+function packEntries(packId, modules) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `ducki-pack-${packId}-`));
+  try {
+    const dependencies = Object.fromEntries(modules.map((name) => [name, pinnedVersion(name)]));
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: `ducki-pack-${packId}`, private: true, dependencies }, null, 2));
+    const r = spawnSync('npm', ['install', '--package-lock-only', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: tmp, stdio: 'inherit', shell: true });
+    if (r.status !== 0) throw new Error(`npm lock resolution failed for pack ${packId}`);
+    const lock = readJson(path.join(tmp, 'package-lock.json'));
+    // npm's os/cpu lists: either an allow-list ("win32") or only negations ("!darwin").
+    const matches = (list, value) =>
+      !list || list.includes(value) || (list.every((x) => x.startsWith('!')) && !list.includes(`!${value}`));
+    return Object.entries(lock.packages ?? {})
+      .filter(([key, meta]) => key && !meta.dev && !meta.link && meta.resolved && meta.integrity)
+      .filter(([, meta]) => matches(meta.os, 'win32') && matches(meta.cpu, 'x64'))
+      .map(([key, meta]) => ({ path: key, version: meta.version, resolved: meta.resolved, integrity: meta.integrity }));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+const modulePacksManifest = { npm: {}, assets: {} };
+for (const [packId, pack] of Object.entries(MODULE_PACKS)) {
+  const entries = packEntries(packId, pack.modules);
+  modulePacksManifest.npm[packId] = { entries };
+  log(`  ↳ module pack "${packId}": ${entries.length} package(s) pinned`);
+}
 
 // apps/server/src/routes/plugins.ts validates agent-authored plugins in an isolated child
 // process (never trusting the agent's own "verified" claim) by spawning @ducki/agent's
@@ -334,7 +448,11 @@ if (fs.existsSync(pluginsSrc)) {
   for (const entry of fs.readdirSync(pluginsSrc, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue; // skips .secret-key, .state.json (both plain files)
     const pluginDest = path.join(pluginsDest, entry.name);
-    copyRecursive(path.join(pluginsSrc, entry.name), pluginDest);
+    // Never ship the dev machine's runtime data (per-plugin SQLite = Discord/Telegram/GitHub
+    // tokens + settings): top-level data/ dir and any stray sqlite/wal/shm files are skipped.
+    const pluginRoot = path.join(pluginsSrc, entry.name);
+    copyRecursive(pluginRoot, pluginDest, (srcPath, name) =>
+      path.dirname(srcPath) === pluginRoot && name === 'data' || /\.sqlite(-wal|-shm)?$/.test(name));
     pluginCount += 1;
     for (const spec of bareExternalImports(path.join(pluginsSrc, entry.name))) {
       const alreadyShared = sharedBundledSpecs.has(spec);
@@ -351,6 +469,44 @@ if (fs.existsSync(pluginsSrc)) {
 } else {
   log('⚠ apps/server/plugins not found - packaged app will start with zero plugins');
 }
+
+// --- Monaco's TypeScript worker (~7MB) as an on-demand asset. The desktop web build
+// (`vite build --mode desktop`) leaves it out; here it is bundled standalone from the SAME
+// monaco-editor version the UI was built with and dropped into update-server/components/, which is
+// uploaded with the release (https://ducki.cloud/updates/desktop/components/).
+const COMPONENTS_BASE_URL = (process.env.DUCKI_COMPONENTS_BASE_URL || 'https://ducki.cloud/updates/desktop/components').replace(/\/$/, '');
+{
+  const webRequire = createRequire(path.join(__dirname, '../web/package.json'));
+  const monacoPkgJson = resolvePackageJson('monaco-editor', webRequire);
+  const monacoVersion = readJson(monacoPkgJson).version;
+  const workerBuild = await esbuild.build({
+    entryPoints: [path.join(path.dirname(monacoPkgJson), 'esm/vs/language/typescript/ts.worker.js')],
+    bundle: true,
+    format: 'iife',
+    minify: true,
+    write: false,
+    logLevel: 'warning',
+  });
+  const code = workerBuild.outputFiles[0].contents;
+  const sha256 = crypto.createHash('sha256').update(code).digest('hex');
+  const file = `monaco-ts-worker-${monacoVersion}-${sha256.slice(0, 8)}.js`;
+  const componentsOut = path.join(__dirname, 'update-server/components');
+  fs.mkdirSync(componentsOut, { recursive: true });
+  for (const old of fs.readdirSync(componentsOut)) {
+    if (old.startsWith('monaco-ts-worker-') && old !== file) fs.rmSync(path.join(componentsOut, old));
+  }
+  fs.writeFileSync(path.join(componentsOut, file), code);
+  modulePacksManifest.assets['monaco-ts'] = { url: `${COMPONENTS_BASE_URL}/${file}`, sha256, file: 'ts.worker.js' };
+  log(`✓ Monaco TS worker -> update-server/components/${file} (${(code.length / 1e6).toFixed(1)}MB, upload with the release)`);
+
+  const webAssets = path.join(webDistSrc, 'assets');
+  if (fs.existsSync(webAssets) && fs.readdirSync(webAssets).some((f) => f.startsWith('ts.worker'))) {
+    log('⚠ apps/web/dist still contains ts.worker - build the UI with "pnpm -w build:web:desktop" to leave it out of the installer');
+  }
+}
+
+fs.writeFileSync(path.join(serverDistDest, 'module-packs.json'), JSON.stringify(modulePacksManifest, null, 2));
+log('✓ module-packs.json written (on-demand components)');
 
 // Seed stamp: the desktop shell re-runs its (additive) prompt/skill/plugin seeding only when this
 // changes, instead of walking the whole plugin tree on every launch (see src-tauri/src/seed.rs).

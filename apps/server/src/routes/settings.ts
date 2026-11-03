@@ -1,6 +1,10 @@
 import { autoStartChatterbox, chatterboxStatus, controlChatterbox } from "../lib/chatterbox-runtime.js";
+import { deleteStorage, listStorage } from "../lib/ai-storage.js";
+import { autoStartPocketTts, pocketTtsStatus, controlPocketTts } from "../lib/pocket-tts-runtime.js";
+import { autoStartQwenTts, qwenTtsStatus, controlQwenTts } from "../lib/qwen-tts-runtime.js";
 import { autoStartSttServer, controlSttServer, sttServerStatus } from "../lib/stt-runtime.js";
-import { Router, type IRouter } from "express";
+import express, { Router, type IRouter } from "express";
+import { assertVoiceId, VOICES_DIR, defaultReferenceVoice, deleteVoice, listVoices, MAX_VOICE_BYTES, saveTranscript, saveVoice } from "../lib/tts-voices.js";
 import type { Request } from "express";
 import type { Server as SocketIOServer } from "socket.io";
 import type { DatabaseService } from "@ducki/database";
@@ -47,7 +51,10 @@ const PROVIDER_SETTINGS = new Set([
 ]);
 
 settingsRouter.get("/", async (req, res, next) => {
-  try { res.json(createApiResponse(await (req.app.locals["db"] as DatabaseService).getAllSettings())); } catch (e) { next(e); }
+  try {
+    const rows = await (req.app.locals["db"] as DatabaseService).getAllSettings();
+    res.json(createApiResponse(rows.filter((row) => !row.key.startsWith("secret:"))));
+  } catch (e) { next(e); }
 });
 
 // ============================================================
@@ -129,6 +136,85 @@ settingsRouter.post("/chatterbox/:action", async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ---- Disk usage of local TTS/STT engines (venvs + model caches) ----
+settingsRouter.get("/ai-storage", async (req, res, next) => {
+  try { res.json(createApiResponse({ items: await listStorage(req.app.locals["db"] as DatabaseService) })); }
+  catch (error) { next(error); }
+});
+settingsRouter.delete("/ai-storage", async (req, res) => {
+  try {
+    await deleteStorage(req.app.locals["db"] as DatabaseService, String(req.query["id"] ?? ""));
+    res.json(createApiResponse({ deleted: true }));
+  } catch (error) { res.status(409).json(createApiError(error instanceof Error ? error.message : String(error))); }
+});
+
+// ---- Shared TTS reference-voice library (Chatterbox + Qwen3-TTS) ----
+settingsRouter.get("/tts-voices", async (_req, res, next) => {
+  try { res.json(createApiResponse({ voices: await listVoices(), defaultVoice: defaultReferenceVoice() })); }
+  catch (error) { next(error); }
+});
+settingsRouter.get("/tts-voices/:id/audio", (req, res) => {
+  try {
+    const id = assertVoiceId(String(req.params["id"] ?? ""));
+    res.sendFile(`${VOICES_DIR}${id}.wav`, (error) => { if (error && !res.headersSent) res.status(404).json(createApiError("Stimme nicht gefunden")); });
+  } catch (error) { res.status(400).json(createApiError(error instanceof Error ? error.message : String(error))); }
+});
+settingsRouter.put("/tts-voices/:id", express.raw({ type: () => true, limit: MAX_VOICE_BYTES }), async (req, res) => {
+  try {
+    const overwrite = req.query["overwrite"] === "true";
+    await saveVoice(String(req.params["id"] ?? ""), Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), overwrite);
+    res.json(createApiResponse({ saved: true }));
+  } catch (error) { res.status(400).json(createApiError(error instanceof Error ? error.message : String(error))); }
+});
+settingsRouter.put("/tts-voices/:id/transcript", async (req, res) => {
+  try {
+    await saveTranscript(String(req.params["id"] ?? ""), String((req.body as { text?: string })?.text ?? ""));
+    res.json(createApiResponse({ saved: true }));
+  } catch (error) { res.status(400).json(createApiError(error instanceof Error ? error.message : String(error))); }
+});
+settingsRouter.delete("/tts-voices/:id", async (req, res) => {
+  try {
+    await deleteVoice(String(req.params["id"] ?? ""));
+    res.json(createApiResponse({ deleted: true }));
+  } catch (error) { res.status(400).json(createApiError(error instanceof Error ? error.message : String(error))); }
+});
+
+settingsRouter.get("/pocket-tts/status", async (req, res, next) => {
+  try { res.json(createApiResponse(await pocketTtsStatus(req.app.locals["db"] as DatabaseService))); }
+  catch (error) { next(error); }
+});
+settingsRouter.post("/pocket-tts/:action", async (req, res, next) => {
+  const action = req.params["action"];
+  if (!["start", "stop", "load", "unload", "setup", "auto-start"].includes(action || "")) {
+    res.status(400).json(createApiError("Unknown Pocket TTS action")); return;
+  }
+  const db = req.app.locals["db"] as DatabaseService;
+  try {
+    const task = action === "auto-start" ? autoStartPocketTts(db)
+      : controlPocketTts(db, action as "start" | "stop" | "load" | "unload" | "setup");
+    void task.catch((error) => console.error("Pocket TTS action failed", error));
+    res.status(202).json(createApiResponse({ accepted: true }));
+  } catch (error) { next(error); }
+});
+
+settingsRouter.get("/qwen-tts/status", async (req, res, next) => {
+  try { res.json(createApiResponse(await qwenTtsStatus(req.app.locals["db"] as DatabaseService))); }
+  catch (error) { next(error); }
+});
+settingsRouter.post("/qwen-tts/:action", async (req, res, next) => {
+  const action = req.params["action"];
+  if (!["start", "stop", "load", "unload", "setup", "auto-start"].includes(action || "")) {
+    res.status(400).json(createApiError("Unknown Qwen3-TTS action")); return;
+  }
+  const db = req.app.locals["db"] as DatabaseService;
+  try {
+    const task = action === "auto-start" ? autoStartQwenTts(db)
+      : controlQwenTts(db, action as "start" | "stop" | "load" | "unload" | "setup");
+    void task.catch((error) => console.error("Qwen3-TTS action failed", error));
+    res.status(202).json(createApiResponse({ accepted: true }));
+  } catch (error) { next(error); }
+});
+
 settingsRouter.get("/:key", async (req, res, next) => {
   try {
     const value = await (req.app.locals["db"] as DatabaseService).getSetting(req.params["key"] ?? "");
@@ -152,6 +238,12 @@ settingsRouter.put("/:key", async (req, res, next) => {
 
     if (["DEFAULT_TEXT_TO_SPEECH_PROVIDER", "CHATTERBOX_AUTO_START"].includes(key)) {
       void autoStartChatterbox(req.app.locals["db"] as DatabaseService).catch(console.error);
+    }
+    if (["DEFAULT_TEXT_TO_SPEECH_PROVIDER", "POCKET_TTS_AUTO_START"].includes(key)) {
+      void autoStartPocketTts(req.app.locals["db"] as DatabaseService).catch(console.error);
+    }
+    if (["DEFAULT_TEXT_TO_SPEECH_PROVIDER", "QWEN_TTS_AUTO_START"].includes(key)) {
+      void autoStartQwenTts(req.app.locals["db"] as DatabaseService).catch(console.error);
     }
     if (["DEFAULT_SPEECH_TO_TEXT_PROVIDER", "STT_SERVER_AUTO_START"].includes(key)) {
       void autoStartSttServer(req.app.locals["db"] as DatabaseService).catch(console.error);

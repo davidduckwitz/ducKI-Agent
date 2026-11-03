@@ -1,10 +1,11 @@
-import { Wallet } from "xrpl";
 import { BaseWallet, Address, Balance } from "./wallet-base.js";
+import { loadXrpl } from "./libs.js";
 
 export class XRPWallet extends BaseWallet {
   currency: "XRP" = "XRP";
 
   override async generateAddress(derivationPath?: string): Promise<Address> {
+    const { Wallet } = await loadXrpl();
     // Generate a new random XRP wallet
     const wallet = Wallet.generate();
 
@@ -26,6 +27,7 @@ export class XRPWallet extends BaseWallet {
   }
 
   override async importPrivateKey(seed: string, label: string): Promise<Address> {
+    const { Wallet } = await loadXrpl();
     try {
       // XRP Ledger uses seed format (starts with 's')
       const wallet = Wallet.fromSeed(seed);

@@ -5,6 +5,9 @@ import { getRootLogger } from "@ducki/logger";
 import { browserTool, browserFrameEvents } from "@ducki/tools";
 import { agentRegistry } from "./agent-registry.js";
 import { loadProviderFromSettings, setPluginLLMProviders } from "./provider-settings.js";
+import { synthesizeSpeech } from "./audio-synthesis.js";
+import { listTtsVoices } from "./tts-voice-listing.js";
+import { listVoices, saveTranscript, saveVoice } from "./tts-voices.js";
 
 type BrowserFrame = NonNullable<AgentCapabilities["browser"]> extends infer B
   ? B extends { getFrame(...args: any[]): Promise<infer F> } ? F : never
@@ -100,6 +103,14 @@ export class PluginManager {
   private constructor(db: DatabaseService) {
     this.capabilities = createAgentCapabilities(db, this.logger, async () => (await loadProviderFromSettings(db)).provider);
     wireBrowserCapabilities(this.capabilities);
+    // Same engines/settings as /api/chat/speak, so plugins speak with the Voice-tab setup.
+    this.capabilities.speech.synthesize = (text, opts) => synthesizeSpeech(db, text, { ...opts, settingsOverride: opts?.settings });
+    this.capabilities.speech.listVoices = (provider, settings) => listTtsVoices(db, provider, { settingsOverride: settings });
+    this.capabilities.speech.listReferenceVoices = () => listVoices();
+    this.capabilities.speech.saveReferenceVoice = async (id, wav, opts) => {
+      await saveVoice(id, wav, opts?.overwrite === true);
+      if (opts?.transcript?.trim()) await saveTranscript(id, opts.transcript);
+    };
     agentRegistry.subscribe((snap) => {
       if (this.pending && snap.runningCount === 0) void this.apply("idle");
     });

@@ -1,16 +1,12 @@
-import { ECPairFactory } from "ecpair";
-import { payments, networks } from "bitcoinjs-lib";
-import * as tinysecp from "tiny-secp256k1";
 import { randomBytes } from "crypto";
+import type { ECPairInterface } from "ecpair";
 import { BaseWallet, Address, Balance } from "./wallet-base.js";
-
-const ECPair = ECPairFactory(tinysecp);
+import { loadBitcoinjs, loadECPair } from "./libs.js";
 
 export class BitcoinWallet extends BaseWallet {
   currency: "BTC" = "BTC";
-  private network = networks.bitcoin; // Mainnet
-
   override async generateAddress(derivationPath?: string): Promise<Address> {
+    const [ECPair, { payments }] = await Promise.all([loadECPair(), loadBitcoinjs()]);
     // Generate random private key
     const privateKey = randomBytes(32);
     const keyPair = ECPair.fromPrivateKey(privateKey);
@@ -38,9 +34,10 @@ export class BitcoinWallet extends BaseWallet {
   }
 
   override async importPrivateKey(privateKeyHex: string, label: string): Promise<Address> {
+    const [ECPair, { payments }] = await Promise.all([loadECPair(), loadBitcoinjs()]);
     try {
       // Create keyPair from private key (hex or WIF)
-      let keyPair: ReturnType<typeof ECPair.fromPrivateKey>;
+      let keyPair: ECPairInterface;
 
       if (privateKeyHex.length === 64) {
         // Hex format
