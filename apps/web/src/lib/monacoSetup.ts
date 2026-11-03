@@ -74,3 +74,38 @@ self.MonacoEnvironment = {
 };
 
 loader.config({ monaco });
+
+/** Extensions Monaco has no language for, mapped to the closest one it does highlight. */
+const EXTRA_LANGUAGES: Record<string, string> = {
+  ".vue": "html",
+  ".svelte": "html",
+  ".astro": "html",
+  ".jsonc": "json",
+  ".json5": "json",
+  ".env": "ini",
+  ".toml": "ini",
+  ".conf": "ini",
+  ".cfg": "ini",
+  ".zsh": "shell",
+  ".bash": "shell",
+};
+
+/**
+ * Monaco language id for a file path, from the extensions/filenames every registered Monaco
+ * language declares (PHP, HTML, CSS/SCSS/LESS, JS/TS incl. .mjs/.cjs, SQL, shell, Dockerfile, ...),
+ * so any file Monaco can highlight gets highlighted. Longest extension wins (".blade.php" style).
+ */
+export function languageForPath(path: string): string {
+  const name = (path.split(/[\/]/).pop() ?? "").toLowerCase();
+  let best: { id: string; length: number } | undefined;
+  for (const language of monaco.languages.getLanguages()) {
+    if (language.filenames?.some((f) => f.toLowerCase() === name)) return language.id;
+    for (const ext of language.extensions ?? []) {
+      const e = ext.toLowerCase();
+      if (name.endsWith(e) && (!best || e.length > best.length)) best = { id: language.id, length: e.length };
+    }
+  }
+  if (best) return best.id;
+  const dot = name.lastIndexOf(".");
+  return (dot >= 0 && EXTRA_LANGUAGES[name.slice(dot)]) || "plaintext";
+}

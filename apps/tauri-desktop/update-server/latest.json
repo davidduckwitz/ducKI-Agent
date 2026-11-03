@@ -1,11 +1,11 @@
 {
-  "version": "1.0.12",
-  "notes": "Kleinerer Installer (~30 MB statt 62 MB): ffmpeg, Browser-Automatisierung, Krypto-Wallets, nodejs-whisper und TypeScript im Code-Editor sind jetzt unter Einstellungen > Komponenten nachinstallierbar.",
-  "pub_date": "2026-10-30T01:09:13Z",
+  "version": "1.0.15",
+  "notes": "Code-Editor in der Desktop-App: Darstellungsfehler behoben (übereinanderliegende Zeilen nach Größenänderung/Hinweisen) und Syntax-Hervorhebung wieder aktiv. Alle bekannten Dateien (PHP, Markdown, Shell, SQL, TXT u.v.m.) lassen sich öffnen und werden eingefärbt. TTS-Updates und TTS-Studio-Plugin.",
+  "pub_date": "2026-11-03T15:35:41Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGJkUUZ2WVNucEQ2SWk1S285N3pqamZsd3lhMnhxYlBlTGN4MVZIR1ZjWDBPRXh0ak82eGlpM2NGRW9IZGZWVTFIM2R1VU9JckpBcW1reXpGY1lXeEFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzMzIyNTUzCWZpbGU6RHVjS0kgTm9kZV8xLjAuMTJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjEuMC4xMgozSElVSDJ6TUZkM3dCM1dUMUs1dWRIcGJyU3VwWDdmeFVmQkgxeEdENlBHOGtiQmVTdXdQejdkODdyQmVGeXdXd3ZyUDN1SmJ5dUxkQWpRSXNlM0FEUT09Cg==",
-      "url": "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.12_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGFGaUY4cUNWMlBQYmVEazg2NEFSK3VsZkhid3NhNVVCQkpFMzdRM3ltbkZlZ1NhSTFuenJSQld3MFY2RlA3NmhkYnY0c2RhZzV0bGo2YmFiVjF4MGdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzIwMTQxCWZpbGU6RHVjS0kgTm9kZV8xLjAuMTVfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjEuMC4xNQp4SmxOcU1vbnFNKzJ4OG9EcDhyZGM0dmlzcHhidXJZVEtjOVhqQllwMXpManQ1am1tNGl1V2xoOUt5UUxzemZOQkRYVnZlRlczZTZsZ2FOTlpZMFRCUT09Cg==",
+      "url": "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.15_x64-setup.exe"
     }
   }
 }

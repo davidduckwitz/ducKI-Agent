@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { SHARED_WORKSPACE_ROOT, CODING_WORKSPACE_ROOT } from "@ducki/tools";
 import { listCheckpoints, diffCheckpoint, restoreCheckpoint } from "@ducki/agent";
 import type { LLMProvider, LLMMessage } from "@ducki/providers";
+import { isTextFile } from "../lib/text-detection.js";
 
 export const codingRouter: IRouter = Router();
 
@@ -70,10 +71,6 @@ function writeLinkedProjects(map: Record<string, string>): void {
  *  den Speicher sprengen (Base64 für Binärdateien vervielfacht das noch). Der Coding-Agent
  *  liest Projektdateien über die Sandbox-Tools, nicht über diese UI-Route. */
 const MAX_INLINE_READ_BYTES = 10 * 1024 * 1024;
-
-const TEXT_EXTENSIONS = new Set([
-  ".txt", ".md", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".yml", ".yaml", ".xml", ".csv", ".html", ".css",
-]);
 
 function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
   if (value === undefined) return defaultValue;
@@ -348,7 +345,7 @@ codingRouter.get("/projects/:project/read", (req, res) => {
       return;
     }
     const buffer = readFileSync(target);
-    const isText = TEXT_EXTENSIONS.has(ext);
+    const isText = isTextFile(ext, buffer);
     res.json(createApiResponse({
       project: slug,
       path: sanitizeRelativePath(rel),
