@@ -185,7 +185,12 @@ fn seed_builtin_plugins(paths: &AppPaths, progress: &dyn Fn(u8, String)) {
             continue;
         }
         match copy_dir_recursive(&entry.path(), &dest) {
-            Ok(()) => log::info!("Seeded built-in plugin: {}", name.to_string_lossy()),
+            Ok(()) => {
+                // Defense in depth: a bundled plugin must never carry runtime data (tokens,
+                // settings) from the build machine - start with a clean data dir.
+                let _ = std::fs::remove_dir_all(dest.join("data"));
+                log::info!("Seeded built-in plugin: {}", name.to_string_lossy())
+            }
             Err(e) => log::warn!("Failed to seed plugin {:?}: {}", name, e),
         }
     }
