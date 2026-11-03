@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TTS-Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0b0f; --surface: #141419; --surface-2: #1b1b22; --surface-3: #22222b;
+    --border: #292932; --border-strong: #383842; --text: #f4f4f5; --text-secondary: #d4d4d8; --muted: #a1a1aa;
+    --primary: #8b5cf6; --primary-hover: #a78bfa; --primary-soft: rgba(139, 92, 246, .16);
+    --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+    --shadow: 0 15px 50px rgba(0, 0, 0, .35); --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  button, input, select, textarea { font: inherit; }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; opacity: .55; }
+  .app { width: 100%; max-width: 980px; margin: 0 auto; padding: 20px 24px 40px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 13px; }
+  .brand-icon { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 14px; color: #fff; font-size: 21px; background: linear-gradient(135deg, #7c3aed, #a78bfa); box-shadow: 0 8px 25px rgba(139, 92, 246, .35); flex-shrink: 0; }
+  .brand-text h1 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -.03em; }
+  .brand-text p { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+  .secondary-button { min-height: 38px; padding: 0 13px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+  .secondary-button:hover { background: var(--surface-2); }
+
+  .banner { padding: 10px 14px; border-radius: 10px; font-size: 12px; margin-bottom: 14px; border: 1px solid rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .1); color: #fcd34d; }
+  .banner.err { border-color: rgba(239, 68, 68, .4); background: rgba(239, 68, 68, .1); color: #fca5a5; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 14px; font-weight: 700; }
+  textarea { width: 100%; min-height: 200px; resize: vertical; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); line-height: 1.55; }
+  textarea:focus, input:focus, select:focus { outline: 2px solid var(--primary-soft); border-color: var(--primary); }
+  .counter { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin: 6px 2px 14px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  label.field { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 600; color: var(--muted); }
+  label.field input, label.field select { min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-weight: 400; font-size: 13px; }
+  .segmented { display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; min-height: 40px; }
+  .segmented button { flex: 1; border: 0; background: var(--surface-2); color: var(--muted); font-weight: 700; font-size: 13px; }
+  .segmented button.active { background: var(--primary-soft); color: var(--primary-hover); }
+
+  details { margin-top: 12px; }
+  summary { cursor: pointer; font-size: 12px; color: var(--muted); font-weight: 600; user-select: none; }
+  details .grid { margin-top: 10px; }
+
+  .actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+  .primary-button { min-height: 44px; padding: 0 20px; border-radius: 10px; border: 1px solid var(--primary); background: var(--primary); color: #fff; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; }
+  .primary-button:hover:not(:disabled) { background: var(--primary-hover); }
+  .status { font-size: 12px; color: var(--muted); }
+  .status.err { color: var(--danger); }
+  .status.ok { color: var(--success); }
+  .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; animation: spin .8s linear infinite; display: none; }
+  .busy .spinner { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .result { display: none; }
+  .result.show { display: block; }
+  .result audio { width: 100%; margin: 4px 0 10px; }
+  .result-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+  .row.playing { border-color: var(--primary); }
+  .row-body { flex: 1; min-width: 0; }
+  .row-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; font-weight: 700; background: var(--primary-soft); color: var(--primary-hover); text-transform: uppercase; }
+  .icon-btn { border: 1px solid var(--border); background: var(--surface); color: var(--text-secondary); width: 34px; height: 34px; border-radius: 9px; font-size: 14px; flex-shrink: 0; }
+  .icon-btn:hover { background: var(--surface-3); }
+  .icon-btn.del:hover { color: var(--danger); border-color: rgba(239,68,68,.4); }
+  .hint { margin: -4px 0 12px; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .val { color: var(--text-secondary); font-weight: 500; }
+  input[type=range] { accent-color: var(--primary); min-height: 40px; padding: 0 !important; }
+  input[type=file] { padding: 8px 10px !important; }
+  .empty { padding: 30px 20px; text-align: center; color: var(--muted); font-size: 13px; }
+
+  .toast-container { position: fixed; right: 20px; bottom: 20px; z-index: 2000; display: flex; flex-direction: column; gap: 8px; }
+  .toast { min-width: 220px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-size: 12px; }
+
+  @media (max-width: 560px) { .app { padding: 16px 16px 32px; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">🎙️</div>
+      <div class="brand-text"><h1>TTS-Studio</h1><p data-i18n="subtitle">Text in Sprache umwandeln &amp; als WAV/MP3 exportieren</p></div>
+    </div>
+    <a class="secondary-button" href="/api/plugins/tts-studio/ui/settings/" target="_blank" rel="noopener" id="settingsLink">⚙️ <span data-i18n="settings">Einstellungen</span></a>
+  </header>
+
+  <div id="banners"></div>
+
+  <section class="card">
+    <h2 data-i18n="text">Text</h2>
+    <textarea id="text" data-i18n-ph="textPh" placeholder="Text eingeben oder einfügen … Absätze werden als natürliche Pausen gelesen."></textarea>
+    <div class="counter"><span id="charCount">0 Zeichen</span><span id="chunkInfo"></span></div>
+
+    <div class="grid">
+      <label class="field"><span data-i18n="title">Titel / Dateiname</span>
+        <input type="text" id="title" data-i18n-ph="titlePh" placeholder="automatisch aus dem Text" maxlength="80">
+      </label>
+      <label class="field">Engine
+        <select id="provider">
+          <option value="standard" data-i18n="providerStandard">Standard (Sprache-Tab)</option>
+          <option value="chatterbox">Chatterbox</option>
+          <option value="piper">Piper</option>
+          <option value="openai">OpenAI</option>
+          <option value="elevenlabs">ElevenLabs</option>
+          <option value="qwen3-tts">Qwen3-TTS</option>
+          <option value="pocket-tts">Pocket-TTS</option>
+          <option value="breeze">Breeze</option>
+          <option value="local" data-i18n="providerLocal">Lokaler Befehl</option>
+        </select>
+      </label>
+      <label class="field"><span data-i18n="voice">Stimme</span>
+        <select id="voice"><option value="" data-i18n="engineDefault">Engine-Standard</option></select>
+      </label>
+      <label class="field"><span data-i18n="language">Sprache</span>
+        <input type="text" id="language" placeholder="de" maxlength="12">
+      </label>
+      <div class="field" style="display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:600;color:var(--muted)">Format
+        <div class="segmented" id="formatSeg">
+          <button type="button" data-format="mp3">MP3</button>
+          <button type="button" data-format="wav">WAV</button>
+        </div>
+      </div>
+    </div>
+
+    <details>
+      <summary data-i18n="advanced">Erweitert</summary>
+      <div class="grid">
+        <label class="field">MP3-Bitrate
+          <select id="bitrate">
+            <option value="96">96 kbit/s</option><option value="128">128 kbit/s</option><option value="160">160 kbit/s</option>
+            <option value="192">192 kbit/s</option><option value="256">256 kbit/s</option><option value="320">320 kbit/s</option>
+          </select>
+        </label>
+        <label class="field"><span data-i18n="sampleRate">Samplerate</span>
+          <select id="sampleRate">
+            <option value="original" data-i18n="original">Original</option><option value="16000">16 kHz</option><option value="22050">22,05 kHz</option>
+            <option value="24000">24 kHz</option><option value="44100">44,1 kHz</option><option value="48000">48 kHz</option>
+          </select>
+        </label>
+        <label class="field"><span data-i18n="channels">Kanäle</span>
+          <select id="channels"><option value="original" data-i18n="original">Original</option><option value="mono">Mono</option><option value="stereo">Stereo</option></select>
+        </label>
+        <label class="field"><span data-i18n="gap">Pause zwischen Abschnitten (ms)</span>
+          <input type="number" id="gap" min="0" max="5000" step="50">
+        </label>
+        <label class="field"><span data-i18n="speed">Geschwindigkeit</span> <span class="val" id="speedVal"></span>
+          <input type="range" id="speed" min="0.5" max="2" step="0.05">
+        </label>
+        <label class="field"><span data-i18n="pitch">Tonhöhe</span> <span class="val" id="pitchVal"></span>
+          <input type="range" id="pitch" min="0.5" max="2" step="0.05">
+        </label>
+        <label class="field"><span data-i18n="volume">Lautstärke</span> <span class="val" id="volumeVal"></span>
+          <input type="range" id="volume" min="0" max="2" step="0.05">
+        </label>
+        <label class="field">Emotion
+          <select id="emotionStyle">
+            <option value="" data-i18n="engineDefault">Engine-Standard</option><option value="neutral" data-i18n="emoNeutral">Neutral</option><option value="calm" data-i18n="emoCalm">Ruhig</option>
+            <option value="empathetic" data-i18n="emoEmpathetic">Einfühlsam</option><option value="cheerful" data-i18n="emoCheerful">Fröhlich</option><option value="excited" data-i18n="emoExcited">Begeistert</option>
+          </select>
+        </label>
+        <label class="field" style="grid-column: 1 / -1"><span data-i18n="instructions">Sprechanweisung (OpenAI, Qwen3, Breeze)</span>
+          <input type="text" id="emotionInstructions" data-i18n-ph="instructionsPh" placeholder="z. B. ruhig und warm, wie ein Hörbuchsprecher">
+        </label>
+      </div>
+    </details>
+
+    <div class="actions">
+      <button type="button" class="primary-button" id="generateBtn"><span class="spinner"></span><span id="generateLabel">🔊 Erzeugen</span></button>
+      <span class="status" id="status"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="refTitle">Referenz-Audio hinzufügen</h2>
+    <p class="hint" data-i18n="refHint">Eine kurze, saubere Sprachaufnahme (ca. 5-30 s) wird zur Stimme geklont - für Chatterbox, Qwen3-TTS und Pocket-TTS. Die Datei wird in WAV umgewandelt und in die Stimmenbibliothek des Agenten übernommen, sie erscheint also auch im Sprache-Tab.</p>
+    <div class="grid">
+      <label class="field"><span data-i18n="refFile">Audiodatei (WAV, MP3, M4A, OGG …)</span>
+        <input type="file" id="refFile" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac,.webm">
+      </label>
+      <label class="field">Name
+        <input type="text" id="refName" data-i18n-ph="refNamePh" placeholder="z. B. meine-stimme" maxlength="64">
+      </label>
+      <label class="field" style="grid-column: 1 / -1"><span data-i18n="refTranscript">Transkript (optional, verbessert das Klonen)</span>
+        <input type="text" id="refTranscript" data-i18n-ph="refTranscriptPh" placeholder="Was in der Aufnahme gesagt wird">
+      </label>
+    </div>
+    <audio id="refPreview" controls style="width:100%;margin-top:10px;display:none"></audio>
+    <div class="actions">
+      <button type="button" class="primary-button" id="refAddBtn"><span class="spinner"></span><span data-i18n="refAdd">➕ Zur Stimmenbibliothek hinzufügen</span></button>
+      <label class="check"><input type="checkbox" id="refOverwrite"> <span data-i18n="refOverwrite">vorhandene ersetzen</span></label>
+      <span class="status" id="refStatus"></span>
+    </div>
+  </section>
+
+  <section class="card result" id="result">
+    <h2 id="resultTitle" data-i18n="result">Ergebnis</h2>
+    <audio id="player" controls preload="auto"></audio>
+    <div class="result-meta">
+      <button type="button" class="primary-button" id="downloadBtn">⬇️ <span data-i18n="download">Herunterladen</span></button>
+      <span class="status" id="resultInfo"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 data-i18n="history">Verlauf</h2>
+    <div class="list" id="history"></div>
+  </section>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", async function () {
+  const NAME = "tts-studio";
+  const BASE = "/api/plugins/" + NAME;
+  const $ = (id) => document.getElementById(id);
+
+  /** UI language follows the app: ?lang= from the host iframe, else the app's stored choice, else the browser. */
+  const LANG = (function () {
+    const fromQuery = new URLSearchParams(location.search).get("lang");
+    let stored = null;
+    try { stored = localStorage.getItem("ducki.language"); } catch { /* storage blocked */ }
+    const pick = fromQuery || stored || navigator.language || "de";
+    return String(pick).toLowerCase().startsWith("de") ? "de" : "en";
+  })();
+  const LOCALE = LANG === "de" ? "de-DE" : "en-US";
+  const I18N = {
+    de: {
+      subtitle: "Text in Sprache umwandeln & als WAV/MP3 exportieren", settings: "Einstellungen", text: "Text",
+      textPh: "Text eingeben oder einfügen … Absätze werden als natürliche Pausen gelesen.",
+      title: "Titel / Dateiname", titlePh: "automatisch aus dem Text", providerStandard: "Standard (Sprache-Tab)",
+      providerStandardIs: "Standard (Sprache-Tab: {p})", providerLocal: "Lokaler Befehl", voice: "Stimme", language: "Sprache",
+      advanced: "Erweitert", sampleRate: "Samplerate", original: "Original", channels: "Kanäle", gap: "Pause zwischen Abschnitten (ms)",
+      speed: "Geschwindigkeit", pitch: "Tonhöhe", volume: "Lautstärke", engineDefault: "Engine-Standard",
+      emoNeutral: "Neutral", emoCalm: "Ruhig", emoEmpathetic: "Einfühlsam", emoCheerful: "Fröhlich", emoExcited: "Begeistert",
+      instructions: "Sprechanweisung (OpenAI, Qwen3, Breeze)", instructionsPh: "z. B. ruhig und warm, wie ein Hörbuchsprecher",
+      generate: "🔊 Erzeugen", generating: "Erzeuge …", refTitle: "Referenz-Audio hinzufügen",
+      refHint: "Eine kurze, saubere Sprachaufnahme (ca. 5-30 s) wird zur Stimme geklont - für Chatterbox, Qwen3-TTS und Pocket-TTS. Die Datei wird in WAV umgewandelt und in die Stimmenbibliothek des Agenten übernommen, sie erscheint also auch im Sprache-Tab.",
+      refFile: "Audiodatei (WAV, MP3, M4A, OGG …)", refNamePh: "z. B. meine-stimme", refTranscript: "Transkript (optional, verbessert das Klonen)",
+      refTranscriptPh: "Was in der Aufnahme gesagt wird", refAdd: "➕ Zur Stimmenbibliothek hinzufügen", refOverwrite: "vorhandene ersetzen",
+      result: "Ergebnis", download: "Herunterladen", history: "Verlauf",
+      noFfmpegEffects: "ffmpeg ist nicht installiert - Geschwindigkeit, Tonhöhe und Lautstärke können nicht angewendet werden. Stelle sie auf 1,00× oder installiere die ffmpeg-Komponente.",
+      noFfmpegMp3: "ffmpeg ist nicht installiert - MP3-Export ist nur möglich, wenn die Engine selbst MP3 liefert (z. B. OpenAI, ElevenLabs) und der Text in einen Abschnitt passt. Installiere die ffmpeg-Komponente in den Einstellungen oder exportiere als WAV.",
+      chars: "{n} Zeichen", approxChunks: "≈ {n} Abschnitte", chunks: "{n} Abschnitte", loadingVoices: "Lade Stimmen …",
+      engineVoices: "Stimmen der Engine", referenceVoices: "Referenzstimmen (Bibliothek)", transcript: "Transkript", saved: "gespeichert",
+      voicesUnavailable: "Engine-Stimmen nicht abrufbar: ", refNoFile: "Bitte eine Audiodatei wählen.",
+      refBadName: "Name: nur Buchstaben, Ziffern, _ und -.", refConverting: "Konvertiere zu WAV …",
+      refTooLong: "Aufnahme zu lang (WAV über 30 MB) - bitte kürzen.", refUploading: "Lade hoch …",
+      refAdded: "✓ „{name}“ hinzugefügt ({sec} s)", refLongHint: " - Hinweis: kürzere Clips (5-30 s) klonen meist besser",
+      refEnginesHint: "Referenzstimmen wirken bei Chatterbox, Qwen3-TTS und Pocket-TTS", failed: "Fehlgeschlagen: ",
+      noText: "Bitte zuerst Text eingeben.", synthesizing: "Sprache wird synthetisiert - bei langen Texten kann das etwas dauern.",
+      done: "✓ Fertig in {sec} s", generateFailed: "Erzeugen fehlgeschlagen: ",
+      historyEmpty: "Noch keine Exporte. Erzeugte Audiodateien erscheinen hier.", historyFailed: "Verlauf konnte nicht geladen werden: ",
+      play: "Abspielen", reuse: "Text übernehmen", delete: "Löschen", confirmDelete: "Diesen Export löschen?", deleted: "Export gelöscht",
+      error: "Fehler: ", noTts: "Dieser DucKI-Host stellt Plugins keine TTS-Schnittstelle bereit - bitte DucKI aktualisieren.",
+      statusFailed: "Status konnte nicht geprüft werden: ",
+    },
+    en: {
+      subtitle: "Turn text into speech & export it as WAV/MP3", settings: "Settings", text: "Text",
+      textPh: "Type or paste text … paragraphs are read with natural pauses.",
+      title: "Title / file name", titlePh: "derived from the text", providerStandard: "Default (Voice tab)",
+      providerStandardIs: "Default (Voice tab: {p})", providerLocal: "Local command", voice: "Voice", language: "Language",
+      advanced: "Advanced", sampleRate: "Sample rate", original: "Original", channels: "Channels", gap: "Pause between sections (ms)",
+      speed: "Speed", pitch: "Pitch", volume: "Volume", engineDefault: "Engine default",
+      emoNeutral: "Neutral", emoCalm: "Calm", emoEmpathetic: "Empathetic", emoCheerful: "Cheerful", emoExcited: "Excited",
+      instructions: "Delivery instructions (OpenAI, Qwen3, Breeze)", instructionsPh: "e.g. calm and warm, like an audiobook narrator",
+      generate: "🔊 Generate", generating: "Generating …", refTitle: "Add reference audio",
+      refHint: "A short, clean voice recording (about 5-30 s) is cloned into a voice - for Chatterbox, Qwen3-TTS and Pocket-TTS. The file is converted to WAV and added to the agent's voice library, so it also shows up in the Voice tab.",
+      refFile: "Audio file (WAV, MP3, M4A, OGG …)", refNamePh: "e.g. my-voice", refTranscript: "Transcript (optional, improves cloning)",
+      refTranscriptPh: "What is said in the recording", refAdd: "➕ Add to voice library", refOverwrite: "replace existing",
+      result: "Result", download: "Download", history: "History",
+      noFfmpegEffects: "ffmpeg is not installed - speed, pitch and volume cannot be applied. Set them to 1.00× or install the ffmpeg component.",
+      noFfmpegMp3: "ffmpeg is not installed - MP3 export only works when the engine itself returns MP3 (e.g. OpenAI, ElevenLabs) and the text fits into one section. Install the ffmpeg component in the settings or export as WAV.",
+      chars: "{n} characters", approxChunks: "≈ {n} sections", chunks: "{n} sections", loadingVoices: "Loading voices …",
+      engineVoices: "Engine voices", referenceVoices: "Reference voices (library)", transcript: "transcript", saved: "saved",
+      voicesUnavailable: "Engine voices unavailable: ", refNoFile: "Please choose an audio file.",
+      refBadName: "Name: letters, digits, _ and - only.", refConverting: "Converting to WAV …",
+      refTooLong: "Recording too long (WAV over 30 MB) - please trim it.", refUploading: "Uploading …",
+      refAdded: "✓ \"{name}\" added ({sec} s)", refLongHint: " - tip: shorter clips (5-30 s) usually clone better",
+      refEnginesHint: "Reference voices are used by Chatterbox, Qwen3-TTS and Pocket-TTS", failed: "Failed: ",
+      noText: "Please enter some text first.", synthesizing: "Synthesizing speech - long texts can take a while.",
+      done: "✓ Done in {sec} s", generateFailed: "Generation failed: ",
+      historyEmpty: "No exports yet. Generated audio files appear here.", historyFailed: "Could not load the history: ",
+      play: "Play", reuse: "Reuse text", delete: "Delete", confirmDelete: "Delete this export?", deleted: "Export deleted",
+      error: "Error: ", noTts: "This DucKI host does not offer a TTS interface to plugins - please update DucKI.",
+      statusFailed: "Could not check the status: ",
+    },
+  };
+  function t(key, vars) {
+    let text = (I18N[LANG] && I18N[LANG][key]) ?? I18N.de[key] ?? key;
+    for (const [k, v] of Object.entries(vars || {})) text = text.split("{" + k + "}").join(String(v));
+    return text;
+  }
+  function fmtNum(value, digits) {
+    return Number(value).toLocaleString(LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+  document.documentElement.lang = LANG;
+  document.title = "TTS-Studio";
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+  $("generateLabel").textContent = t("generate");
+
+  let settings = {};
+  let format = "mp3";
+  let current = null; // { exportInfo, blob }
+  let playingId = null;
+  let ffmpegAvailable = true;
+  let agentDefaultProvider; // undefined = not fetched yet, null = unknown
+
+  function showToast(message) {
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.textContent = message;
+    $("toastContainer").appendChild(toast);
+    setTimeout(function () { toast.remove(); }, 3500);
+  }
+
+  function setStatus(msg, kind) {
+    const s = $("status");
+    s.textContent = msg || "";
+    s.className = "status" + (kind ? " " + kind : "");
+  }
+
+  async function invoke(input) {
+    const res = await fetch(BASE + "/invoke", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool: "tts_studio", input: Object.assign({ lang: LANG }, input) })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+    const payload = (json.data && json.data.result) || json.result || {};
+    if (payload.error) throw new Error(payload.error);
+    return payload;
+  }
+
+  function base64ToBlob(b64, mimeType) {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType });
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+  }
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return fmtNum(n / 1024, 1) + " KB";
+    return fmtNum(n / 1024 / 1024, 1) + " MB";
+  }
+
+  function fmtDuration(sec) {
+    if (sec == null) return "";
+    const s = Math.round(sec);
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + " min";
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function setFormat(next) {
+    format = next === "wav" ? "wav" : "mp3";
+    document.querySelectorAll("#formatSeg button").forEach((b) => b.classList.toggle("active", b.dataset.format === format));
+    $("bitrate").disabled = format !== "mp3";
+    renderBanners();
+  }
+
+  function renderBanners(extra) {
+    const parts = [];
+    if (extra) parts.push('<div class="banner err">' + escapeHtml(extra) + "</div>");
+    const effects = ["speed", "pitch", "volume"].some((id) => Math.abs(Number($(id).value) - 1) > 0.001);
+    if (!ffmpegAvailable && effects) {
+      parts.push('<div class="banner">' + escapeHtml(t("noFfmpegEffects")) + '</div>');
+    }
+    if (!ffmpegAvailable && format === "mp3") {
+      parts.push('<div class="banner">' + escapeHtml(t("noFfmpegMp3")) + '</div>');
+    }
+    $("banners").innerHTML = parts.join("");
+  }
+
+  function updateCounter() {
+    const text = $("text").value;
+    const len = text.trim().length;
+    $("charCount").textContent = t("chars", { n: len.toLocaleString(LOCALE) });
+    const max = Number(settings.max_chunk_chars) || 600;
+    const approx = len === 0 ? 0 : Math.max(text.split(/\n\s*\n/).filter((p) => p.trim()).length, Math.ceil(len / max));
+    $("chunkInfo").textContent = approx > 1 ? t("approxChunks", { n: approx }) : "";
+  }
+
+  /** Resolves "standard" to the agent's actual default engine (Voice tab) for the voice list. */
+  async function effectiveProvider() {
+    const provider = $("provider").value;
+    if (provider !== "standard") return provider;
+    if (agentDefaultProvider === undefined) {
+      try {
+        const res = await fetch("/api/settings/DEFAULT_TEXT_TO_SPEECH_PROVIDER");
+        const json = await res.json();
+        const data = json.data;
+        const value = data && typeof data === "object" ? data.value : data;
+        agentDefaultProvider = typeof value === "string" && value ? value : null;
+      } catch { agentDefaultProvider = null; }
+      const opt = $("provider").querySelector('option[value="standard"]');
+      if (agentDefaultProvider) opt.textContent = t("providerStandardIs", { p: agentDefaultProvider });
+    }
+    return agentDefaultProvider || "standard";
+  }
+
+  async function loadVoices(selectId) {
+    const select = $("voice");
+    const keep = selectId !== undefined ? selectId : select.value;
+    select.innerHTML = '<option value="">' + escapeHtml(t("loadingVoices")) + "</option>";
+    let payload = { voices: [], reference_voices: [], uses_reference_voices: false };
+    try {
+      payload = await invoke({ action: "voices", provider: await effectiveProvider() });
+    } catch (e) {
+      payload.voices_error = e.message;
+    }
+    const seen = new Set();
+    const groups = [];
+    const engineOpts = (payload.voices || []).filter((v) => {
+      const id = v.voiceId || v.id || v.name;
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    }).map((v) => {
+      const id = v.voiceId || v.id || v.name;
+      return '<option value="' + escapeHtml(id) + '">' + escapeHtml(v.name && v.name !== id ? v.name + " (" + id + ")" : id) + "</option>";
+    });
+    if (engineOpts.length) groups.push('<optgroup label="' + escapeHtml(t("engineVoices")) + '">' + engineOpts.join("") + "</optgroup>");
+    if (payload.uses_reference_voices) {
+      const refOpts = (payload.reference_voices || []).filter((v) => !seen.has(v.id)).map((v) =>
+        '<option value="' + escapeHtml(v.id) + '">' + escapeHtml(v.id) + (v.has_transcript ? " ✓ " + t("transcript") : "") + "</option>");
+      if (refOpts.length) groups.push('<optgroup label="' + escapeHtml(t("referenceVoices")) + '">' + refOpts.join("") + "</optgroup>");
+    }
+    select.innerHTML = '<option value="">' + escapeHtml(t("engineDefault")) + "</option>" + groups.join("");
+    if (keep && !Array.from(select.options).some((o) => o.value === keep)) {
+      select.insertAdjacentHTML("beforeend", '<option value="' + escapeHtml(keep) + '">' + escapeHtml(keep) + " (" + escapeHtml(t("saved")) + ")</option>");
+    }
+    select.value = keep || "";
+    select.title = payload.voices_error ? t("voicesUnavailable") + payload.voices_error : "";
+  }
+
+  /** Decodes any browser-playable audio and re-encodes it as 16-bit mono PCM WAV. */
+  async function toMonoWav(file) {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    try {
+      const buffer = await ctx.decodeAudioData(await file.arrayBuffer());
+      const length = buffer.length;
+      const mono = new Float32Array(length);
+      for (let c = 0; c < buffer.numberOfChannels; c++) {
+        const data = buffer.getChannelData(c);
+        for (let i = 0; i < length; i++) mono[i] += data[i] / buffer.numberOfChannels;
+      }
+      const out = new DataView(new ArrayBuffer(44 + length * 2));
+      const writeStr = (o, str) => { for (let i = 0; i < str.length; i++) out.setUint8(o + i, str.charCodeAt(i)); };
+      writeStr(0, "RIFF"); out.setUint32(4, 36 + length * 2, true); writeStr(8, "WAVE");
+      writeStr(12, "fmt "); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true);
+      out.setUint32(24, buffer.sampleRate, true); out.setUint32(28, buffer.sampleRate * 2, true);
+      out.setUint16(32, 2, true); out.setUint16(34, 16, true);
+      writeStr(36, "data"); out.setUint32(40, length * 2, true);
+      for (let i = 0; i < length; i++) {
+        const v = Math.max(-1, Math.min(1, mono[i]));
+        out.setInt16(44 + i * 2, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      }
+      return { bytes: new Uint8Array(out.buffer), durationSec: buffer.duration };
+    } finally {
+      ctx.close().catch(() => {});
+    }
+  }
+
+  function bytesToBase64(bytes) {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  function setRefStatus(msg, kind) {
+    const el = $("refStatus");
+    el.textContent = msg || "";
+    el.className = "status" + (kind ? " " + kind : "");
+  }
+
+  async function addReferenceVoice() {
+    const file = $("refFile").files[0];
+    const name = $("refName").value.trim();
+    if (!file) { setRefStatus(t("refNoFile"), "err"); return; }
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) { setRefStatus(t("refBadName"), "err"); return; }
+    const btn = $("refAddBtn");
+    btn.disabled = true;
+    btn.classList.add("busy");
+    setRefStatus(t("refConverting"));
+    try {
+      const wav = await toMonoWav(file);
+      if (wav.bytes.length > 30 * 1024 * 1024) throw new Error(t("refTooLong"));
+      setRefStatus(t("refUploading"));
+      await invoke({ action: "add_reference_voice", name, audio_base64: bytesToBase64(wav.bytes),
+        transcript: $("refTranscript").value.trim(), overwrite: $("refOverwrite").checked });
+      setRefStatus(t("refAdded", { name, sec: fmtNum(wav.durationSec, 1) }) + (wav.durationSec > 40 ? t("refLongHint") : ""), "ok");
+      if (!["chatterbox", "qwen3-tts", "pocket-tts"].includes(await effectiveProvider())) {
+        showToast(t("refEnginesHint"));
+      }
+      await loadVoices(name);
+      $("refFile").value = "";
+      $("refTranscript").value = "";
+      $("refPreview").style.display = "none";
+    } catch (e) {
+      setRefStatus(t("failed") + e.message, "err");
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("busy");
+    }
+  }
+
+  function showResult(exportInfo, blob) {
+    current = { exportInfo, blob };
+    const player = $("player");
+    if (player.dataset.url) URL.revokeObjectURL(player.dataset.url);
+    const url = URL.createObjectURL(blob);
+    player.dataset.url = url;
+    player.src = url;
+    $("resultTitle").textContent = exportInfo.title;
+    $("resultInfo").textContent = [exportInfo.format.toUpperCase(), fmtDuration(exportInfo.duration_sec), fmtBytes(exportInfo.size_bytes),
+      exportInfo.chunks > 1 ? t("chunks", { n: exportInfo.chunks }) : "", exportInfo.provider].filter(Boolean).join(" · ");
+    $("result").classList.add("show");
+  }
+
+  async function generate() {
+    const text = $("text").value.trim();
+    if (!text) { setStatus(t("noText"), "err"); return; }
+    const btn = $("generateBtn");
+    btn.disabled = true;
+    btn.classList.add("busy");
+    $("generateLabel").textContent = t("generating");
+    setStatus(t("synthesizing"));
+    renderBanners();
+    const started = Date.now();
+    try {
+      const input = { action: "synthesize", text, format, include_audio: true, provider: $("provider").value };
+      const title = $("title").value.trim(); if (title) input.title = title;
+      const voice = $("voice").value.trim(); if (voice) input.voice = voice;
+      const language = $("language").value.trim(); if (language) input.language = language;
+      input.bitrate_kbps = Number($("bitrate").value);
+      if ($("sampleRate").value !== "original") input.sample_rate = Number($("sampleRate").value);
+      if ($("channels").value !== "original") input.channels = $("channels").value === "mono" ? 1 : 2;
+      const gap = $("gap").value; if (gap !== "") input.gap_ms = Number(gap);
+      input.speed = Number($("speed").value);
+      input.pitch = Number($("pitch").value);
+      input.volume = Number($("volume").value);
+      if ($("emotionStyle").value) input.emotion_style = $("emotionStyle").value;
+      const instructions = $("emotionInstructions").value.trim(); if (instructions) input.emotion_instructions = instructions;
+      if (input.provider === "standard") delete input.provider;
+
+      const payload = await invoke(input);
+      showResult(payload.export, base64ToBlob(payload.audio_base64, payload.export.mime_type));
+      setStatus(t("done", { sec: fmtNum((Date.now() - started) / 1000, 1) }), "ok");
+      $("player").play().catch(() => {});
+      loadHistory();
+    } catch (e) {
+      setStatus("", "");
+      renderBanners(t("generateFailed") + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove("busy");
+      $("generateLabel").textContent = t("generate");
+    }
+  }
+
+  async function fetchExport(id) {
+    const payload = await invoke({ action: "get", id, include_audio: true });
+    return { info: payload.export, blob: base64ToBlob(payload.audio_base64, payload.export.mime_type) };
+  }
+
+  async function loadHistory() {
+    const list = $("history");
+    try {
+      const payload = await invoke({ action: "list", limit: 100 });
+      if (!payload.exports.length) {
+        list.innerHTML = '<div class="empty">' + escapeHtml(t("historyEmpty")) + "</div>";
+        return;
+      }
+      list.innerHTML = payload.exports.map((e) =>
+        '<div class="row' + (e.id === playingId ? " playing" : "") + '" data-id="' + e.id + '">' +
+          '<button type="button" class="icon-btn" data-act="play" title="' + escapeHtml(t("play")) + '">▶</button>' +
+          '<div class="row-body"><div class="row-title" title="' + escapeHtml(e.text_preview) + '">' + escapeHtml(e.title) + "</div>" +
+          '<div class="row-meta"><span class="badge">' + e.format + "</span><span>" + fmtDuration(e.duration_sec) + "</span><span>" + fmtBytes(e.size_bytes) +
+          "</span><span>" + escapeHtml(e.provider) + (e.voice ? " · " + escapeHtml(e.voice) : "") + "</span><span>" +
+          new Date(e.created_at).toLocaleString(LOCALE, { dateStyle: "short", timeStyle: "short" }) + "</span></div></div>" +
+          '<button type="button" class="icon-btn" data-act="download" title="' + escapeHtml(t("download")) + '">⬇</button>' +
+          '<button type="button" class="icon-btn" data-act="reuse" title="' + escapeHtml(t("reuse")) + '">↺</button>' +
+          '<button type="button" class="icon-btn del" data-act="delete" title="' + escapeHtml(t("delete")) + '">✕</button>' +
+        "</div>").join("");
+    } catch (e) {
+      list.innerHTML = '<div class="empty">' + escapeHtml(t("historyFailed") + e.message) + "</div>";
+    }
+  }
+
+  $("history").addEventListener("click", async function (ev) {
+    const btn = ev.target.closest("button[data-act]");
+    if (!btn) return;
+    const id = Number(btn.closest(".row").dataset.id);
+    const act = btn.dataset.act;
+    try {
+      if (act === "delete") {
+        if (!confirm(t("confirmDelete"))) return;
+        await invoke({ action: "delete", id });
+        if (current && current.exportInfo.id === id) $("result").classList.remove("show");
+        showToast(t("deleted"));
+        loadHistory();
+        return;
+      }
+      if (act === "reuse") {
+        const payload = await invoke({ action: "get", id });
+        $("text").value = payload.export.text;
+        $("title").value = payload.export.title;
+        updateCounter();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+      const { info, blob } = await fetchExport(id);
+      if (act === "download") { downloadBlob(blob, info.filename); return; }
+      playingId = id;
+      showResult(info, blob);
+      $("player").play().catch(() => {});
+      document.querySelectorAll("#history .row").forEach((r) => r.classList.toggle("playing", Number(r.dataset.id) === id));
+    } catch (e) {
+      showToast(t("error") + e.message);
+    }
+  });
+
+  $("settingsLink").href = "/api/plugins/tts-studio/ui/settings/?lang=" + LANG;
+
+  $("downloadBtn").onclick = function () {
+    if (current) downloadBlob(current.blob, current.exportInfo.filename);
+  };
+  $("generateBtn").onclick = generate;
+  $("text").addEventListener("input", updateCounter);
+  $("text").addEventListener("keydown", function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter") generate();
+  });
+  $("provider").addEventListener("change", function () { loadVoices(""); });
+  $("refAddBtn").onclick = addReferenceVoice;
+  $("refFile").addEventListener("change", function () {
+    const file = $("refFile").files[0];
+    if (!file) return;
+    if (!$("refName").value.trim()) {
+      $("refName").value = file.name.replace(/\.[^.]+$/, "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+    }
+    const preview = $("refPreview");
+    if (preview.dataset.url) URL.revokeObjectURL(preview.dataset.url);
+    preview.dataset.url = URL.createObjectURL(file);
+    preview.src = preview.dataset.url;
+    preview.style.display = "block";
+  });
+  ["speed", "pitch", "volume"].forEach(function (id) {
+    const update = function () { $(id + "Val").textContent = fmtNum(Number($(id).value), 2) + "×"; renderBanners(); };
+    $(id).addEventListener("input", update);
+    $(id).updateLabel = update;
+  });
+  document.querySelectorAll("#formatSeg button").forEach((b) => b.addEventListener("click", function () { setFormat(b.dataset.format); }));
+
+  // Defaults from the plugin settings, then capability check.
+  try {
+    const res = await fetch(BASE + "/settings");
+    const json = await res.json();
+    settings = (json.data && json.data.values) || {};
+  } catch { /* defaults below */ }
+  $("provider").value = settings.default_provider || "standard";
+  if (!$("provider").value) $("provider").value = "standard";
+  $("language").value = settings.default_language || "";
+  $("bitrate").value = String(settings.mp3_bitrate || "192");
+  $("sampleRate").value = String(settings.sample_rate || "original");
+  $("channels").value = String(settings.channels || "original");
+  $("gap").value = settings.gap_ms != null ? String(settings.gap_ms) : "250";
+  $("speed").value = String(settings.speed ?? 1);
+  $("pitch").value = String(settings.pitch ?? 1);
+  $("volume").value = String(settings.volume ?? 1);
+  ["speed", "pitch", "volume"].forEach((id) => $(id).updateLabel());
+  $("emotionStyle").value = settings.emotion_style || "";
+  $("emotionInstructions").value = settings.emotion_instructions || "";
+  setFormat(settings.default_format || "mp3");
+  updateCounter();
+  loadVoices(settings.default_voice || "");
+  loadHistory();
+
+  try {
+    const status = await invoke({ action: "status" });
+    ffmpegAvailable = status.ffmpeg_available;
+    if (!status.tts_available) renderBanners(t("noTts"));
+    else renderBanners();
+  } catch (e) {
+    renderBanners(t("statusFailed") + e.message);
+  }
+});
+</script>
+</body>
+</html>

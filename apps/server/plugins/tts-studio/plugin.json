@@ -1,0 +1,346 @@
+{
+  "name": "tts-studio",
+  "version": "1.1.0",
+  "description": "TTS-Studio: Text über das interne Sprachsystem (Chatterbox, Piper, OpenAI, ElevenLabs, Qwen3, Pocket, Breeze, lokal) in Sprache umwandeln und als WAV- oder MP3-Datei exportieren. Lange Texte werden automatisch in Abschnitte geteilt und zusammengefügt. Eigene Oberfläche mit Stimmen-Auswahl, Referenz-Audio-Upload (landet in der Stimmenbibliothek des Agenten), Vorschau, Download und Verlauf. Alle TTS-Einstellungen des Agenten lassen sich nur für das Plugin überschreiben; auch der Agent kann Audiodateien erzeugen.",
+  "author": "DucKI",
+  "license": "Proprietary",
+  "icon": "🎙️",
+  "category": "workspace",
+  "trust": "node",
+  "storage": {
+    "sqlite": true
+  },
+  "provides": {
+    "moduleTools": [
+      "tools/tts-studio.js"
+    ],
+    "skills": [
+      "skills/tts-studio-usage"
+    ],
+    "frontendPage": "app/index.html",
+    "settingsPage": "settings/index.html",
+    "settings": [
+      {
+        "key": "default_provider",
+        "type": "select",
+        "default": "standard",
+        "options": [
+          "standard",
+          "chatterbox",
+          "piper",
+          "openai",
+          "elevenlabs",
+          "qwen3-tts",
+          "pocket-tts",
+          "breeze",
+          "local"
+        ],
+        "description": "TTS-Engine für Exporte. \"standard\" nutzt die Engine aus dem Sprache-Tab."
+      },
+      {
+        "key": "default_voice",
+        "type": "string",
+        "default": "",
+        "description": "Standard-Stimme/Voice-ID für die gewählte Engine (leer = Engine-Standard)."
+      },
+      {
+        "key": "default_language",
+        "type": "string",
+        "default": "de",
+        "description": "Sprachcode, z. B. de oder en."
+      },
+      {
+        "key": "default_format",
+        "type": "select",
+        "default": "mp3",
+        "options": [
+          "mp3",
+          "wav"
+        ],
+        "description": "Standard-Exportformat."
+      },
+      {
+        "key": "mp3_bitrate",
+        "type": "select",
+        "default": "192",
+        "options": [
+          "96",
+          "128",
+          "160",
+          "192",
+          "256",
+          "320"
+        ],
+        "description": "MP3-Bitrate in kbit/s."
+      },
+      {
+        "key": "sample_rate",
+        "type": "select",
+        "default": "original",
+        "options": [
+          "original",
+          "16000",
+          "22050",
+          "24000",
+          "44100",
+          "48000"
+        ],
+        "description": "Ziel-Samplerate (original = wie von der Engine geliefert)."
+      },
+      {
+        "key": "channels",
+        "type": "select",
+        "default": "original",
+        "options": [
+          "original",
+          "mono",
+          "stereo"
+        ],
+        "description": "Kanäle der Exportdatei."
+      },
+      {
+        "key": "gap_ms",
+        "type": "number",
+        "default": 250,
+        "description": "Pause zwischen Textabschnitten in Millisekunden."
+      },
+      {
+        "key": "max_chunk_chars",
+        "type": "number",
+        "default": 600,
+        "description": "Maximale Zeichen pro TTS-Aufruf (lange Texte werden an Satzgrenzen geteilt)."
+      },
+      {
+        "key": "history_limit",
+        "type": "number",
+        "default": 50,
+        "description": "Wie viele Exporte aufbewahrt werden (0 = unbegrenzt)."
+      },
+      {
+        "key": "speed",
+        "type": "number",
+        "default": 1,
+        "description": "Sprechgeschwindigkeit 0,5-2 (wie im Sprache-Tab, per ffmpeg ohne Tonhöhenänderung)."
+      },
+      {
+        "key": "pitch",
+        "type": "number",
+        "default": 1,
+        "description": "Tonhöhe 0,5-2 bei gleicher Geschwindigkeit."
+      },
+      {
+        "key": "volume",
+        "type": "number",
+        "default": 1,
+        "description": "Lautstärke 0-2 (1 = unverändert)."
+      },
+      {
+        "key": "emotion_style",
+        "type": "select",
+        "default": "",
+        "options": [
+          "",
+          "neutral",
+          "calm",
+          "empathetic",
+          "cheerful",
+          "excited"
+        ],
+        "description": "Emotions-Preset (Chatterbox, ElevenLabs, OpenAI, Qwen3, Breeze). Leer = Engine-Standard."
+      },
+      {
+        "key": "emotion_instructions",
+        "type": "string",
+        "default": "",
+        "description": "Freitext-Anweisung zur Sprechweise (OpenAI, Qwen3, Breeze); hat Vorrang vor dem Preset."
+      },
+      {
+        "key": "CHATTERBOX_SERVER_URL",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Chatterbox-Server-URL."
+      },
+      {
+        "key": "CHATTERBOX_DEFAULT_VOICE",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Chatterbox-Standardstimme (Referenzstimme)."
+      },
+      {
+        "key": "CHATTERBOX_EMOTION_EXAGGERATION",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Chatterbox-Emotionsstärke 0-1."
+      },
+      {
+        "key": "QWEN_TTS_SERVER_URL",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Qwen3-TTS-Server-URL."
+      },
+      {
+        "key": "QWEN_TTS_DEFAULT_VOICE",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Qwen3-TTS-Standardstimme (Referenzstimme)."
+      },
+      {
+        "key": "POCKET_TTS_SERVER_URL",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Pocket-TTS-Server-URL."
+      },
+      {
+        "key": "POCKET_TTS_DEFAULT_VOICE",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Pocket-TTS-Standardstimme."
+      },
+      {
+        "key": "OPENAI_API_KEY",
+        "type": "secret",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). OpenAI-API-Key für TTS."
+      },
+      {
+        "key": "OPENAI_TTS_MODEL",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). OpenAI-TTS-Modell (tts-1, tts-1-hd, gpt-4o-mini-tts)."
+      },
+      {
+        "key": "OPENAI_TTS_VOICE",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). OpenAI-Standardstimme."
+      },
+      {
+        "key": "ELEVENLABS_API_KEY",
+        "type": "secret",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). ElevenLabs-API-Key."
+      },
+      {
+        "key": "ELEVENLABS_MODEL",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). ElevenLabs-Modell (z. B. eleven_multilingual_v2)."
+      },
+      {
+        "key": "ELEVENLABS_VOICE_ID",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). ElevenLabs-Standard-Voice-ID."
+      },
+      {
+        "key": "ELEVENLABS_STABILITY",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). ElevenLabs-Stabilität 0-1."
+      },
+      {
+        "key": "ELEVENLABS_SIMILARITY_BOOST",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). ElevenLabs-Ähnlichkeit 0-1."
+      },
+      {
+        "key": "BREEZE_API_KEY",
+        "type": "secret",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Breeze-API-Key."
+      },
+      {
+        "key": "BREEZE_WS_URL",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Breeze-WebSocket-URL."
+      },
+      {
+        "key": "BREEZE_DEFAULT_VOICE_ID",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Breeze-Standard-Voice-ID."
+      },
+      {
+        "key": "PIPER_EXECUTABLE_PATH",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Pfad zur piper-Executable."
+      },
+      {
+        "key": "PIPER_MODEL_PATH",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Pfad zum Piper-Stimmmodell (.onnx)."
+      },
+      {
+        "key": "PIPER_SPEAKER_ID",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Piper-Sprecher-ID (Mehrsprecher-Modelle)."
+      },
+      {
+        "key": "PIPER_LENGTH_SCALE",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Piper-Länge (größer = langsamer)."
+      },
+      {
+        "key": "PIPER_NOISE_SCALE",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Piper-Noise-Scale."
+      },
+      {
+        "key": "PIPER_NOISE_W",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Piper-Noise-W."
+      },
+      {
+        "key": "PIPER_SENTENCE_SILENCE",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Piper-Pause zwischen Sätzen (s)."
+      },
+      {
+        "key": "LOCAL_TTS_COMMAND",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Lokaler TTS-Befehl."
+      },
+      {
+        "key": "LOCAL_TTS_ARGS",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Argumente als JSON-Array."
+      },
+      {
+        "key": "LOCAL_TTS_WORKDIR",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Arbeitsverzeichnis des Befehls."
+      },
+      {
+        "key": "LOCAL_TTS_TIMEOUT_MS",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Timeout in ms."
+      },
+      {
+        "key": "LOCAL_TTS_OUTPUT_EXT",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Ausgabeformat des Befehls (wav, mp3 ...)."
+      },
+      {
+        "key": "LOCAL_TTS_MODEL",
+        "type": "string",
+        "default": "",
+        "description": "Engine-Einstellung (nur Plugin, leer = Wert aus dem Sprache-Tab des Agenten). Modellname für den Befehl."
+      }
+    ]
+  },
+  "enabled": true
+}

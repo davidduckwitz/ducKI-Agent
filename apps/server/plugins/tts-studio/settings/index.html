@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TTS-Studio Einstellungen</title>
+<style>
+  :root {
+    --bg: #0b0b0f; --surface: #141419; --surface-2: #1b1b22; --border: #292932; --text: #f4f4f5; --muted: #a1a1aa;
+    --primary: #8b5cf6; --primary-hover: #a78bfa; --success: #22c55e; --danger: #ef4444; --warning: #f59e0b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 13px; }
+  button, input, select { font: inherit; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 18px 16px 28px; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 16px; color: var(--muted); font-size: 12px; }
+  .info { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); margin-bottom: 16px; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+  .info b { color: var(--text); font-weight: 600; }
+  .ok { color: var(--success); } .warn { color: var(--warning); } .err { color: var(--danger); }
+  h2 { font-size: 13px; margin: 22px 0 4px; padding-top: 14px; border-top: 1px solid var(--border); }
+  h2 + p.sub { margin: 0 0 10px; color: var(--muted); font-size: 11px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field span { font-weight: 600; font-size: 12px; }
+  .field small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+  .field input, .field select { min-height: 38px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); }
+  .actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  button.primary { min-height: 38px; padding: 0 16px; border-radius: 9px; border: 1px solid var(--primary); background: var(--primary); color: #fff; font-weight: 700; cursor: pointer; }
+  button.primary:hover { background: var(--primary-hover); }
+  #status { font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙️ TTS-Studio</h1>
+  <p class="lead" id="lead"></p>
+  <div class="info" id="info"></div>
+  <form id="form"><div id="fields"></div></form>
+  <div class="actions">
+    <button type="button" class="primary" id="save"></button>
+    <span id="status"></span>
+  </div>
+</div>
+<script>
+  const NAME = "tts-studio";
+  const BASE = "/api/plugins/" + NAME;
+  const $ = (id) => document.getElementById(id);
+
+  /** UI language follows the app: ?lang= from the host iframe, else the app's stored choice, else the browser. */
+  const LANG = (function () {
+    const fromQuery = new URLSearchParams(location.search).get("lang");
+    let stored = null;
+    try { stored = localStorage.getItem("ducki.language"); } catch { /* storage blocked */ }
+    const pick = fromQuery || stored || navigator.language || "de";
+    return String(pick).toLowerCase().startsWith("de") ? "de" : "en";
+  })();
+  const LOCALE = LANG === "de" ? "de-DE" : "en-US";
+  const I18N = {
+    de: {
+      lead: "Standardwerte für Exporte und eigene Engine-Einstellungen. Alles hier gilt <b>nur für dieses Plugin</b> und wird nicht in die Agent-Einstellungen geschrieben. Leere Engine-Felder übernehmen den Wert aus dem Sprache-Tab des Agenten (als Platzhalter angezeigt).",
+      checking: "Prüfe Systemstatus …", save: "Speichern", groupExport: "Export", groupVoice: "Sprechweise", groupLocal: "Lokaler Befehl",
+      engineSub: "Leer lassen = Einstellung des Agenten verwenden.", standardOption: "(Standard)",
+      secretSet: "•••••••• gesetzt - leer lassen zum Beibehalten", secretUnset: "leer = API-Key aus dem Sprache-Tab",
+      secretClear: "Plugin-Key entfernen", agentValue: "Agent: {v}", agentDefault: "Agent-Standard",
+      loadFailed: "Konnte Einstellungen nicht laden: ", ttsApi: "TTS-Schnittstelle", available: "verfügbar",
+      unavailable: "nicht verfügbar (DucKI aktualisieren)", installed: "installiert", ffmpegOk: "(MP3 & Konvertierung möglich)",
+      notInstalled: "nicht installiert", ffmpegMissing: "- nur WAV-Export bzw. MP3 direkt von MP3-Engines",
+      exports: "Exporte", files: "Dateien", in: "in", statusFailed: "Status nicht verfügbar: ",
+      saved: "✓ Gespeichert (nur im Plugin).", saveFailed: "Speichern fehlgeschlagen: ",
+    },
+    en: {
+      lead: "Export defaults and the plugin's own engine settings. Everything here applies <b>to this plugin only</b> and is never written to the agent's settings. Empty engine fields use the value from the agent's Voice tab (shown as placeholder).",
+      checking: "Checking system status …", save: "Save", groupExport: "Export", groupVoice: "Delivery", groupLocal: "Local command",
+      engineSub: "Leave empty = use the agent's setting.", standardOption: "(default)",
+      secretSet: "•••••••• set - leave empty to keep", secretUnset: "empty = API key from the Voice tab",
+      secretClear: "Remove plugin key", agentValue: "Agent: {v}", agentDefault: "Agent default",
+      loadFailed: "Could not load the settings: ", ttsApi: "TTS interface", available: "available",
+      unavailable: "not available (update DucKI)", installed: "installed", ffmpegOk: "(MP3 & conversion possible)",
+      notInstalled: "not installed", ffmpegMissing: "- WAV export only, or MP3 straight from MP3 engines",
+      exports: "Exports", files: "files", in: "in", statusFailed: "Status unavailable: ",
+      saved: "✓ Saved (plugin only).", saveFailed: "Saving failed: ",
+    },
+  };
+  function t(key, vars) {
+    let text = (I18N[LANG] && I18N[LANG][key]) ?? I18N.de[key] ?? key;
+    for (const [k, v] of Object.entries(vars || {})) text = text.split("{" + k + "}").join(String(v));
+    return text;
+  }
+
+  /** Labels + descriptions for the plugin's own (lower-case) settings; engine keys are labelled from their name. */
+  const FIELDS = {
+    de: {
+      default_provider: ["Engine", "TTS-Engine für Exporte. \"standard\" nutzt die Engine aus dem Sprache-Tab."],
+      default_voice: ["Stimme / Voice-ID", "Standardstimme für die gewählte Engine (leer = Engine-Standard)."],
+      default_language: ["Sprache", "Sprachcode der Ausgabe, z. B. de oder en."],
+      default_format: ["Exportformat", "Standard-Exportformat."],
+      mp3_bitrate: ["MP3-Bitrate (kbit/s)", "Bitrate für MP3-Exporte."],
+      sample_rate: ["Samplerate (Hz)", "Ziel-Samplerate (original = wie von der Engine geliefert)."],
+      channels: ["Kanäle", "Kanäle der Exportdatei."],
+      gap_ms: ["Pause zwischen Abschnitten (ms)", "Pause zwischen Textabschnitten in Millisekunden."],
+      max_chunk_chars: ["Zeichen pro TTS-Aufruf", "Lange Texte werden an Satzgrenzen in Abschnitte dieser Größe geteilt."],
+      history_limit: ["Exporte aufbewahren", "Wie viele Exporte aufbewahrt werden (0 = unbegrenzt)."],
+      speed: ["Geschwindigkeit (0,5-2)", "Sprechgeschwindigkeit, per ffmpeg ohne Tonhöhenänderung."],
+      pitch: ["Tonhöhe (0,5-2)", "Tonhöhe bei gleicher Geschwindigkeit."],
+      volume: ["Lautstärke (0-2)", "1 = unverändert."],
+      emotion_style: ["Emotion", "Emotions-Preset (Chatterbox, ElevenLabs, OpenAI, Qwen3, Breeze). Leer = Engine-Standard."],
+      emotion_instructions: ["Sprechanweisung", "Freitext zur Sprechweise (OpenAI, Qwen3, Breeze); hat Vorrang vor dem Preset."],
+    },
+    en: {
+      default_provider: ["Engine", "TTS engine for exports. \"standard\" uses the engine from the Voice tab."],
+      default_voice: ["Voice / voice ID", "Default voice for the chosen engine (empty = engine default)."],
+      default_language: ["Language", "Output language code, e.g. de or en."],
+      default_format: ["Export format", "Default export format."],
+      mp3_bitrate: ["MP3 bitrate (kbit/s)", "Bitrate for MP3 exports."],
+      sample_rate: ["Sample rate (Hz)", "Target sample rate (original = as delivered by the engine)."],
+      channels: ["Channels", "Channels of the exported file."],
+      gap_ms: ["Pause between sections (ms)", "Pause between text sections in milliseconds."],
+      max_chunk_chars: ["Characters per TTS call", "Long texts are split at sentence boundaries into sections of this size."],
+      history_limit: ["Exports to keep", "How many exports are kept (0 = unlimited)."],
+      speed: ["Speed (0.5-2)", "Speaking rate, applied with ffmpeg without changing the pitch."],
+      pitch: ["Pitch (0.5-2)", "Pitch at constant speed."],
+      volume: ["Volume (0-2)", "1 = unchanged."],
+      emotion_style: ["Emotion", "Emotion preset (Chatterbox, ElevenLabs, OpenAI, Qwen3, Breeze). Empty = engine default."],
+      emotion_instructions: ["Delivery instructions", "Free-text delivery instructions (OpenAI, Qwen3, Breeze); override the preset."],
+    },
+  };
+
+  /** Sections in display order; engine sections match the agent's settings-key prefixes. */
+  const GROUPS = [
+    { title: () => t("groupExport"), match: (k) => ["default_provider", "default_voice", "default_language", "default_format", "mp3_bitrate", "sample_rate", "channels", "gap_ms", "max_chunk_chars", "history_limit"].includes(k) },
+    { title: () => t("groupVoice"), match: (k) => ["speed", "pitch", "volume", "emotion_style", "emotion_instructions"].includes(k) },
+    { title: () => "Chatterbox", prefix: "CHATTERBOX_" },
+    { title: () => "Qwen3-TTS", prefix: "QWEN_TTS_" },
+    { title: () => "Pocket-TTS", prefix: "POCKET_TTS_" },
+    { title: () => "OpenAI", prefix: "OPENAI_" },
+    { title: () => "ElevenLabs", prefix: "ELEVENLABS_" },
+    { title: () => "Breeze", prefix: "BREEZE_" },
+    { title: () => "Piper", prefix: "PIPER_" },
+    { title: () => t("groupLocal"), prefix: "LOCAL_TTS_" },
+  ].map((g) => g.prefix ? { ...g, match: (k) => k.startsWith(g.prefix) } : g);
+  const isEngineKey = (k) => /^[A-Z0-9_]+$/.test(k);
+  let specs = [];
+  const status = (msg, cls) => { const s = $("status"); s.textContent = msg || ""; s.className = cls || ""; };
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  /** Turns ELEVENLABS_SIMILARITY_BOOST into "Similarity Boost" (the group heading names the engine). */
+  function engineLabel(key) {
+    const group = GROUPS.find((g) => g.match(key));
+    const rest = group && group.prefix ? key.slice(group.prefix.length) : key;
+    return rest.toLowerCase().split("_").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  }
+
+  function control(spec, value, agentValue) {
+    if (spec.type === "select") {
+      return '<select name="' + spec.key + '">' + (spec.options || []).map((o) =>
+        '<option value="' + escapeHtml(o) + '"' + (String(value) === o ? " selected" : "") + ">" + escapeHtml(o || t("standardOption")) + "</option>").join("") + "</select>";
+    }
+    if (spec.type === "secret") {
+      const isSet = typeof value === "string" && value.startsWith("*");
+      return '<input name="' + spec.key + '" type="password" autocomplete="off" placeholder="' + escapeHtml(isSet ? t("secretSet") : t("secretUnset")) + '">' +
+        (isSet ? '<label style="font-size:11px;color:var(--muted)"><input type="checkbox" data-clear-for="' + spec.key + '"> ' + escapeHtml(t("secretClear")) + "</label>" : "");
+    }
+    const placeholder = isEngineKey(spec.key) ? (agentValue ? t("agentValue", { v: agentValue }) : t("agentDefault")) : "";
+    return '<input name="' + spec.key + '" type="' + (spec.type === "number" ? "number" : "text") + '" value="' + escapeHtml(value ?? "") +
+      '" placeholder="' + escapeHtml(placeholder) + '"' + (spec.type === "number" ? ' step="any" min="0"' : "") + ">";
+  }
+
+  function render(values, agent) {
+    const used = new Set();
+    const fields = FIELDS[LANG] || FIELDS.de;
+    $("fields").innerHTML = GROUPS.map((group) => {
+      const items = specs.filter((spec) => !used.has(spec.key) && group.match(spec.key));
+      if (!items.length) return "";
+      items.forEach((spec) => used.add(spec.key));
+      const engine = isEngineKey(items[0].key);
+      return "<h2>" + escapeHtml(group.title()) + "</h2>" +
+        (engine ? '<p class="sub">' + escapeHtml(t("engineSub")) + "</p>" : "") +
+        '<div class="grid">' + items.map((spec) => {
+          const value = values[spec.key] ?? (isEngineKey(spec.key) ? "" : spec.default ?? "");
+          const [label, description] = fields[spec.key] || [engineLabel(spec.key), ""];
+          const agentValue = /KEY/.test(spec.key) ? "" : agent[spec.key];
+          return '<label class="field"><span>' + escapeHtml(label) + "</span>" + control(spec, value, agentValue) +
+            (description ? "<small>" + escapeHtml(description) + "</small>" : "") + "</label>";
+        }).join("") + "</div>";
+    }).join("");
+    document.querySelectorAll("[data-clear-for]").forEach((box) => box.addEventListener("change", () => {
+      const input = document.querySelector('[name="' + box.dataset.clearFor + '"]');
+      input.dataset.clear = box.checked ? "1" : "";
+    }));
+  }
+
+  async function load() {
+    try {
+      const res = await fetch(BASE + "/settings");
+      const json = await res.json();
+      const data = json.data || json;
+      specs = data.specs || [];
+      const agent = {};
+      try {
+        const all = await (await fetch("/api/settings")).json();
+        for (const row of (all.data || [])) if (row && typeof row.key === "string") agent[row.key] = row.value;
+      } catch { /* placeholders stay generic */ }
+      render(data.values || {}, agent);
+    } catch (e) { status(t("loadFailed") + e.message, "err"); }
+
+    try {
+      const res = await fetch(BASE + "/invoke", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: "tts_studio", input: { action: "status", lang: LANG } })
+      });
+      const json = await res.json();
+      const st = (json.data && json.data.result) || {};
+      const mb = ((st.export_bytes || 0) / 1024 / 1024).toLocaleString(LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+      $("info").innerHTML =
+        "<div>" + escapeHtml(t("ttsApi")) + ": " + (st.tts_available ? '<b class="ok">' + escapeHtml(t("available")) + "</b>" : '<b class="err">' + escapeHtml(t("unavailable")) + "</b>") + "</div>" +
+        "<div>ffmpeg: " + (st.ffmpeg_available ? '<b class="ok">' + escapeHtml(t("installed")) + "</b> " + escapeHtml(t("ffmpegOk")) : '<b class="warn">' + escapeHtml(t("notInstalled")) + "</b> " + escapeHtml(t("ffmpegMissing"))) + "</div>" +
+        "<div>" + escapeHtml(t("exports")) + ": <b>" + (st.export_count || 0) + "</b> " + escapeHtml(t("files")) + ", " + mb + " MB" +
+        (st.export_dir ? " " + escapeHtml(t("in")) + " <code>" + escapeHtml(st.export_dir) + "</code>" : "") + "</div>";
+    } catch (e) { $("info").textContent = t("statusFailed") + e.message; }
+  }
+
+  async function save() {
+    const values = {};
+    for (const spec of specs) {
+      const el = document.querySelector('[name="' + spec.key + '"]');
+      if (!el) continue;
+      if (spec.type === "secret") {
+        if (el.value.trim()) values[spec.key] = el.value.trim();
+        else if (el.dataset.clear === "1") values[spec.key] = "";
+        continue;
+      }
+      values[spec.key] = spec.type === "number" ? (el.value === "" ? spec.default ?? 0 : Number(el.value)) : el.value.trim();
+    }
+    try {
+      const res = await fetch(BASE + "/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ values })
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json && (json.error || json.message)) || ("HTTP " + res.status));
+      status(t("saved"), "ok");
+      load();
+    } catch (e) { status(t("saveFailed") + e.message, "err"); }
+  }
+
+  document.documentElement.lang = LANG;
+  $("lead").innerHTML = t("lead");
+  $("info").textContent = t("checking");
+  $("save").textContent = t("save");
+  $("save").onclick = save;
+  load();
+</script>
+</body>
+</html>
