@@ -368,6 +368,22 @@ fs.writeFileSync(
 fs.writeFileSync(path.join(agentPkgDest, 'index.js'), '// stub: only resolved for its directory, see resolveValidateCliPath() in routes/plugins.ts\n');
 log('✓ @ducki/agent validate-cli.js bundled standalone for isolated plugin validation');
 
+// --- Python model servers (faster-whisper STT, Chatterbox, Pocket TTS, Qwen3-TTS): ship the
+// scripts + requirements + default reference voices; python-paths.ts finds them here and puts
+// the venvs/voices into <duckiHome>/python. Never the dev venvs, logs, tests or __pycache__.
+const pyScriptsSrc = path.join(__dirname, '../server/scripts');
+const pyScriptsDest = path.join(serverDistDest, 'python-scripts');
+fs.mkdirSync(path.join(pyScriptsDest, 'voices'), { recursive: true });
+for (const file of fs.readdirSync(pyScriptsSrc)) {
+  if ((file.endsWith('.py') && !file.startsWith('test_')) || /^requirements-.+\.txt$/.test(file)) {
+    fs.copyFileSync(path.join(pyScriptsSrc, file), path.join(pyScriptsDest, file));
+  }
+}
+for (const file of fs.readdirSync(path.join(pyScriptsSrc, 'voices'))) {
+  if (/\.(wav|txt)$/.test(file)) fs.copyFileSync(path.join(pyScriptsSrc, 'voices', file), path.join(pyScriptsDest, 'voices', file));
+}
+log(`✓ Python model-server scripts bundled into resources/server-dist/python-scripts (${fs.readdirSync(pyScriptsDest).length - 1} files + voices)`);
+
 // --- Built-in plugins: apps/server/plugins/* holds the actual plugin folders (calendar, notes,
 // pet-companion, ...) - these are runtime data/code, not part of the tsc build, so they never
 // land in dist/ and were previously missing from the packaged app entirely. Bundle them here as

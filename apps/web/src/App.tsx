@@ -144,7 +144,7 @@ function AudioGate() {
     return <div className="p-6 text-sm text-muted-foreground">{t("app.loadingPage")}</div>;
   }
 
-  if (!readFlag(settingsQuery.data, "AUDIO_ENABLED")) {
+  if (!readFlag(settingsQuery.data, "AUDIO_ENABLED", true)) {
     return <Navigate to="/dashboard" replace />;
   }
 

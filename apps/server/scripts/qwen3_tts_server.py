@@ -64,7 +64,7 @@ CLONE_PROMPT_CACHE_SIZE = 4
 _metrics = {"requests": 0, "lastQueueMs": 0, "lastSynthesisMs": 0, "lastAudioSeconds": 0, "lastRealtimeFactor": None}
 
 # Same voices/ folder as Chatterbox - existing reference clips work for both engines.
-VOICES_DIR = Path(__file__).parent / "voices"
+VOICES_DIR = Path(os.environ.get("DUCKI_VOICES_DIR") or Path(__file__).parent / "voices")
 
 # Fixed contract for /synthesize_stream: the Node provider's streamSampleRate is hardcoded to
 # this value, so any model sample rate is resampled to match.

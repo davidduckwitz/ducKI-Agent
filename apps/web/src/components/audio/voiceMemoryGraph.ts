@@ -5,6 +5,7 @@ export interface WikiMemoryNode {
   tags: string[];
   degree: number;
   kind?: "note" | "folder";
+  preview?: string;
 }
 
 export interface WikiMemoryEdge {
@@ -32,6 +33,8 @@ export interface VoiceMemoryGraph {
   nodes: VoiceMemoryNode[];
   edges: VoiceMemoryEdge[];
   rootIndex: number;
+  /** Per node: indices into `edges` touching it - the paths a synapse discharge can take. */
+  incident: number[][];
 }
 
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
@@ -118,5 +121,61 @@ export function buildVoiceMemoryGraph(
     edges.push({ source, target, direct: source === 0 || target === 0 });
   }
 
-  return { nodes, edges, rootIndex: 0 };
+  const incident = nodes.map((): number[] => []);
+  edges.forEach((edge, edgeIndex) => {
+    incident[edge.source]!.push(edgeIndex);
+    if (edge.target !== edge.source) incident[edge.target]!.push(edgeIndex);
+  });
+
+  return { nodes, edges, rootIndex: 0, incident };
+}
+
+/**
+ * Relaxes the golden-angle shells into an organic 3D network: linked notes pull
+ * together, all notes push apart, and each note is softly held on its hop shell so
+ * the "distance from index.md" reading survives. The root never moves. The
+ * iteration count shrinks with n^2 so large wikis stay well under ~100 ms.
+ */
+export function relaxVoiceMemoryLayout(graph: VoiceMemoryGraph): VoiceMemoryGraph {
+  const count = graph.nodes.length;
+  if (count < 3) return graph;
+  const x = Float64Array.from(graph.nodes, (node) => node.x);
+  const y = Float64Array.from(graph.nodes, (node) => node.y);
+  const z = Float64Array.from(graph.nodes, (node) => node.z);
+  const shell = Float64Array.from(graph.nodes, (node) => Math.hypot(node.x, node.y / 0.72, node.z));
+  const fx = new Float64Array(count), fy = new Float64Array(count), fz = new Float64Array(count);
+  const iterations = Math.max(12, Math.min(140, Math.floor(4e7 / (count * count))));
+  const repulsion = 0.012 / Math.sqrt(count);
+  for (let step = 0; step < iterations; step += 1) {
+    const cooling = 1 - step / iterations;
+    fx.fill(0); fy.fill(0); fz.fill(0);
+    for (let a = 1; a < count; a += 1) {
+      for (let b = a + 1; b < count; b += 1) {
+        const dx = x[a]! - x[b]!, dy = y[a]! - y[b]!, dz = z[a]! - z[b]!;
+        const distanceSq = Math.max(1e-4, dx * dx + dy * dy + dz * dz);
+        const push = repulsion / distanceSq;
+        fx[a]! += dx * push; fy[a]! += dy * push; fz[a]! += dz * push;
+        fx[b]! -= dx * push; fy[b]! -= dy * push; fz[b]! -= dz * push;
+      }
+    }
+    for (const edge of graph.edges) {
+      const dx = x[edge.target]! - x[edge.source]!, dy = y[edge.target]! - y[edge.source]!, dz = z[edge.target]! - z[edge.source]!;
+      const pull = edge.direct ? 0.02 : 0.05;
+      fx[edge.source]! += dx * pull; fy[edge.source]! += dy * pull; fz[edge.source]! += dz * pull;
+      fx[edge.target]! -= dx * pull; fy[edge.target]! -= dy * pull; fz[edge.target]! -= dz * pull;
+    }
+    for (let i = 1; i < count; i += 1) {
+      const radius = Math.max(1e-3, Math.hypot(x[i]!, y[i]! / 0.72, z[i]!));
+      const toShell = (shell[i]! - radius) * 0.18;
+      fx[i]! += (x[i]! / radius) * toShell; fy[i]! += (y[i]! / radius) * toShell; fz[i]! += (z[i]! / radius) * toShell;
+      const limit = 0.06 * cooling + 0.004;
+      const length = Math.hypot(fx[i]!, fy[i]!, fz[i]!);
+      const scale = length > limit ? limit / length : 1;
+      x[i]! += fx[i]! * scale; y[i]! += fy[i]! * scale; z[i]! += fz[i]! * scale;
+    }
+  }
+  return {
+    ...graph,
+    nodes: graph.nodes.map((node, i) => (i === graph.rootIndex ? node : { ...node, x: x[i]!, y: y[i]!, z: z[i]! })),
+  };
 }

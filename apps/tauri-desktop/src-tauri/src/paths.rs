@@ -10,6 +10,8 @@ use tauri::{AppHandle, Manager};
 pub struct AppPaths {
     pub data_dir: PathBuf,
     pub logs_dir: PathBuf,
+    /// DucKI home (`DUCKI_HOME`, default `~/DucKI`); passed on so the server agrees with it.
+    pub user_root: PathBuf,
     pub workspace_dir: PathBuf,
     pub skills_dir: PathBuf,
     pub plugins_dir: PathBuf,
@@ -25,10 +27,13 @@ impl AppPaths {
             .local_data_dir()
             .map_err(|e| format!("Lokaler Datenordner nicht ermittelbar: {}", e))?
             .join(DATA_DIR_NAME);
-        let user_root = path
-            .home_dir()
-            .map_err(|e| format!("Benutzerordner nicht ermittelbar: {}", e))?
-            .join("DucKI");
+        let user_root = match std::env::var_os("DUCKI_HOME").filter(|v| !v.is_empty()) {
+            Some(home) => PathBuf::from(home),
+            None => path
+                .home_dir()
+                .map_err(|e| format!("Benutzerordner nicht ermittelbar: {}", e))?
+                .join("DucKI"),
+        };
         let server_dist = path
             .resource_dir()
             .map_err(|e| format!("Ressourcenordner nicht ermittelbar: {}", e))?
@@ -40,6 +45,7 @@ impl AppPaths {
             workspace_dir: user_root.join("shared-workspace"),
             skills_dir: user_root.join("skills"),
             plugins_dir: user_root.join("plugins"),
+            user_root,
             server_dist,
         })
     }

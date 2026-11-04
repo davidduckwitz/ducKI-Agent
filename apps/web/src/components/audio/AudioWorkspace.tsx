@@ -2,6 +2,7 @@ import { Ear, EarOff, PhoneOff } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { ChatContainer } from "../chat/ChatContainer";
 import { VoiceOrb } from "./VoiceOrb";
+import { VoiceStage } from "./VoiceStage";
 import { ToolActivityBubble } from "./ToolActivityBubble";
 import { ReplyBubble } from "./ReplyBubble";
 import { requestVoiceToggle, requestVoiceEnd, interruptVoiceReply, onVoiceCaptureStarted, onVoiceCaptureStopped, getWakeWordState, onWakeWordStateChanged } from "../../lib/voiceCaptureBus";
@@ -97,60 +98,62 @@ export function AudioWorkspace() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      <div className="flex flex-col items-center justify-center gap-4 border-b border-white/5 bg-[#020306] px-4 py-6">
-        <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Sprachgespräch</p>
-        <div className="flex min-h-[2rem] items-center">
-          <ToolActivityBubble />
+    <VoiceStage>
+      <div className="flex h-full min-h-0 flex-col overflow-y-auto">
+        <div className="flex flex-col items-center justify-center gap-4 border-b border-white/5 px-4 py-6">
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-400">Sprachgespräch</p>
+          <div className="flex min-h-[2rem] items-center">
+            <ToolActivityBubble />
+          </div>
+
+          <button type="button" aria-label={listening || wakeState !== "off" ? "Mikrofon pausieren" : "Sprachgespräch starten"} aria-pressed={listening || wakeState !== "off"} onClick={() => requestVoiceToggle()} className="cursor-pointer rounded-full border-0 bg-transparent p-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400">
+            <VoiceOrb />
+          </button>
+
+          <p className="max-w-sm text-center text-xs text-slate-400">
+            {wakeWordEnabled
+              ? wakeState === "loading" ? "Lade Aktivierungswort-Erkennung …"
+                : wakeState === "armed" ? `Warte auf „${wakeWordPhrase}“ – sag es, um eine Frage zu stellen oder den Agenten zu unterbrechen.`
+                : listening ? "Ich höre zu …"
+                : `Tippe auf das Mikrofon, damit der Agent auf „${wakeWordPhrase}“ wartet.`
+              : listening ? "Sprich einfach weiter – du kannst den Agenten beim Arbeiten und Antworten unterbrechen." : "Tippe auf das Mikrofon, um das Gespräch zu starten."}
+          </p>
+
+          <ReplyBubble />
+
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setWakeWord({ wakeWordEnabled: !wakeWordEnabled })}
+              title={wakeWordEnabled ? "Aktivierungswort ausschalten" : `Nur auf „${wakeWordPhrase}“ reagieren`}
+              aria-label={wakeWordEnabled ? "Aktivierungswort-Modus ausschalten" : "Aktivierungswort-Modus einschalten"}
+              aria-pressed={wakeWordEnabled}
+              className={`flex h-12 items-center gap-2 rounded-full border px-4 text-xs font-medium transition ${
+                wakeWordEnabled
+                  ? "border-indigo-400/50 bg-indigo-950/70 text-indigo-200 hover:bg-indigo-900/70"
+                  : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
+              }`}
+            >
+              {wakeWordEnabled ? <Ear className="h-4 w-4" /> : <EarOff className="h-4 w-4" />}
+              <span>{wakeWordEnabled ? `„${wakeWordPhrase}“` : "Aktivierungswort aus"}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleHangUp}
+              title="Beenden"
+              aria-label="Sprachgespräch beenden und Agenten stoppen"
+              className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/40 bg-red-950/60 text-red-300 transition hover:bg-red-900/70"
+            >
+              <PhoneOff className="h-5 w-5" />
+            </button>
+          </div>
+          <ScreenSharePanel />
         </div>
 
-        <button type="button" aria-label={listening || wakeState !== "off" ? "Mikrofon pausieren" : "Sprachgespräch starten"} aria-pressed={listening || wakeState !== "off"} onClick={() => requestVoiceToggle()} className="cursor-pointer rounded-full border-0 bg-transparent p-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-400">
-          <VoiceOrb />
-        </button>
-
-        <p className="max-w-sm text-center text-xs text-slate-400">
-          {wakeWordEnabled
-            ? wakeState === "loading" ? "Lade Aktivierungswort-Erkennung …"
-              : wakeState === "armed" ? `Warte auf „${wakeWordPhrase}“ – sag es, um eine Frage zu stellen oder den Agenten zu unterbrechen.`
-              : listening ? "Ich höre zu …"
-              : `Tippe auf das Mikrofon, damit der Agent auf „${wakeWordPhrase}“ wartet.`
-            : listening ? "Sprich einfach weiter – du kannst den Agenten beim Arbeiten und Antworten unterbrechen." : "Tippe auf das Mikrofon, um das Gespräch zu starten."}
-        </p>
-
-        <ReplyBubble />
-
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={() => setWakeWord({ wakeWordEnabled: !wakeWordEnabled })}
-            title={wakeWordEnabled ? "Aktivierungswort ausschalten" : `Nur auf „${wakeWordPhrase}“ reagieren`}
-            aria-label={wakeWordEnabled ? "Aktivierungswort-Modus ausschalten" : "Aktivierungswort-Modus einschalten"}
-            aria-pressed={wakeWordEnabled}
-            className={`flex h-12 items-center gap-2 rounded-full border px-4 text-xs font-medium transition ${
-              wakeWordEnabled
-                ? "border-indigo-400/50 bg-indigo-950/70 text-indigo-200 hover:bg-indigo-900/70"
-                : "border-white/10 bg-white/5 text-slate-400 hover:bg-white/10"
-            }`}
-          >
-            {wakeWordEnabled ? <Ear className="h-4 w-4" /> : <EarOff className="h-4 w-4" />}
-            <span>{wakeWordEnabled ? `„${wakeWordPhrase}“` : "Aktivierungswort aus"}</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleHangUp}
-            title="Beenden"
-            aria-label="Sprachgespräch beenden und Agenten stoppen"
-            className="flex h-12 w-12 items-center justify-center rounded-full border border-red-500/40 bg-red-950/60 text-red-300 transition hover:bg-red-900/70"
-          >
-            <PhoneOff className="h-5 w-5" />
-          </button>
+        <div className="min-h-0 flex-1">
+          <ChatContainer hideTranscript />
         </div>
-        <ScreenSharePanel />
       </div>
-
-      <div className="min-h-0 flex-1">
-        <ChatContainer hideTranscript />
-      </div>
-    </div>
+    </VoiceStage>
   );
 }

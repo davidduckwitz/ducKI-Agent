@@ -6,6 +6,8 @@ interface Status {
   managed: boolean;
   working: boolean;
   autoStart: boolean;
+  envReady?: boolean;
+  phase?: string;
   error?: string;
   health?: { modelLoaded?: boolean; busy?: boolean; model?: string; device?: string; computeType?: string;
     cudaAvailable?: boolean; error?: string; metrics?: { lastTranscribeMs?: number; lastAudioSeconds?: number; lastRealtimeFactor?: number } };
@@ -85,8 +87,8 @@ export function SttServerControls() {
         void save("DEFAULT_SPEECH_TO_TEXT_PROVIDER", e.target.checked ? "faster-whisper" : "nodejs-whisper", setProvider)} />
       faster-whisper Server für die Spracheingabe verwenden (inkl. Live-Text während des Sprechens)
     </label>
-    <p className="text-sm" role="status">{!status ? "Status wird geladen …" : status.working ? "Aktion läuft … (erster Start lädt das Modell herunter)" :
-      !status.reachable ? "Server gestoppt" : h?.modelLoaded ? `Modell ${h.model} geladen` : "Modell entladen"}
+    <p className="text-sm" role="status">{!status ? "Status wird geladen …" : status.phase ?? (status.working ? "Aktion läuft … (erster Start lädt das Modell herunter)" :
+      !status.reachable ? (status.envReady === false ? "Python-Umgebung fehlt – bitte „Umgebung einrichten“" : "Server gestoppt") : h?.modelLoaded ? `Modell ${h.model} geladen` : "Modell entladen")}
       {h?.device && ` · ${h.device === "cuda" ? "NVIDIA CUDA" : "CPU"}${h.computeType ? ` (${h.computeType})` : ""}`}
       {h && !h.cudaAvailable && h.device !== "cuda" && " · keine CUDA-GPU erkannt"}
     </p>
@@ -111,7 +113,9 @@ export function SttServerControls() {
         setStatus((current) => current && { ...current, autoStart: v === "true" }))} />
       Automatisch starten, wenn faster-whisper aktiviert ist</label>
     <div className="flex flex-wrap gap-2">
-      <button type="button" className="btn-secondary" disabled={!status || busy || status.reachable} onClick={() => void action("start")}>Server starten</button>
+      {status?.envReady === false && !status.reachable &&
+        <button type="button" className="btn-secondary" disabled={busy} onClick={() => void action("setup")}>Umgebung einrichten</button>}
+      <button type="button" className="btn-secondary" disabled={!status || busy || status.reachable || status.envReady === false} onClick={() => void action("start")}>Server starten</button>
       <button type="button" className="btn-secondary" disabled={!status?.managed || busy} onClick={() => void action("stop")}>Server stoppen</button>
       <button type="button" className="btn-secondary" disabled={!status?.reachable || busy || h?.modelLoaded} onClick={() => void action("load")}>Modell laden</button>
       <button type="button" className="btn-secondary" disabled={!h?.modelLoaded || busy} onClick={() => void action("unload")}>Modell entladen</button>

@@ -1,10 +1,9 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { DatabaseService } from "@ducki/database";
+import { PYTHON_DATA_DIR, PYTHON_SCRIPTS_DIR as scripts, pythonServerEnv, venvPython } from "./python-paths.js";
 import { modelServerEnv } from "./secrets-store.js";
 
-const scripts = fileURLToPath(new URL("../../scripts/", import.meta.url));
 let child: ChildProcess | undefined;
 let operation: Promise<unknown> | undefined;
 let lastError: string | undefined;
@@ -45,11 +44,11 @@ async function start(db: DatabaseService) {
   if ((await chatterboxStatus(db)).reachable) return;
   const url = await endpoint(db);
   if (!child) {
-    const venv = `${scripts}.venv/${process.platform === "win32" ? "Scripts/python.exe" : "bin/python"}`;
+    const venv = venvPython(`${PYTHON_DATA_DIR}.venv`);
     const python = process.env["CHATTERBOX_PYTHON"] || (existsSync(venv) ? venv : "python");
     const proc = spawn(python, [`${scripts}chatterbox_server.py`], {
       cwd: scripts, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...(await modelServerEnv(db)), CHATTERBOX_HOST: "127.0.0.1", CHATTERBOX_PORT: url.port || "80", CHATTERBOX_LAZY_LOAD: "1", CHATTERBOX_MODEL: "v3" },
+      env: { ...process.env, ...pythonServerEnv(), ...(await modelServerEnv(db)), CHATTERBOX_HOST: "127.0.0.1", CHATTERBOX_PORT: url.port || "80", CHATTERBOX_LAZY_LOAD: "1", CHATTERBOX_MODEL: "v3" },
     });
     child = proc;
     proc.stdout?.on("data", (data: Buffer) => console.info(`[Chatterbox] ${data.toString().trim()}`));

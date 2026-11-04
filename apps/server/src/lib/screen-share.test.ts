@@ -23,6 +23,9 @@ function setup() {
 describe("screen sharing capability", () => {
   it("only permits desktop access from loopback and a local origin", () => {
     expect(isLocalDesktopClient("127.0.0.1", "http://localhost:5173")).toBe(true);
+    expect(isLocalDesktopClient("127.0.0.1", "http://tauri.localhost")).toBe(true);
+    expect(isLocalDesktopClient("::1", "tauri://localhost")).toBe(true);
+    expect(isLocalDesktopClient("127.0.0.1", "http://evil.tauri.localhost")).toBe(false);
     expect(isLocalDesktopClient("192.168.1.5", "http://localhost:5173")).toBe(false);
     expect(isLocalDesktopClient("127.0.0.1", "https://evil.example")).toBe(false);
     expect(isLocalDesktopClient("127.0.0.1", undefined)).toBe(false);

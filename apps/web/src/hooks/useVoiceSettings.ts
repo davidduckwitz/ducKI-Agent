@@ -6,6 +6,8 @@ export type STTMode = "push-to-talk" | "vad-auto";
 export type TTSEmotionStyle = "neutral" | "cheerful" | "calm" | "empathetic" | "excited";
 export type AgentVoiceReplyStyle = "adapt" | "unchanged";
 export type WakeWordProvider = "openwakeword" | "porcupine";
+/** What the 3D wiki backdrop of the voice tab writes next to its nodes. */
+export type VoiceBackdropLabels = "none" | "titles" | "titles-notes";
 
 export interface VoiceSettings {
   // STT Settings
@@ -53,6 +55,9 @@ export interface VoiceSettings {
   wakeWordFollowUpMs: number;
   wakeWordChime: boolean;
 
+  // Voice tab visuals
+  voiceBackdropLabels: VoiceBackdropLabels;
+
   // Advanced
   autoPlayTTS: boolean;
   ttsQuality: "low" | "high"; // for OpenAI/Silero: tts-1 vs tts-1-hd
@@ -95,6 +100,8 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   wakeWordFollowUpMs: 8000,
   wakeWordChime: true,
 
+  voiceBackdropLabels: "titles",
+
   autoPlayTTS: false,
   ttsQuality: "high",
 };
@@ -129,6 +136,7 @@ interface VoiceSettingsStore extends VoiceSettings {
   setVoiceRetryPromptEnabled: (enabled: boolean) => void;
 
   setWakeWord: (patch: Partial<Pick<VoiceSettings, WakeWordSettingKey>>) => void;
+  setVoiceBackdropLabels: (labels: VoiceBackdropLabels) => void;
 
   setAutoPlayTTS: (autoPlay: boolean) => void;
   setTTSQuality: (quality: "low" | "high") => void;
@@ -171,6 +179,8 @@ export const useVoiceSettings = create<VoiceSettingsStore>()(
         ...(patch.wakeWordPorcupineSensitivity !== undefined && { wakeWordPorcupineSensitivity: clamp01(patch.wakeWordPorcupineSensitivity) }),
         ...(patch.wakeWordFollowUpMs !== undefined && { wakeWordFollowUpMs: Math.max(0, Math.min(60000, patch.wakeWordFollowUpMs)) }),
       }),
+
+      setVoiceBackdropLabels: (labels) => set({ voiceBackdropLabels: labels }),
 
       setAutoPlayTTS: (autoPlay) => set({ autoPlayTTS: autoPlay }),
       setTTSQuality: (quality) => set({ ttsQuality: quality }),

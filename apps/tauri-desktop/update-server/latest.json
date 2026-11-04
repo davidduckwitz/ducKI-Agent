@@ -1,11 +1,11 @@
 {
-  "version": "1.0.16",
-  "notes": "WakeUpWord im Voicemodus | TTS für deutsche Zahlen und Zeichen in PocketTTS",
-  "pub_date": "2026-11-03T16:22:49Z",
+  "version": "1.0.23",
+  "notes": "UI ToolCall Fixes - Boxen werden nach 5 Sekunden ausgeblendet",
+  "pub_date": "2026-11-04T14:17:04Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGNPT3VjWVJKNVd5VVBnY0FTNE9ZbTVERkU4aWw3OTArSFFFY2N5QUV5Yi82T1pRRDFqV3NwVUFBcThIZlF0SUhTNGRNZmVodXNXNnN1MGlIdlM0UGdzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzNzIyOTY4CWZpbGU6RHVjS0kgTm9kZV8xLjAuMTZfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjEuMC4xNgpvMzZBeFZmWFpZQ1RYdjYycGNkdGwzSm9kenBmMERvTWpZQ3lMdFNOVXJKZHF5dCtNbmxJOFE4MnBRbGswVWpzaFpSdUd2NC8rVGdlRXZEWURzYTFCZz09Cg==",
-      "url": "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.16_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSSjJaZHJ5WVhGOGZ1TnhBcm1WZGo2K3R4TnNKQ2NmdFJaWE1uQWZDM2NaVFh4a0xxVlJMbFdZUGRza0RrbVFNV3B4cXBEZUxIV3hUSnRjVDFRVlFXaExyMFl5ZXprRndzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkzODAxODI0CWZpbGU6RHVjS0kgTm9kZV8xLjAuMjNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjEuMC4yMwpzdWRDU3ZHemQ3RWwwVStZN2xWRjVXQTFyaG10c2N3R05oVWFKeXhVbkNFb3hTTkJnZGhSMnp2czBXUTRLK0RDaUJCNEdCZ01PWkdXYW1ESGRBRnZEQT09Cg==",
+      "url": "https://ducki.cloud/updates/desktop/DucKI-Node_1.0.23_x64-setup.exe"
     }
   }
 }

@@ -76,7 +76,8 @@ $bitmap = New-Object System.Drawing.Bitmap($r.Width,$r.Height)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 try {
  $graphics.CopyFromScreen($r.Left,$r.Top,0,0,$bitmap.Size)
- $scale = [Math]::Min(1,1600 / $r.Width)
+ # Double literals: Min(1, x) binds the int overload and rounds e.g. 0.29 down to 0 (1x1 image)
+ $scale = [Math]::Min([double]1,[double]1600 / $r.Width)
  for ($attempt=0; $attempt -lt 8; $attempt++) {
   $small = New-Object System.Drawing.Bitmap([Math]::Max(1,[int]($r.Width*$scale)),[Math]::Max(1,[int]($r.Height*$scale)))
   $g = [System.Drawing.Graphics]::FromImage($small)

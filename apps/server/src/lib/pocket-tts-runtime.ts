@@ -1,14 +1,13 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { DatabaseService } from "@ducki/database";
 import { localChatterboxUrl } from "./chatterbox-runtime.js";
 import { run } from "./qwen-tts-runtime.js";
+import { PYTHON_DATA_DIR, PYTHON_SCRIPTS_DIR as scripts, pythonServerEnv, venvPython } from "./python-paths.js";
 import { modelServerEnv } from "./secrets-store.js";
 
 // Same lifecycle rules as chatterbox-runtime.ts / qwen-tts-runtime.ts: only a process we spawned
 // ourselves is ever stopped. Pocket TTS is CPU-first, so there is no CUDA handling here.
-const scripts = fileURLToPath(new URL("../../scripts/", import.meta.url));
 const DEFAULT_URL = "http://127.0.0.1:8893";
 export const DEFAULT_POCKET_TTS_LANGUAGE = "german";
 let child: ChildProcess | undefined;
@@ -18,8 +17,8 @@ let setupPhase: string | undefined;
 const intentionallyStopped = new WeakSet<ChildProcess>();
 
 // POCKET_TTS_VENV_DIR relocates the venv to another drive when the project drive is small.
-const VENV_DIR = (process.env["POCKET_TTS_VENV_DIR"] || `${scripts}.venv-pocket`).replace(/[\\/]+$/, "");
-const VENV_PYTHON = `${VENV_DIR}/${process.platform === "win32" ? "Scripts/python.exe" : "bin/python"}`;
+const VENV_DIR = (process.env["POCKET_TTS_VENV_DIR"] || `${PYTHON_DATA_DIR}.venv-pocket`).replace(/[\\/]+$/, "");
+const VENV_PYTHON = venvPython(VENV_DIR);
 const REQUIREMENTS = `${scripts}requirements-pocket-tts.txt`;
 let envCache: { ready: boolean; checkedAt: number } | undefined;
 
@@ -44,6 +43,23 @@ export async function pocketTtsEnvironmentReady(force = false): Promise<boolean>
   return ready;
 }
 
+/** Creates a Python 3.12 venv (uv, py launcher or python on PATH). Returns the last output on failure. */
+export async function createVenv(venvDir: string, hasUv: boolean): Promise<string | undefined> {
+  let lastOutput = "";
+  const candidates: Array<[string, string[]]> = [
+    ...(hasUv ? [["uv", ["venv", venvDir, "--python", "3.12"]] as [string, string[]]] : []),
+    ...(process.platform === "win32" ? [["py", ["-3.12", "-m", "venv", venvDir]] as [string, string[]]] : []),
+    ["python3.12", ["-m", "venv", venvDir]],
+    ["python", ["-m", "venv", venvDir]],
+  ];
+  for (const [command, args] of candidates) {
+    const result = await run(command, args, { timeoutMs: 300_000 });
+    lastOutput = result.output;
+    if (result.code === 0 && existsSync(venvPython(venvDir))) return undefined;
+  }
+  return lastOutput;
+}
+
 /** Creates .venv-pocket and installs the requirements (a few hundred MB). Only on explicit user action. */
 async function setupEnvironment() {
   const fail = (message: string, output: string): never => {
@@ -53,20 +69,8 @@ async function setupEnvironment() {
     const hasUv = (await run("uv", ["--version"], { timeoutMs: 10_000 })).code === 0;
     if (!existsSync(VENV_PYTHON)) {
       setupPhase = "Erstelle Python-Umgebung (.venv-pocket) …";
-      let created = false;
-      let lastOutput = "";
-      const candidates: Array<[string, string[]]> = [
-        ...(hasUv ? [["uv", ["venv", VENV_DIR, "--python", "3.12"]] as [string, string[]]] : []),
-        ...(process.platform === "win32" ? [["py", ["-3.12", "-m", "venv", VENV_DIR]] as [string, string[]]] : []),
-        ["python3.12", ["-m", "venv", VENV_DIR]],
-        ["python", ["-m", "venv", VENV_DIR]],
-      ];
-      for (const [command, args] of candidates) {
-        const result = await run(command, args, { timeoutMs: 300_000 });
-        lastOutput = result.output;
-        if (result.code === 0 && existsSync(VENV_PYTHON)) { created = true; break; }
-      }
-      if (!created) fail("Python-Umgebung konnte nicht erstellt werden. Installiere Python 3.10–3.14 (oder uv: https://docs.astral.sh/uv/).", lastOutput);
+      const lastOutput = await createVenv(VENV_DIR, hasUv);
+      if (lastOutput !== undefined) fail("Python-Umgebung konnte nicht erstellt werden. Installiere Python 3.10–3.14 (oder uv: https://docs.astral.sh/uv/).", lastOutput);
     }
     setupPhase = "Installiere Pocket TTS und PyTorch (CPU) …";
     const install = hasUv
@@ -109,7 +113,7 @@ async function start(db: DatabaseService) {
     }
     const proc = spawn(pythonPath()!, [`${scripts}pocket_tts_server.py`], {
       cwd: scripts, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...(await modelServerEnv(db)), POCKET_TTS_HOST: "127.0.0.1", POCKET_TTS_PORT: url.port || "80", POCKET_TTS_LAZY_LOAD: "1",
+      env: { ...process.env, ...pythonServerEnv(), ...(await modelServerEnv(db)), POCKET_TTS_HOST: "127.0.0.1", POCKET_TTS_PORT: url.port || "80", POCKET_TTS_LAZY_LOAD: "1",
         POCKET_TTS_LANGUAGE: await db.getSetting("POCKET_TTS_LANGUAGE") || DEFAULT_POCKET_TTS_LANGUAGE,
         HF_HUB_DISABLE_SYMLINKS_WARNING: "1" },
     });

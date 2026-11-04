@@ -8351,40 +8351,38 @@ export class Agent {
         if (isProviderConnectionError(error)) {
           throw error;
         }
-        const canRetryCompact = compactSkillManifests.length > 0 && activeSkills.length > compactSkillManifests.length;
-        if (!canRetryCompact || !isProviderLoadError(providerError)) {
-          throw error;
-        }
-
-        emit("guardrail", "Provider error detected, retrying with compact skill context", {
-          error: providerError,
-          loadedSkills: activeSkillSlugs,
-          compactSkills: compactSkillManifests.map((skill) => skill.slug),
-        });
-
-        skillMode = "compact";
-        messages = buildMessages("compact");
-        try {
+        // A 400 while a screenshot is attached is most likely the image itself being rejected
+        // (format, size, upstream content filter). The compact/minimal retries below keep the
+        // image and fail identically, so swap it for a text note the model can act on instead.
+        const status = (error as { status?: unknown }).status;
+        if (status === 400 && Array.isArray(this.currentScreenshotMessage?.content)) {
+          emit("guardrail", "Provider rejected the attached screenshot, retrying without it", { error: providerError });
+          this.history.clearByType("screenshot");
+          this.currentScreenshotMessage = {
+            role: "user",
+            content: `[The model provider rejected the last screenshot (${providerError.slice(0, 300)}). The image was removed from the conversation. Do not claim to see it; tell the user the screenshot could not be analyzed with this model.]`,
+            metadata: { source: "screenshot_rejected" },
+          };
+          messages = buildMessages(skillMode);
           response = await retryWithBackoff(
-            async () => {
-              return await generateFromMessages(messages);
-            },
+            async () => generateFromMessages(messages),
             DEFAULT_RETRY_CONFIG,
             { logger: this.logger, eventEmitter: this.eventEmitterV2 }
           );
-        } catch (compactError) {
-          const compactProviderError = compactError instanceof Error ? compactError.message : String(compactError);
-          if (!isProviderLoadError(compactProviderError)) {
-            throw compactError;
+        } else {
+          const canRetryCompact = compactSkillManifests.length > 0 && activeSkills.length > compactSkillManifests.length;
+          if (!canRetryCompact || !isProviderLoadError(providerError)) {
+            throw error;
           }
 
-          emit("guardrail", "Compact retry failed, retrying with minimal prompt context", {
-            error: compactProviderError,
-            droppedSkillContents: activeSkillSlugs,
+          emit("guardrail", "Provider error detected, retrying with compact skill context", {
+            error: providerError,
+            loadedSkills: activeSkillSlugs,
+            compactSkills: compactSkillManifests.map((skill) => skill.slug),
           });
 
-          skillMode = "minimal";
-          messages = buildMessages("minimal");
+          skillMode = "compact";
+          messages = buildMessages("compact");
           try {
             response = await retryWithBackoff(
               async () => {
@@ -8393,30 +8391,52 @@ export class Agent {
               DEFAULT_RETRY_CONFIG,
               { logger: this.logger, eventEmitter: this.eventEmitterV2 }
             );
-          } catch (minimalError) {
-            const minimalProviderError = minimalError instanceof Error ? minimalError.message : String(minimalError);
-            if (!isContextOverflowError(minimalProviderError)) {
-              throw minimalError;
+          } catch (compactError) {
+            const compactProviderError = compactError instanceof Error ? compactError.message : String(compactError);
+            if (!isProviderLoadError(compactProviderError)) {
+              throw compactError;
             }
 
-            emit("guardrail", "Minimal retry still exceeded context, retrying with aggressively truncated context", {
-              error: minimalProviderError,
+            emit("guardrail", "Compact retry failed, retrying with minimal prompt context", {
+              error: compactProviderError,
+              droppedSkillContents: activeSkillSlugs,
             });
 
             skillMode = "minimal";
-            messages = buildMessages("minimal", {
-              messageLimit: 12,
-              charLimit: 24000,
-              dynamicMemoryLimit: 0,
-              includeDynamicMemory: false,
-            });
-            response = await retryWithBackoff(
-              async () => {
-                return await generateFromMessages(messages);
-              },
-              DEFAULT_RETRY_CONFIG,
-              { logger: this.logger, eventEmitter: this.eventEmitterV2 }
-            );
+            messages = buildMessages("minimal");
+            try {
+              response = await retryWithBackoff(
+                async () => {
+                  return await generateFromMessages(messages);
+                },
+                DEFAULT_RETRY_CONFIG,
+                { logger: this.logger, eventEmitter: this.eventEmitterV2 }
+              );
+            } catch (minimalError) {
+              const minimalProviderError = minimalError instanceof Error ? minimalError.message : String(minimalError);
+              if (!isContextOverflowError(minimalProviderError)) {
+                throw minimalError;
+              }
+
+              emit("guardrail", "Minimal retry still exceeded context, retrying with aggressively truncated context", {
+                error: minimalProviderError,
+              });
+
+              skillMode = "minimal";
+              messages = buildMessages("minimal", {
+                messageLimit: 12,
+                charLimit: 24000,
+                dynamicMemoryLimit: 0,
+                includeDynamicMemory: false,
+              });
+              response = await retryWithBackoff(
+                async () => {
+                  return await generateFromMessages(messages);
+                },
+                DEFAULT_RETRY_CONFIG,
+                { logger: this.logger, eventEmitter: this.eventEmitterV2 }
+              );
+            }
           }
         }
       }

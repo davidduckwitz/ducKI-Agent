@@ -203,7 +203,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
   const [autoSkillSelection, setAutoSkillSelection] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_SELECTION"), true));
   const [skillBehavior, setSkillBehavior] = useState<SkillBehavior>((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
   const [autoSkillFallbackNone, setAutoSkillFallbackNone] = useState(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
-  const [audioEnabled, setAudioEnabled] = useState(toBool(settingsMap.get("AUDIO_ENABLED"), false));
+  const [audioEnabled, setAudioEnabled] = useState(toBool(settingsMap.get("AUDIO_ENABLED"), true));
 
   // Plugins step: every installed non-connector plugin, toggled locally and applied on finish.
   const regularPlugins = useMemo(() => (connectorPluginsQuery.data ?? []).filter((p) => !p.connector), [connectorPluginsQuery.data]);
@@ -256,7 +256,7 @@ export function SetupWizardModal({ open, onClose, settings }: SetupWizardModalPr
     setAutoSkillSelection(toBool(settingsMap.get("AGENT_AUTO_SKILL_SELECTION"), true));
     setSkillBehavior((settingsMap.get("AGENT_SKILL_BEHAVIOR") as SkillBehavior | undefined) ?? "automatic");
     setAutoSkillFallbackNone(toBool(settingsMap.get("AGENT_AUTO_SKILL_FALLBACK_NONE"), true));
-    setAudioEnabled(toBool(settingsMap.get("AUDIO_ENABLED"), false));
+    setAudioEnabled(toBool(settingsMap.get("AUDIO_ENABLED"), true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settingsMap]);
 

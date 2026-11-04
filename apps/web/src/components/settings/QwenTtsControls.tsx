@@ -109,9 +109,9 @@ export function QwenTtsControls() {
     {status?.reachable && !status.managed && <p className="text-xs text-muted-foreground">Extern gestarteter Server: zum Übernehmen einmal im ursprünglichen Terminal stoppen und hier starten.</p>}
     <p className="text-xs text-muted-foreground">
       Ein Modellwechsel wirkt nach Server-Neustart (stoppen, starten).
-      Base-Modelle klonen die Stimme aus einer .wav unter <code className="rounded bg-muted px-1">apps/server/scripts/voices/</code> (optional gleichnamige .txt mit dem gesprochenen Text);
+      Base-Modelle klonen die Stimme aus einer .wav der Stimmen-Bibliothek (optional mit dem gesprochenen Text);
       CustomVoice-Modelle bringen feste Sprecher mit{status?.health && !status.health.supportsInstruct ? "; Stil-Anweisungen unterstützt nur CustomVoice 1.7B" : ""}.
-      Einrichtung: <code className="rounded bg-muted px-1">requirements-qwen3-tts.txt</code> in eine eigene venv (.venv-qwen) installieren.
+      Einrichtung über „Umgebung einrichten“ (eigene venv .venv-qwen).
     </p>
     {status?.health?.metrics?.lastRealtimeFactor != null && <p className="text-xs">Letzte Generierung: {status.health.metrics.lastRealtimeFactor} Sekunden Rechenzeit pro Sekunde Audio (kleiner ist schneller).</p>}
     {(error || statusError || status?.error) && <p role="alert" className="text-sm text-red-500">{error || statusError || status?.error}</p>}

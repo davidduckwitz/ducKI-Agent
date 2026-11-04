@@ -107,11 +107,11 @@ settingsRouter.get("/stt-server/status", async (req, res, next) => {
 });
 settingsRouter.post("/stt-server/:action", async (req, res, next) => {
   const action = req.params["action"];
-  if (!["start", "stop", "load", "unload"].includes(action ?? "")) {
+  if (!["start", "stop", "load", "unload", "setup"].includes(action ?? "")) {
     res.status(400).json(createApiError("Unknown STT server action")); return;
   }
   try {
-    const task = controlSttServer(req.app.locals["db"] as DatabaseService, action as "start" | "stop" | "load" | "unload");
+    const task = controlSttServer(req.app.locals["db"] as DatabaseService, action as "start" | "stop" | "load" | "unload" | "setup");
     void task.catch((error) => console.error("STT server action failed", error));
     res.status(202).json(createApiResponse({ accepted: true }));
   } catch (error) { res.status(409).json(createApiError(error instanceof Error ? error.message : String(error))); }
@@ -150,7 +150,7 @@ settingsRouter.delete("/ai-storage", async (req, res) => {
 
 // ---- Shared TTS reference-voice library (Chatterbox + Qwen3-TTS) ----
 settingsRouter.get("/tts-voices", async (_req, res, next) => {
-  try { res.json(createApiResponse({ voices: await listVoices(), defaultVoice: defaultReferenceVoice() })); }
+  try { res.json(createApiResponse({ voices: await listVoices(), defaultVoice: defaultReferenceVoice(), dir: VOICES_DIR })); }
   catch (error) { next(error); }
 });
 settingsRouter.get("/tts-voices/:id/audio", (req, res) => {

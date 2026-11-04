@@ -98,7 +98,8 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Copies the top-level files of the data dir (databases, settings); logs and old backups are skipped.
+/// Copies the top-level files of the data dir plus storage/ (SQLite incl. WAL - the agent is
+/// already stopped); logs, old backups and the temporary tool-staging area are skipped.
 fn backup_data(data_dir: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(data_dir)? {
@@ -108,14 +109,41 @@ fn backup_data(data_dir: &Path, target: &Path) -> std::io::Result<()> {
             std::fs::copy(&path, target.join(entry.file_name()))?;
         }
     }
+    copy_tree(
+        &data_dir.join("storage"),
+        &target.join("storage"),
+        &["tool-staging"],
+    )?;
     prune_backups(target.parent());
+    Ok(())
+}
+
+fn copy_tree(src: &Path, dest: &Path, skip: &[&str]) -> std::io::Result<()> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        if skip.iter().any(|s| entry.file_name() == *s) {
+            continue;
+        }
+        let dest_path = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &dest_path, &[])?;
+        } else {
+            std::fs::copy(entry.path(), dest_path)?;
+        }
+    }
     Ok(())
 }
 
 /// Keeps the three most recent pre-update backups.
 fn prune_backups(dir: Option<&Path>) {
     let Some(dir) = dir else { return };
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut entries: Vec<_> = read
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().starts_with("vor-update-"))

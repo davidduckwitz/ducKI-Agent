@@ -2,9 +2,11 @@ import type { Socket } from "socket.io";
 import type { ToolExecutor, ToolResult } from "@ducki/shared";
 import { runDesktopAction, validateDesktopAction } from "./desktop-control.js";
 
+// The Tauri desktop shell serves the bundled UI from http(s)://tauri.localhost on Windows
+// (tauri://localhost on macOS/Linux), so those origins count as the local app too.
 export function isLocalDesktopClient(address: string, origin: string | undefined): boolean {
   if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address)) return false;
-  try { return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin ?? "").hostname); }
+  try { return ["localhost", "127.0.0.1", "[::1]", "tauri.localhost"].includes(new URL(origin ?? "").hostname); }
   catch { return false; }
 }
 

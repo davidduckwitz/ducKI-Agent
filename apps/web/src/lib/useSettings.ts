@@ -23,8 +23,11 @@ export function useSettings() {
   });
 }
 
-export function readFlag(settings: SettingEntry[] | undefined, key: string): boolean {
-  return String(settings?.find((s) => s.key === key)?.value ?? "false").trim().toLowerCase() === "true";
+/** `fallback` applies only while the key was never saved; an explicit "false" always wins. */
+export function readFlag(settings: SettingEntry[] | undefined, key: string, fallback = false): boolean {
+  const raw = settings?.find((s) => s.key === key)?.value;
+  if (raw == null || raw.trim() === "") return fallback;
+  return raw.trim().toLowerCase() === "true";
 }
 
 /** Parses a numeric setting; falls back to `fallback` when unset, blank or not a positive number. */

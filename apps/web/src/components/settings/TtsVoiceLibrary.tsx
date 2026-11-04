@@ -12,6 +12,7 @@ async function errorText(response: Response): Promise<string> {
 export function TtsVoiceLibrary() {
   const [voices, setVoices] = useState<VoiceEntry[]>([]);
   const [defaultVoice, setDefaultVoice] = useState<string>();
+  const [dir, setDir] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [name, setName] = useState("");
@@ -26,7 +27,7 @@ export function TtsVoiceLibrary() {
       const response = await fetch(base);
       if (!response.ok) throw new Error(await errorText(response));
       const body = await response.json();
-      setVoices(body.data.voices); setDefaultVoice(body.data.defaultVoice);
+      setVoices(body.data.voices); setDefaultVoice(body.data.defaultVoice); setDir(body.data.dir ?? "");
     } catch (cause) { setError(String(cause)); }
   }, [base]);
   useEffect(() => { void refresh(); }, [refresh]);
@@ -57,7 +58,7 @@ export function TtsVoiceLibrary() {
     <h3 className="font-semibold">Referenzstimmen (Chatterbox &amp; Qwen3-TTS)</h3>
     <p className="text-xs text-muted-foreground">
       Beide Modelle klonen die Stimme aus einer kurzen, sauberen Aufnahme (5–20 s, ein Sprecher, .wav). Alle Aufnahmen liegen
-      im gemeinsamen Ordner <code className="rounded bg-muted px-1">apps/server/scripts/voices/</code>. Der gesprochene
+      im gemeinsamen Ordner{dir && <> <code className="rounded bg-muted px-1 break-all">{dir}</code></>}. Der gesprochene
       Text (optional) verbessert die Qualität bei Qwen3-TTS Base.
     </p>
     {voices.length === 0 ? <p className="text-sm">Noch keine Referenzstimme vorhanden.</p> : (

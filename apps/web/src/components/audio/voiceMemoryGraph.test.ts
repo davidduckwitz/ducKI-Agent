@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildVoiceMemoryGraph, type WikiMemoryNode } from "./voiceMemoryGraph";
+import { buildVoiceMemoryGraph, relaxVoiceMemoryLayout, type WikiMemoryNode } from "./voiceMemoryGraph";
 
 const node = (id: string): WikiMemoryNode => ({
   id,
@@ -40,5 +40,23 @@ describe("buildVoiceMemoryGraph", () => {
       edges: [{ id: 1, source: "index.md", target: "missing.md", resolved: false }],
     });
     expect(graph?.edges).toEqual([]);
+  });
+});
+
+describe("relaxVoiceMemoryLayout", () => {
+  it("keeps the root fixed, lists incident edges and moves notes apart", () => {
+    const ids = ["index.md", "a.md", "b.md", "c.md", "d.md"];
+    const graph = buildVoiceMemoryGraph({
+      nodes: ids.map(node),
+      edges: ids.slice(1).map((id, i) => ({ id: i, source: "index.md", target: id, resolved: true })),
+    })!;
+    expect(graph.incident[0]).toHaveLength(4);
+    expect(graph.incident[1]).toHaveLength(1);
+    const relaxed = relaxVoiceMemoryLayout(graph);
+    expect(relaxed.nodes[0]).toMatchObject({ x: 0, y: 0, z: 0 });
+    for (const entry of relaxed.nodes) expect(Number.isFinite(entry.x + entry.y + entry.z)).toBe(true);
+    const minDistance = Math.min(...relaxed.nodes.slice(1).flatMap((a, i) => relaxed.nodes.slice(i + 2)
+      .map((b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z))));
+    expect(minDistance).toBeGreaterThan(0.2);
   });
 });

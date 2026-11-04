@@ -1,12 +1,11 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import type { DatabaseService } from "@ducki/database";
 import { localChatterboxUrl } from "./chatterbox-runtime.js";
+import { PYTHON_DATA_DIR, PYTHON_SCRIPTS_DIR as scripts, pythonServerEnv, venvPython } from "./python-paths.js";
 import { modelServerEnv } from "./secrets-store.js";
 
 // Same lifecycle rules as chatterbox-runtime.ts: only a process we spawned ourselves is stopped.
-const scripts = fileURLToPath(new URL("../../scripts/", import.meta.url));
 const DEFAULT_URL = "http://127.0.0.1:8892";
 export const DEFAULT_QWEN_TTS_MODEL = "Qwen/Qwen3-TTS-12Hz-0.6B-Base";
 let child: ChildProcess | undefined;
@@ -22,8 +21,8 @@ async function endpoint(db: DatabaseService) {
 // qwen-tts pins its own transformers, so it gets a dedicated venv (.venv-qwen) and must NEVER
 // fall back to Chatterbox's .venv or a system python ("No module named 'qwen_tts'").
 // QWEN_TTS_VENV_DIR relocates the venv (several GB) to another drive when the project drive is small.
-const VENV_DIR = (process.env["QWEN_TTS_VENV_DIR"] || `${scripts}.venv-qwen`).replace(/[\\/]+$/, "");
-const VENV_PYTHON = `${VENV_DIR}/${process.platform === "win32" ? "Scripts/python.exe" : "bin/python"}`;
+const VENV_DIR = (process.env["QWEN_TTS_VENV_DIR"] || `${PYTHON_DATA_DIR}.venv-qwen`).replace(/[\\/]+$/, "");
+const VENV_PYTHON = venvPython(VENV_DIR);
 const REQUIREMENTS = `${scripts}requirements-qwen3-tts.txt`;
 let setupPhase: string | undefined;
 let envCache: { ready: boolean; cpuOnlyTorch: boolean; checkedAt: number } | undefined;
@@ -155,7 +154,7 @@ async function start(db: DatabaseService) {
     const python = pythonPath()!;
     const proc = spawn(python, [`${scripts}qwen3_tts_server.py`], {
       cwd: scripts, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...(await modelServerEnv(db)), QWEN_TTS_HOST: "127.0.0.1", QWEN_TTS_PORT: url.port || "80", QWEN_TTS_LAZY_LOAD: "1",
+      env: { ...process.env, ...pythonServerEnv(), ...(await modelServerEnv(db)), QWEN_TTS_HOST: "127.0.0.1", QWEN_TTS_PORT: url.port || "80", QWEN_TTS_LAZY_LOAD: "1",
         QWEN_TTS_MODEL: await db.getSetting("QWEN_TTS_MODEL") || DEFAULT_QWEN_TTS_MODEL },
     });
     child = proc;

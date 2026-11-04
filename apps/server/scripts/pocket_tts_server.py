@@ -54,7 +54,7 @@ DEFAULT_LANGUAGE = os.environ.get("POCKET_TTS_LANGUAGE", "german")
 DEVICE = os.environ.get("POCKET_TTS_DEVICE", "cpu")
 MAX_MODELS = max(1, int(os.environ.get("POCKET_TTS_MAX_MODELS", "2")))
 MAX_TEXT_LEN = int(os.environ.get("POCKET_TTS_MAX_TEXT_LEN", "4000"))
-VOICES_DIR = Path(__file__).parent / "voices"
+VOICES_DIR = Path(os.environ.get("DUCKI_VOICES_DIR") or Path(__file__).parent / "voices")
 
 STREAM_SAMPLE_RATE = 24000
 

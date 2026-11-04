@@ -225,6 +225,21 @@ export function toOpenAIMessages(
   return converted;
 }
 
+/**
+ * OpenRouter reports upstream failures as a bare "Provider returned error"; the upstream's
+ * actual reason (e.g. an image rejected by Alibaba) is only in error.metadata.raw. Append it so
+ * the UI and logs show something actionable instead of the generic wrapper.
+ */
+export function appendUpstreamErrorDetail(error: unknown): void {
+  if (!(error instanceof Error)) return;
+  const metadata = (error as { error?: { metadata?: { raw?: unknown; provider_name?: unknown } } }).error?.metadata;
+  if (metadata?.raw === undefined || metadata.raw === null) return;
+  const raw = typeof metadata.raw === "string" ? metadata.raw : JSON.stringify(metadata.raw);
+  const provider = typeof metadata.provider_name === "string" ? `${metadata.provider_name}: ` : "";
+  const detail = `${provider}${raw.slice(0, 500)}`;
+  if (!error.message.includes(detail)) error.message = `${error.message} (${detail})`;
+}
+
 /** Marks the last text part of the final user/tool message as a cache breakpoint. */
 function addHistoryCacheBreakpoint(messages: ChatCompletionMessageParam[]): void {
   const last = messages[messages.length - 1] as { role: string; content: unknown } | undefined;
@@ -286,6 +301,14 @@ export class OpenAIProvider implements LLMProvider {
    *  can still participate in the same self-healing fallback. */
   protected nativeToolsUnsupported = false;
 
+  /**
+   * Extra headers sent with every request. Called from the constructor, so overrides must
+   * not depend on instance fields.
+   */
+  protected defaultHeaders(): Record<string, string> | undefined {
+    return undefined;
+  }
+
   constructor(options: ProviderOptions) {
     const rawApiKey = options.apiKey ?? "";
     const normalizedApiKey = rawApiKey.replace(/^Bearer\s+/i, "").trim();
@@ -310,6 +333,7 @@ export class OpenAIProvider implements LLMProvider {
       apiKey: omitAuthorizationHeader ? "sk-no-auth-required" : normalizedApiKey,
       baseURL,
       fetch: customFetch,
+      defaultHeaders: this.defaultHeaders(),
     });
     this.maxRetries = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRIES"], 2);
     this.baseRetryDelayMs = toPositiveInt(process.env["OPENAI_RATE_LIMIT_RETRY_BASE_MS"], 1200);
@@ -432,6 +456,7 @@ export class OpenAIProvider implements LLMProvider {
     if (this.isRateLimitError(lastError)) {
       throw new Error("429 Provider returned error after retries (rate limited)");
     }
+    appendUpstreamErrorDetail(lastError);
     throw lastError;
   }
 

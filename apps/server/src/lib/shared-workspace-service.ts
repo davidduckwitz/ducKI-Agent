@@ -16,10 +16,11 @@
 import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { getRootLogger } from "@ducki/logger";
+import { sharedWorkspaceRoot } from "@ducki/shared";
 
 const logger = getRootLogger().child("SharedWorkspace");
 
-const WORKSPACE_ROOT = join(process.cwd(), "shared-workspace", "bot-groups");
+const WORKSPACE_ROOT = join(sharedWorkspaceRoot(), "bot-groups");
 
 export class SharedWorkspaceService {
   /** Ensure the workspace directory for a group exists and return its path. */

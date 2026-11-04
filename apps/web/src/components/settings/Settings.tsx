@@ -1250,7 +1250,7 @@ const PREDEFINED_FIELDS: SettingField[] = [
       "Aktiviert den Audio-Tab (Sprach-Workspace mit Visualisierung, Live-Transkript und sprachgesteuerter Browser-Automation).",
     type: "select",
     section: "Agent",
-    defaultValue: "false",
+    defaultValue: "true",
     options: [
       { label: "Deaktiviert", value: "false" },
       { label: "Aktiviert", value: "true" },

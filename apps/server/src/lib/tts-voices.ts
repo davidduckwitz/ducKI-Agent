@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { VOICES_DIR } from "./python-paths.js";
 
 /**
  * Shared reference-voice library for every local TTS engine (Chatterbox, Qwen3-TTS): one folder
  * of `<id>.wav` clips, optionally with `<id>.txt` holding the spoken text (improves cloning).
- * The Python servers read the same folder (apps/server/scripts/voices/).
+ * The Python servers read the same folder (see python-paths.ts).
  */
-export const VOICES_DIR = fileURLToPath(new URL("../../scripts/voices/", import.meta.url));
+export { VOICES_DIR };
 
 /** Used when no voice is configured and the clip exists. */
 export const DEFAULT_REFERENCE_VOICE = "cryptnana-1";

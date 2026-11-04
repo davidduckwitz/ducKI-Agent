@@ -81,7 +81,7 @@ export function Layout() {
 
   const settingsQuery = useSettings();
   const codingEnabled = readFlag(settingsQuery.data, "CODING_ENABLED");
-  const audioEnabled = readFlag(settingsQuery.data, "AUDIO_ENABLED");
+  const audioEnabled = readFlag(settingsQuery.data, "AUDIO_ENABLED", true);
   const pluginsQuery = usePlugins();
 
   useEffect(() => {

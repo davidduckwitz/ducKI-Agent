@@ -886,11 +886,11 @@ export const api = {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
-    graph: () =>
+    graph: (options: { previews?: boolean } = {}) =>
       request<{
-        nodes: Array<{ id: string; title: string; status: string; tags: string[]; degree: number; kind?: "note" | "folder" }>;
+        nodes: Array<{ id: string; title: string; status: string; tags: string[]; degree: number; kind?: "note" | "folder"; preview?: string }>;
         edges: Array<{ id: number | string; source: string; target: string; origin: "parsed" | "manual" | "folder"; resolved: boolean }>;
-      }>("/wiki/graph"),
+      }>(options.previews ? "/wiki/graph?previews=1" : "/wiki/graph"),
     createLink: (sourceFile: string, targetFile: string) =>
       request<{ id: number; sourceFile: string; targetFile: string; origin: string; status: string }>("/wiki/links", {
         method: "POST",

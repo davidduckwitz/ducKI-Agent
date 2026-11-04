@@ -218,7 +218,9 @@ export class UpdateManager {
     const rows = await this.db.getAllSettings();
     const settings = new Map(rows.map((row) => [row.key, row.value]));
 
-    const enabled = parseBoolean(settings.get("AUTO_UPDATE_ENABLED") ?? process.env["AUTO_UPDATE_ENABLED"], true);
+    // The desktop app updates itself via the signed installer; there is no git checkout to pull.
+    const enabled = process.env["DUCKI_DESKTOP"] !== "1" &&
+      parseBoolean(settings.get("AUTO_UPDATE_ENABLED") ?? process.env["AUTO_UPDATE_ENABLED"], true);
     const repoUrl =
       (settings.get("AUTO_UPDATE_REPO_URL") ?? process.env["AUTO_UPDATE_REPO_URL"] ?? "https://github.com/davidduckwitz/ducKI-Agent").trim();
     const branch = (settings.get("AUTO_UPDATE_BRANCH") ?? process.env["AUTO_UPDATE_BRANCH"] ?? "main").trim() || "main";

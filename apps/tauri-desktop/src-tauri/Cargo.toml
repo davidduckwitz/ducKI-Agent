@@ -1,6 +1,6 @@
 [package]
 name = "ducki-desktop"
-version = "1.0.16"
+version = "1.0.23"
 description = "DucKI Node Desktop Application"
 authors = ["David Duckwitz"]
 license = "UNLICENSED"

@@ -2,19 +2,17 @@ import { existsSync } from "node:fs";
 import { lstat, readdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { DatabaseService } from "@ducki/database";
 import { chatterboxStatus } from "./chatterbox-runtime.js";
 import { qwenTtsStatus, qwenVenvDir, resetQwenEnvironmentCache } from "./qwen-tts-runtime.js";
 import { pocketTtsStatus, pocketVenvDir, resetPocketEnvironmentCache } from "./pocket-tts-runtime.js";
-import { sttServerStatus } from "./stt-runtime.js";
+import { PYTHON_DATA_DIR } from "./python-paths.js";
+import { resetSttEnvironmentCache, sttServerStatus } from "./stt-runtime.js";
 
 /**
  * Disk usage of the local TTS/STT engines (Python venvs + downloaded Hugging Face models) and a
  * safe way to delete them. Only paths computed here are ever removed - never a client-supplied path.
  */
-const scripts = fileURLToPath(new URL("../../scripts/", import.meta.url));
-
 type Engine = "qwen" | "pocket" | "chatterbox" | "stt";
 
 export interface StorageItem {
@@ -65,7 +63,7 @@ async function listDefs(): Promise<ItemDef[]> {
   defs.push({
     id: "venv-shared", kind: "venv", label: "Chatterbox- & faster-whisper-Umgebung",
     description: "Gemeinsame Python-Umgebung (.venv) für Chatterbox und den STT-Server. Löschen deaktiviert beide, bis sie neu eingerichtet ist.",
-    path: `${scripts}.venv`, engines: ["chatterbox", "stt"],
+    path: `${PYTHON_DATA_DIR}.venv`, engines: ["chatterbox", "stt"],
   });
   const hub = hubDir();
   if (existsSync(hub)) {
@@ -94,7 +92,8 @@ async function dirSize(root: string): Promise<number> {
       await Promise.all(entries.map(async (entry) => {
         const full = join(dir, entry.name);
         if (entry.isDirectory()) { queue.push(full); return; }
-        try { total += (await lstat(full)).size; } catch { /* vanished file */ }
+        // Await first: `total += await ...` reads `total` before the await and loses concurrent adds.
+        try { const { size } = await lstat(full); total += size; } catch { /* vanished file */ }
       }));
     }));
   }
@@ -137,7 +136,7 @@ export async function deleteStorage(db: DatabaseService, id: string): Promise<vo
   if (reason) throw new Error(reason);
   // Defense in depth: the resolved path must be a real directory below a known root.
   const target = resolve(def.path);
-  const allowedRoots = [resolve(scripts), resolve(hubDir()), resolve(qwenVenvDir()), resolve(pocketVenvDir())];
+  const allowedRoots = [resolve(PYTHON_DATA_DIR), resolve(hubDir()), resolve(qwenVenvDir()), resolve(pocketVenvDir())];
   if (!allowedRoots.some((root) => target === root || target.startsWith(root + sep))) throw new Error("Pfad nicht erlaubt.");
   // A venv is only ever removed if it really is one (guards a misconfigured QWEN_TTS_VENV_DIR).
   if (def.kind === "venv" && !existsSync(join(target, "pyvenv.cfg"))) throw new Error("Das ist keine Python-venv (pyvenv.cfg fehlt) - wird nicht gelöscht.");
@@ -148,4 +147,5 @@ export async function deleteStorage(db: DatabaseService, id: string): Promise<vo
   }
   if (def.engines.includes("qwen")) resetQwenEnvironmentCache();
   if (def.engines.includes("pocket")) resetPocketEnvironmentCache();
+  if (def.engines.includes("stt")) resetSttEnvironmentCache();
 }

@@ -5,6 +5,7 @@
   Ergebnis: update-server\  mit  DucKI-Node_<Version>_x64-setup.exe, .sig und latest.json
   Upload:   Inhalt nach https://ducki.cloud/updates/desktop/ (components\ + Installer + .sig zuerst, latest.json zuletzt).
             components\ enthaelt nachinstallierbare Dateien (z.B. Monaco-TS-Worker), auf die die App verweist.
+  Nach dem Build werden Rust-target und generierte Ressourcen geloescht (-KeepBuildCache behaelt sie).
   Wenig Platz auf dem Projektlaufwerk? `$env:CARGO_TARGET_DIR = 'G:\cargo-target\ducki-desktop'` setzen.
   Schluessel: signing\ducki-desktop.key (nicht im Git; Backup ausserhalb des Repos!)
 #>
@@ -12,7 +13,8 @@ param(
   [Parameter(Mandatory)] [string] $Version,
   [string] $Notes = '',
   [string] $BaseUrl = 'https://ducki.cloud/updates/desktop',
-  [switch] $SkipBuild
+  [switch] $SkipBuild,
+  [switch] $KeepBuildCache
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -64,5 +66,20 @@ $manifest = [ordered]@{
   }
 }
 [IO.File]::WriteAllText((Join-Path $out 'latest.json'), ($manifest | ConvertTo-Json -Depth 5), $utf8)
+
+# Build-Reste loeschen (Rust target ~2 GB inkl. Test-/Debug-Builds, alte Installer, generierte Ressourcen).
+# Der naechste Build kompiliert Rust dafuer komplett neu; -KeepBuildCache behaelt alles.
+if (-not $KeepBuildCache) {
+  $before = (Get-PSDrive ($root.Substring(0, 1))).Free
+  # resources\server-dist bleibt: cargo check / tauri dev brauchen ihn (build.js erneuert ihn ohnehin).
+  # resources\web-dist ist ein Altrest aus der Zeit vor frontendDist.
+  $generated = @($targetDir, (Join-Path $root 'src-tauri\resources\web-dist'))
+  foreach ($dir in $generated) {
+    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force -ErrorAction Continue }
+  }
+  $freed = ((Get-PSDrive ($root.Substring(0, 1))).Free - $before) / 1GB
+  Write-Host ('Build-Reste entfernt ({0:N1} GB frei geworden).' -f $freed)
+}
+
 Write-Host "Fertig: $out" -ForegroundColor Green
 Write-Host 'Hochladen: components\ + Installer + .sig zuerst, latest.json zuletzt.'

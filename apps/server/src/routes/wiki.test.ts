@@ -255,6 +255,46 @@ describe("wiki router", () => {
     expect(body.data.edges).toEqual([{ id: 10, source: "foo.md", target: "bar.md", origin: "parsed", resolved: true }]);
     const fooNode = body.data.nodes.find((n: { id: string }) => n.id === "foo.md");
     expect(fooNode.degree).toBe(1);
+    expect(fooNode.preview).toBeUndefined();
+    await server.close();
+  });
+
+  it("adds plain-text note previews from the first chunk only when requested", async () => {
+    const db: MockDb = {
+      async getSetting() {
+        return undefined;
+      },
+      async setSetting() {},
+      async listLlmWikiEntries() {
+        return [
+          { id: 2, sourcePath: "foo.md#chunk-2", status: "approved", content: "Later chunk", metadata: null },
+          { id: 1, sourcePath: "foo.md#chunk-1", status: "approved", content: "---\ntags: [a]\n---\n# Foo\nSee **[[bar|Bar]]** now.", metadata: null },
+        ];
+      },
+      async listLlmWikiLinks() {
+        return [];
+      },
+    };
+    const wikiService: MockWikiService = {
+      getStats: () => ({}),
+      async ingestNow() {
+        return {};
+      },
+      async listEntries() {
+        return [];
+      },
+      async search() {
+        return [];
+      },
+      async setEntryStatus() {
+        return { id: 1, status: "approved" };
+      },
+    };
+
+    const server = await startTestServer(db, wikiService);
+    const body = await (await fetch(`${server.baseUrl}/api/wiki/graph?previews=1`)).json();
+    const fooNode = body.data.nodes.find((n: { id: string }) => n.id === "foo.md");
+    expect(fooNode.preview).toBe("Foo See Bar now.");
     await server.close();
   });
 

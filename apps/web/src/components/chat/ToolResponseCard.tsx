@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, X, Copy, ExternalLink } from "lucide-react";
 
 interface ToolCallData {
@@ -20,10 +20,15 @@ interface ToolCallData {
 interface ToolResponseCardProps {
   toolCall: ToolCallData;
   onClose?: () => void;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
-export function ToolResponseCard({ toolCall, onClose }: ToolResponseCardProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+export function ToolResponseCard({ toolCall, onClose, onExpandedChange }: ToolResponseCardProps) {
+  const [isExpanded, setIsExpandedState] = useState(false);
+  const setIsExpanded = (expanded: boolean) => {
+    setIsExpandedState(expanded);
+    onExpandedChange?.(expanded);
+  };
   const [copied, setCopied] = useState(false);
 
   const getToolIcon = (toolName: string) => {
@@ -185,19 +190,62 @@ interface ToolResponseDockProps {
   onRemove?: (id: string) => void;
 }
 
+/** How long a settled tool card stays in the dock before it fades out on its own. */
+const DOCK_AUTO_HIDE_MS = 5000;
+
 export function ToolResponseDock({ toolCalls, onRemove }: ToolResponseDockProps) {
-  if (toolCalls.length === 0) return null;
+  // Hidden locally only: the store's toolCalls also feed other views (activity logger, history),
+  // so auto-hiding must not delete them there.
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
+  const hide = useCallback((id: string) => {
+    setHiddenIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }, []);
+
+  const visibleCalls = toolCalls.filter((call) => !hiddenIds.has(call.id));
+  if (visibleCalls.length === 0) return null;
 
   return (
     <div className="fixed bottom-20 right-4 space-y-2 max-w-sm">
-      {toolCalls.map((call) => (
-        <div key={call.id} className="animate-in slide-in-from-right">
-          <ToolResponseCard
-            toolCall={call}
-            onClose={() => onRemove?.(call.id)}
-          />
-        </div>
+      {visibleCalls.map((call) => (
+        <AutoHidingDockItem
+          key={call.id}
+          call={call}
+          onHide={hide}
+          onClose={() => onRemove?.(call.id)}
+        />
       ))}
+    </div>
+  );
+}
+
+function AutoHidingDockItem({
+  call,
+  onHide,
+  onClose,
+}: {
+  call: ToolCallData;
+  onHide: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const settled = call.status !== "executing";
+
+  // Countdown starts once the call has finished; hovering or expanding the card pauses it,
+  // so a card the user is actually reading doesn't vanish under the cursor.
+  useEffect(() => {
+    if (!settled || isHovered || isExpanded) return;
+    const timer = setTimeout(() => onHide(call.id), DOCK_AUTO_HIDE_MS);
+    return () => clearTimeout(timer);
+  }, [settled, isHovered, isExpanded, call.id, onHide]);
+
+  return (
+    <div
+      className="animate-in slide-in-from-right"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <ToolResponseCard toolCall={call} onClose={onClose} onExpandedChange={setIsExpanded} />
     </div>
   );
 }

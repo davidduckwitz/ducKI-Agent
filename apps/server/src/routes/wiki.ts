@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import type { DatabaseService } from "@ducki/database";
 import { createApiError, createApiResponse } from "@ducki/shared";
-import { aggregateWikiNotes, deriveFolderStructure, type LlmWikiService } from "../lib/llm-wiki-service.js";
+import { aggregateWikiNotes, deriveFolderStructure, wikiNotePreviews, type LlmWikiService } from "../lib/llm-wiki-service.js";
 
 export const wikiRouter: IRouter = Router();
 
@@ -212,7 +212,15 @@ wikiRouter.get("/graph", async (req, res, next) => {
       }
     }
 
-    res.json(createApiResponse({ nodes: Array.from(nodesByFile.values()), edges }));
+    // Opt-in: note teasers are only needed by the voice backdrop labels, so the
+    // editor graph keeps its lean payload.
+    const previews = req.query["previews"] === "1" ? wikiNotePreviews(entries) : null;
+    const nodes = Array.from(nodesByFile.values()).map((node) => {
+      const preview = previews?.get(node.id);
+      return preview ? { ...node, preview } : node;
+    });
+
+    res.json(createApiResponse({ nodes, edges }));
   } catch (error) {
     next(error);
   }

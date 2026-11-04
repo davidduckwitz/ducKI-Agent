@@ -164,6 +164,37 @@ function titleForSourceFile(sourceFile: string): string {
 }
 
 /**
+ * Short plain-text teaser per note, taken from its lowest-numbered chunk so the text
+ * matches how the note actually starts. Front matter, headings and link/markup syntax
+ * are stripped - consumers (the voice backdrop labels) render it as plain text.
+ */
+export function wikiNotePreviews(entries: LlmWikiEntrySelect[], maxChars = 160): Map<string, string> {
+  const firstChunk = new Map<string, { chunk: number; content: string }>();
+  for (const entry of entries) {
+    const [sourceFile, chunkRaw] = entry.sourcePath.split("#chunk-");
+    if (!sourceFile || typeof entry.content !== "string") continue;
+    const chunk = chunkRaw === undefined ? 0 : Number(chunkRaw) || 0;
+    const known = firstChunk.get(sourceFile);
+    if (!known || chunk < known.chunk) firstChunk.set(sourceFile, { chunk, content: entry.content });
+  }
+  const previews = new Map<string, string>();
+  for (const [sourceFile, { content }] of firstChunk) {
+    const text = content
+      .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/!?\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_match, target: string, alias?: string) => alias ?? target)
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/^\s{0,3}(#{1,6}|>|[-*+]|\d+\.)\s+/gm, "")
+      .replace(/[*_`~]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    previews.set(sourceFile, text.length > maxChars ? `${text.slice(0, maxChars - 1).trimEnd()}…` : text);
+  }
+  return previews;
+}
+
+/**
  * Folds chunk-level `llm_wiki_entries` rows (`sourceFile#chunk-N`) down to one node
  * per source file - the graph's unit is a note, not a chunk. Shared between the
  * `/api/wiki/graph` route and `LlmWikiService.expand()` so both operate on the exact

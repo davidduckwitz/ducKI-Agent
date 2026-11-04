@@ -5,6 +5,7 @@ import { TtsVoiceLibrary } from "./TtsVoiceLibrary";
 import { AiStorageCard } from "./AiStorageCard";
 import { SttServerControls } from "./SttServerControls";
 import { WakeWordSettings } from "./WakeWordSettings";
+import { VoiceBackdropSettings } from "./VoiceBackdropSettings";
 import { useEffect, useState } from "react";
 import { Volume2, Mic, MessageCircle } from "lucide-react";
 import { useVoiceSettings, type TTSProvider } from "../../hooks/useVoiceSettings";
@@ -409,8 +410,7 @@ export function VoiceSettings() {
                   </select>
                   <p className="text-xs text-muted-foreground">
                     Chatterbox klont Stimmen aus einer Referenzaufnahme statt vorgefertigter Presets zu nutzen - eigene
-                    .wav-Datei unter <code className="rounded bg-muted px-1">apps/server/scripts/voices/</code> ablegen,
-                    dann erscheint sie hier (siehe apps/server/scripts/README.md).
+                    .wav-Datei in der Stimmen-Bibliothek hochladen, dann erscheint sie hier.
                   </p>
                 </div>
               )}
@@ -431,8 +431,7 @@ export function VoiceSettings() {
                     ))}
                   </select>
                   <p className="text-xs text-muted-foreground">
-                    Base-Modelle klonen aus Referenzaufnahmen unter{" "}
-                    <code className="rounded bg-muted px-1">apps/server/scripts/voices/</code> (gleicher Ordner wie
+                    Base-Modelle klonen aus Referenzaufnahmen der Stimmen-Bibliothek (gleicher Ordner wie
                     Chatterbox), CustomVoice-Modelle bieten feste Sprecher. Die Liste erscheint, sobald der Server läuft.
                   </p>
                 </div>
@@ -697,6 +696,9 @@ export function VoiceSettings() {
 
       {/* Aktivierungswort */}
       <WakeWordSettings />
+
+      {/* Sprache-Tab: 3D-Wissens-Hintergrund */}
+      <VoiceBackdropSettings />
 
       {/* Lokale Engines: Platz verwalten */}
       <AiStorageCard />

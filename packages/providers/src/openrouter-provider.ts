@@ -30,6 +30,19 @@ export class OpenRouterProvider extends OpenAIProvider {
     return true;
   }
 
+  /**
+   * App attribution: without these OpenRouter lists requests as "Unknown". HTTP-Referer
+   * identifies the app, X-Title (and its newer alias X-OpenRouter-Title) is the display name.
+   */
+  protected override defaultHeaders(): Record<string, string> {
+    const title = process.env["OPENROUTER_APP_NAME"]?.trim() || "DucKI-Agent";
+    return {
+      "HTTP-Referer": process.env["OPENROUTER_APP_URL"]?.trim() || "https://ducki.cloud",
+      "X-Title": title,
+      "X-OpenRouter-Title": title,
+    };
+  }
+
   constructor(options: Partial<ProviderOptions> & { model: string }) {
     super({
       baseUrl: options.baseUrl ?? "https://openrouter.ai/api/v1",

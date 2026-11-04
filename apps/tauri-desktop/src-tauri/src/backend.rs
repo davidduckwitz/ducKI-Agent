@@ -198,6 +198,7 @@ pub fn start(app: &AppHandle, progress: &dyn Fn(u8, String)) -> Result<u16, Stri
         .env("NODE_ENV", "production")
         .env("DUCKI_DESKTOP", "1")
         .env("DUCKI_DESKTOP_SHUTDOWN_TOKEN", &state.shutdown_token)
+        .env("DUCKI_HOME", paths.user_root.to_string_lossy().to_string())
         .env(
             "SHARED_WORKSPACE_PATH",
             paths.workspace_dir.to_string_lossy().to_string(),

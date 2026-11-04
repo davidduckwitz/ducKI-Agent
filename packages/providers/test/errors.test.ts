@@ -4,6 +4,7 @@ import {
   looksLikeConnectionFailure,
 } from "../src/errors";
 import { estimateUsage } from "../src/token-estimate";
+import { appendUpstreamErrorDetail } from "../src/openai-provider";
 
 describe("looksLikeConnectionFailure", () => {
   test("recognizes the OpenAI SDK's APIConnectionError", () => {
@@ -57,6 +58,24 @@ describe("ProviderConnectionError", () => {
     for (const marker of ["402", "provider returned error", "payment", "quota", "context", "too large", "token"]) {
       expect(message).not.toContain(marker);
     }
+  });
+});
+
+describe("appendUpstreamErrorDetail", () => {
+  test("surfaces OpenRouter's upstream reason behind the generic wrapper", () => {
+    const error = Object.assign(new Error("400 Provider returned error"), {
+      status: 400,
+      error: { message: "Provider returned error", metadata: { provider_name: "Alibaba", raw: "{\"message\":\"image rejected\"}" } },
+    });
+    appendUpstreamErrorDetail(error);
+    appendUpstreamErrorDetail(error);
+    expect(error.message).toBe("400 Provider returned error (Alibaba: {\"message\":\"image rejected\"})");
+  });
+
+  test("leaves errors without upstream metadata untouched", () => {
+    const error = new Error("400 Bad Request");
+    appendUpstreamErrorDetail(error);
+    expect(error.message).toBe("400 Bad Request");
   });
 });
 

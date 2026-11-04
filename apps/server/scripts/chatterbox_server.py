@@ -72,7 +72,7 @@ TEXT_TOKEN_SAFETY_MARGIN = 16
 # in a short reference clip (zero-shot voice cloning via `audio_prompt_path`). Drop .wav files
 # here (5-20s of clean single-speaker speech) and their filename (without extension) becomes
 # the voice id shown in the app's Voice tab / Settings picker - see README.md.
-VOICES_DIR = Path(__file__).parent / "voices"
+VOICES_DIR = Path(os.environ.get("DUCKI_VOICES_DIR") or Path(__file__).parent / "voices")
 
 # Fixed contract for /synthesize_stream: the Node provider's streamSampleRate is hardcoded to
 # this value, so any model sample rate is resampled to match instead of leaving that mismatch
