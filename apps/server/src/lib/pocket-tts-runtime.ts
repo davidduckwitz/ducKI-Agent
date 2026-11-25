@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import type { DatabaseService } from "@ducki/database";
 import { localChatterboxUrl } from "./chatterbox-runtime.js";
 import { run } from "./qwen-tts-runtime.js";
-import { PYTHON_DATA_DIR, PYTHON_SCRIPTS_DIR as scripts, pythonServerEnv, venvPython } from "./python-paths.js";
+import { PYTHON_DATA_DIR, PYTHON_SCRIPTS_DIR as scripts, prepareVenv, pythonServerEnv, venvPython } from "./python-paths.js";
 import { modelServerEnv } from "./secrets-store.js";
 
 // Same lifecycle rules as chatterbox-runtime.ts / qwen-tts-runtime.ts: only a process we spawned
@@ -67,7 +67,7 @@ async function setupEnvironment() {
   };
   try {
     const hasUv = (await run("uv", ["--version"], { timeoutMs: 10_000 })).code === 0;
-    if (!existsSync(VENV_PYTHON)) {
+    if (!prepareVenv(VENV_DIR)) {
       setupPhase = "Erstelle Python-Umgebung (.venv-pocket) …";
       const lastOutput = await createVenv(VENV_DIR, hasUv);
       if (lastOutput !== undefined) fail("Python-Umgebung konnte nicht erstellt werden. Installiere Python 3.10–3.14 (oder uv: https://docs.astral.sh/uv/).", lastOutput);

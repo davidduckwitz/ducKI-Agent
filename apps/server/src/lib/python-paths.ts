@@ -1,4 +1,5 @@
-import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { duckiHome } from "@ducki/shared";
@@ -28,6 +29,29 @@ if (IS_BUNDLED) {
 }
 
 export const venvPython = (venvDir: string) => `${venvDir}/${process.platform === "win32" ? "Scripts/python.exe" : "bin/python"}`;
+
+/**
+ * True when the venv's interpreter actually starts. A venv only links to its base Python
+ * (pyvenv.cfg `home`); if that one was removed (e.g. a uv-managed Python after `uv python
+ * uninstall`/cache clean), python.exe still exists but every call fails with "uv trampoline failed"
+ * / "No virtual environment ... found".
+ */
+export function venvWorks(venvDir: string): boolean {
+  const python = venvPython(venvDir);
+  if (!existsSync(python)) return false;
+  const result = spawnSync(python, ["-c", "import sys"], { windowsHide: true, timeout: 60_000, stdio: "ignore" });
+  return result.status === 0;
+}
+
+/**
+ * Makes sure a venv can be (re)created at `venvDir`: a broken venv (interpreter does not start) is
+ * deleted so the setup builds a fresh one. Returns true when a usable venv already exists.
+ */
+export function prepareVenv(venvDir: string): boolean {
+  if (venvWorks(venvDir)) return true;
+  if (existsSync(venvDir)) rmSync(venvDir, { recursive: true, force: true });
+  return false;
+}
 
 /** Env for a spawned Python server: the scripts read DUCKI_VOICES_DIR (fallback: voices/ beside them). */
 export const pythonServerEnv = (): NodeJS.ProcessEnv => ({ DUCKI_VOICES_DIR: VOICES_DIR });

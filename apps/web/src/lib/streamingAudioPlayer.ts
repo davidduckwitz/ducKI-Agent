@@ -2,6 +2,7 @@ import { getAudioStreamWsUrl } from "./backendUrl";
 import { registerActivePlayback } from "./voicePlaybackRegistry";
 import { onVoiceReplyInterrupted } from "./voiceCaptureBus";
 import { registerVoiceOutput } from "./voiceOutputAnalyser";
+import { requestSpeechLane, type SpeechLaneHandle } from "./speechPlaybackLane";
 
 export interface StreamingAudioPlayerOptions {
   voice?: string;
@@ -55,6 +56,13 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
   let pendingDecodes = 0;
   let unregisterPlayback: (() => void) | undefined;
   let unsubscribeInterrupt: (() => void) | undefined;
+  // Shared speech lane (speechPlaybackLane.ts): synthesis runs right away, but decoded audio is
+  // held back until the previous speaker (e.g. the prior block's still-draining player) is done.
+  let lane: SpeechLaneHandle | undefined;
+  let laneGranted = false;
+  const heldBuffers: AudioBuffer[] = [];
+  // decodeAudioData is async and can resolve out of order - chain it so chunks keep their order.
+  let decodeChain: Promise<void> = Promise.resolve();
 
   const textQueue: string[] = [];
   let sending = false;
@@ -75,6 +83,10 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
     if (stopped) return;
     stopped = true;
     textQueue.length = 0;
+    heldBuffers.length = 0;
+    laneGranted = false;
+    lane?.release();
+    lane = undefined;
     setPlaying(false);
     unsubscribeInterrupt?.();
     unsubscribeInterrupt = undefined;
@@ -89,7 +101,7 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
     }
   };
   const finishIfDrained = () => {
-    if (ending && !sending && !textQueue.length && !pendingSources && !pendingDecodes) stop();
+    if (ending && !sending && !textQueue.length && !pendingSources && !pendingDecodes && !heldBuffers.length) stop();
   };
 
   const reportError = (message: string) => {
@@ -141,19 +153,27 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
     const ctx = ensureAudioContext();
     if (!ctx) return;
     pendingDecodes++;
-    try {
-      const audioBuffer = await ctx.decodeAudioData(buffer.slice(0));
-      scheduleAudioBuffer(ctx, audioBuffer);
-    } catch (err) {
-      reportError(err instanceof Error ? err.message : "Audio-Dekodierung fehlgeschlagen");
-    } finally {
-      pendingDecodes--;
-      finishIfDrained();
-    }
+    const decoded = ctx.decodeAudioData(buffer.slice(0));
+    decodeChain = decodeChain.then(async () => {
+      try {
+        const audioBuffer = await decoded;
+        scheduleAudioBuffer(ctx, audioBuffer);
+      } catch (err) {
+        reportError(err instanceof Error ? err.message : "Audio-Dekodierung fehlgeschlagen");
+      } finally {
+        pendingDecodes--;
+        finishIfDrained();
+      }
+    });
+    await decodeChain;
   };
 
   const scheduleAudioBuffer = (ctx: AudioContext, audioBuffer: AudioBuffer) => {
     if (stopped) return;
+    if (!laneGranted) {
+      heldBuffers.push(audioBuffer);
+      return;
+    }
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
     source.playbackRate.value = options.playbackRate ?? 1;
@@ -247,6 +267,15 @@ export function createStreamingAudioPlayer(options: StreamingAudioPlayerOptions)
       unsubscribeInterrupt = onVoiceReplyInterrupted(stop);
       nextStartTime = 0;
       ensureAudioContext();
+      lane = requestSpeechLane(() => {
+        if (stopped) return;
+        laneGranted = true;
+        nextStartTime = 0; // start right now, not at a schedule computed while waiting
+        const ctx = audioContext;
+        const held = heldBuffers.splice(0);
+        if (ctx) held.forEach((buffer) => scheduleAudioBuffer(ctx, buffer));
+        finishIfDrained();
+      }, stop);
       connect();
     },
     pushText: (text: string) => {

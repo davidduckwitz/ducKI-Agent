@@ -5,6 +5,7 @@ import { useVoiceSettings } from "../../hooks/useVoiceSettings";
 import { useAgentTurnEndSignal } from "../../hooks/useAgentTurnEndSignal";
 import { stripMarkdownForSpeech } from "../../lib/stripMarkdownForSpeech";
 import { isReplyInterrupted, takeUnstreamedRemainder } from "../../lib/streamedSpeechRegistry";
+import { stopAllPlayback } from "../../lib/voicePlaybackRegistry";
 
 interface VoicePlaybackProps {
   text: string;
@@ -72,6 +73,9 @@ export function VoicePlayback({ text, disabled = false, autoPlay = false }: Voic
     if (isPlaying) {
       stop();
     } else {
+      // A manual click means "read THIS now": cut off whatever else is speaking or queued on
+      // the shared speech lane instead of queueing behind it.
+      stopAllPlayback();
       speak(speakable);
     }
   };

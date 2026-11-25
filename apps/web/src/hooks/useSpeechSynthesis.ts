@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useVoiceSettings } from "./useVoiceSettings";
 import { registerActivePlayback } from "../lib/voicePlaybackRegistry";
+import { requestSpeechLane, type SpeechLaneHandle } from "../lib/speechPlaybackLane";
 import { splitForSpeech } from "../lib/splitForSpeech";
 import { observeVoiceElement } from "../lib/voiceOutputAnalyser";
 
@@ -59,6 +60,8 @@ export function useSpeechSynthesis(): UseSpeechSynthesisResult {
         const response = await fetch("/api/chat/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          // A hung request would otherwise hold the shared speech lane forever (everyone else waits).
+          signal: typeof AbortSignal.timeout === "function" ? AbortSignal.timeout(120_000) : undefined,
           body: JSON.stringify({
             text,
             provider: ttsProvider,
@@ -121,14 +124,51 @@ export function useSpeechSynthesis(): UseSpeechSynthesisResult {
   // needed for playback - see the prefetch call in playNext below.
   const prefetchRef = useRef<{ text: string; promise: Promise<{ audio: string; mimeType: string } | null> } | null>(null);
 
+  // The app-wide speech lane (see speechPlaybackLane.ts): held from the first queued chunk until
+  // this instance's queue runs dry, so another instance never speaks over this one.
+  const laneRef = useRef<SpeechLaneHandle | null>(null);
+  const laneGrantedRef = useRef(false);
+  const playNextRef = useRef<() => void>(() => {});
+  const stopRef = useRef<() => void>(() => {});
+
+  const releaseLane = useCallback(() => {
+    laneGrantedRef.current = false;
+    const lane = laneRef.current;
+    laneRef.current = null;
+    lane?.release();
+  }, []);
+
   const playNext = useCallback(() => {
     if (playingRef.current) return; // already draining the queue
 
-    const next = queueRef.current.shift();
-    if (!next) {
+    if (!queueRef.current.length) {
       setIsPlaying(false);
+      releaseLane();
       return;
     }
+
+    if (!laneRef.current) {
+      laneRef.current = requestSpeechLane(
+        () => {
+          laneGrantedRef.current = true;
+          // When granted synchronously (lane was free) laneRef is not assigned yet - the code
+          // right below continues in that case; later grants resume draining from here.
+          if (laneRef.current) playNextRef.current();
+        },
+        () => stopRef.current()
+      );
+    }
+    if (!laneGrantedRef.current) {
+      // Someone else is talking. Start synthesizing our first chunk already so it is ready the
+      // moment the lane frees up.
+      const upcoming = queueRef.current[0];
+      if (ttsProvider !== "web-speech-api" && upcoming && prefetchRef.current?.text !== upcoming) {
+        prefetchRef.current = { text: upcoming, promise: synthesizeServerAudio(upcoming, generationRef.current) };
+      }
+      return;
+    }
+
+    const next = queueRef.current.shift()!;
 
     playingRef.current = true;
 
@@ -136,12 +176,20 @@ export function useSpeechSynthesis(): UseSpeechSynthesisResult {
       if (!window.speechSynthesis) {
         setError("Sprachausgabe wird von diesem Browser nicht unterstützt.");
         playingRef.current = false;
+        queueRef.current = [];
+        releaseLane();
         return;
       }
 
+      const generation = generationRef.current;
       const utterance = buildUtterance(next);
-      utterance.onstart = () => setIsPlaying(true);
+      utterance.onstart = () => {
+        if (generation === generationRef.current) setIsPlaying(true);
+      };
       utterance.onend = () => {
+        // A cancelled utterance of a superseded generation must not touch the new one's state -
+        // resetting playingRef here would let a second chunk start in parallel.
+        if (generation !== generationRef.current) return;
         playingRef.current = false;
         playNext();
       };
@@ -151,6 +199,7 @@ export function useSpeechSynthesis(): UseSpeechSynthesisResult {
         if (!stoppingRef.current && event.error !== "canceled" && event.error !== "interrupted") {
           setError(`Fehler bei der Sprachausgabe: ${event.error}`);
         }
+        if (generation !== generationRef.current) return;
         playingRef.current = false;
         playNext();
       };
@@ -176,18 +225,27 @@ export function useSpeechSynthesis(): UseSpeechSynthesisResult {
           }
         })
         .finally(() => {
+          // Only the current generation owns playingRef - a stale chunk finishing after
+          // stop()+speak() must not clear the NEW chunk's flag (that allowed two chunks of one
+          // instance to play at the same time).
+          if (generation !== generationRef.current) return;
           playingRef.current = false;
-          if (generation === generationRef.current) playNext();
+          playNext();
         });
     }
-  }, [buildUtterance, synthesizeServerAudio, playAudioResult, ttsProvider]);
+  }, [buildUtterance, synthesizeServerAudio, playAudioResult, ttsProvider, releaseLane]);
+  playNextRef.current = playNext;
 
   const stop = useCallback(() => {
+    // Only the lane holder may be making sound right now. speechSynthesis.cancel() is global, so
+    // a waiting (or idle) instance calling it would cut off whoever is actually speaking.
+    const wasSpeaking = laneGrantedRef.current;
     setError(null);
     setIsPlaying(false);
     queueRef.current = [];
     playingRef.current = false;
     generationRef.current += 1;
+    releaseLane();
     // Not strictly required for correctness (the stale promise's own generation check already
     // makes playNext ignore it), but avoids a same-text coincidence reusing a discarded prefetch.
     prefetchRef.current = null;
@@ -197,12 +255,13 @@ export function useSpeechSynthesis(): UseSpeechSynthesisResult {
       audioRef.current = null;
     }
     releaseOutputRef.current?.();
-    if (typeof window !== "undefined" && window.speechSynthesis) {
+    if (wasSpeaking && typeof window !== "undefined" && window.speechSynthesis) {
       stoppingRef.current = true;
       window.speechSynthesis.cancel();
       stoppingRef.current = false;
     }
-  }, []);
+  }, [releaseLane]);
+  stopRef.current = stop;
 
   // Splits before queuing - text handed to speak()/enqueue() from outside this hook (a manual
   // "read aloud" click on an already-complete message, or a full message replay) is never

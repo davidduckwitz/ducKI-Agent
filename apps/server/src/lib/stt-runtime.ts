@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import type { DatabaseService } from "@ducki/database";
 import { localChatterboxUrl } from "./chatterbox-runtime.js";
 import { createVenv } from "./pocket-tts-runtime.js";
-import { PYTHON_DATA_DIR, PYTHON_SCRIPTS_DIR as scripts, pythonServerEnv, venvPython } from "./python-paths.js";
+import { PYTHON_DATA_DIR, PYTHON_SCRIPTS_DIR as scripts, prepareVenv, pythonServerEnv, venvPython } from "./python-paths.js";
 import { run } from "./qwen-tts-runtime.js";
 import { modelServerEnv } from "./secrets-store.js";
 
@@ -59,7 +59,7 @@ async function setupEnvironment() {
   try {
     const hasUv = (await run("uv", ["--version"], { timeoutMs: 10_000 })).code === 0;
     const python = venvPython(VENV_DIR);
-    if (!existsSync(python)) {
+    if (!prepareVenv(VENV_DIR)) {
       setupPhase = "Erstelle Python-Umgebung (.venv) …";
       const output = await createVenv(VENV_DIR, hasUv);
       if (output !== undefined) fail("Python-Umgebung konnte nicht erstellt werden. Installiere Python 3.10–3.14 (oder uv: https://docs.astral.sh/uv/).", output);

@@ -84,3 +84,22 @@ it("stops streamed playback through the shared stop control", () => {
   expect(isPlaybackActive()).toBe(false);
   expect(test.close).toHaveBeenCalledTimes(1);
 });
+
+it("holds the next block's audio until the previous block's player has finished", () => {
+  const first = setup();
+  first.open();
+  first.player.pushText("Block eins.");
+  first.audio();
+  expect(first.sources).toHaveLength(1);
+  first.player.end();
+
+  const second = setup();
+  second.open();
+  second.player.pushText("Block zwei.");
+  second.audio();
+  expect(second.sources).toHaveLength(0); // would overlap block one otherwise
+
+  first.message({ type: "done" });
+  first.sources[0]!.onended?.();
+  expect(second.sources).toHaveLength(1);
+});
